@@ -719,9 +719,18 @@
     background: var(--bg-hover);
   }
 
+  /* Same treatment as the detail pane's Remove button — one look for "this destroys
+     something", so the two cannot drift into meaning different things. */
   .secondary.danger {
     color: var(--danger);
     border-color: color-mix(in oklab, var(--danger) 40%, transparent);
+    background: color-mix(in oklab, var(--danger) 8%, transparent);
+  }
+
+  .secondary.danger:hover:not(:disabled) {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--fg-on-accent);
   }
 
   .primary {

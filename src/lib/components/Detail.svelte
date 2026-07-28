@@ -388,23 +388,45 @@
     *does* get ellipsised, it reads as a truncated word rather than an affordance. Spelling it
     out costs a few pixels the path can give up.
   */
+  /*
+    Red at rest, not only on hover. This is the one control in the pane that destroys
+    something, and a button you can only identify as destructive *after* reaching for it is
+    doing the job backwards.
+
+    Outlined rather than filled, which puts it a step below the dialog's solid-red confirm:
+    this button opens that dialog, the confirm is the irreversible one. Filling both would
+    make the reversible step look like the point of no return — and a solid red block sitting
+    permanently in the header would fight `New Worktree` for the eye.
+  */
   .remove {
     flex: 0 0 auto;
     white-space: nowrap;
     padding: 4px 10px;
     border-radius: var(--r-md);
-    border: 1px solid var(--border);
+    border: 1px solid color-mix(in oklab, var(--danger) 40%, transparent);
+    background: color-mix(in oklab, var(--danger) 8%, transparent);
     font-size: var(--step--2);
-    color: var(--fg-muted);
+    font-weight: 500;
+    color: var(--danger);
+    transition:
+      background var(--dur-fast) var(--ease),
+      border-color var(--dur-fast) var(--ease),
+      color var(--dur-fast) var(--ease);
   }
 
   .remove:hover:not(:disabled) {
-    border-color: color-mix(in oklab, var(--danger) 45%, transparent);
-    color: var(--danger);
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--fg-on-accent);
   }
 
+  /* Neutral when unavailable, rather than a faded red. Red should mean "this will destroy
+     something you can actually destroy"; on the main worktree it never fires. */
   .remove:disabled {
-    opacity: 0.35;
+    border-color: var(--border);
+    background: transparent;
+    color: var(--fg-subtle);
+    opacity: 0.6;
     cursor: default;
   }
 

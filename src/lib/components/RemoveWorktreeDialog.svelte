@@ -342,9 +342,12 @@
     color: var(--fg-on-accent);
   }
 
+  /* The solid fill is reserved for this one: the point of no return. Everything upstream
+     that leads here is outlined. */
   .danger-btn {
     background: var(--danger);
-    color: var(--gray-0);
+    /* Not `--gray-0`: components read the semantic layer, never a primitive. */
+    color: var(--fg-on-accent);
   }
 
   .danger-btn:hover:not(:disabled) {
