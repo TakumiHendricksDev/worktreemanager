@@ -1,0 +1,23 @@
+[package]
+name        = "wtm-testkit"
+description = "Dev-only: in-memory fakes for every port, plus a real-git fixture builder."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+
+# Never goes to a registry. It exists because Rust cannot share #[cfg(test)]
+# modules across crate boundaries, and these fakes are needed by wtm-core's,
+# wtm-config's and src-tauri's tests alike.
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+wtm-core    = { workspace = true }
+parking_lot = { workspace = true }
+tempfile    = { workspace = true }
+serde_json  = { workspace = true }

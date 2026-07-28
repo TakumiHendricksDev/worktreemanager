@@ -1,0 +1,266 @@
+/*
+ * Theme tokens.
+ *
+ * TWO LAYERS, AND ONE RULE:
+ *
+ *   Components may reference ONLY layer-2 semantic tokens.
+ *   Never a layer-1 primitive. Never a literal colour.
+ *
+ * That single rule is what makes light/dark a data change rather than a code change:
+ * adding a theme means adding one block below, not touching any component. It is also
+ * what keeps the two modes from drifting — there is no component holding a hard-coded
+ * grey that only looks right in one of them.
+ */
+
+/* ── Layer 1: primitives. Mode-independent. Never used in a component. ──────── */
+:root {
+  --gray-0: #ffffff;
+  --gray-50: #fafaf9;
+  --gray-100: #f5f4f2;
+  --gray-150: #eeece8;
+  --gray-200: #e5e2dd;
+  --gray-300: #d3cfc8;
+  --gray-400: #a8a29a;
+  --gray-500: #78716a;
+  --gray-600: #57534e;
+  --gray-700: #3d3a37;
+  --gray-800: #282624;
+  --gray-850: #1f1e1c;
+  --gray-900: #171614;
+  --gray-950: #0f0e0d;
+
+  --clay-300: #e8a288;
+  --clay-400: #d97757;
+  --clay-500: #c96442;
+  --clay-600: #a94f31;
+
+  --green-400: #5cb860;
+  --green-500: #3f9142;
+  --amber-400: #dfa53a;
+  --amber-500: #c07f00;
+  --red-400: #e06c6d;
+  --red-500: #c8393a;
+  --blue-400: #6ba3d6;
+
+  --font-ui: ui-sans-serif, -apple-system, 'SF Pro Text', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --step--2: 0.6875rem;
+  --step--1: 0.8125rem;
+  --step-0: 0.875rem;
+  --step-1: 1rem;
+  --step-2: 1.25rem;
+  --step-3: 1.5rem;
+
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  /* Long enough that a progress bar reads as advancing rather than jumping. */
+  --dur-slow: 320ms;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --titlebar-h: 52px;
+}
+
+/* ── Layer 2: semantic roles. The ONLY thing components touch. ──────────────── */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: var(--gray-50);
+  --bg-elevated: var(--gray-0);
+  /* Semi-transparent so the window's native sidebar vibrancy shows through. */
+  --bg-sidebar: color-mix(in oklab, var(--gray-100) 62%, transparent);
+  --bg-hover: var(--gray-150);
+  --bg-active: var(--gray-200);
+  --bg-input: var(--gray-0);
+  --bg-code: var(--gray-100);
+  --bg-scrim: rgb(0 0 0 / 0.28);
+
+  --fg: var(--gray-900);
+  --fg-muted: var(--gray-500);
+  --fg-subtle: var(--gray-400);
+  --fg-on-accent: var(--gray-0);
+
+  --border: var(--gray-200);
+  --border-strong: var(--gray-300);
+  --border-focus: var(--clay-500);
+
+  --accent: var(--clay-500);
+  --accent-hover: var(--clay-600);
+  --accent-soft: color-mix(in oklab, var(--clay-500) 12%, transparent);
+
+  --ok: var(--green-500);
+  --warn: var(--amber-500);
+  --danger: var(--red-500);
+  --info: var(--blue-400);
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.18);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: var(--gray-900);
+  --bg-elevated: var(--gray-850);
+  --bg-sidebar: color-mix(in oklab, var(--gray-950) 52%, transparent);
+  --bg-hover: var(--gray-800);
+  --bg-active: var(--gray-700);
+  --bg-input: var(--gray-850);
+  --bg-code: var(--gray-950);
+  --bg-scrim: rgb(0 0 0 / 0.5);
+
+  --fg: var(--gray-100);
+  --fg-muted: var(--gray-400);
+  --fg-subtle: var(--gray-500);
+  --fg-on-accent: var(--gray-0);
+
+  --border: var(--gray-800);
+  --border-strong: var(--gray-700);
+  --border-focus: var(--clay-400);
+
+  --accent: var(--clay-400);
+  --accent-hover: var(--clay-300);
+  --accent-soft: color-mix(in oklab, var(--clay-400) 18%, transparent);
+
+  --ok: var(--green-400);
+  --warn: var(--amber-400);
+  --danger: var(--red-400);
+  --info: var(--blue-400);
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.6);
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  color: var(--fg);
+  /* Transparent so the native window vibrancy is visible behind the chrome. */
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  /* A desktop app is not a document: rubber-band scrolling on the window itself
+     reveals the transparent background and looks broken. */
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.925em;
+}
+
+/* ── Accessibility primitives ──────────────────────────────────────────────── */
+
+/*
+ * A visible focus ring, always. This is a keyboard-driven app; removing the outline
+ * to "clean up" the design would make it unusable without a mouse.
+ */
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  /* An inset border keeps the thumb from touching the content edge. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-subtle);
+  background-clip: content-box;
+}

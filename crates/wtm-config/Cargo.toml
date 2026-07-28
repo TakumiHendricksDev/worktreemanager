@@ -1,0 +1,38 @@
+[package]
+name        = "wtm-config"
+description = "wtm.toml schema, four-layer merge, validation, and the config trust store."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wtm-core   = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+# JSONPath, for mapping a `[[lookup]]` command's JSON output onto template
+# tokens — this is what replaces the `jq -r '.fields.issuetype.name'` pipeline.
+serde_json_path = { workspace = true }
+toml       = { workspace = true }
+etcetera   = { workspace = true }
+sha2       = { workspace = true }
+regex      = { workspace = true }
+parking_lot = { workspace = true }
+thiserror  = { workspace = true }
+tracing    = { workspace = true }
+
+[dev-dependencies]
+# Validation takes `&dyn TemplateEngine`, so the real engine is only needed to test
+# it — this crate depends on the domain alone.
+wtm-render        = { workspace = true }
+wtm-testkit       = { workspace = true }
+tempfile          = { workspace = true }
+insta             = { workspace = true }
+pretty_assertions = { workspace = true }
+rstest            = { workspace = true }

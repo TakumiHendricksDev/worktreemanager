@@ -1,0 +1,152 @@
+//! Worktree Manager — the Tauri application.
+//!
+//! The only crate in the workspace that knows Tauri exists. It wires concrete adapters
+//! into the domain's ports ([`app`]), renders domain facts into a UI contract
+//! ([`view`], [`display`]), and exposes that over IPC ([`commands`]).
+
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
+pub mod app;
+pub mod commands;
+pub mod display;
+pub mod pty_bridge;
+pub mod view;
+
+use std::sync::Arc;
+
+use app::App;
+
+/// Start the application.
+///
+/// # Panics
+///
+/// If the app cannot be constructed (no resolvable home directory) or Tauri fails to
+/// start. Both are unrecoverable at launch, and a window that appears but cannot do
+/// anything would be worse than a clear crash.
+pub fn run() {
+    init_tracing();
+
+    let app = Arc::new(App::new().expect("initialize the application"));
+
+    tauri::Builder::default()
+        .manage(app)
+        .invoke_handler(tauri::generate_handler![
+            commands::list_projects,
+            commands::register_project,
+            commands::unregister_project,
+            commands::list_worktrees,
+            commands::worktree_form,
+            commands::field_options,
+            commands::list_actions,
+            commands::set_config_trust,
+            commands::get_pref,
+            commands::set_pref,
+            commands::doctor,
+            commands::reveal_env_value,
+            commands::preview_worktree,
+            commands::create_worktree,
+            commands::remove_preflight,
+            commands::remove_worktree,
+            commands::run_setup,
+            commands::run_action,
+            commands::pty_write,
+            commands::pty_resize,
+            commands::pty_kill,
+            commands::open_url,
+        ])
+        .run(tauri::generate_context!())
+        .expect("run the application");
+}
+
+/// Configure logging.
+///
+/// Defaults to `info` for our crates and `warn` for everything else, so the noise from
+/// ~800 dependencies stays out of the way. `WTM_LOG` overrides it, using the standard
+/// `RUST_LOG` grammar.
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_env("WTM_LOG").unwrap_or_else(|_| {
+        EnvFilter::new(
+            "warn,wtm_app_lib=info,wtm_core=info,wtm_git=info,wtm_exec=info,wtm_config=info",
+        )
+    });
+
+    // Log to a file as well as stderr.
+    //
+    // A GUI app launched from Finder has no stderr anyone will ever read, so without this a
+    // failure leaves no evidence at all — which is what made a silent crash impossible to
+    // diagnose. `just logs` tails this.
+    //
+    // `try_init` rather than `init`: a test binary may already have a subscriber, and failing to
+    // start over logging would be absurd.
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_ansi(false);
+
+    let _ = match Tee::open() {
+        Some(tee) => builder.with_writer(tee).try_init(),
+        None => builder.with_writer(std::io::stderr).try_init(),
+    };
+
+    // A panic that reaches here is a bug; make sure it is written down before the unwind
+    // takes it somewhere less visible.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("panic: {info}");
+        previous(info);
+    }));
+}
+
+/// Writes every log line to `~/.config/wtm/wtm.log` **and** stderr.
+///
+/// Implements `MakeWriter` itself rather than being wrapped in a mutex. `tracing_subscriber`
+/// provides that impl only for `std::sync::Mutex`, which the workspace's `disallowed-types` rule
+/// rejects — poisoning would mean one panic while logging turns every later log call into a
+/// panic too. Owning the impl is a dozen lines and keeps `parking_lot` throughout.
+#[derive(Clone)]
+struct Tee {
+    file: std::sync::Arc<parking_lot::Mutex<std::fs::File>>,
+}
+
+impl Tee {
+    /// Open the log file, or `None` if the config directory is unavailable.
+    fn open() -> Option<Self> {
+        let paths = wtm_config::AppPaths::discover().ok()?;
+        paths.ensure_dir().ok()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(paths.config_dir.join("wtm.log"))
+            .ok()?;
+        Some(Self {
+            file: std::sync::Arc::new(parking_lot::Mutex::new(file)),
+        })
+    }
+}
+
+impl std::io::Write for Tee {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // The file is the one that must succeed; a closed stderr is normal in a bundled app,
+        // and a failure to write to it must not lose the log line.
+        let written = self.file.lock().write(buf)?;
+        let _ = std::io::stderr().write_all(buf);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stderr().flush();
+        self.file.lock().flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Tee {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        // Cheap: the clone shares one `Arc`, and each write takes the lock only for as long as
+        // the write itself.
+        self.clone()
+    }
+}

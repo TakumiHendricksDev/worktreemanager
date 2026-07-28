@@ -1,0 +1,49 @@
+# Supply-chain gate for `just audit` / `cargo deny check`.
+
+[advisories]
+yanked = "warn"
+
+# Vulnerabilities are a hard failure and no longer configurable — cargo-deny 0.14 removed the
+# `vulnerability` key precisely so nobody could downgrade them. Recorded here because that is
+# the behaviour this gate depends on.
+
+# `unmaintained`, however, is scoped to crates *we* chose. It is not a vulnerability, and for a
+# transitive dependency it is not actionable: Tauri's macOS build pulls `unic-*` through
+# `urlpattern`, and the advisory for those says outright "No safe upgrade is available!". Ten more
+# come from gtk-rs, which is Linux-only and is not in the macOS dependency graph at all — verify
+# with `cargo tree -e normal --target aarch64-apple-darwin | grep gtk`, which prints nothing.
+#
+# Denying all of them would mean permanently ignoring seventeen advisory IDs by number, and an
+# ignore list that long is where a real advisory goes to hide. Scoped to the workspace, this
+# check stays meaningful: if *we* add an unmaintained crate, it fails.
+unmaintained = "workspace"
+
+[licenses]
+# Permissive only. Anything copyleft in a dependency tree is a decision, not a
+# default — it should show up as a failing check, not a surprise at ship time.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "MPL-2.0",       # used by some webview-adjacent crates; file-level copyleft only
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"   # unavoidable in a Tauri tree; warn so it stays visible
+wildcards         = "deny"   # a `*` version requirement is never intentional
+
+# ...except for this workspace's own crates, which are `{ path = "…" }` with no version — the
+# right way to declare an unpublished internal dependency, and what cargo reports as `*`. This
+# exempts only path dependencies; a wildcard on anything from a registry still fails.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"

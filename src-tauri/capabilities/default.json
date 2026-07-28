@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capability set. The frontend reaches the outside world only through this app's own #[tauri::command] functions, so no filesystem, shell or HTTP plugin permissions are granted — every side effect goes through Rust code that enforces timeouts, PATH resolution and config trust.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-theme",
+    "core:window:allow-start-dragging",
+    "core:event:default"
+  ]
+}

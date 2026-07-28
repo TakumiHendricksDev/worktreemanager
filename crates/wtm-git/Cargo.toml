@@ -1,0 +1,33 @@
+[package]
+name        = "wtm-git"
+description = "Git adapter over the git CLI, including the --porcelain -z parsers."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# Note: no `wtm-exec` dependency. This crate is handed an `Arc<dyn CommandRunner>`
+# (the port defined in wtm-core), so it never spawns a process itself and stays
+# unit-testable against a fake runner. Dependency inversion, enforced by the
+# dependency list.
+[dependencies]
+wtm-core  = { workspace = true }
+thiserror = { workspace = true }
+tracing   = { workspace = true }
+
+[dev-dependencies]
+# Integration tests drive a REAL git binary against a real repo in a TempDir,
+# because the CLI's output grammar is the contract we're implementing. Mocking
+# git here would only test the mock.
+wtm-exec          = { workspace = true }
+wtm-testkit       = { workspace = true }
+tempfile          = { workspace = true }
+insta             = { workspace = true }
+pretty_assertions = { workspace = true }
+rstest            = { workspace = true }

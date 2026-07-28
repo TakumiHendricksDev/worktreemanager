@@ -1,0 +1,22 @@
+# Pinned deliberately to an exact version, not the floating `stable` channel.
+#
+# Why exact: a solo project should never have `cargo build` silently change
+# compiler versions mid-week. A version bump becomes a reviewable one-line diff
+# with its own CI run. Cost is one extra ~350 MB toolchain in ~/.rustup the first
+# time (rustup treats "1.97.1" as distinct from "stable" even when they're the
+# same build). Bump quarterly — see ARCHITECTURE.md § Toolchain policy.
+#
+# Do NOT install Rust with Homebrew. Homebrew's rust ignores this file entirely,
+# cannot add targets, and self-upgrades during unrelated `brew upgrade`s, which
+# invalidates target/ and costs a full rebuild.
+
+[toolchain]
+channel    = "1.97.1"
+components = ["rustfmt", "clippy"]
+targets    = [
+  "aarch64-apple-darwin",
+  # Not for shipping — this is the target for `cargo core-wasm`, which
+  # mechanically proves wtm-core has no OS-specific dependencies.
+  "wasm32-unknown-unknown",
+]
+profile    = "minimal"

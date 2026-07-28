@@ -1,0 +1,36 @@
+[package]
+name        = "wtm-core"
+description = "Domain model, ports (traits) and use-cases. Zero I/O, zero OS, zero framework."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVARIANT: this dependency list must stay free of anything OS-specific.
+# `cargo core-wasm` (see .cargo/config.toml) fails the moment that stops being
+# true, which is what keeps the dependency-inversion rule honest over time.
+# ─────────────────────────────────────────────────────────────────────────────
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }
+# JSONPath, for mapping a lookup command's JSON onto tokens. Pure Rust: no OS surface, so
+# it does not break `cargo core-wasm`.
+serde_json_path = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+# Dev-only, and deliberately cyclic: both of these depend on wtm-core. Cargo permits a
+# dev-dependency cycle, and it is what lets the domain's integration tests use the real
+# template engine and the shared fakes rather than reimplementing either.
+wtm-render        = { workspace = true }
+wtm-testkit       = { workspace = true }
+insta             = { workspace = true }
+pretty_assertions = { workspace = true }
+rstest            = { workspace = true }

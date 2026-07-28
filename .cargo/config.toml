@@ -1,0 +1,38 @@
+# Deliberately minimal. The commented-out entries below are *documented
+# rejections*, not TODOs — see ARCHITECTURE.md § Build performance.
+
+[net]
+# Make cargo shell out to the `git` binary for git dependencies instead of using
+# its bundled libgit2. Required on this machine: SSH keys live in the 1Password
+# SSH agent, which cargo's built-in fetcher cannot talk to. Also faster for large
+# repos.
+git-fetch-with-cli = true
+
+[alias]
+# `cargo lint` is what CI runs, so run exactly this locally.
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
+# The mechanical enforcement of "wtm-core depends on nothing OS-specific".
+core-wasm = "check -p wtm-core --target wasm32-unknown-unknown"
+
+# ── Rejected, with reasons ────────────────────────────────────────────────────
+#
+# [target.aarch64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+#   Rejected. `lld`/`mold` advice is copied from Linux threads. On Apple silicon
+#   the system linker (ld-prime, Xcode 15+) is already fast and parallel, while
+#   lld on Mach-O still has rough edges around dead-strip and codesign padding.
+#   Measured gain here is noise; the risk of a weird link failure inside 800
+#   Tauri crates is not. Revisit only if link time is ever measured as the
+#   bottleneck.
+#
+# [build]
+# rustflags = ["-C", "target-cpu=native"]
+#   Rejected. This is a distributable .app; `target-cpu=native` bakes in the
+#   build machine's ISA and silently produces a binary that SIGILLs on an older
+#   Mac. Zero benefit for an I/O-bound app that spends its life waiting on git.
+#
+# [build]
+# jobs = N
+#   Rejected. Cargo's default (one job per core) is correct. Capping it only
+#   helps if you are thermally throttling, which is a laptop problem, not a
+#   repo policy.

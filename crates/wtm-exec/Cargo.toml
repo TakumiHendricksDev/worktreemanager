@@ -1,0 +1,29 @@
+[package]
+name        = "wtm-exec"
+description = "The one place processes are spawned: captured CommandRunner + portable-pty PtyHost."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wtm-core     = { workspace = true }
+portable-pty = { workspace = true }
+shell-words  = { workspace = true }
+parking_lot  = { workspace = true }
+uuid         = { workspace = true }
+nix          = { workspace = true }
+time         = { workspace = true }
+thiserror    = { workspace = true }
+tracing      = { workspace = true }
+
+[dev-dependencies]
+tempfile          = { workspace = true }
+pretty_assertions = { workspace = true }
+rstest            = { workspace = true }

@@ -1,0 +1,26 @@
+# `just watch` — a second pane that re-runs check → clippy → tests on save.
+default_job = "clippy"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--all-targets", "--color", "always"]
+need_stdout = false
+
+[jobs.clippy]
+command = ["cargo", "clippy", "--workspace", "--all-targets", "--all-features",
+           "--color", "always", "--", "-D", "warnings"]
+need_stdout = false
+
+[jobs.test]
+command = ["cargo", "nextest", "run", "--workspace", "--color", "always"]
+need_stdout = true
+
+# The dependency-inversion guard, on a keystroke.
+[jobs.core-wasm]
+command = ["cargo", "check", "-p", "wtm-core", "--target", "wasm32-unknown-unknown",
+           "--color", "always"]
+need_stdout = false
+
+[keybindings]
+c = "job:clippy"
+t = "job:test"
+w = "job:core-wasm"

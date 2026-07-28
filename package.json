@@ -1,0 +1,29 @@
+{
+  "name": "wtm",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Worktree Manager — a macOS app for managing git worktrees across projects",
+  "scripts": {
+    "dev": "vite",
+    "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.2.0",
+    "@tauri-apps/cli": "2.11.4",
+    "@types/node": "^26.1.2",
+    "prettier": "^3.4.2",
+    "prettier-plugin-svelte": "4.1.1",
+    "svelte": "5.56.8",
+    "svelte-check": "4.7.4",
+    "typescript": "~6.0.3",
+    "vite": "8.1.5"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0"
+  }
+}

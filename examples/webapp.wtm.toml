@@ -1,0 +1,454 @@
+# A worked example: a Dockerised web app with a Jira board and a setup script.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────
+# WHAT THIS FILE IS
+#
+# The reference configuration, and the proof of wtm's central claim: a project's entire
+# worktree convention — the form fields, the issue-tracker lookup, the branch-naming
+# rules, the container teardown, the port table and the hazard guards — is **data**.
+# There is not one line of Rust in wtm that knows about any of it.
+#
+# It describes a fictional project called ACME: a Django-ish app run through Docker
+# Compose, tracked in Jira, with a `bin/worktree.sh` helper that sets up a new worktree
+# (writes an `.env` with a collision-free port set, symlinks some local state, clones the
+# database volume). If that sounds like your project, most of this will transfer with the
+# names changed. If your project is a plain library with no tooling at all, you need
+# **none** of this — `defaults/wtm.default.toml` already gives you a working form.
+#
+# Read it top to bottom; the sections are in the order the create pipeline runs them.
+#
+# INSTALL
+#
+#     just install-example REPO=~/code/myproject
+#
+# which copies it to `$(git rev-parse --git-common-dir)/wtm.local.toml` — inside `.git`,
+# so nothing is added to the repo's tracked files and no PR is needed. Every worktree of
+# the repo shares it. To make it team-shared later, move it to a committed `wtm.toml`.
+#
+# TRUST
+#
+# This file declares shell commands, so wtm asks you to approve it the first time it
+# loads, and again whenever the contents change. Read the commands before approving.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+schema_version = 1
+
+[project]
+name = "ACME"
+
+# Constants, so the magic strings live in one place instead of in six templates.
+[project.vars]
+jira_slug = "ACME"
+# The sentinel for "this work has no ticket". Several rules below key off it.
+placeholder = "ACME-0000"
+remote = "origin"
+
+# ═══════════════════════════════════ THE FORM ═══════════════════════════════════
+#
+# The New Worktree pane renders this list directly. Adding a field here changes the UI
+# with no code change — that is what "the options are pulled from the project" means in
+# practice.
+
+[[field]]
+key = "issue"
+label = "Jira issue"
+kind = "text"
+required = true
+placeholder = "ACME-1234, 1234, or ACME-0000"
+help = "Bare numbers get the project prefix. ACME-0000 means there is no ticket."
+# An auto-prefix rule expressed as a template rather than as code. The pane shows the
+# normalized result next to what you typed, so `1234` visibly becomes `ACME-1234`
+# *before* you press Create — the value that gets validated is the one you can see.
+normalize = "{{ issue | trim | re_replace('^([0-9]+)$', vars.jira_slug ~ '-$1') | upper }}"
+pattern = "^[A-Z][A-Z0-9]*-[0-9]+$"
+# Regexes make terrible error messages, so supply a human one.
+pattern_message = "Use ACME-1234, or just 1234."
+
+[[field]]
+key = "title"
+label = "Title override"
+kind = "text"
+required = false
+help = "Leave blank to use the Jira summary. Required when there is no ticket."
+# Conditionally required: a title is only mandatory when there is no ticket to describe
+# the work. Without this the sentinel would produce a branch with an empty slug.
+required_when = "issue == vars.placeholder"
+
+[[field]]
+key = "base"
+label = "Base branch"
+kind = "select"
+required = true
+default = "origin/develop"
+# A tag or a sha is a legitimate base even though it will not be in the list.
+allow_custom = true
+
+# The dropdown's contents come from the repository itself, not from this file.
+[field.options]
+kind = "command"
+run = [
+  "git",
+  "for-each-ref",
+  "--format=%(refname:short)",
+  "refs/heads",
+  "refs/remotes/origin",
+]
+cwd = "repo_root"
+parse = "lines"
+timeout_ms = 5000
+# `origin/HEAD` is a symbolic ref, not a branch; basing on it produces a confusing
+# detached checkout.
+exclude = "^origin/HEAD$"
+# Keeps a live-previewing form from re-running this on every keystroke.
+cache_ttl_ms = 15000
+
+[[field]]
+key = "type_override"
+label = "Type"
+kind = "select"
+required = false
+help = "Normally taken from Jira. Set this to force the branch prefix."
+
+[field.options]
+kind = "static"
+values = ["task", "subtask", "epic", "story", "bug", "feature", "experiment"]
+
+[[field]]
+key = "load_dump"
+label = "Restore the database from a dump instead of cloning the volume"
+kind = "bool"
+default = false
+
+[[field]]
+key = "skip_db"
+label = "Skip database setup entirely"
+kind = "bool"
+default = false
+help = "Much faster. Use it when the worktree is for reading code, not running it."
+
+# ═══════════════════════════════════ LOOKUP ═══════════════════════════════════
+#
+# Ask the issue tracker what this ticket is, so the branch name can be derived rather
+# than typed. Replaces a shell pipeline like:
+#
+#   acli jira workitem view ACME-1234 --json \
+#     | jq -r '.fields.issuetype.name | ascii_downcase'   → type
+#     | jq -r '.fields.summary'                           → summary
+#
+# `acli` is Atlassian's CLI. Any command that prints JSON works — swap in `gh issue view
+# --json`, a `curl` to your own tracker, or a script.
+
+[[lookup]]
+id = "jira"
+# Do not call the tracker for the no-ticket sentinel.
+when = "issue != vars.placeholder"
+run = ["acli", "jira", "workitem", "view", "{{ issue }}", "--json"]
+cwd = "repo_root"
+timeout_ms = 20000
+format = "json"
+# `warn`, not `fail`: a tracker outage, an expired token or a train tunnel must not stop
+# you making a worktree. The fallbacks below apply and the review screen says so.
+on_error = "warn"
+cache_ttl_ms = 300000
+
+[lookup.map.type]
+path = "$.fields.issuetype.name"
+transform = ["lower"]
+# Trackers and branch conventions disagree about spelling. Fix it here, as data.
+rewrite = [{ from = "sub-task", to = "subtask" }]
+fallback = "experiment"
+
+[lookup.map.summary]
+path = "$.fields.summary"
+fallback = ""
+
+[lookup.map.status]
+path = "$.fields.status.name"
+fallback = ""
+
+# ═══════════════════════════════════ COMPUTED ═══════════════════════════════════
+#
+# Evaluated in declaration order; each is visible to the next as `computed.<key>`. The
+# point is DRY: the slug is defined once here and referenced by both naming templates
+# below, so the branch and the directory can never disagree about it.
+
+[[computed]]
+key = "issue_type"
+# An explicit override wins; then the tracker; then a safe default.
+template = "{{ type_override | default_if_empty(lookup.jira.type) | default_if_empty('experiment') }}"
+
+[[computed]]
+key = "slug"
+# A typed title beats the tracker summary.
+#
+# Note the absence of `| truncate(...)`. Real ticket summaries run to 60+ characters and
+# a cap here would silently produce different directory names than the project's own
+# script does for the same ticket. Match your tooling, or replace it — do not half-match.
+template = "{{ title | default_if_empty(lookup.jira.summary) | slugify }}"
+
+# ═══════════════════════════════════ NAMING ═══════════════════════════════════
+
+[naming]
+branch = "{{ computed.issue_type }}/{{ issue }}-{{ computed.slug }}"
+# The branch minus its `type/` prefix, so the directory is short enough to read.
+directory = "{{ issue }}-{{ computed.slug }}"
+# A flat sibling of the repo root, so `cd ../ACME-…` works.
+dir_base = "repo_parent"
+# The backstop, and the reason this key exists. A summary that slugifies to nothing (all
+# punctuation, or non-ASCII — `slugify` is byte-wise, exactly like `tr`) would otherwise
+# yield the branch `experiment/ACME-0000-`, which is not an error anywhere until it is a
+# very confusing one. This turns it into a clear failure before anything is created.
+branch_must_match = "^[a-z]+/[A-Z][A-Z0-9]*-[0-9]+-[a-z0-9][a-z0-9-]*$"
+
+# ═══════════════════════════════════ CREATE ═══════════════════════════════════
+
+[create]
+base_field = "base"
+# `git fetch origin develop` when the base is remote-tracking. Failure is non-fatal: the
+# review screen warns and shows how old the cached ref is.
+fetch_base = true
+# `--no-track`, deliberately. With tracking, a branch cut from `origin/develop` inherits
+# it as upstream and a reflexive `git push` targets develop.
+track = "no_track"
+
+# Someone already started this ticket on a branch. Offer it on the review screen instead
+# of failing, or silently creating a second branch for the same work.
+[[create.existing_branch_match]]
+pattern = "*{{ issue }}*"
+scope = "local_and_remote"
+behavior = "offer"
+# An adopted branch's directory is the branch minus its type prefix.
+directory = "{{ matched_branch | re_replace('^[^/]+/', '') }}"
+# A remote-only match becomes `--track -b <name> <path> origin/<name>`, where an upstream
+# is exactly what you want.
+adopt_remote_track = true
+
+# ═══════════════════════════════════ SETUP ═══════════════════════════════════
+#
+# The project's own script does the real work; wtm only creates the worktree and then
+# runs it. Which subcommand you point this at matters enormously — see GUARDS below.
+# `init <abs-path>` is chosen here because it returns normally and prompts for nothing.
+
+[setup]
+# Called directly rather than through a `just` wrapper: just's `*ARGS` re-splits on
+# whitespace, which would mangle a path containing a space.
+run = ["./bin/worktree.sh", "init", "{{ worktree.path }}"]
+# Surprising enough that the review screen shows it: a script full of `./bin/` and `../`
+# relative paths must run from the repo root, NOT from the worktree it is setting up.
+cwd = "repo_root"
+# Interactive: it prints progress, and a pty is what makes that visible — plus a prompt
+# stays answerable in the Terminal pane instead of hanging forever.
+pty = true
+# 30 minutes. Copying a multi-gigabyte database volume is not fast.
+timeout_ms = 1800000
+# If the script picks free ports by scanning every worktree's `.env`, two concurrent
+# scans can choose the same port. Serialize setup across the whole project.
+concurrency = "one_globally"
+# NEVER auto-remove on failure. By the time this fails it may have written `.env`,
+# allocated a dozen ports, created volumes and cloned a database. Removing all that to
+# leave a tidy-looking failure would leak the volumes and destroy work that is usually
+# one command from fixed. wtm offers Retry / Open shell / Remove instead.
+on_failure = "keep"
+
+# Map the boolean fields onto the script's flags.
+#
+# Note that these are separate guards, not an either/or: if your script treats one flag
+# as overriding the other, make sure the form cannot produce both.
+args_when = [
+  { when = "load_dump", push = ["--load-dump"] },
+  { when = "skip_db", push = ["--no-db"] },
+]
+
+[setup.env]
+# The load-bearing line for a bundled .app. Launched from Finder it inherits
+# `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and a setup script that calls `just`, `docker` or
+# `acli` — all of which live in /opt/homebrew/bin — would fail with "command not found"
+# only once installed. wtm probes a login shell for a usable PATH and exposes it here.
+PATH = "{{ env.LOGIN_PATH }}"
+
+# ═══════════════════════════════════ REMOVE ═══════════════════════════════════
+#
+# `native` means wtm runs git itself rather than calling the project's remove script. It
+# is the default for a reason: a script that asks `Delete branch <x>? [y/n]` on stdin
+# cannot be driven from a GUI, and the question becomes a checkbox instead.
+
+[remove]
+strategy = "native"
+require_clean = true
+allow_force = true
+prompt_delete_branch = true
+warn_if_unmerged = true
+
+# Teardown, before `git worktree remove`. Containers must stop and root-owned files must
+# be handed back, or git cannot delete the directory.
+[[remove.pre]]
+run = ["docker", "compose", "down", "-v", "-t", "0"]
+cwd = "worktree"
+# Nothing to tear down if the worktree was never initialized.
+#
+# `| default_if_empty('')` is load-bearing, not decoration: an *undefined* token is not
+# equal to '' in jinja semantics, so a bare `env.X != ''` is TRUE when the variable is
+# absent — exactly backwards. Collapsing undefined to '' first makes the condition mean
+# what it reads like.
+when = "env.COMPOSE_PROJECT_NAME | default_if_empty('') != ''"
+timeout_ms = 300000
+# A stopped Docker daemon must not block removal.
+on_failure = "warn"
+
+[[remove.pre]]
+# Containers running as root leave root-owned files (node_modules, collected static
+# assets) behind, which `git worktree remove` then cannot delete.
+run = [
+  "docker",
+  "run",
+  "--rm",
+  "-v",
+  "{{ worktree.path }}:/workdir",
+  "alpine",
+  "chown",
+  "-R",
+  "{{ os.uid }}:{{ os.gid }}",
+  "/workdir",
+]
+cwd = "repo_root"
+timeout_ms = 120000
+on_failure = "warn"
+
+# ═══════════════════════════════════ DISPLAY ═══════════════════════════════════
+#
+# Everything below is read-only presentation: which files to read facts from, and how to
+# turn them into the detail pane. wtm never writes any of these.
+
+# The per-worktree state the setup script wrote.
+[[display.source]]
+id = "env"
+kind = "dotenv"
+path = "{{ worktree.path }}/.env"
+optional = true
+
+# The committed base values. Load-bearing for the port table below.
+[[display.source]]
+id = "port_defaults"
+kind = "dotenv"
+path = "{{ repo.root }}/docker-compose.ports.defaults"
+optional = true
+
+[display]
+# The directory name and the branch are shown as separate facts, never conflated. They
+# genuinely disagree more often than you would expect — a directory named after one
+# ticket, checked out on a branch named after another.
+title = "{{ worktree.dirname }}"
+subtitle = "{{ worktree.branch | default_if_empty('(detached)') }}"
+
+[[display.badge]]
+label = "compose"
+# docker compose's own fallback when COMPOSE_PROJECT_NAME is unset: slugify the directory.
+value = "{{ env.COMPOSE_PROJECT_NAME | default_if_empty(worktree.dirname | slugify) }}"
+
+[[display.badge]]
+label = "jira"
+value = "{{ lookup.jira.status }}"
+when = "lookup.jira.status != ''"
+
+[[display.link]]
+label = "Web"
+value = "http://{{ env.DOMAIN | default_if_empty('127.0.0.1:' ~ (env.HOST_PORT_WEB | default_if_empty(port_defaults.HOST_PORT_WEB))) }}"
+open = true
+
+[[display.link]]
+label = "Mailpit"
+value = "http://127.0.0.1:{{ env.HOST_PORT_MAILPIT_UI | default_if_empty(port_defaults.HOST_PORT_MAILPIT_UI) }}"
+open = true
+
+[[display.link]]
+label = "MinIO"
+value = "http://127.0.0.1:{{ env.HOST_PORT_MINIO_CONSOLE | default_if_empty(port_defaults.HOST_PORT_MINIO_CONSOLE) }}"
+open = true
+
+# Every `HOST_PORT_*` as one table rather than a declaration each.
+#
+# `defaults` encodes the subtlety that makes this correct: a compose file written as
+# `${HOST_PORT_X:-8000}` means an **absent** variable leaves the base value in effect. So
+# a missing key is not a missing port — it is an inherited one, and the UI marks those
+# rows accordingly, because otherwise the distinction is invisible and then confusing.
+[[display.port_table]]
+prefix = "HOST_PORT_"
+from = "env"
+defaults = "port_defaults"
+label_transform = ["strip_prefix", "lower", "replace('_', ' ')"]
+link_template = "http://127.0.0.1:{{ value }}"
+link_for = ["HOST_PORT_WEB", "HOST_PORT_MAILPIT_UI", "HOST_PORT_MINIO_CONSOLE"]
+
+# ═══════════════════════════════════ ACTIONS ═══════════════════════════════════
+#
+# Buttons in the detail pane. Anything you would otherwise `cd` into the worktree to run.
+
+[[action]]
+id = "shell"
+label = "Open shell"
+run = ["{{ env.SHELL | default_if_empty('/bin/zsh') }}", "-l"]
+cwd = "worktree"
+pty = true
+
+[[action]]
+id = "start"
+label = "just start"
+run = ["just", "start"]
+cwd = "worktree"
+pty = true
+timeout_ms = 900000
+
+[[action]]
+id = "retry_setup"
+label = "Re-run setup (--force)"
+# Also the remedy offered when setup fails: same command, one implementation.
+run = ["./bin/worktree.sh", "init", "{{ worktree.path }}", "--force"]
+cwd = "repo_root"
+pty = true
+timeout_ms = 1800000
+
+[action.env]
+PATH = "{{ env.LOGIN_PATH }}"
+
+# ═══════════════════════════════════ GUARDS ═══════════════════════════════════
+#
+# The one place project-specific hazard knowledge lives, and it lives here as *data*.
+#
+# These are not "unwise" commands. They are commands that genuinely cannot work when
+# driven by a GUI, and every one of the patterns below describes a real failure mode of
+# real worktree scripts:
+#
+#   * a `create` subcommand that ends with `cd <path> && exec "$SHELL" -l` — it never
+#     returns, so anything waiting on it waits forever;
+#   * a `confirm()` helper that loops printing "Please enter y or n." on EOF stdin, so
+#     redirecting from /dev/null does not save you;
+#   * a `list` subcommand that is a passthrough to the human-readable `git worktree
+#     list`, whose column widths shift with the longest path and which cannot represent a
+#     path containing a space;
+#   * a `branch-create` that runs `git checkout -b` in the *current* worktree, changing
+#     what is checked out underneath you.
+#
+# Each carries its reason, because a guard with no reason is a guard the next person
+# deletes when it trips. Checked when this file loads AND again at spawn time, since an
+# argv is only fully known once its templates are rendered.
+
+[[guards.forbid]]
+argv_matches = "worktree\\.sh\\s+create"
+reason = "never returns: it ends with `cd <path> && exec \"$SHELL\" -l`, installs a trap INT that also execs a shell, and prompts on stdin with a numbered branch picker. Use `worktree.sh init <abs-path>` instead."
+
+[[guards.forbid]]
+argv_matches = "just\\s+worktree_create"
+reason = "a thin wrapper around `worktree.sh create` — same problem."
+
+[[guards.forbid]]
+argv_matches = "just\\s+worktree_remove"
+reason = "prompts `Delete branch <x>? [y/n]` with no --yes flag, and its confirm() helper loops forever on EOF stdin. wtm removes worktrees with git directly and offers the branch deletion as a checkbox."
+
+[[guards.forbid]]
+argv_matches = "just\\s+worktree_list"
+reason = "a passthrough to the human-readable `git worktree list`, whose column widths shift with the longest path and which cannot represent a path containing a space. wtm parses --porcelain -z."
+
+[[guards.forbid]]
+argv_matches = "worktree\\.sh\\s+branch-create"
+reason = "runs `git checkout -b` in the CURRENT worktree, changing what is checked out underneath you rather than creating a new worktree."

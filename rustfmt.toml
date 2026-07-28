@@ -1,0 +1,31 @@
+# STABLE OPTIONS ONLY. Anything requiring nightly is listed at the bottom as a
+# rejection so nobody re-adds it and then wonders why `cargo fmt` silently
+# ignores this file.
+
+edition       = "2024"
+style_edition = "2024"
+
+max_width          = 100
+tab_spaces         = 4
+hard_tabs          = false
+newline_style      = "Unix"
+use_small_heuristics = "Default"
+
+reorder_imports       = true
+reorder_modules       = true
+remove_nested_parens  = true
+merge_derives         = true
+match_arm_leading_pipes = "Never"
+fn_params_layout      = "Tall"
+force_explicit_abi    = true
+
+# ── Rejected: nightly-only, silently ignored on a stable toolchain ────────────
+# group_imports        = "StdExternalCrate"   # nightly
+# imports_granularity  = "Crate"              # nightly
+# wrap_comments        = true                 # nightly
+# comment_width        = 100                  # nightly
+# normalize_comments   = true                 # nightly
+# format_code_in_doc_comments = true          # nightly
+#
+# We hand-order imports std / external / crate with blank lines between groups.
+# It is a convention, not a lint, because enforcing it would require nightly.

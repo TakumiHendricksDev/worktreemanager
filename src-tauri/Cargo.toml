@@ -1,0 +1,49 @@
+[package]
+name        = "wtm-app"
+description = "Composition root and Tauri command surface."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lib]
+# Tauri's own convention: the app lives in a library so integration tests and the
+# (future) mobile entry point can both use it, with a thin binary on top.
+name       = "wtm_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# The binary name must match `mainBinaryName` in tauri.conf.json, or bundling cannot
+# find what it built. Without this it would default to the package name, `wtm-app`.
+[[bin]]
+name = "wtm"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The only crate that knows Tauri exists. Everything below it is framework-free.
+tauri      = { version = "2", features = ["macos-private-api"] }
+wtm-core   = { workspace = true }
+wtm-config = { workspace = true }
+wtm-exec   = { workspace = true }
+wtm-git    = { workspace = true }
+wtm-render = { workspace = true }
+parking_lot = { workspace = true }
+regex      = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+tracing    = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+wtm-testkit = { workspace = true }
+tempfile    = { workspace = true }
+# Only to assert things about our own Cargo.toml — see `the_release_profile_does_not_abort_on_panic`.
+toml        = { workspace = true }

@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push supersedes an in-flight run on the same ref. macOS runners are the
+# expensive ones; don't pay for results nobody will read.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # No incremental artifacts are reused between CI runs, so building them is
+  # pure cost.
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Everything that does NOT need the Tauri/webview toolchain runs on Linux,
+  # which is ~10x cheaper than a macOS runner. The domain crates are portable by
+  # design, so this is where the bulk of the signal comes from.
+  # ───────────────────────────────────────────────────────────────────────────
+  rust:
+    name: rust (core + adapters)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        # rust-toolchain.toml is authoritative; this action reads it.
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all --check
+
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - run: cargo nextest run --workspace
+
+      # The architectural guard: wtm-core must have no OS-specific dependency.
+      # If an adapter concern leaks into the domain, this is what catches it.
+      - name: wtm-core is OS-agnostic
+        run: cargo check -p wtm-core --target wasm32-unknown-unknown
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun x prettier --check "src/**/*.{ts,svelte,css}" "*.json"
+      - run: bun run check
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The only job that needs macOS: proving the app actually links and bundles.
+  # ───────────────────────────────────────────────────────────────────────────
+  app:
+    name: build .app (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - run: bun install --frozen-lockfile
+
+      - run: bun x tauri build --bundles app
+
+  supply-chain:
+    name: licenses + advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2

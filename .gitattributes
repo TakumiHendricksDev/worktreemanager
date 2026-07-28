@@ -1,0 +1,19 @@
+# Normalize line endings so a stray CRLF never lands in a shell script or TOML.
+* text=auto eol=lf
+
+# Shell scripts and hooks must stay LF and executable.
+*.sh        text eol=lf
+.githooks/* text eol=lf
+
+# Lockfiles: collapse in diffs and exclude from GitHub's language stats.
+Cargo.lock       linguist-generated=true -diff
+bun.lock         linguist-generated=true -diff
+package-lock.json linguist-generated=true -diff
+
+# Generated IPC types — don't review them, don't count them.
+src/lib/ipc/types.d.ts linguist-generated=true -diff
+
+# Binary assets.
+*.png  binary
+*.icns binary
+*.ico  binary

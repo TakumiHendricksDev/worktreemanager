@@ -1,0 +1,103 @@
+# Built-in defaults, compiled into the binary.
+#
+# These are what a repository with no `wtm.toml` gets, and they are deliberately
+# complete enough to be *useful* rather than merely valid: point wtm at any git repo
+# and New Worktree works immediately, with a name field, a base-branch dropdown
+# populated from the repo's own branches, and a working remove flow.
+#
+# Every key here is overridable by ~/.config/wtm/config.toml, then <repo>/wtm.toml,
+# then <git-common-dir>/wtm.local.toml. Note that arrays REPLACE rather than append,
+# so a project defining [[field]] defines the whole form.
+#
+# Nothing here runs a command except `git`, so the built-in configuration never
+# triggers a trust prompt.
+
+schema_version = 1
+
+# ─────────────────────────────── the form ───────────────────────────────
+
+[[field]]
+key = "name"
+label = "What are you working on?"
+kind = "text"
+required = true
+placeholder = "short-description"
+help = "Becomes the branch name and the directory name, slugified."
+
+[[field]]
+key = "base"
+label = "Base branch"
+kind = "select"
+required = true
+default = "HEAD"
+# Let a user type a ref that is not in the list — a tag, a sha, an unusual remote.
+allow_custom = true
+
+[field.options]
+kind = "command"
+# Local branches only by default. Listing remotes as well is a per-project choice:
+# on a repo with hundreds of remote branches an unfiltered dropdown is unusable.
+run = ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"]
+cwd = "repo_root"
+parse = "lines"
+timeout_ms = 5000
+cache_ttl_ms = 15000
+
+# ─────────────────────────────── naming ───────────────────────────────
+
+[naming]
+branch = "{{ name | slugify }}"
+# Capped: some filesystems and a lot of tooling get unhappy with very long
+# directory names, and a directory name is not the place for a full sentence.
+directory = "{{ name | slugify | truncate(60, '') }}"
+# A sibling of the repo root — the layout that keeps `cd ../` navigation working.
+dir_base = "repo_parent"
+# Guards against a name that slugifies to nothing (all punctuation, or non-ASCII)
+# silently producing an empty branch name.
+branch_must_match = "^[a-z0-9][a-z0-9._/-]*$"
+
+# ─────────────────────────────── create ───────────────────────────────
+
+[create]
+base_field = "base"
+fetch_base = true
+# Do not inherit the base as upstream. With tracking, a reflexive `git push` on a
+# branch cut from `main` targets `main`.
+track = "no_track"
+
+# ─────────────────────────────── remove ───────────────────────────────
+
+[remove]
+# The app runs git itself rather than delegating, so the "delete the branch too?"
+# question is a checkbox instead of a prompt on stdin.
+strategy = "native"
+require_clean = true
+allow_force = true
+prompt_delete_branch = true
+warn_if_unmerged = true
+
+# ─────────────────────────────── actions ───────────────────────────────
+
+[[action]]
+id = "shell"
+label = "Open shell"
+run = ["{{ env.SHELL | default_if_empty('/bin/zsh') }}", "-l"]
+cwd = "worktree"
+pty = true
+
+# ─────────────────────────────── guards ───────────────────────────────
+#
+# Two rules that hold for every project, so they live in the defaults rather than
+# being re-derived per repo. Both describe commands that cannot work from a GUI at
+# all, as opposed to commands that are merely unwise.
+
+[[guards.forbid]]
+argv_matches = "\\bgit\\s+worktree\\s+list\\b"
+# Rust's regex crate has no look-around (it guarantees linear-time matching), so
+# "unless" is a second pattern rather than a `(?!…)`.
+unless_matches = "--porcelain"
+reason = "human-readable `git worktree list` has elastic column widths and cannot represent a path containing a space. Use --porcelain -z."
+
+[[guards.forbid]]
+argv_matches = "\\bgit\\s+(rebase|add|commit|checkout)\\s+(-i|--interactive)\\b"
+reason = "interactive git commands expect a controlling editor and terminal; run them in a shell action instead."

@@ -1,0 +1,30 @@
+msrv = "1.85"
+
+# This is an application, not a library — breaking our own API is free.
+avoid-breaking-exported-api = false
+
+too-many-arguments-threshold = 8
+type-complexity-threshold    = 300
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The architectural rule that clippy enforces for us.
+#
+# This app's entire job is shelling out to git / just / acli / docker. Every one
+# of those spawns must go through the single wrapper in `wtm-exec`, which
+# guarantees a timeout, a sanitized environment, a resolved PATH, and a tracing
+# span. A bare `Command::new` anywhere else is how you get the hang that
+# `worktree.sh`'s confirm() loop causes.
+#
+# `wtm-exec`'s wrapper carries the one `#[allow(clippy::disallowed_methods)]`.
+# Likewise `SystemTime::now` is confined to the `Clock` port's real adapter, so
+# every use-case is testable at a fixed instant.
+# ─────────────────────────────────────────────────────────────────────────────
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "spawn via wtm_exec::Runner so the call is timed, timed-out, PATH-resolved and traced" },
+  { path = "std::time::SystemTime::now",  reason = "inject the Clock port instead, so use-cases are deterministic under test" },
+  { path = "std::time::Instant::now",     reason = "inject the Clock port instead, so use-cases are deterministic under test" },
+]
+
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "prefer parking_lot::Mutex: no poisoning, so no unwrap() on every lock" },
+]

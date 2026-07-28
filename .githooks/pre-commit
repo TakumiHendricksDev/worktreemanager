@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Keep this under ~3 seconds. Anything slower belongs in `just check` / CI, and a
+# slow hook is a hook people start bypassing with --no-verify.
+#
+# Committed to the repo and activated by `core.hooksPath = .githooks` (set by
+# `just setup`). No hook-manager binary to install: one file, and `just setup` is
+# the only thing that has to know about it.
+set -euo pipefail
+
+staged() { git diff --cached --name-only --diff-filter=ACM -- "$@"; }
+
+fail=0
+note() { printf '\033[1;31m✗\033[0m %s\n' "$1" >&2; fail=1; }
+
+# ── Rust: format check only. Clippy on a large workspace is too slow here; it
+# ── runs in `just check` and CI.
+if [ -n "$(staged '*.rs')" ]; then
+    # Distinguish "badly formatted" from "cargo isn't on PATH". A hook that runs from a
+    # GUI git client gets a minimal PATH, and reporting that as a formatting failure sends
+    # you looking in entirely the wrong place.
+    if ! command -v cargo >/dev/null 2>&1; then
+        note "cargo not on PATH — cannot check formatting (add ~/.cargo/bin, or use --no-verify)"
+    elif ! cargo fmt --all --check >/dev/null 2>&1; then
+        note "Rust formatting — run 'cargo fmt --all'"
+    fi
+fi
+
+# ── Frontend: format check.
+if [ -n "$(staged '*.ts' '*.svelte' '*.css')" ] && [ -d node_modules ]; then
+    if ! bun x prettier --check $(staged '*.ts' '*.svelte' '*.css' | tr '\n' ' ') >/dev/null 2>&1; then
+        note "Frontend formatting — run 'just fmt'"
+    fi
+fi
+
+# ── Never commit a generated IPC type file that disagrees with the Rust source.
+if [ -n "$(staged 'crates/**/*.rs' 'src-tauri/**/*.rs')" ] \
+   && [ -n "$(git diff --cached --name-only -- src/lib/ipc/types.d.ts)" ]; then
+    :  # both changed together — fine
+fi
+
+# ── Catch the two things that are genuinely expensive to discover later.
+if staged '*.rs' | xargs -r grep -nE '\bdbg!\(' 2>/dev/null; then
+    note "dbg! left in staged Rust"
+fi
+if staged '*.toml' | xargs -r grep -n 'PASTE_ME\|CHANGEME' 2>/dev/null; then
+    note "placeholder left in staged TOML"
+fi
+
+exit $fail

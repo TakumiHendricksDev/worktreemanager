@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Worktree Manager</title>
+    <script>
+      // Resolve the theme before first paint. Without this, the window flashes light
+      // while the app boots and asks Rust for the stored preference — which on a dark
+      // desktop is a visible, ugly blink on every launch.
+      (() => {
+        try {
+          const stored = localStorage.getItem('wtm.theme') ?? 'system';
+          const dark =
+            stored === 'dark' ||
+            (stored === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+          document.documentElement.dataset.themeChoice = stored;
+        } catch {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

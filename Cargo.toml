@@ -1,0 +1,135 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/wtm-core",
+  "crates/wtm-config",
+  "crates/wtm-git",
+  "crates/wtm-exec",
+  "crates/wtm-render",
+  "crates/wtm-testkit",
+  "src-tauri",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared package metadata. Every member inherits with `field.workspace = true`.
+# ─────────────────────────────────────────────────────────────────────────────
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.88"
+license      = "MIT"
+authors      = ["Takumi Hendricks"]
+repository   = "https://github.com/TakumiHendricksDev/worktreemanager"
+# Never publish to crates.io. These are one application's internal crates, and saying so is
+# what lets `[bans] allow-wildcard-paths` exempt their `{ path = … }` declarations — cargo-deny
+# refuses to, for a crate that *could* be published, because crates.io rejects path deps.
+publish      = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE single source of truth for every dependency version in the repo.
+# Members write `serde = { workspace = true }` — never a version number. This is
+# the DRY rule that stops two crates drifting onto two minor versions of serde.
+# ─────────────────────────────────────────────────────────────────────────────
+[workspace.dependencies]
+# internal
+wtm-core    = { path = "crates/wtm-core" }
+wtm-config  = { path = "crates/wtm-config" }
+wtm-git     = { path = "crates/wtm-git" }
+wtm-exec    = { path = "crates/wtm-exec" }
+wtm-render  = { path = "crates/wtm-render" }
+wtm-testkit = { path = "crates/wtm-testkit" }
+wtm-app     = { path = "src-tauri" }
+
+# external — domain (must stay OS-agnostic: wtm-core compiles to wasm32)
+serde      = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+thiserror  = "2"
+
+# external — adapters
+toml            = "1"
+serde_json_path = "0.7"
+# `default-features = false` is the sandbox: without the `loader` feature there is
+# no way for a template to `{% include %}` a file. `builtins` supplies the string
+# filters; `serde` is needed to build values from our own types.
+minijinja       = { version = "2", default-features = false, features = ["builtins", "serde"] }
+portable-pty    = "0.9"
+etcetera        = "0.11"
+shell-words     = "1"
+regex           = "1"
+sha2            = "0.10"
+parking_lot     = "0.12"
+time            = { version = "0.3", features = ["formatting", "parsing", "local-offset"] }
+# `nix`, not `libc`, specifically so `unsafe_code = "forbid"` can stay. Killing a
+# process *group* is mandatory here (the real tree is script → shell → docker), and
+# `libc::killpg` is an unsafe extern call. nix wraps exactly these syscalls in a
+# safe, well-maintained API, so this repo contains no `unsafe` at all.
+nix             = { version = "0.30", features = ["signal", "process", "user"] }
+uuid            = { version = "1", features = ["v4", "serde"] }
+tracing         = "0.1"
+
+# dev
+tempfile          = "3"
+insta             = { version = "1", features = ["json", "redactions"] }
+rstest            = "0.26"
+pretty_assertions = "1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lints: the quality gate. Members opt in with `[lints] workspace = true`.
+#
+# Groups carry priority = -1 so the individual opt-outs below actually win —
+# without that, group and lint have equal priority and cargo errors out.
+# ─────────────────────────────────────────────────────────────────────────────
+[workspace.lints.rust]
+unsafe_code            = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub        = "warn"
+rust_2018_idioms       = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all      = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# pedantic opt-outs — each a judgement call, not laziness
+module_name_repetitions = "allow"  # `git::GitError` reads better than `git::Error` at call sites
+missing_errors_doc      = "allow"  # error types are self-documenting via thiserror messages
+missing_panics_doc      = "allow"  # `unsafe_code = forbid` + `unwrap_used` already cover this
+must_use_candidate      = "allow"  # noise on an app; #[must_use] is applied where it matters
+too_many_lines          = "allow"  # the create pipeline is one honest linear state machine
+
+# hand-picked restriction lints — deliberately NOT the whole group
+dbg_macro     = "deny"
+todo          = "warn"
+unwrap_used   = "warn"   # allowed in #[cfg(test)] via a crate-level allow in test modules
+print_stdout  = "warn"   # a GUI app logs via tracing; stdout goes nowhere useful
+print_stderr  = "warn"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Profiles. These MUST live at the workspace root — cargo ignores
+# [profile.*] in member manifests and only warns about it.
+# ─────────────────────────────────────────────────────────────────────────────
+[profile.dev]
+# Enough debuginfo for a backtrace with line numbers, without the DWARF bloat.
+debug     = 1
+opt-level = 0
+
+[profile.dev.package."*"]
+# Full debuginfo across ~800 Tauri dependencies is the single biggest cost in a
+# Tauri dev build: it dominates link time and pushes target/ past 6 GB. You
+# never step into `objc2-app-kit`, so don't pay for it.
+debug     = false
+opt-level = 1
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"
+
+# `panic = "abort"` is deliberately NOT set, and that is a correction rather than an omission.
+#
+# It was set, and it made every panic anywhere in the app an instant silent process death:
+# `commands::blocking` catches a panicking task and turns it into an error the UI can show, but
+# with `abort` the process is gone before that handler exists. A user sees the window vanish
+# with no message and no crash report — which is exactly what happened.
+#
+# Unwinding costs a little binary size and buys the difference between "the app quit" and "the
+# operation failed, here is why".
