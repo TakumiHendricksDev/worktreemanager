@@ -245,6 +245,11 @@ pub struct TableRowView {
 }
 
 /// A worktree, ready to render.
+// Four independent booleans. Clippy's suggestion — fold them into enums — would be right
+// for a domain type, but this is the wire format: each flag is a separate thing the sidebar
+// renders, the frontend reads them by name, and an enum would trade four obvious fields for
+// a tagged union that TypeScript has to unpack. The JSON contract is the constraint.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeView {
@@ -271,6 +276,13 @@ pub struct WorktreeView {
 
     /// An issue key extracted from the branch, then the directory, if either has one.
     pub issue_key: Option<String>,
+
+    /// Starred by the user, which floats it to the top of the sidebar.
+    ///
+    /// The only field here that comes from the *app* config rather than from git or the
+    /// project config. It rides along on this view so the sidebar's ordering survives a
+    /// cold start from the frontend's cache, with no second round-trip.
+    pub favorite: bool,
 
     pub badges: Vec<BadgeView>,
     pub links: Vec<LinkView>,
@@ -625,6 +637,7 @@ mod tests {
             ahead: 0,
             behind: 0,
             issue_key: None,
+            favorite: false,
             badges: vec![],
             links: vec![],
             table: vec![],
@@ -634,7 +647,9 @@ mod tests {
         let object = json.as_object().unwrap();
 
         // Snake_case leaking through would silently break every binding in the UI.
-        for expected in ["isMain", "isBare", "issueKey", "dirname", "subtitle"] {
+        for expected in [
+            "isMain", "isBare", "issueKey", "dirname", "subtitle", "favorite",
+        ] {
             assert!(
                 object.contains_key(expected),
                 "missing `{expected}` in {object:?}"

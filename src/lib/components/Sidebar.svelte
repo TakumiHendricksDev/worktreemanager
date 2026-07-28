@@ -1,27 +1,59 @@
 <script lang="ts">
   /**
-   * The left rail: project switcher, then worktrees as tabs.
+   * The left rail: a filter field, then worktrees as tabs.
    *
    * The list is a genuine `role="tablist"` with arrow-key navigation, so the "tabs down
    * the left" interaction works from the keyboard. It is not virtualized on purpose — a
    * developer with 500 open worktrees does not exist, and a virtual list would cost more
    * than it could ever save here.
+   *
+   * The project switcher used to sit above the list and now lives in the title bar; see
+   * `TitleBar.svelte` for why.
    */
+  import { onMount } from 'svelte';
+
   import { workspace } from '../state/workspace.svelte';
   import WorktreeTab from './WorktreeTab.svelte';
 
   const {
     onnew,
-    onaddproject,
     onselectworktree,
   }: {
     onnew: () => void;
-    onaddproject: () => void;
     /** Picking a worktree means "show me that one", so the pane leaves the create view. */
     onselectworktree?: () => void;
   } = $props();
 
   let listEl = $state<HTMLDivElement | null>(null);
+  let searchEl = $state<HTMLInputElement | null>(null);
+
+  /**
+   * ⌘F focuses the filter.
+   *
+   * Registered here rather than alongside the other shortcuts in `App.svelte` because the
+   * thing it acts on is this component's input element. Reaching it from the parent would
+   * mean exporting a ref upward for one keystroke.
+   */
+  onMount(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
+        event.preventDefault();
+        searchEl?.focus();
+        searchEl?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  /** Move focus onto whichever tab is selected, and scroll it into view. */
+  function focusSelectedTab() {
+    queueMicrotask(() => {
+      const active = listEl?.querySelector<HTMLElement>('[aria-selected="true"]');
+      active?.focus();
+      active?.scrollIntoView({ block: 'nearest' });
+    });
+  }
 
   function onKeydown(event: KeyboardEvent) {
     const moves: Record<string, number> = { ArrowDown: 1, ArrowUp: -1 };
@@ -33,44 +65,55 @@
     onselectworktree?.();
     // Move real focus with the selection, or the next arrow press would be handled by
     // the element the user has actually focused rather than by the list.
-    queueMicrotask(() => {
-      const active = listEl?.querySelector<HTMLElement>('[aria-selected="true"]');
-      active?.focus();
-      active?.scrollIntoView({ block: 'nearest' });
-    });
+    focusSelectedTab();
   }
 
-  async function onProjectChange(event: Event) {
-    const id = (event.currentTarget as HTMLSelectElement).value;
-    if (id === '__add__') {
-      // Re-select the current project so the picker does not stay on the sentinel.
-      (event.currentTarget as HTMLSelectElement).value = workspace.activeProjectId ?? '';
-      onaddproject();
+  /** Escape clears, Enter and ArrowDown hand off to the list. */
+  function onSearchKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      // Only swallow the key while there is something to clear, so Escape still reaches
+      // anything else that wants it once the field is empty.
+      if (workspace.query !== '') {
+        event.preventDefault();
+        workspace.query = '';
+      }
       return;
     }
-    await workspace.selectProject(id);
+
+    if (event.key === 'Enter' || event.key === 'ArrowDown') {
+      const first = workspace.ordered[0];
+      if (!first) return;
+      event.preventDefault();
+      // Enter means "the one I was typing towards"; ArrowDown means "let me walk the list".
+      // Both start by selecting the top match, and both move focus out of the field.
+      workspace.select(first.id);
+      onselectworktree?.();
+      focusSelectedTab();
+    }
   }
 </script>
 
-<nav class="sidebar" aria-label="Projects and worktrees">
-  <div class="project">
-    <label class="visually-hidden" for="project-picker">Project</label>
-    <select
-      id="project-picker"
-      value={workspace.activeProjectId ?? ''}
-      onchange={onProjectChange}
-      disabled={workspace.projects.length === 0}
-    >
-      {#if workspace.projects.length === 0}
-        <option value="">No projects yet</option>
-      {/if}
-      {#each workspace.projects as project (project.id)}
-        <option value={project.id}>
-          {project.name}{project.usable ? '' : '  ⚠'}
-        </option>
-      {/each}
-      <option value="__add__">Add a repository…</option>
-    </select>
+<nav class="sidebar" aria-label="Worktrees">
+  <div class="search" role="search">
+    <span class="glyph" aria-hidden="true">⌕</span>
+    <label class="visually-hidden" for="worktree-search">Filter worktrees</label>
+    <input
+      id="worktree-search"
+      type="search"
+      bind:this={searchEl}
+      bind:value={workspace.query}
+      onkeydown={onSearchKeydown}
+      placeholder="Filter worktrees"
+      autocomplete="off"
+      spellcheck="false"
+      disabled={!workspace.activeProject?.usable}
+    />
+    {#if workspace.query !== ''}
+      <button class="clear" onclick={() => (workspace.query = '')} title="Clear the filter">
+        <span aria-hidden="true">✕</span>
+        <span class="visually-hidden">Clear the filter</span>
+      </button>
+    {/if}
   </div>
 
   <div class="listwrap" bind:this={listEl}>
@@ -87,6 +130,12 @@
       <p class="empty">This project needs attention — see the panel on the right.</p>
     {:else if workspace.worktrees.length === 0}
       <p class="empty">No worktrees.</p>
+    {:else if workspace.ordered.length === 0}
+      <p class="empty">
+        Nothing matches <strong>{workspace.query}</strong>.
+        <button class="link" onclick={() => (workspace.query = '')}>Clear the filter</button
+        >
+      </p>
     {:else}
       <!--
         The tablist itself is deliberately not focusable. Per the ARIA tabs pattern,
@@ -102,7 +151,19 @@
         class="list"
         onkeydown={onKeydown}
       >
-        {#each workspace.worktrees as worktree (worktree.id)}
+        <!--
+          Two groups, but one tablist and one selection. The headings only appear once
+          something is starred, so a project with no favorites looks exactly as it did
+          before — and they are `presentation` because a tablist's children must be tabs.
+          The star on each row is what actually conveys the state; these are a visual aid.
+
+          Both groups render from `workspace.ordered`'s two halves, which is also what
+          arrow-key navigation walks, so screen order and keyboard order cannot drift.
+        -->
+        {#if workspace.favorites.length > 0}
+          <p class="group" role="presentation">Favorites</p>
+        {/if}
+        {#each workspace.favorites as worktree (worktree.id)}
           <WorktreeTab
             {worktree}
             selected={worktree.id === workspace.selectedWorktreeId}
@@ -110,6 +171,22 @@
               workspace.select(worktree.id);
               onselectworktree?.();
             }}
+            onfavorite={() => workspace.toggleFavorite(worktree.id)}
+          />
+        {/each}
+
+        {#if workspace.favorites.length > 0 && workspace.others.length > 0}
+          <p class="group" role="presentation">All worktrees</p>
+        {/if}
+        {#each workspace.others as worktree (worktree.id)}
+          <WorktreeTab
+            {worktree}
+            selected={worktree.id === workspace.selectedWorktreeId}
+            onselect={() => {
+              workspace.select(worktree.id);
+              onselectworktree?.();
+            }}
+            onfavorite={() => workspace.toggleFavorite(worktree.id)}
           />
         {/each}
       </div>
@@ -123,7 +200,9 @@
       *knowable*, without anything moving.
     -->
     <p class="status" aria-live="polite">
-      {#if workspace.revalidating}Refreshing…{:else if workspace.stale}Showing the last
+      {#if workspace.filtering}
+        {workspace.ordered.length} of {workspace.worktrees.length}
+      {:else if workspace.revalidating}Refreshing…{:else if workspace.stale}Showing the last
         known list.{/if}
     </p>
     <button class="new" onclick={onnew} disabled={!workspace.activeProject?.usable}>
@@ -142,19 +221,74 @@
     border-right: 1px solid var(--border);
   }
 
-  .project {
-    padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  .search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    margin: var(--sp-3) var(--sp-3) var(--sp-2);
     flex: 0 0 auto;
   }
 
-  select {
+  .glyph {
+    position: absolute;
+    left: 8px;
+    color: var(--fg-subtle);
+    font-size: var(--step-0);
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  input {
     width: 100%;
-    padding: 6px 8px;
+    height: 28px;
+    /* Left room for the glyph, right room for the clear button. */
+    padding: 0 26px 0 26px;
     border: 1px solid var(--border);
     border-radius: var(--r-md);
     background: var(--bg-input);
+    color: var(--fg);
     font-size: var(--step--1);
-    font-weight: 500;
+  }
+
+  /* WebKit draws its own decorations on `type=search`; they do not match anything else
+     here, and the clear button is provided below so the native one would be a duplicate. */
+  input::-webkit-search-decoration,
+  input::-webkit-search-cancel-button {
+    appearance: none;
+  }
+
+  input::placeholder {
+    color: var(--fg-subtle);
+  }
+
+  input:focus-visible {
+    border-color: var(--border-focus);
+  }
+
+  .clear {
+    position: absolute;
+    right: 5px;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    color: var(--fg-muted);
+    font-size: var(--step--2);
+    line-height: 1;
+  }
+
+  .clear:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  .link {
+    display: block;
+    margin: var(--sp-2) auto 0;
+    color: var(--accent);
+    font-size: var(--step--1);
+    text-decoration: underline;
   }
 
   .listwrap {
@@ -168,6 +302,20 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .group {
+    padding: var(--sp-3) var(--sp-3) 2px;
+    font-size: var(--step--2);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+  }
+
+  /* No leading gap above the first heading; it sits directly under the project picker. */
+  .group:first-child {
+    padding-top: var(--sp-1);
   }
 
   .empty {

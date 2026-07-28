@@ -9,7 +9,7 @@
 //! paths, and the symptom would be a command that works in the terminal pane but not in a
 //! captured preflight check — a genuinely baffling bug.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -194,6 +194,18 @@ impl App {
         let worktrees = self.git.list_worktrees(&project.root)?;
         let base = self.base_branch(project, &worktrees);
 
+        // Read once for the whole list, not once per row. A missing or unreadable app
+        // config means nothing is starred, which is the right answer anyway.
+        let favorites: BTreeSet<String> = self
+            .config
+            .favorites(&project.root)
+            .unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "cannot read favorites; treating none as starred");
+                Vec::new()
+            })
+            .into_iter()
+            .collect();
+
         Ok(worktrees
             .iter()
             .map(|worktree| {
@@ -202,12 +214,30 @@ impl App {
                     project,
                     worktree,
                     status,
+                    favorites.contains(worktree.id.as_str()),
                     self.files.as_ref(),
                     self.engine.as_ref(),
                     &self.os_tokens,
                 )
             })
             .collect())
+    }
+
+    /// Star or unstar a worktree.
+    ///
+    /// Takes the id verbatim: [`WorktreeId`](wtm_core::model::WorktreeId) *is* the absolute
+    /// path, so what gets stored is exactly the string the next `worktrees` call will
+    /// compare against. Resolving it through git first would cost a process spawn to
+    /// re-derive a value we already hold.
+    pub fn set_favorite(
+        &self,
+        project: &Project,
+        worktree_id: &str,
+        favorite: bool,
+    ) -> Result<(), WtmError> {
+        Ok(self
+            .config
+            .set_favorite(&project.root, worktree_id, favorite)?)
     }
 
     /// Status plus divergence for one worktree.

@@ -84,6 +84,8 @@ export interface Worktree {
   behind: number;
 
   issueKey: string | null;
+  /** Starred by the user. Sorts to the top of the sidebar; see `workspace.ordered`. */
+  favorite: boolean;
 
   badges: Badge[];
   links: Link[];

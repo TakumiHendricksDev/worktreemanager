@@ -80,6 +80,10 @@ pub struct ExecPrefs {
 }
 
 /// One registered repository.
+///
+/// Field order matters: TOML requires every plain value to be emitted before any table,
+/// so `favorites` (an array of strings) must stay above `config` (a table). Moving it
+/// below would make `save` fail at runtime, not at compile time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectEntry {
     /// Display name override.
@@ -88,6 +92,14 @@ pub struct ProjectEntry {
     /// ISO date it was added, for ordering and for display.
     #[serde(default)]
     pub added: Option<String>,
+    /// Absolute paths of worktrees the user has starred, sorted.
+    ///
+    /// Stored per project rather than globally because a worktree path is only meaningful
+    /// relative to its repository, and unregistering a project should take its stars with
+    /// it. Kept out of the file entirely when empty, so a config nobody has starred in
+    /// looks exactly as it did before this existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favorites: Vec<String>,
     /// Project-config overrides for this repository, merged as the user layer.
     #[serde(default)]
     pub config: Option<toml::Value>,
@@ -181,6 +193,43 @@ impl UserConfig {
 
     pub fn unregister(&mut self, root: &Path) {
         self.projects.remove(&root.to_string_lossy().into_owned());
+    }
+
+    /// Starred worktree paths for `root`, or empty if it has none.
+    #[must_use]
+    pub fn favorites(&self, root: &Path) -> &[String] {
+        self.projects
+            .get(root.to_string_lossy().as_ref())
+            .map_or(&[], |entry| entry.favorites.as_slice())
+    }
+
+    /// Star or unstar one worktree. Returns whether anything changed.
+    ///
+    /// A missing project entry is a no-op rather than an insertion: `projects` is also the
+    /// registration list, so creating an entry here would make a stray star register a
+    /// phantom repository in the sidebar. Only a registered project's worktrees are
+    /// reachable in the UI, so absent means something is already wrong upstream.
+    pub fn set_favorite(&mut self, root: &Path, worktree: &str, favorite: bool) -> bool {
+        let Some(entry) = self.projects.get_mut(root.to_string_lossy().as_ref()) else {
+            return false;
+        };
+
+        // A linear scan rather than a binary search: this file is hand-editable, so the
+        // list cannot be assumed sorted on the way in. Sorting on insert keeps the diff
+        // stable going forward, and these lists are a handful of entries long.
+        let at = entry.favorites.iter().position(|f| f == worktree);
+        match (at, favorite) {
+            (None, true) => {
+                entry.favorites.push(worktree.to_owned());
+                entry.favorites.sort();
+                true
+            }
+            (Some(at), false) => {
+                entry.favorites.remove(at);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Read a dotted preference key.
@@ -323,6 +372,88 @@ mod tests {
             config.projects["/r"].config.is_some(),
             "overrides must survive registration"
         );
+    }
+
+    #[test]
+    fn favorites_round_trip_and_stay_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut config = UserConfig::default();
+        config.register(Path::new("/r"), "2026-07-28".to_owned());
+        assert!(config.set_favorite(Path::new("/r"), "/r-b", true));
+        assert!(config.set_favorite(Path::new("/r"), "/r-a", true));
+        config.save(&path).unwrap();
+
+        let reloaded = UserConfig::load(&path).unwrap();
+        assert_eq!(reloaded.favorites(Path::new("/r")), ["/r-a", "/r-b"]);
+    }
+
+    #[test]
+    fn favoriting_is_idempotent_in_both_directions() {
+        let mut config = UserConfig::default();
+        config.register(Path::new("/r"), "2026-07-28".to_owned());
+
+        assert!(config.set_favorite(Path::new("/r"), "/r-a", true));
+        assert!(
+            !config.set_favorite(Path::new("/r"), "/r-a", true),
+            "starring twice must not duplicate the entry"
+        );
+        assert_eq!(config.favorites(Path::new("/r")).len(), 1);
+
+        assert!(config.set_favorite(Path::new("/r"), "/r-a", false));
+        assert!(
+            !config.set_favorite(Path::new("/r"), "/r-a", false),
+            "unstarring what is not starred is not a change"
+        );
+        assert!(config.favorites(Path::new("/r")).is_empty());
+    }
+
+    #[test]
+    fn favoriting_an_unregistered_project_does_not_register_it() {
+        // `projects` doubles as the registration list, so an insert here would put a
+        // phantom repository in the sidebar.
+        let mut config = UserConfig::default();
+        assert!(!config.set_favorite(Path::new("/never-added"), "/x", true));
+        assert!(config.projects.is_empty());
+    }
+
+    #[test]
+    fn unstarring_survives_a_hand_sorted_list() {
+        // The list is assumed unsorted on the way in, because a human may have typed it.
+        let mut config = UserConfig::default();
+        config.projects.insert(
+            "/r".to_owned(),
+            ProjectEntry {
+                favorites: vec!["/r-z".to_owned(), "/r-a".to_owned()],
+                ..ProjectEntry::default()
+            },
+        );
+        assert!(config.set_favorite(Path::new("/r"), "/r-z", false));
+        assert_eq!(config.favorites(Path::new("/r")), ["/r-a"]);
+    }
+
+    #[test]
+    fn a_project_with_no_favorites_writes_no_favorites_key() {
+        // The setting should be invisible until it is used.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut config = UserConfig::default();
+        config.register(Path::new("/r"), "2026-07-28".to_owned());
+        config.save(&path).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("favorites"), "unexpected key in:\n{text}");
+    }
+
+    #[test]
+    fn unregistering_takes_the_favorites_with_it() {
+        let mut config = UserConfig::default();
+        config.register(Path::new("/r"), "2026-07-28".to_owned());
+        config.set_favorite(Path::new("/r"), "/r-a", true);
+        config.unregister(Path::new("/r"));
+        assert!(config.favorites(Path::new("/r")).is_empty());
     }
 
     #[test]

@@ -12,7 +12,13 @@
     worktree,
     projectId,
     onremove,
-  }: { worktree: Worktree; projectId: string; onremove: () => void } = $props();
+    onfavorite,
+  }: {
+    worktree: Worktree;
+    projectId: string;
+    onremove: () => void;
+    onfavorite: () => void;
+  } = $props();
 
   type Tab = 'overview' | 'env';
   let tab = $state<Tab>('overview');
@@ -92,6 +98,20 @@
 >
   <header class="head">
     <div class="titles">
+      <!--
+        Duplicated from the sidebar on purpose: the one there only appears on hover, which
+        is not somewhere a control can be *found*. This is where you learn it exists.
+      -->
+      <button
+        class="star"
+        class:on={worktree.favorite}
+        aria-pressed={worktree.favorite}
+        title={worktree.favorite ? 'Remove from favorites' : 'Add to favorites'}
+        onclick={onfavorite}
+      >
+        <span aria-hidden="true">{worktree.favorite ? '★' : '☆'}</span>
+        <span class="visually-hidden">Favorite</span>
+      </button>
       <h1>{worktree.title}</h1>
       <div class="badges">
         {#if worktree.isMain}<span class="badge accent">main worktree</span>{/if}
@@ -302,6 +322,33 @@
     font-size: var(--step-2);
     font-weight: 600;
     letter-spacing: -0.01em;
+  }
+
+  /* Always visible here, unlike the sidebar's hover-revealed twin — this is the copy that
+     has to be findable. */
+  .star {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    /* Pulls the star in from the row's gap so it reads as attached to the title. */
+    margin-right: calc(var(--sp-2) - var(--sp-3));
+    border-radius: var(--r-sm);
+    font-size: var(--step-1);
+    line-height: 1;
+    color: var(--fg-subtle);
+    transition:
+      background var(--dur-fast) var(--ease),
+      color var(--dur-fast) var(--ease);
+  }
+
+  .star.on {
+    color: var(--star);
+  }
+
+  .star:hover {
+    background: var(--bg-hover);
+    color: var(--star);
   }
 
   h2 {

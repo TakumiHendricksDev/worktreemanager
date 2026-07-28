@@ -35,6 +35,7 @@ pub fn run() {
             commands::register_project,
             commands::unregister_project,
             commands::list_worktrees,
+            commands::set_worktree_favorite,
             commands::worktree_form,
             commands::field_options,
             commands::list_actions,

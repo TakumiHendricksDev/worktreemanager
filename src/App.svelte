@@ -40,8 +40,6 @@
   let showAddProject = $state(false);
   let showRemove = $state(false);
 
-  const subtitle = $derived(workspace.activeProject?.root ?? '');
-
   onMount(() => {
     void (async () => {
       await theme.init();
@@ -129,13 +127,12 @@
 </script>
 
 <div class="shell" style:--sidebar-w="{sidebarWidth}px">
-  <TitleBar title={workspace.activeProject?.name ?? 'Worktree Manager'} {subtitle} />
+  <TitleBar onaddproject={addProject} />
 
   <div class="columns" class:dragging>
     <aside class="col-sidebar">
       <Sidebar
         onnew={() => (mainView = 'new')}
-        onaddproject={addProject}
         onselectworktree={() => (mainView = 'worktree')}
       />
     </aside>
@@ -202,6 +199,10 @@
           worktree={workspace.selected}
           projectId={workspace.activeProjectId ?? ''}
           onremove={() => (showRemove = true)}
+          onfavorite={() => {
+            const id = workspace.selected?.id;
+            if (id) void workspace.toggleFavorite(id);
+          }}
         />
       {:else if !workspace.loadingWorktrees}
         <div class="placeholder">

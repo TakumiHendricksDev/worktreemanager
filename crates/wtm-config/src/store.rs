@@ -97,6 +97,45 @@ impl FileConfigStore {
         config.save(&self.paths.config_file)
     }
 
+    /// Starred worktree paths for `repo_root`.
+    ///
+    /// Deliberately an inherent method rather than part of the [`ConfigStore`] port. A
+    /// favorite is a sidebar-ordering preference: no use-case reads it, no plan depends on
+    /// it, and putting it on the port would hand the domain an opinion about the UI. The
+    /// composition root reaches for the concrete store, which is the one place allowed to.
+    pub fn favorites(&self, repo_root: &Path) -> Result<Vec<String>, ConfigError> {
+        Ok(self.user_config()?.favorites(repo_root).to_vec())
+    }
+
+    /// Star or unstar one worktree, by its absolute path.
+    ///
+    /// Writing the whole config back for one boolean is fine here: the file is small, the
+    /// write is atomic, and a star is a deliberate click rather than something that
+    /// happens in a loop.
+    pub fn set_favorite(
+        &self,
+        repo_root: &Path,
+        worktree: &str,
+        favorite: bool,
+    ) -> Result<(), ConfigError> {
+        let mut config = self.user_config()?;
+        if !config
+            .projects
+            .contains_key(repo_root.to_string_lossy().as_ref())
+        {
+            tracing::warn!(
+                repo = %repo_root.display(),
+                "ignoring a favorite for an unregistered project"
+            );
+            return Ok(());
+        }
+        // Already in the requested state: no change, so no write.
+        if !config.set_favorite(repo_root, worktree, favorite) {
+            return Ok(());
+        }
+        self.save_user_config(&config)
+    }
+
     fn trust_store(&self) -> TrustStore {
         TrustStore::load(&self.paths.trust_file)
     }
@@ -703,5 +742,55 @@ mod tests {
     fn declared_commands_deduplicates() {
         let value = layers::document("[a]\nrun = ['x']\n\n[b]\nrun = ['x']\n").unwrap();
         assert_eq!(declared_commands_in(&value).len(), 1);
+    }
+
+    #[test]
+    fn favorites_persist_to_disk_and_can_be_removed() {
+        let h = Harness::new();
+        h.store.register_project(&h.repo).unwrap();
+
+        let a = h.repo.join("../wt-a").to_string_lossy().into_owned();
+        h.store.set_favorite(&h.repo, &a, true).unwrap();
+        assert_eq!(h.store.favorites(&h.repo).unwrap(), vec![a.clone()]);
+
+        h.store.set_favorite(&h.repo, &a, false).unwrap();
+        assert!(h.store.favorites(&h.repo).unwrap().is_empty());
+    }
+
+    #[test]
+    fn favoriting_does_not_disturb_the_rest_of_the_app_config() {
+        // The whole file is rewritten for one boolean, so the round-trip has to be safe.
+        let h = Harness::new();
+        h.store.register_project(&h.repo).unwrap();
+        h.store.set_user_pref("ui.theme", "dark").unwrap();
+
+        h.store.set_favorite(&h.repo, "/wt-a", true).unwrap();
+
+        assert_eq!(
+            h.store.user_pref("ui.theme").unwrap().as_deref(),
+            Some("dark"),
+            "an unrelated preference must survive a favorite"
+        );
+        assert_eq!(
+            h.store.projects().unwrap(),
+            vec![h.repo.clone()],
+            "registration must survive a favorite"
+        );
+    }
+
+    #[test]
+    fn favoriting_an_unregistered_project_is_ignored_rather_than_an_error() {
+        // Reachable only if the UI got ahead of the config; it must not create a phantom
+        // project, and it must not fail the click either.
+        let h = Harness::new();
+        h.store.set_favorite(&h.repo, "/wt-a", true).unwrap();
+        assert!(h.store.projects().unwrap().is_empty());
+        assert!(h.store.favorites(&h.repo).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_project_with_no_config_file_reports_no_favorites() {
+        let h = Harness::new();
+        assert!(h.store.favorites(&h.repo).unwrap().is_empty());
     }
 }

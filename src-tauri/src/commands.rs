@@ -99,6 +99,28 @@ pub async fn list_worktrees(app: AppState<'_>, project_id: String) -> Reply<Vec<
     .await
 }
 
+/// Star or unstar a worktree, persisting to the app config.
+///
+/// Returns nothing on purpose. Unlike a create or a remove, this changes no git state and
+/// nothing else can contradict it, so the frontend flips its own star and calls this
+/// behind the click — the same shape as a theme change. Re-listing every worktree to
+/// confirm one boolean would cost several `git` invocations per click.
+#[tauri::command]
+pub async fn set_worktree_favorite(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    favorite: bool,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let project = app.project(&project_id)?;
+        app.set_favorite(&project, &worktree_id, favorite)
+            .map_err(Into::into)
+    })
+    .await
+}
+
 // ─────────────────────────────── the form ───────────────────────────────
 
 /// The New Worktree form for a project, straight from its config.
@@ -667,14 +689,24 @@ pub async fn remove_worktree(
         let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
         let sink = crate::pty_bridge::EventSink::new(handle);
 
-        app.remove_pipeline()
-            .execute(
-                &req,
-                &progress,
-                &(sink as Arc<dyn wtm_core::ports::pty::PtySink>),
-                &wtm_core::ports::exec::CancelToken::new(),
-            )
-            .map_err(Into::into)
+        let outcome = app.remove_pipeline().execute(
+            &req,
+            &progress,
+            &(sink as Arc<dyn wtm_core::ports::pty::PtySink>),
+            &wtm_core::ports::exec::CancelToken::new(),
+        )?;
+
+        // Drop the star along with the worktree. Without this the app config accumulates
+        // paths that no longer exist, and a later worktree created at the same path would
+        // come back mysteriously starred.
+        if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. }) {
+            if let Err(err) = app.set_favorite(&req.project, &worktree_id, false) {
+                // The worktree is already gone; a leftover entry is untidy, not broken.
+                tracing::warn!(error = %err, "could not clear the favorite for a removed worktree");
+            }
+        }
+
+        Ok(outcome)
     })
     .await
 }

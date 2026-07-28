@@ -29,6 +29,9 @@ export const commands = {
 
   // ── worktrees ──
   listWorktrees: (projectId: string) => invoke<Worktree[]>('list_worktrees', { projectId }),
+  /** Persists to `~/.config/wtm/config.toml`. Returns nothing — see the Rust doc comment. */
+  setWorktreeFavorite: (projectId: string, worktreeId: string, favorite: boolean) =>
+    invoke<void>('set_worktree_favorite', { projectId, worktreeId, favorite }),
 
   // ── the form ──
   worktreeForm: (projectId: string) => invoke<Form>('worktree_form', { projectId }),

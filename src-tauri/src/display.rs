@@ -174,10 +174,16 @@ pub fn add_source_tokens(
 }
 
 /// Build the view for one worktree.
+///
+/// `favorite` is passed in rather than looked up: this module renders from the project
+/// config and git, and knows nothing about the app config where stars are stored. Taking
+/// it as an argument keeps the function total — there is no half-built view for a caller
+/// to remember to patch afterwards.
 pub fn worktree_view(
     project: &Project,
     worktree: &Worktree,
     status: WorkingTreeStatus,
+    favorite: bool,
     files: &dyn FileStore,
     engine: &dyn TemplateEngine,
     os_tokens: &BTreeMap<String, String>,
@@ -274,6 +280,7 @@ pub fn worktree_view(
         ahead: status.ahead,
         behind: status.behind,
         issue_key: extract_issue_key(worktree),
+        favorite,
         badges,
         links,
         table,
