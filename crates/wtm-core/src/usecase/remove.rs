@@ -119,28 +119,29 @@ impl RemovePipeline {
             );
         }
 
-        if req.delete_branch && project.remove.warn_if_unmerged {
-            if let Some(branch) = req.worktree.branch() {
-                // Compare against the project's default base, since that is what "merged"
-                // means for this workflow.
-                let base = project
-                    .field(&project.create.base_field)
-                    .and_then(|f| f.default.as_ref())
-                    .map_or_else(|| "HEAD".to_owned(), crate::model::FieldDefault::as_string);
+        if req.delete_branch
+            && project.remove.warn_if_unmerged
+            && let Some(branch) = req.worktree.branch()
+        {
+            // Compare against the project's default base, since that is what "merged"
+            // means for this workflow.
+            let base = project
+                .field(&project.create.base_field)
+                .and_then(|f| f.default.as_ref())
+                .map_or_else(|| "HEAD".to_owned(), crate::model::FieldDefault::as_string);
 
-                if !self
-                    .git
-                    .is_merged(&project.root, branch, &base)
-                    .unwrap_or(false)
-                {
-                    items.push(
-                        PreflightItem::warn(
-                            "unmerged",
-                            format!("`{branch}` has commits that are not in `{base}`."),
-                        )
-                        .with_hint("Deleting the branch loses them."),
-                    );
-                }
+            if !self
+                .git
+                .is_merged(&project.root, branch, &base)
+                .unwrap_or(false)
+            {
+                items.push(
+                    PreflightItem::warn(
+                        "unmerged",
+                        format!("`{branch}` has commits that are not in `{base}`."),
+                    )
+                    .with_hint("Deleting the branch loses them."),
+                );
             }
         }
 
@@ -292,18 +293,18 @@ impl RemovePipeline {
         cancel.check()?;
         progress.stage("remove", "Removing the worktree", total - 1, total);
 
-        if project.remove.strategy == RemoveStrategy::Command {
-            if let Some(_command) = &project.remove.command {
-                // Not reachable from the UI yet: the native path is the default and the one
-                // that turns the branch prompt into a checkbox. Left explicit so the branch is
-                // visible rather than silently falling through to native.
-                return Err(WtmError::Validation(vec![crate::error::FieldProblem::new(
-                    "remove.strategy",
-                    "`strategy = \"command\"` is not supported yet; use the default \
+        if project.remove.strategy == RemoveStrategy::Command
+            && let Some(_command) = &project.remove.command
+        {
+            // Not reachable from the UI yet: the native path is the default and the one
+            // that turns the branch prompt into a checkbox. Left explicit so the branch is
+            // visible rather than silently falling through to native.
+            return Err(WtmError::Validation(vec![crate::error::FieldProblem::new(
+                "remove.strategy",
+                "`strategy = \"command\"` is not supported yet; use the default \
                      `\"native\"`, which runs git directly and offers branch deletion as a \
                      checkbox.",
-                )]));
-            }
+            )]));
         }
 
         self.git

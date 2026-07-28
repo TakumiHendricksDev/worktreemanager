@@ -39,10 +39,16 @@ if [ -n "$(staged 'crates/**/*.rs' 'src-tauri/**/*.rs')" ] \
 fi
 
 # ── Catch the two things that are genuinely expensive to discover later.
-if staged '*.rs' | xargs -r grep -nE '\bdbg!\(' 2>/dev/null; then
+#
+# The `[ -n ... ]` guard is load-bearing, not defensive noise: `xargs -r` exits 0 when its
+# input is empty, so `if staged '*.toml' | xargs -r grep ...` reads "nothing staged" as
+# "grep matched" and reports a placeholder in a commit that touches no TOML at all.
+if [ -n "$(staged '*.rs')" ] \
+   && staged '*.rs' | xargs grep -nE '\bdbg!\(' 2>/dev/null; then
     note "dbg! left in staged Rust"
 fi
-if staged '*.toml' | xargs -r grep -n 'PASTE_ME\|CHANGEME' 2>/dev/null; then
+if [ -n "$(staged '*.toml')" ] \
+   && staged '*.toml' | xargs grep -n 'PASTE_ME\|CHANGEME' 2>/dev/null; then
     note "placeholder left in staged TOML"
 fi
 

@@ -570,13 +570,12 @@ impl CreatePipeline {
         let mut resolved = BTreeMap::new();
 
         for lookup in &project.lookups {
-            if let Some(when) = &lookup.command.when {
-                if !self
+            if let Some(when) = &lookup.command.when
+                && !self
                     .engine
                     .eval_bool(&format!("lookup.{}.when", lookup.id), when, ctx)?
-                {
-                    continue;
-                }
+            {
+                continue;
             }
 
             progress.emit(crate::ports::progress::ProgressEvent::LookupStarted {
@@ -1084,36 +1083,36 @@ impl CreatePipeline {
 
         // Every configured program must be findable, or setup fails after the worktree
         // exists — the messiest possible time.
-        if let Some(argv) = &plan.setup_argv {
-            if let Some(program) = argv.first() {
-                let is_path = program.contains('/');
-                let found = if is_path {
-                    let candidate = if program.starts_with('/') {
-                        PathBuf::from(program)
-                    } else {
-                        plan.setup_cwd
-                            .clone()
-                            .unwrap_or_else(|| project.root.clone())
-                            .join(program)
-                    };
-                    self.files.exists(&candidate)
+        if let Some(argv) = &plan.setup_argv
+            && let Some(program) = argv.first()
+        {
+            let is_path = program.contains('/');
+            let found = if is_path {
+                let candidate = if program.starts_with('/') {
+                    PathBuf::from(program)
                 } else {
-                    self.runner.which(program).is_some()
+                    plan.setup_cwd
+                        .clone()
+                        .unwrap_or_else(|| project.root.clone())
+                        .join(program)
                 };
+                self.files.exists(&candidate)
+            } else {
+                self.runner.which(program).is_some()
+            };
 
-                if !found {
-                    items.push(
-                        PreflightItem::error(
-                            "setup_program_missing",
-                            format!("`{program}` was not found."),
-                        )
-                        .overridable()
-                        .with_hint(
-                            "Create the worktree anyway and run setup later, or check \
+            if !found {
+                items.push(
+                    PreflightItem::error(
+                        "setup_program_missing",
+                        format!("`{program}` was not found."),
+                    )
+                    .overridable()
+                    .with_hint(
+                        "Create the worktree anyway and run setup later, or check \
                              `just doctor` — a bundled app may not see Homebrew's PATH.",
-                        ),
-                    );
-                }
+                    ),
+                );
             }
         }
 
@@ -1218,12 +1217,12 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
     let mut rest = text;
 
     // A pattern not starting with `*` must match from the beginning.
-    if let Some(first) = parts.first() {
-        if !first.is_empty() {
-            match rest.strip_prefix(first) {
-                Some(tail) => rest = tail,
-                None => return false,
-            }
+    if let Some(first) = parts.first()
+        && !first.is_empty()
+    {
+        match rest.strip_prefix(first) {
+            Some(tail) => rest = tail,
+            None => return false,
         }
     }
 

@@ -239,10 +239,10 @@ pub async fn field_options(
             }
         };
 
-        if let Some(pattern) = exclude {
-            if let Ok(regex) = regex_lite(pattern) {
-                values.retain(|value| !regex.is_match(value));
-            }
+        if let Some(pattern) = exclude
+            && let Ok(regex) = regex_lite(pattern)
+        {
+            values.retain(|value| !regex.is_match(value));
         }
 
         Ok(values)
@@ -699,11 +699,11 @@ pub async fn remove_worktree(
         // Drop the star along with the worktree. Without this the app config accumulates
         // paths that no longer exist, and a later worktree created at the same path would
         // come back mysteriously starred.
-        if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. }) {
-            if let Err(err) = app.set_favorite(&req.project, &worktree_id, false) {
-                // The worktree is already gone; a leftover entry is untidy, not broken.
-                tracing::warn!(error = %err, "could not clear the favorite for a removed worktree");
-            }
+        if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. })
+            && let Err(err) = app.set_favorite(&req.project, &worktree_id, false)
+        {
+            // The worktree is already gone; a leftover entry is untidy, not broken.
+            tracing::warn!(error = %err, "could not clear the favorite for a removed worktree");
         }
 
         Ok(outcome)

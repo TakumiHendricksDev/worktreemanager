@@ -215,13 +215,13 @@ fn check_references(project: &Project, origin: &Origin) -> Result<(), ConfigErro
                 format!("`{}` is not a declared `[[display.source]]`", table.from),
             ));
         }
-        if let Some(defaults) = &table.defaults {
-            if !source_ids.contains(defaults.as_str()) {
-                return Err(origin.invalid(
-                    "display.port_table.defaults",
-                    format!("`{defaults}` is not a declared `[[display.source]]`"),
-                ));
-            }
+        if let Some(defaults) = &table.defaults
+            && !source_ids.contains(defaults.as_str())
+        {
+            return Err(origin.invalid(
+                "display.port_table.defaults",
+                format!("`{defaults}` is not a declared `[[display.source]]`"),
+            ));
         }
     }
 

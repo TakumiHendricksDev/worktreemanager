@@ -329,10 +329,10 @@ impl ConfigStore for FileConfigStore {
         let loaded = self.read_layers(repo_root)?;
         let fingerprint = Self::fingerprint(&loaded);
 
-        if let Some(entry) = self.cache.lock().get(repo_root) {
-            if entry.fingerprint == fingerprint {
-                return Ok(entry.project.clone());
-            }
+        if let Some(entry) = self.cache.lock().get(repo_root)
+            && entry.fingerprint == fingerprint
+        {
+            return Ok(entry.project.clone());
         }
 
         self.enforce_trust(&loaded)?;

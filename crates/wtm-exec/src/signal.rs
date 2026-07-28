@@ -167,10 +167,10 @@ mod tests {
                 Instant::now() < deadline,
                 "grandchild never reported its pid"
             );
-            if let Ok(text) = std::fs::read_to_string(&pidfile) {
-                if let Ok(pid) = text.trim().parse::<u32>() {
-                    break pid;
-                }
+            if let Ok(text) = std::fs::read_to_string(&pidfile)
+                && let Ok(pid) = text.trim().parse::<u32>()
+            {
+                break pid;
             }
             std::thread::sleep(Duration::from_millis(25));
         };

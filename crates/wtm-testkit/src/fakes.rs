@@ -559,10 +559,11 @@ impl Git for FakeGit {
             prunable: None,
         };
         self.worktrees.lock().push(worktree.clone());
-        if opts.create_branch && !matches!(opts.track, TrackMode::Detach) {
-            if let Some(branch) = &opts.branch {
-                self.local_branches.lock().push(branch.clone());
-            }
+        if opts.create_branch
+            && !matches!(opts.track, TrackMode::Detach)
+            && let Some(branch) = &opts.branch
+        {
+            self.local_branches.lock().push(branch.clone());
         }
         Ok(worktree)
     }

@@ -248,11 +248,11 @@ impl App {
     fn status_of(&self, worktree: &Worktree, base: Option<&str>) -> WorkingTreeStatus {
         let mut status = self.git.status(&worktree.path).unwrap_or_default();
 
-        if let (Some(branch), Some(base)) = (worktree.branch(), base) {
-            if let Ok((ahead, behind)) = self.git.ahead_behind(&worktree.path, branch, base) {
-                status.ahead = ahead;
-                status.behind = behind;
-            }
+        if let (Some(branch), Some(base)) = (worktree.branch(), base)
+            && let Ok((ahead, behind)) = self.git.ahead_behind(&worktree.path, branch, base)
+        {
+            status.ahead = ahead;
+            status.behind = behind;
         }
 
         status
@@ -366,15 +366,15 @@ impl App {
 /// starts with `~` is what a person naturally writes.
 fn expand_tilde(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
-    if text == "~" || text.starts_with("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            let home = PathBuf::from(home);
-            return if text == "~" {
-                home
-            } else {
-                home.join(text.trim_start_matches("~/"))
-            };
-        }
+    if (text == "~" || text.starts_with("~/"))
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let home = PathBuf::from(home);
+        return if text == "~" {
+            home
+        } else {
+            home.join(text.trim_start_matches("~/"))
+        };
     }
     path.to_path_buf()
 }

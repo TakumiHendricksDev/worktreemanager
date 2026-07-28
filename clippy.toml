@@ -1,4 +1,7 @@
-msrv = "1.85"
+# No `msrv` key on purpose. Clippy reads `rust-version` from Cargo.toml, and stating it in
+# both places means one of them is wrong the moment the other moves — which is exactly what
+# happened when the workspace went to 1.88 for a patched `time`, and clippy then warned
+# "the MSRV in `clippy.toml` and `Cargo.toml` differ" on every single lint run.
 
 # This is an application, not a library — breaking our own API is free.
 avoid-breaking-exported-api = false

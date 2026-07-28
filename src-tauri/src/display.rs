@@ -156,11 +156,11 @@ pub fn add_source_tokens(
         }
     }
 
-    if let Some(first) = project.display.sources.first() {
-        if let Some(values) = sources.get(&first.id) {
-            for (key, value) in values {
-                ctx.insert(format!("env.{key}"), value.clone());
-            }
+    if let Some(first) = project.display.sources.first()
+        && let Some(values) = sources.get(&first.id)
+    {
+        for (key, value) in values {
+            ctx.insert(format!("env.{key}"), value.clone());
         }
     }
 
