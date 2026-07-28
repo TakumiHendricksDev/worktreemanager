@@ -260,31 +260,25 @@
         <p class="revealerror">{revealError}</p>
       {/if}
       <p class="envnote">
-        Values for keys that look like credentials are not sent to this window at all until
-        you reveal them individually.
+        No values are sent to this window. Reveal one at a time; each is read from disk when
+        you ask for it and never kept.
       </p>
       <table class="env">
         <tbody>
-          {#each envEntries as entry (entry.key)}
+          {#each envEntries as key (key)}
             <tr>
-              <th><code>{entry.key}</code></th>
+              <th><code>{key}</code></th>
               <td>
-                {#if !entry.sensitive}
-                  <code>{entry.value}</code>
-                {:else if revealed[entry.key] !== undefined}
-                  <code class="revealed">{revealed[entry.key]}</code>
-                  <button class="envaction" onclick={() => hide(entry.key)}>hide</button>
-                  <button class="envaction" onclick={() => copyValue(entry.key)}>
-                    {copiedKey === entry.key ? 'copied' : 'copy'}
-                  </button>
+                {#if revealed[key] !== undefined}
+                  <code class="revealed">{revealed[key]}</code>
+                  <button class="envaction" onclick={() => hide(key)}>hide</button>
                 {:else}
                   <code class="masked" aria-label="hidden value">••••••••</code>
-                  <button class="envaction" onclick={() => reveal(entry.key)}>reveal</button
-                  >
-                  <button class="envaction" onclick={() => copyValue(entry.key)}>
-                    {copiedKey === entry.key ? 'copied' : 'copy'}
-                  </button>
+                  <button class="envaction" onclick={() => reveal(key)}>reveal</button>
                 {/if}
+                <button class="envaction" onclick={() => copyValue(key)}>
+                  {copiedKey === key ? 'copied' : 'copy'}
+                </button>
               </td>
             </tr>
           {/each}

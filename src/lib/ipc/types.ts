@@ -50,19 +50,6 @@ export interface TableRow {
   url: string | null;
 }
 
-/**
- * One environment entry.
- *
- * `value` is `null` for anything the backend flagged sensitive — the secret is not merely
- * hidden in the UI, it was never sent. Use `commands.revealEnvValue` to fetch a single one
- * on demand.
- */
-export interface EnvEntry {
-  key: string;
-  value: string | null;
-  sensitive: boolean;
-}
-
 export interface Worktree {
   id: string;
   title: string;
@@ -90,7 +77,11 @@ export interface Worktree {
   badges: Badge[];
   links: Link[];
   table: TableRow[];
-  env: EnvEntry[];
+  /**
+   * Environment key *names* only, sorted. No value is ever sent with the listing — fetch
+   * one at a time with `commands.revealEnvValue`.
+   */
+  env: string[];
 }
 
 export interface Field {

@@ -202,23 +202,22 @@ handled:
   and `ipc:`, no HTTP plugin permission is granted, there is no `fetch`/XHR/WebSocket in the
   frontend and no HTTP client crate in the dependency tree. No telemetry.
 - **Nothing is logged.** No log line carries an environment value.
-- **Secrets are never sent to the window.** Values for credential-bearing keys are withheld
-  before serialization; the Environment tab shows `••••••••` with a per-key **reveal**, which
-  fetches that one value on demand and re-masks when you switch worktrees. A screenshot or a
-  screen-share cannot leak what was never sent.
+- **No value is sent to the window.** Not "no secret" — *no value*. The listing carries key
+  names only; the Environment tab shows `••••••••` for every row with a per-key **reveal**,
+  which fetches that one value on demand, reads it fresh from disk, and re-masks when you
+  switch worktrees. A screenshot or a screen-share cannot leak what was never sent.
 
-Classification uses the key name, whether the value looks like `scheme://user:pass@host`, and
-whether the value matches another key's secret — the last of which catches the case where a
-dev setup reuses one string for several keys. It errs toward over-masking.
+There is deliberately no attempt to work out which keys are secrets. An earlier version
+classified them by key name, by whether the value looked like `scheme://user:pass@host`, and
+by whether a value matched another key's secret. It worked, and it was still the wrong shape:
+guessing fails in two directions — under-match and a credential is published, over-match and a
+port number needs a click — and every project's `.env` gets a vote on which way. The type the
+listing uses can no longer hold a value at all, so this is a property of the design rather
+than a policy that has to be kept correct.
 
-To verify it yourself against your own `.env`:
-
-```bash
-cargo test -p wtm-app --test env_masking -- --ignored --nocapture
-```
-
-That reads your real file, builds the payload the UI would receive, and fails if any secret
-appears in it.
+`cargo test -p wtm-app --test env_masking` proves it, against a repo whose `.env` is nothing
+but credentials. It runs as part of `just check` — it no longer needs a real checkout, because
+the guarantee no longer depends on the data.
 
 ## Dev workflow
 

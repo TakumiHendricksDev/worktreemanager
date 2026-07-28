@@ -332,13 +332,12 @@ pub async fn doctor(app: AppState<'_>) -> Reply<DoctorView> {
 
 /// Return one environment value that was withheld from the worktree listing.
 ///
-/// Sensitive values never travel with `list_worktrees` — see
-/// [`EnvEntryView`](crate::view::EnvEntryView). This fetches exactly one, by key, when the
-/// user clicks reveal. Three properties follow, and they are the reason this is a separate
-/// command rather than a flag on the listing:
+/// *No* value travels with `list_worktrees` — see [`EnvKeys`](crate::view::EnvKeys). This
+/// fetches exactly one, by key, when the user clicks reveal. Three properties follow, and
+/// they are the reason this is a separate command rather than a flag on the listing:
 ///
-/// * a screenshot or screen-share of the app cannot leak a secret that was never sent;
-/// * only the key the user asked for enters the webview, not all fifteen;
+/// * a screenshot or screen-share of the app cannot leak a value that was never sent;
+/// * only the key the user asked for enters the webview, not all fifty;
 /// * the value is read fresh from disk each time, so nothing is cached in the frontend.
 ///
 /// The value is deliberately **not** logged, at any level.
@@ -352,30 +351,8 @@ pub async fn reveal_env_value(
     let app = Arc::clone(&app);
     blocking(move || {
         let project = app.project(&project_id)?;
-        let worktree = app.worktree(&project, &worktree_id)?;
-
-        // Read through the project's own declared display sources, so this cannot be used
-        // to read an arbitrary file — only the ones the config already exposes.
-        let mut ctx = display::base_context(&project, app.os_tokens());
-        display::add_worktree_tokens(&mut ctx, &worktree);
-        let sources =
-            display::read_sources(&project, app.files.as_ref(), app.engine.as_ref(), &ctx);
-
-        let value = project
-            .display
-            .sources
-            .first()
-            .and_then(|source| sources.get(&source.id))
-            .and_then(|values| values.get(&key))
-            .cloned();
-
-        value.ok_or_else(|| {
-            // Report the key, never a partial value.
-            ErrorView::new(
-                "unknownEnvKey",
-                format!("`{key}` is not set for this worktree"),
-            )
-        })
+        app.env_value(&project, &worktree_id, &key)
+            .map_err(Into::into)
     })
     .await
 }

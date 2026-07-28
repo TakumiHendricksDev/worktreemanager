@@ -223,6 +223,38 @@ impl App {
             .collect())
     }
 
+    /// One environment value for one worktree, read fresh from disk.
+    ///
+    /// The counterpart to `WorktreeView::env` carrying names only: this is the single way a
+    /// value crosses into the frontend, and it does so one key at a time on an explicit
+    /// click. Read through the project's *declared* display sources, so it cannot be turned
+    /// into "read me any key of any file" — only what the config already exposes.
+    ///
+    /// The value is deliberately never logged, at any level.
+    pub fn env_value(
+        &self,
+        project: &Project,
+        worktree_id: &str,
+        key: &str,
+    ) -> Result<String, WtmError> {
+        let worktree = self.worktree(project, worktree_id)?;
+
+        let mut ctx = display::base_context(project, &self.os_tokens);
+        display::add_worktree_tokens(&mut ctx, &worktree);
+        let sources =
+            display::read_sources(project, self.files.as_ref(), self.engine.as_ref(), &ctx);
+
+        project
+            .display
+            .sources
+            .first()
+            .and_then(|source| sources.get(&source.id))
+            .and_then(|values| values.get(key))
+            .cloned()
+            // Reports the key, never a partial value.
+            .ok_or_else(|| WtmError::UnknownEnvKey(key.to_owned()))
+    }
+
     /// Star or unstar a worktree.
     ///
     /// Takes the id verbatim: [`WorktreeId`](wtm_core::model::WorktreeId) *is* the absolute

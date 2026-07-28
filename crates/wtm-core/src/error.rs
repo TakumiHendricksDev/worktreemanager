@@ -56,6 +56,13 @@ pub enum WtmError {
     /// outside the app.
     #[error("unknown worktree: {0}")]
     UnknownWorktree(String),
+
+    /// A reveal was asked for a key the project's display sources do not expose.
+    ///
+    /// Names the key and never any part of a value, since this is the error path of the
+    /// one call that handles secrets.
+    #[error("`{0}` is not set for this worktree")]
+    UnknownEnvKey(String),
 }
 
 /// One field's validation problem.

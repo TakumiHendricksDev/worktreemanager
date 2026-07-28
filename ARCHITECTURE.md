@@ -243,9 +243,8 @@ quietly return.
 
 ## 6a. Environment values
 
-A worktree's `.env` is the most sensitive thing this app reads. In the reference project it
-holds fifteen credentials — Stripe, `OpenAI`, `AWS`, Postgres, SMTP — and the app's job
-involves displaying that file.
+A worktree's `.env` is the most sensitive thing this app reads — Stripe keys, database
+passwords, SMTP credentials — and the app's job involves displaying that file.
 
 **Nothing leaves the machine.** There is no network capability at all: the CSP allows
 `connect-src 'self' ipc:` and nothing else, no HTTP plugin permission is granted, no
@@ -258,38 +257,41 @@ cheap to re-verify — the checks are one `grep` each.
 interpolated a secret into a command *would* put it in a debug log; the default filter is
 `info`, but that is a reason to keep it that way.
 
-**Sensitive values never cross the IPC boundary.** `classify_env` withholds them before
-serialization, and a separate `reveal_env_value` command fetches exactly one on request. So a
-screenshot, a screen-share, or a rummage through the webview's memory cannot expose a secret
-that was never sent. Values are read fresh from disk each time and not cached in the
-frontend.
+**No value crosses the IPC boundary.** Not "no secret" — no value. The worktree listing
+carries `EnvKeys`, which is a `Vec<String>` of key *names*, and a separate `reveal_env_value`
+command fetches exactly one on request, read fresh from disk and not cached in the frontend.
+A screenshot, a screen-share, or a rummage through the webview's memory has nothing to find.
 
-Classification uses three signals, because each one alone leaks:
+### Why there is no "is this a secret" classifier
 
-1. **Key name** — `STRIPE_API_KEY`. The obvious case, and the weakest signal.
-2. **A credential inside the value** — `DATABASE_URL=postgres://app:pw@db/app`. The key name
-   is innocent; the structure (`scheme://user:pass@`) is the giveaway.
-3. **A value that matches another entry's secret.** This is the strongest signal, because it
-   is a consistency check within the file rather than a guess about the world.
+There was one, and removing it is the more defensible design.
 
-Signal 3 exists because of a real finding. An earlier version exempted `AWS_ACCESS_KEY_ID` on
-the reasonable-sounding argument that it is the public half of a key pair — and a leak test
-against a real `.env` showed that the local `MinIO` setup uses *one string* for the access key,
-the secret key, the `MinIO` user and the `MinIO` password. The exemption was publishing the
-secret verbatim. The general lesson: do not exempt a key because of what its name implies
-about its value.
+It used three signals: a table of key-name substrings (`secret`, `token`, `password`, …); a
+check for `scheme://user:pass@host` in the value; and a pass that flagged any value matching
+an already-known secret. That third signal existed because of a real finding — an earlier
+version exempted `AWS_ACCESS_KEY_ID` on the reasonable-sounding argument that it is the public
+half of a key pair, and a leak test against a real `.env` showed the local `MinIO` setup used
+*one string* for the access key, the secret key, the `MinIO` user and the `MinIO` password. The
+exemption was publishing the secret verbatim.
 
-`src-tauri/tests/env_masking.rs` is the test that actually proves this. It reads the real
-`.env` itself to learn the plaintext, builds the real view through the real adapters,
-serializes it exactly as Tauri would, and asserts no secret appears in the payload. It is
-`#[ignore]`d because it depends on a local checkout:
+That finding is the argument against the whole approach, not just against that exemption. The
+classifier was trying to infer a property of data it could not see, from names. It fails in two
+directions — under-match and a credential is published, over-match and a port number needs a
+click — and every project's `.env` gets a vote on which way it fails, so the substring table
+could only grow, each entry a judgement call defended by a comment.
 
-```bash
-cargo test -p wtm-app --test env_masking -- --ignored --nocapture
-```
+So nothing is classified, and the guarantee moved from a policy into the type: `EnvKeys` cannot
+hold a value, so no input can produce a payload containing one, and no future edit can start
+sending one by accident. Roughly 150 lines of classifier and its tests went with it.
 
-The masking errs toward over-matching. A masked port number costs one click; a leaked Stripe
-key costs an incident.
+The cost is one extra click for a port number. That is the right trade, and it is also
+*visible* — an over-masked value annoys you until you fix it, whereas an under-masked one is
+silent.
+
+`src-tauri/tests/env_masking.rs` proves it end to end: a repo whose `.env` is nothing but
+unmistakable credentials, rendered through the real adapters and serialized exactly as Tauri
+would, asserting that no value appears and every key name does. It runs in `just check` — it
+needs no real checkout, because the property no longer depends on the data.
 
 ---
 

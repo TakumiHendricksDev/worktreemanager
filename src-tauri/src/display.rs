@@ -23,8 +23,7 @@ use wtm_core::ports::fs::FileStore;
 use wtm_core::ports::template::{Context, TemplateEngine};
 
 use crate::view::{
-    ActionView, BadgeView, EnvEntryView, LinkView, TableRowView, WorktreeView, classify_env,
-    extract_issue_key,
+    ActionView, BadgeView, EnvKeys, LinkView, TableRowView, WorktreeView, extract_issue_key,
 };
 
 /// Ambient tokens that do not depend on a worktree.
@@ -252,14 +251,15 @@ pub fn worktree_view(
 
     // The Env tab shows the first source, which is the one `env.*` aliases.
     //
-    // Sensitive values are dropped here, before the view is serialized, so a secret never
-    // crosses the IPC boundary unless the user asks for that one key by name.
-    let env: Vec<EnvEntryView> = project
+    // Keys only. Values are dropped here, before the view is serialized, so none of them
+    // crosses the IPC boundary unless the user asks for one by name. Already sorted: the
+    // source is a `BTreeMap`.
+    let env: EnvKeys = project
         .display
         .sources
         .first()
         .and_then(|source| sources.get(&source.id))
-        .map(classify_env)
+        .map(|values| values.keys().cloned().collect())
         .unwrap_or_default();
 
     WorktreeView {
