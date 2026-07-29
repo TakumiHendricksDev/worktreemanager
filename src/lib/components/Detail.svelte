@@ -2,8 +2,11 @@
   /**
    * The right pane: everything known about the selected worktree.
    *
-   * The path is the first thing shown and the first thing copyable, because "where is
-   * this on disk" is the question the app exists to answer quickly.
+   * The path is the first fact in Overview and the first thing copyable, because "where is
+   * this on disk" is the question the app exists to answer quickly. It used to sit in the
+   * header beside the actions, which made a *fact* look like a control and left the header
+   * doing two jobs; the header is now the title and the things you can do to it, nothing
+   * else.
    */
   import { commands } from '../ipc/commands';
   import { errorMessage, type Worktree } from '../ipc/types';
@@ -123,12 +126,9 @@
       </div>
     </div>
 
+    <!-- Actions, pinned right. The path moved into Overview, where it reads as one of the
+         facts rather than as something to click. -->
     <div class="row">
-      <button class="path" onclick={copyPath} title="Copy the full path">
-        <code>{worktree.path}</code>
-        <span class="copy">{copied ? 'copied' : 'copy'}</span>
-      </button>
-
       <!-- The main worktree cannot be removed; git refuses, and so does the pipeline. -->
       <button
         class="remove"
@@ -157,6 +157,23 @@
   <div class="body">
     {#if tab === 'overview'}
       <dl class="facts">
+        <!--
+          First, because "where is this on disk" is the question the app exists to answer
+          quickly. It is a fact, so it is rendered like the other values rather than as the
+          button it used to be; the copy action sits beside it and stays visible, matching
+          the Environment tab's row actions.
+
+          There is no separate `Directory` row any more — `dirname` is by definition the last
+          segment of this path, so it was the same fact written twice, one line apart.
+        -->
+        <dt>Path</dt>
+        <dd class="pathrow">
+          <code>{worktree.path}</code>
+          <button class="rowaction" onclick={copyPath}>
+            {copied ? 'copied' : 'copy'}
+          </button>
+        </dd>
+
         <dt>Branch</dt>
         <dd>
           {#if worktree.branch}
@@ -166,9 +183,6 @@
             <span class="muted">detached HEAD</span>
           {/if}
         </dd>
-
-        <dt>Directory</dt>
-        <dd><code>{worktree.dirname}</code></dd>
 
         {#if worktree.head}
           <dt>HEAD</dt>
@@ -271,12 +285,12 @@
               <td>
                 {#if revealed[key] !== undefined}
                   <code class="revealed">{revealed[key]}</code>
-                  <button class="envaction" onclick={() => hide(key)}>hide</button>
+                  <button class="rowaction" onclick={() => hide(key)}>hide</button>
                 {:else}
                   <code class="masked" aria-label="hidden value">••••••••</code>
-                  <button class="envaction" onclick={() => reveal(key)}>reveal</button>
+                  <button class="rowaction" onclick={() => reveal(key)}>reveal</button>
                 {/if}
-                <button class="envaction" onclick={() => copyValue(key)}>
+                <button class="rowaction" onclick={() => copyValue(key)}>
                   {copiedKey === key ? 'copied' : 'copy'}
                 </button>
               </td>
@@ -297,12 +311,23 @@
     background: var(--bg);
   }
 
+  /*
+    One row: the name on the left, what you can do to it on the right.
+
+    The actions used to sit on their own line below the title, left-aligned. Two things were
+    wrong with that. The left edge is where every scan starts, so the first thing met after
+    the worktree's name was the button that destroys it — a destructive action should be
+    reachable, not first. And once the path moved into Overview that row held one small
+    button against a pane's worth of empty space, which reads as an orphan rather than as a
+    toolbar.
+  */
   .head {
     flex: 0 0 auto;
     padding: var(--sp-4) var(--sp-5) var(--sp-3);
     display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-4);
   }
 
   .titles {
@@ -310,6 +335,9 @@
     align-items: center;
     gap: var(--sp-3);
     flex-wrap: wrap;
+    /* Takes the slack, so the actions stay pinned right however many badges wrap. */
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   h1 {
@@ -379,7 +407,10 @@
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    min-width: 0;
+    flex: 0 0 auto;
+    /* Optically centres the button against the h1's cap-height rather than its line box,
+       which top-alignment alone leaves sitting a couple of pixels high. */
+    margin-top: 2px;
   }
 
   /*
@@ -430,35 +461,19 @@
     cursor: default;
   }
 
-  .path {
+  /*
+    The path is long enough to be the one value that can outgrow the pane, so it wraps at
+    any character (inherited from `dd`) while the copy action stays pinned to the first line
+    — `baseline` alignment on the grid keeps the label, the first line of the path and the
+    action all sitting on the same line.
+  */
+  .pathrow {
     display: flex;
-    align-items: center;
-    gap: var(--sp-2);
+    align-items: baseline;
+  }
+
+  .pathrow code {
     min-width: 0;
-    padding: 4px 8px;
-    border-radius: var(--r-md);
-    background: var(--bg-code);
-    color: var(--fg-muted);
-    transition: background var(--dur-fast) var(--ease);
-  }
-
-  .path:hover {
-    background: var(--bg-hover);
-  }
-
-  .path code {
-    font-size: var(--step--1);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .copy {
-    flex: 0 0 auto;
-    font-size: var(--step--2);
-    color: var(--fg-subtle);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
   }
 
   .tabs {
@@ -637,15 +652,20 @@
     overflow-wrap: anywhere;
   }
 
-  .envaction {
+  /* A small action beside a row's value — the Path row and every Environment row. One rule
+     for both, so `copy` cannot come to mean two different-looking things one tab apart. */
+  .rowaction {
+    /* Not a flex gap: the Environment rows lay these out inline, not as flex children. */
     margin-left: var(--sp-2);
+    /* Never shrink or wrap away from the value it acts on. */
+    flex: 0 0 auto;
     font-size: var(--step--2);
     color: var(--fg-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
 
-  .envaction:hover {
+  .rowaction:hover {
     color: var(--accent);
     text-decoration: underline;
   }
