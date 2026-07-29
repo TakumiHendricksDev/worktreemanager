@@ -13,7 +13,11 @@
 //! Adding to `FORBIDDEN` is cheap. Use it for anything that would embarrass you in a public
 //! repository: employer names, internal hostnames, ticket keys, absolute home directories.
 
-#![allow(clippy::unwrap_used)]
+// `Command::new` is banned workspace-wide so every spawn in the *app* goes through
+// `wtm-exec`'s wrapper and gets a timeout, a sanitized environment and a tracing span. None of
+// that applies to a test asking git for its own file list, and routing this through the adapter
+// would mean building one just to read a list of paths.
+#![allow(clippy::unwrap_used, clippy::disallowed_methods)]
 
 use std::path::{Path, PathBuf};
 
@@ -33,17 +37,6 @@ const FORBIDDEN: &[(&str, bool)] = &[
     (concat!("Sites/", "Canopy"), false),
 ];
 
-/// Directories that are build output or vendored code, not ours to police.
-const SKIP_DIRS: &[&str] = &[
-    ".git",
-    "target",
-    "node_modules",
-    "dist",
-    ".vite",
-    ".svelte-kit",
-    "gen",
-];
-
 /// Files exempt for a stated reason.
 const SKIP_FILES: &[&str] = &[
     // This file, which necessarily names what it forbids.
@@ -57,15 +50,13 @@ fn no_project_specific_identifiers_are_committed() {
     let root = workspace_root();
     let mut findings: Vec<String> = Vec::new();
 
-    walk(&root, &mut |path| {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return; // Binary or unreadable: nothing to scan.
+    for relative in tracked_files(&root) {
+        if SKIP_FILES.contains(&file_name(&relative)) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(&relative)) else {
+            continue; // Binary, or deleted since it was staged: nothing to scan.
         };
-        let relative = path
-            .strip_prefix(&root)
-            .unwrap_or(path)
-            .display()
-            .to_string();
 
         for (needle, word) in FORBIDDEN {
             for (number, line) in text.lines().enumerate() {
@@ -73,13 +64,14 @@ fn no_project_specific_identifiers_are_committed() {
                     continue;
                 }
                 findings.push(format!(
-                    "{relative}:{}: {}",
+                    "{}:{}: {}",
+                    relative.display(),
                     number + 1,
                     line.trim().chars().take(110).collect::<String>()
                 ));
             }
         }
-    });
+    }
 
     assert!(
         findings.is_empty(),
@@ -114,22 +106,38 @@ fn contains(line: &str, needle: &str, word: bool) -> bool {
     false
 }
 
-fn walk(dir: &Path, visit: &mut impl FnMut(&Path)) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
+/// Every path git tracks, relative to the workspace root.
+///
+/// Asked of git rather than walked from disk, which is the difference between checking what is
+/// *committed* — what this test is named for and what actually gets published — and checking
+/// whatever happens to be sitting in the working tree. Walking meant build output and vendored
+/// code needed a skip list, and it still failed on things no skip list anticipates: a
+/// `JetBrains` `.idea/workspace.xml` records the absolute path of the project you opened, so the
+/// check went red over a gitignored file that was never going anywhere. Which editor someone
+/// uses is not a repository-hygiene problem.
+fn tracked_files(root: &Path) -> Vec<PathBuf> {
+    // `-z`, because a filename may contain a newline and `lines()` would then invent two.
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(root)
+        .output()
+        .expect("git ls-files");
 
-        if path.is_dir() {
-            if !SKIP_DIRS.contains(&name.as_str()) {
-                walk(&path, visit);
-            }
-        } else if !SKIP_FILES.contains(&name.as_str()) {
-            visit(&path);
-        }
-    }
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8_lossy(&output.stdout)
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn file_name(path: &Path) -> &str {
+    path.file_name().and_then(|n| n.to_str()).unwrap_or("")
 }
 
 /// The workspace root, from this crate's manifest directory.
