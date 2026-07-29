@@ -30,7 +30,15 @@
 .DS_Store
 .AppleDouble
 .LSOverride
-Icon?
+# Finder's custom-folder-icon file, which is literally `Icon` followed by a carriage
+# return. Written as a bracket expression so the CR is matched explicitly.
+#
+# It was `Icon?` for a long time, and that was a real bug: `?` is a wildcard, git is
+# case-insensitive on macOS by default, and a pattern with no slash matches at any
+# depth — so it also matched the directory `src-tauri/icons`, silently excluding every
+# app icon from the repository. `tauri build` then failed for anyone who cloned it
+# with "failed to open icon …/32x32.png", including CI on both platforms.
+Icon[]
 ._*
 .Spotlight-V100
 .Trashes
