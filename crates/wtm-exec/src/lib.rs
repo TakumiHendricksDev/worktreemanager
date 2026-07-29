@@ -8,8 +8,9 @@
 //! Contents:
 //!
 //! - [`path`] — probe a login shell for a usable `PATH`, and find programs on it.
-//!   This is the mitigation for the app's most likely production failure: a bundled
-//!   `.app` inherits `launchd`'s minimal `PATH` and cannot see Homebrew.
+//!   This is the mitigation for the app's most likely production failure: a
+//!   GUI-launched app inherits a minimal `PATH` and cannot see the tools a project
+//!   config calls.
 //! - [`runner`] — [`Runner`], the captured-output [`CommandRunner`].
 //! - [`pty`] — [`PtyHostImpl`], interactive sessions for anything that prompts or
 //!   whose progress the user should watch.

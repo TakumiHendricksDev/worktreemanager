@@ -28,7 +28,7 @@
   let searchEl = $state<HTMLInputElement | null>(null);
 
   /**
-   * ⌘F focuses the filter.
+   * ⌘F / Ctrl-F focuses the filter.
    *
    * Registered here rather than alongside the other shortcuts in `App.svelte` because the
    * thing it acts on is this component's input element. Reaching it from the parent would

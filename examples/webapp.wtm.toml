@@ -261,10 +261,11 @@ args_when = [
 ]
 
 [setup.env]
-# The load-bearing line for a bundled .app. Launched from Finder it inherits
-# `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and a setup script that calls `just`, `docker` or
-# `acli` — all of which live in /opt/homebrew/bin — would fail with "command not found"
-# only once installed. wtm probes a login shell for a usable PATH and exposes it here.
+# The load-bearing line for an installed app. A GUI launch does not inherit your shell's
+# environment — from Finder it gets `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, from a .desktop
+# entry it gets the systemd user session's — so a setup script calling `just`, `docker` or
+# `acli` (in /opt/homebrew/bin, or ~/.local/bin) fails with "command not found" only once
+# installed. wtm probes a login shell for a usable PATH and exposes it here.
 PATH = "{{ env.LOGIN_PATH }}"
 
 # ═══════════════════════════════════ REMOVE ═══════════════════════════════════
