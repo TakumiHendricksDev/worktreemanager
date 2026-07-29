@@ -67,14 +67,23 @@
   <section>
     <h3>What will be created</h3>
     <dl>
+      <!--
+        Both of these come from the adopted branch rather than from the naming templates, and
+        saying so here is what connects the radio button above to the dimmed fields on the
+        left. Without it the values simply change and you are left to infer why.
+      -->
       <dt>Branch</dt>
       <dd>
         {#if preview.branch}<code>{preview.branch}</code>{:else}<span class="muted"
             >detached</span
           >{/if}
+        {#if adoptBranch}<span class="from">existing</span>{/if}
       </dd>
       <dt>Directory</dt>
-      <dd><code>{preview.directory}</code></dd>
+      <dd>
+        <code>{preview.directory}</code>
+        {#if adoptBranch}<span class="from">from the branch</span>{/if}
+      </dd>
       <dt>Base</dt>
       <dd>
         <code>{preview.baseRef}</code>
@@ -247,6 +256,17 @@
   .ack {
     color: var(--fg-muted);
     font-size: var(--step--2);
+  }
+
+  /* Marks a value that came from the adopted branch rather than from a naming template. */
+  .from {
+    margin-left: var(--sp-2);
+    padding: 0 6px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklab, var(--info) 35%, transparent);
+    color: var(--info);
+    font-size: var(--step--2);
+    white-space: nowrap;
   }
 
   .muted {

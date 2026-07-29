@@ -220,6 +220,9 @@ pub struct PreviewView {
     /// Existing branches the user could adopt instead — the GUI form of the shell's
     /// numbered stdin picker.
     pub branch_choices: Vec<BranchChoiceView>,
+    /// Field keys that only feed the branch and directory templates, so the form can mark
+    /// them inert once an existing branch is adopted.
+    pub naming_fields: Vec<String>,
     /// Normalized field values, so the form can show `1234` → `ACME-1234`.
     pub normalized: BTreeMap<String, String>,
     pub can_create: bool,
@@ -619,6 +622,7 @@ pub fn preview_view(preview: &PlanPreview, values: &wtm_core::model::FormValues)
                 directory: choice.directory.to_string_lossy().into_owned(),
             })
             .collect(),
+        naming_fields: preview.naming_fields.clone(),
         normalized: values
             .normalized
             .iter()

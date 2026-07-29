@@ -144,6 +144,13 @@ export interface Preview {
   lookups: Record<string, string>;
   computed: Record<string, string>;
   branchChoices: BranchChoice[];
+  /**
+   * Field keys that feed the branch and directory templates.
+   *
+   * Adopting an existing branch supplies both, so these inputs go inert — while every other
+   * field still drives the setup command. Derived in Rust from the project's own templates.
+   */
+  namingFields: string[];
   /** Field values after normalization, so the form can show `1234` → `ACME-1234`. */
   normalized: Record<string, string>;
   canCreate: boolean;

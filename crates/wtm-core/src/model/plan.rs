@@ -183,6 +183,16 @@ pub struct PlanPreview {
     /// Existing branches matching the configured pattern, when the project asked
     /// to be offered a choice. This is the GUI form of a numbered stdin picker.
     pub branch_choices: Vec<BranchChoice>,
+    /// Form field keys that feed the branch and directory templates.
+    ///
+    /// Exists so the UI can say which inputs stop mattering once an existing branch is
+    /// adopted: adopting takes the branch *and* the directory from the chosen branch, so
+    /// every field that only fed those templates goes inert — while the rest still drive
+    /// `[setup]`, which is emphatically not the same thing as "the form is ignored".
+    ///
+    /// Derived from the project's own templates rather than hardcoded, so it stays correct
+    /// for any config.
+    pub naming_fields: Vec<String>,
 }
 
 impl PlanPreview {
@@ -344,6 +354,7 @@ mod tests {
             lookups: std::collections::BTreeMap::default(),
             computed: std::collections::BTreeMap::default(),
             branch_choices: vec![],
+            naming_fields: vec![],
         }
     }
 

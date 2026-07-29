@@ -1069,3 +1069,82 @@ fn the_setup_session_is_announced_before_the_pipeline_finishes() {
     };
     assert_eq!(session, &returned);
 }
+
+// ── which fields feed naming ────────────────────────────────────────────────────
+//
+// Drives the UI's "these inputs no longer matter" hint when an existing branch is adopted.
+// The transitive step through `[computed]` is the part worth testing: a naming template
+// usually references `computed.slug`, not the field, so a non-recursive answer would report
+// no fields at all and the hint would silently never appear.
+
+#[test]
+fn naming_fields_reports_the_fields_a_naming_template_uses() {
+    let h = harness(FakeGit::with_main(REPO, "main"), FakeFileStore::new());
+    let preview = h
+        .pipeline
+        .preview(
+            &request(project(), &[("name", "thing")]),
+            &NullProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
+
+    // `task/{{ name | slugify }}` uses `name`; `base` feeds the base ref, not the name.
+    assert_eq!(preview.naming_fields, vec!["name".to_owned()]);
+}
+
+#[test]
+fn naming_fields_follows_computed_values_to_the_fields_behind_them() {
+    let mut project = project();
+    project
+        .fields
+        .push(field("issue", FieldKind::Text, Some("X-1")));
+    project.computed = vec![wtm_core::model::ComputedSpec {
+        key: "slug".to_owned(),
+        template: "{{ issue }}-{{ name | slugify }}".to_owned(),
+    }];
+    project.naming = NamingSpec {
+        branch: "task/{{ computed.slug }}".to_owned(),
+        directory: "{{ computed.slug }}".to_owned(),
+        dir_base: wtm_core::model::DirBase::RepoParent,
+        branch_must_match: None,
+    };
+
+    let h = harness(FakeGit::with_main(REPO, "main"), FakeFileStore::new());
+    let preview = h
+        .pipeline
+        .preview(
+            &request(project, &[("name", "thing")]),
+            &NullProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        preview.naming_fields,
+        vec!["issue".to_owned(), "name".to_owned()],
+        "both fields reach naming through `computed.slug`"
+    );
+}
+
+#[test]
+fn naming_fields_ignores_ambient_tokens_that_are_not_form_inputs() {
+    let mut project = project();
+    project.naming.directory = "{{ repo.name }}-{{ name | slugify }}".to_owned();
+
+    let h = harness(FakeGit::with_main(REPO, "main"), FakeFileStore::new());
+    let preview = h
+        .pipeline
+        .preview(
+            &request(project, &[("name", "thing")]),
+            &NullProgress,
+            &CancelToken::new(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        preview.naming_fields,
+        vec!["name".to_owned()],
+        "`repo.name` is ambient — dimming it would be meaningless, there is no such field"
+    );
+}

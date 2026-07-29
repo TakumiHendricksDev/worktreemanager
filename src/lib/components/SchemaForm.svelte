@@ -21,12 +21,25 @@
     values,
     problems = {},
     normalized = {},
+    inert = [],
+    inertReason = '',
   }: {
     projectId: string;
     fields: Field[];
     values: Record<string, string>;
     /** Per-field validation messages from the backend, shown inline. */
     problems?: Record<string, string>;
+    /**
+     * Keys whose value no longer affects the outcome.
+     *
+     * Dimmed and annotated rather than hidden or disabled: the value is still *true* — it is
+     * what the field says — and removing it would make the form appear to lose your input.
+     * Disabling would be worse still, because clearing the condition must put the field back
+     * exactly as you left it.
+     */
+    inert?: string[];
+    /** Shown beneath each inert field. Says *why*, since the field looks fine otherwise. */
+    inertReason?: string;
     /**
      * The effective value after the field's `normalize` template ran.
      *
@@ -70,11 +83,13 @@
   function optionsFor(field: Field): string[] {
     return field.hasDynamicOptions ? (options[field.key]?.values ?? []) : field.options;
   }
+
+  const inertKeys = $derived(new Set(inert));
 </script>
 
 <div class="form">
   {#each fields as field (field.key)}
-    <div class="field">
+    <div class="field" class:inert={inertKeys.has(field.key)}>
       <label for={`f-${field.key}`}>
         {field.label}
         {#if field.required}<span class="req" aria-label="required">*</span>{/if}
@@ -133,7 +148,11 @@
         />
       {/if}
 
-      {#if normalized[field.key] && normalized[field.key] !== values[field.key]}
+      {#if inertKeys.has(field.key)}
+        <p class="help inertnote">{inertReason}</p>
+      {:else if normalized[field.key] && normalized[field.key] !== values[field.key]}
+        <!-- Suppressed while inert: showing `1234 → ACME-1234` beside a field that no longer
+             names anything is the exact false impression this is meant to dispel. -->
         <p class="normalized">
           → <code>{normalized[field.key]}</code>
         </p>
@@ -164,6 +183,20 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
+  }
+
+  /*
+    Faded, but still legible and still editable. Not `disabled`: the value has not become
+    invalid, it has become irrelevant, and clearing the condition must restore the field
+    exactly as it was — which is free if it was never disabled in the first place. Not
+    hidden either, or the form would appear to have thrown your input away.
+  */
+  .field.inert {
+    opacity: 0.55;
+  }
+
+  .inertnote {
+    font-style: italic;
   }
 
   label {

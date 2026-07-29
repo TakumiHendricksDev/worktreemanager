@@ -24,7 +24,7 @@
 //! that is usually one command from fixed. So stage 9 returns a *successful*
 //! [`CreateOutcome::SetupFailed`] carrying the worktree and a set of [`Remedy`] options.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -245,9 +245,58 @@ impl CreatePipeline {
                 lookups,
                 computed,
                 branch_choices,
+                naming_fields: self.naming_fields(project),
             },
             add,
         })
+    }
+
+    /// Form fields that feed the branch and directory templates, directly or through
+    /// `[computed]`.
+    ///
+    /// Answers "which of these inputs stop mattering if I adopt an existing branch?" —
+    /// adopting supplies both the branch and the directory, so anything that only fed those
+    /// two templates has nothing left to affect.
+    ///
+    /// Read off the project's own templates via [`TemplateEngine::referenced_tokens`], never
+    /// a hardcoded list, because which fields exist is a `wtm.toml` decision. A template that
+    /// fails to parse contributes nothing rather than failing the plan: this drives a UI hint,
+    /// and validation has already rejected a broken template long before here.
+    fn naming_fields(&self, project: &Project) -> Vec<String> {
+        let mut pending: Vec<String> = Vec::new();
+        let push = |template: &str, key: &str, out: &mut Vec<String>| {
+            if let Ok(tokens) = self.engine.referenced_tokens(key, template) {
+                out.extend(tokens);
+            }
+        };
+
+        push(&project.naming.branch, "naming.branch", &mut pending);
+        push(&project.naming.directory, "naming.directory", &mut pending);
+
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut fields: BTreeSet<String> = BTreeSet::new();
+
+        while let Some(token) = pending.pop() {
+            if !seen.insert(token.clone()) {
+                continue;
+            }
+
+            // `computed.slug` is not itself an input — follow it to whatever it is built from.
+            if let Some(name) = token.strip_prefix("computed.") {
+                if let Some(spec) = project.computed.iter().find(|c| c.key == name) {
+                    push(&spec.template, "computed", &mut pending);
+                }
+                continue;
+            }
+
+            // Anything else is an input only if the form actually declares it; `repo.root`
+            // and friends are ambient and not something the user can change here.
+            if project.field(&token).is_some() {
+                fields.insert(token);
+            }
+        }
+
+        fields.into_iter().collect()
     }
 
     // ── stages 7–10: mutations ───────────────────────────────────────────────

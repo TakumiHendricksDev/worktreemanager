@@ -58,6 +58,13 @@
   /** Field-level problems, keyed by field, from a validation rejection. */
   let fieldProblems = $state<Record<string, string>>({});
   let previewing = $state(false);
+  /**
+   * Monotonic id of the newest preview request.
+   *
+   * Deliberately not `$state`: nothing renders it, and making it reactive would make the
+   * effect that bumps it depend on itself.
+   */
+  let previewSeq = 0;
 
   let phase = $state<Phase>('form');
   let adoptBranch = $state<string | null>(null);
@@ -122,16 +129,28 @@
     const snapshot = JSON.stringify(values);
     const chosen = adoptBranch;
 
+    // Which preview is current. The debounce cancels a *pending* request, but nothing can
+    // cancel one already in flight — and a preview runs the project's `[[lookup]]` commands,
+    // which for an issue tracker is a network call of very variable latency. So edit an issue
+    // key while the previous lookup is still running and two requests overlap; without this,
+    // whichever *resolves* last wins rather than whichever was *issued* last, and a stale
+    // answer landing second leaves the review pane showing the previous issue with nothing
+    // to dislodge it until you type again. Same guard the worktree list uses.
+    const seq = ++previewSeq;
+    const current = () => seq === previewSeq;
+
     const timer = setTimeout(() => {
       previewing = true;
       void commands
         .previewWorktree(projectId, JSON.parse(snapshot) as Record<string, string>, chosen)
         .then((result) => {
+          if (!current()) return;
           preview = result;
           previewError = null;
           fieldProblems = {};
         })
         .catch((e) => {
+          if (!current()) return;
           preview = null;
           // A validation rejection carries per-field detail; show it inline rather than as
           // one opaque banner.
@@ -151,7 +170,9 @@
           }
         })
         .finally(() => {
-          previewing = false;
+          // Only the current request may clear the indicator, or a stale one finishing
+          // first would report "done" while the real answer is still on its way.
+          if (current()) previewing = false;
         });
     }, PREVIEW_DEBOUNCE_MS);
 
@@ -319,12 +340,35 @@
         <div class="columns">
           <div class="col form-col">
             <h2>Details</h2>
+
+            <!--
+              Adopting an existing branch takes the branch *and* the directory from that
+              branch, so the naming templates never run and the fields feeding them have
+              nothing left to affect. Without saying so, the form still looks like it is
+              driving the outcome — you can watch `1234` normalize to `ACME-1234` beside a
+              field that is no longer naming anything.
+
+              Stated at the top and marked per field, because the two answer different
+              questions: the banner says what changed, the dimming says which inputs. And it
+              is careful to say the rest still apply — the fields that gate setup arguments
+              very much do, and "the form is ignored" would be a dangerous thing to imply.
+            -->
+            {#if adoptBranch}
+              <p class="adopting">
+                Adopting <code>{adoptBranch}</code>. Its name and directory are used as they
+                are, so the fields below no longer affect them — the rest still apply to
+                setup.
+              </p>
+            {/if}
+
             <SchemaForm
               projectId={form.projectId}
               fields={form.fields}
               {values}
               problems={fieldProblems}
               normalized={preview?.normalized ?? {}}
+              inert={adoptBranch ? (preview?.namingFields ?? []) : []}
+              inertReason="Not used — the adopted branch supplies this."
             />
           </div>
 
@@ -674,6 +718,23 @@
 
   .col {
     min-width: 0;
+  }
+
+  /* Info-toned rather than warning-toned: adopting a branch is a normal choice, not a
+     mistake. It only needs to be legible, not alarming. */
+  .adopting {
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid color-mix(in oklab, var(--info) 35%, transparent);
+    border-radius: var(--r-md);
+    background: color-mix(in oklab, var(--info) 8%, transparent);
+    color: var(--fg-muted);
+    font-size: var(--step--2);
+    line-height: 1.5;
+  }
+
+  .adopting code {
+    color: var(--fg);
   }
 
   .review-col {
