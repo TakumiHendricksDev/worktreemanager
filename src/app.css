@@ -42,8 +42,24 @@
   --red-500: #c8393a;
   --blue-400: #6ba3d6;
 
-  --font-ui: ui-sans-serif, -apple-system, 'SF Pro Text', system-ui, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  /*
+   * Append-only past the existing entries, never insert or reorder. macOS WebKit
+   * resolves `ui-sans-serif` / `ui-monospace` on the first name and never reads
+   * further, so everything after them is unreachable there — which is what makes
+   * adding Linux names provably free.
+   *
+   * WebKitGTK does not implement the CSS4 generics, so it skips to `system-ui`
+   * (the GTK session font — Cantarell on GNOME, Ubuntu on Ubuntu). The explicit
+   * names after that are the deterministic floor for a machine where it does not
+   * resolve; DejaVu ships with fontconfig, so both stacks land on something real
+   * before reaching the generic.
+   */
+  --font-ui:
+    ui-sans-serif, -apple-system, 'SF Pro Text', system-ui, Cantarell, Ubuntu, 'Noto Sans',
+    'DejaVu Sans', sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono',
+    'Noto Sans Mono', monospace;
 
   --step--2: 0.6875rem;
   --step--1: 0.8125rem;
@@ -88,8 +104,10 @@
 
   --bg: var(--gray-50);
   --bg-elevated: var(--gray-0);
-  /* Semi-transparent so the window's native sidebar vibrancy shows through. */
-  --bg-sidebar: color-mix(in oklab, var(--gray-100) 62%, transparent);
+  /* Semi-transparent so the window's native sidebar vibrancy shows through on
+     macOS. On Linux `--under-window` is opaque, so this composites to a solid
+     colour instead of depending on what happens to be behind the window. */
+  --bg-sidebar: color-mix(in oklab, var(--gray-100) 62%, var(--under-window));
   --bg-hover: var(--gray-150);
   --bg-active: var(--gray-200);
   --bg-input: var(--gray-0);
@@ -127,7 +145,7 @@
 
   --bg: var(--gray-900);
   --bg-elevated: var(--gray-850);
-  --bg-sidebar: color-mix(in oklab, var(--gray-950) 52%, transparent);
+  --bg-sidebar: color-mix(in oklab, var(--gray-950) 52%, var(--under-window));
   --bg-hover: var(--gray-800);
   --bg-active: var(--gray-700);
   --bg-input: var(--gray-850);
@@ -158,6 +176,38 @@
   --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.6);
 }
 
+/* ── Layer 3: platform ───────────────────────────────────────────────────────
+ *
+ * The only place a windowing-system fact may live. Same rule as the two layers
+ * above: a token belongs here when its *reason to exist* is something the OS
+ * draws — the window's own backdrop, chrome insets, scrollbars. Nothing about
+ * the app's visual language goes here; that is Layer 2's job.
+ *
+ * macOS is the unattributed default, and `data-platform` is only ever set to
+ * `linux` (see index.html). So every macOS value survives even if the attribute
+ * never arrives — which is what makes "the mac branch cannot regress" a
+ * structural property rather than something a test has to catch.
+ */
+:root {
+  /* What sits behind the app. On macOS: nothing — the window is transparent and
+     the native sidebar vibrancy shows through it. */
+  --under-window: transparent;
+  /* Room for the traffic lights, which macOS draws *inside* the webview's rect.
+     Three 12pt buttons with 8pt gaps span 52pt from `trafficLightPosition.x:
+     16`, so content must start past 68 — 76 leaves a margin. */
+  --titlebar-lead: 76px;
+}
+
+:root[data-platform='linux'] {
+  /* No vibrancy to reveal, and no guarantee of a compositing WM, so the window
+     is opaque and paints its own background. Pairs with `transparent: false` in
+     tauri.linux.conf.json — change one and the other is wrong. */
+  --under-window: var(--bg);
+  /* The window manager draws the controls, on the right, outside the webview.
+     There is nothing to reserve, so this is an ordinary leading inset. */
+  --titlebar-lead: var(--sp-2);
+}
+
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
 *,
 *::before,
@@ -180,11 +230,14 @@ body {
   font-size: var(--step-0);
   line-height: 1.5;
   color: var(--fg);
-  /* Transparent so the native window vibrancy is visible behind the chrome. */
-  background: transparent;
+  /* On macOS: transparent, so the native window vibrancy shows through the chrome.
+     On Linux: opaque, because there is no vibrancy and no guaranteed compositor. */
+  background: var(--under-window);
+  /* No-op on WebKitGTK, which does not implement it. Left ungated: if Linux text
+     ever reads too thin, this is where a platform gate would go. */
   -webkit-font-smoothing: antialiased;
   /* A desktop app is not a document: rubber-band scrolling on the window itself
-     reveals the transparent background and looks broken. */
+     reveals whatever is behind it and looks broken. */
   overflow: hidden;
 }
 
@@ -276,4 +329,19 @@ pre {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--fg-subtle);
   background-clip: content-box;
+}
+
+/*
+ * WebKitGTK does not implement the pseudo-elements above — it hands scrollbars to
+ * GTK, which exposes exactly two knobs to CSS. Gated to Linux rather than applied
+ * globally because Safari 18.2 understands both mechanisms, and which one would win
+ * on a recent macOS is not something to find out in a release build.
+ *
+ * `scrollbar-width` does not inherit, hence the universal selector. The block above
+ * is deliberately left ungated: gating it would change its specificity for no gain,
+ * and if some WebKitGTK build does honour it, gating would make Linux strictly worse.
+ */
+:root[data-platform='linux'] * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }

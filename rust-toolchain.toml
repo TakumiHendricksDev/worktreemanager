@@ -6,15 +6,19 @@
 # time (rustup treats "1.97.1" as distinct from "stable" even when they're the
 # same build). Bump quarterly — see ARCHITECTURE.md § Toolchain policy.
 #
-# Do NOT install Rust with Homebrew. Homebrew's rust ignores this file entirely,
-# cannot add targets, and self-upgrades during unrelated `brew upgrade`s, which
-# invalidates target/ and costs a full rebuild.
+# Do NOT install Rust via a package manager — not Homebrew, not apt. Those builds
+# ignore this file entirely, cannot add targets, and self-upgrade during unrelated
+# system upgrades, which invalidates target/ and costs a full rebuild.
 
 [toolchain]
 channel    = "1.97.1"
 components = ["rustfmt", "clippy"]
+# No host target listed, deliberately. rustup always installs the host's own target
+# with the toolchain, so naming `aarch64-apple-darwin` bought nothing on the Mac that
+# needs it while costing every Linux build a ~40 MB std download of a target it will
+# never compile for. `x86_64-apple-darwin` is likewise absent: `just build-universal`
+# is rare enough that the README tells you to `rustup target add` it first.
 targets    = [
-  "aarch64-apple-darwin",
   # Not for shipping — this is the target for `cargo core-wasm`, which
   # mechanically proves wtm-core has no OS-specific dependencies.
   "wasm32-unknown-unknown",

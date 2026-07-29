@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Report what wtm needs, what's present, and what will break at runtime.
 #
-# This exists because of the single most likely production failure: a bundled
-# .app launched from Finder inherits PATH=/usr/bin:/bin:/usr/sbin:/sbin, while
-# `just`, `acli`, `docker` and `bun` all live in /opt/homebrew/bin. Everything
-# works under `just dev` and then fails once installed. So doctor checks tools
-# against BOTH the current PATH and a login shell's PATH.
+# This exists because of the single most likely production failure: a
+# GUI-launched app does not inherit your interactive shell's environment. On
+# macOS a .app opened from Finder gets PATH=/usr/bin:/bin:/usr/sbin:/sbin while
+# `just`, `acli`, `docker` and `bun` live in /opt/homebrew/bin; on Linux a
+# .desktop launch gets the systemd user session's environment, which never read
+# ~/.zshrc, while ~/.local/bin sits outside it. Same failure, two dialects:
+# everything works under `just dev` and then fails once installed. So doctor
+# checks tools against BOTH the current PATH and a login shell's PATH.
 set -uo pipefail
+
+os="$(uname -s)"
 
 pass=0 warn=0 fail=0
 
@@ -18,8 +23,12 @@ warned(){ printf '  %s!%s %-22s %s\n' "$c_warn" "$c_off" "$1" "${2:-}"; warn=$((
 bad()  { printf '  %s✗%s %-22s %s\n'  "$c_err"  "$c_off" "$1" "${2:-}"; fail=$((fail+1)); }
 hdr()  { printf '\n%s%s%s\n' "$c_bold" "$1" "$c_off"; }
 
-# The PATH a GUI-launched .app will actually see, as reported by a login shell.
-login_path="$("${SHELL:-/bin/zsh}" -lc 'printf %s "$PATH"' 2>/dev/null)"
+# The PATH a GUI-launched app will actually see, as reported by a login shell.
+#
+# The fallback must match `platform::DEFAULT_SHELL` in crates/wtm-exec/src/path.rs.
+# If these two disagree, doctor cheerfully reports a PATH the app never uses.
+if [ "$os" = Darwin ]; then default_shell=/bin/zsh; else default_shell=/bin/sh; fi
+login_path="$("${SHELL:-$default_shell}" -lc 'printf %s "$PATH"' 2>/dev/null)"
 
 hdr "Required"
 
@@ -31,27 +40,69 @@ if command -v cargo >/dev/null 2>&1; then
     else
         ok "rust" "$actual"
     fi
-    # Homebrew's rust ignores rust-toolchain.toml. Catch it shadowing the shims.
+    # A package-manager rust — Homebrew's or a distro's — ignores rust-toolchain.toml
+    # and cannot add targets. Catch either one shadowing the rustup shims.
     if [ "$(command -v cargo)" != "$HOME/.cargo/bin/cargo" ]; then
-        warned "cargo location" "$(command -v cargo) — expected ~/.cargo/bin/cargo (Homebrew rust shadowing rustup?)"
+        warned "cargo location" "$(command -v cargo) — expected ~/.cargo/bin/cargo (packaged rust shadowing rustup?)"
     fi
 else
-    bad "rust" "not found — install with rustup (NOT brew), see README"
+    bad "rust" "not found — install with rustup (NOT brew or apt), see README"
 fi
 
-command -v git >/dev/null 2>&1 \
-    && ok "git" "$(git --version | awk '{print $3}')" \
-    || bad "git" "not found — xcode-select --install"
+if command -v git >/dev/null 2>&1; then
+    ok "git" "$(git --version | awk '{print $3}')"
+elif [ "$os" = Darwin ]; then
+    bad "git" "not found — xcode-select --install"
+else
+    bad "git" "not found — install it with your distribution's package manager"
+fi
 
 if command -v node >/dev/null 2>&1; then
     ok "node" "$(node --version)"
-else
+elif [ "$os" = Darwin ]; then
     bad "node" "not found — brew install node"
+else
+    bad "node" "not found — install Node 20.19+/22.12+ (nodesource or your distro)"
 fi
 
 command -v bun >/dev/null 2>&1 \
     && ok "bun" "$(bun --version)" \
     || warned "bun" "not found — 'just deps' expects bun; edit \`pm\` in the justfile to use npm"
+
+if [ "$os" = Linux ]; then
+    hdr "Linux build dependencies (Tauri v2 / WebKitGTK)"
+
+    if ! command -v pkg-config >/dev/null 2>&1; then
+        bad "pkg-config" "not found — the -sys crates cannot locate anything without it"
+    else
+        missing=""
+        for pkg in webkit2gtk-4.1 javascriptcoregtk-4.1 libsoup-3.0 gdk-3.0 glib-2.0; do
+            pkg-config --exists "$pkg" 2>/dev/null \
+                && ok "$pkg" "$(pkg-config --modversion "$pkg" 2>/dev/null)" \
+                || { bad "$pkg" "missing"; missing="yes"; }
+        done
+
+        if [ -n "$missing" ]; then
+            # The exact line CI runs. Without these the build dies at
+            # "The system library `glib-2.0` required by crate `glib-sys` was not
+            # found", which says nothing about how to fix it.
+            printf '\n    %ssudo apt-get install libwebkit2gtk-4.1-dev \\\n' "$c_dim"
+            printf '      libayatana-appindicator3-dev librsvg2-dev libxdo-dev \\\n'
+            printf '      libssl-dev build-essential curl wget file%s\n' "$c_off"
+        fi
+
+        # The CSS floor. `color-mix()` landed in WebKitGTK 2.40 and `:has()` in
+        # 2.42, and this app ships neither fallback — below 2.42 the sidebar and
+        # every tinted banner lose their background outright rather than degrade.
+        wk="$(pkg-config --modversion webkit2gtk-4.1 2>/dev/null || true)"
+        if [ -n "$wk" ]; then
+            major="${wk%%.*}"; rest="${wk#*.}"; minor="${rest%%.*}"
+            if [ "${major:-0}" -eq 2 ] && [ "${minor:-0}" -lt 42 ]; then
+                warned "webkitgtk version" "$wk — wtm expects 2.42+; below that the sidebar and banners render without their backgrounds"
+            fi
+        fi
+    fi
+fi
 
 hdr "Per-project tooling (only needed by the projects that reference it)"
 
@@ -66,7 +117,7 @@ for tool in just acli docker gh; do
     tool_dir="$(cd "$(dirname "$path")" && pwd)"
     case ":${login_path}:" in
         *":${tool_dir}:"*) ok "$tool" "$path" ;;
-        *) warned "$tool" "$path — not on the login-shell PATH; a bundled .app won't find it" ;;
+        *) warned "$tool" "$path — not on the login-shell PATH; a GUI-launched app won't find it" ;;
     esac
 done
 

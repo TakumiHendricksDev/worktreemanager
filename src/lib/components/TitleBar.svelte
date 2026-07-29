@@ -49,7 +49,8 @@
 </script>
 
 <header class="titlebar" data-tauri-drag-region>
-  <!-- Reserves space for the macOS traffic lights. -->
+  <!-- Reserves space for the macOS traffic lights; a plain inset on Linux, where the
+       window manager draws the controls outside the webview. -->
   <div class="gutter" data-tauri-drag-region></div>
 
   <!--
@@ -127,11 +128,13 @@
   }
 
   /*
-    Space for the traffic lights. Three 12pt buttons with 8pt gaps span 52pt from
-    `trafficLightPosition.x: 16`, so content must start past 68 — 76 leaves a margin.
+    On macOS, space for the traffic lights — the arithmetic behind the 76px lives with
+    the token in app.css. On Linux the window manager draws the controls on the right,
+    outside the webview entirely, so this collapses to an ordinary leading inset that
+    stays draggable.
   */
   .gutter {
-    width: 76px;
+    width: var(--titlebar-lead);
     height: 100%;
     flex: 0 0 auto;
   }

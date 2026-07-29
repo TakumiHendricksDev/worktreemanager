@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Worktree Manager — a macOS app for managing git worktrees across projects",
+  "description": "Worktree Manager — a desktop app for managing git worktrees across projects",
   "scripts": {
     "dev": "vite",
     "build": "svelte-check --tsconfig ./tsconfig.json && vite build",

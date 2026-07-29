@@ -4,19 +4,21 @@
 //!
 //! This is the single most likely production failure in the whole app.
 //!
-//! A macOS `.app` launched from Finder or Spotlight does not inherit your shell's
-//! environment. It gets `launchd`'s, which is roughly:
+//! **A GUI-launched process does not inherit your interactive shell's environment.**
+//! Same failure on both platforms, two dialects:
 //!
-//! ```text
-//! PATH=/usr/bin:/bin:/usr/sbin:/sbin
-//! ```
+//! - A macOS `.app` opened from Finder or Spotlight gets `launchd`'s environment,
+//!   roughly `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, while `just`, `acli`, `docker`,
+//!   `gh` and `bun` all live in `/opt/homebrew/bin`.
+//! - A Linux `.desktop` launch gets the systemd user session's environment, which
+//!   read `~/.profile` at login if you are lucky and never read `~/.zshrc` at all,
+//!   while `~/.local/bin` and `~/.cargo/bin` sit outside it.
 //!
-//! Meanwhile `just`, `acli`, `docker`, `gh` and `bun` all live in
-//! `/opt/homebrew/bin`. So a project config that works perfectly under
-//! `cargo tauri dev` — where the process inherits your terminal — fails with
-//! "program not found" the moment the app is installed and double-clicked. It is a
-//! nasty class of bug because nothing is wrong with the config, the code, or the
-//! machine; only the launch context differs.
+//! So a project config that works perfectly under `cargo tauri dev` — where the
+//! process inherits your terminal — fails with "program not found" the moment the
+//! app is installed and launched from the desktop. It is a nasty class of bug
+//! because nothing is wrong with the config, the code, or the machine; only the
+//! launch context differs.
 //!
 //! # The fix
 //!
@@ -40,12 +42,77 @@ use std::time::Duration;
 /// that a hung profile does not hold up launch.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
-/// Directories always appended, in case the probe failed *and* the inherited
-/// environment is the bare `launchd` one.
+/// Everything in this crate that differs by platform, in one block so the two can be
+/// read against each other rather than hunted for.
 ///
-/// Not a substitute for the probe — just a floor, so the app is still usable on a
-/// stock Homebrew machine when a shell profile is broken.
-const FALLBACK_DIRS: &[&str] = &["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"];
+/// Two arms, not a catch-all with a default: a third target should be a deliberate act,
+/// and failing to compile is how it stays one.
+#[cfg(target_os = "macos")]
+mod platform {
+    /// Appended as a floor to every resolved `PATH` — Homebrew's prefix on Apple
+    /// silicon, plus the classic `/usr/local`.
+    ///
+    /// Not a substitute for the probe. A floor, so the app is still usable on a stock
+    /// Homebrew machine whose shell profile is broken.
+    pub(super) const FALLBACK_DIRS: &[&str] =
+        &["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"];
+
+    /// Floor entries relative to `$HOME`. Empty here on purpose: the macOS floor is
+    /// long-standing and the Linux port is not a reason to change it.
+    pub(super) const HOME_FALLBACK_DIRS: &[&str] = &[];
+
+    /// Only consulted when `SHELL` is unset, which `launchd` essentially never leaves it.
+    pub(super) const DEFAULT_SHELL: &str = "/bin/zsh";
+
+    /// What `os.platform` must report. Read only by the tests, which cross-check it
+    /// against `std::env::consts::OS` — two independent sources, so an arm that was
+    /// copy-pasted and not edited cannot go unnoticed.
+    #[cfg(test)]
+    pub(super) const NAME: &str = "macos";
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    /// See the macOS arm. `snap` is included because a snap-installed tool is
+    /// invisible to a session that never sourced `/etc/profile.d`.
+    pub(super) const FALLBACK_DIRS: &[&str] = &[
+        "/home/linuxbrew/.linuxbrew/bin",
+        "/home/linuxbrew/.linuxbrew/sbin",
+        "/usr/local/bin",
+        "/snap/bin",
+    ];
+
+    /// Ahead of the system directories above, because a tool the user installed for
+    /// themselves should beat one the distribution packaged.
+    pub(super) const HOME_FALLBACK_DIRS: &[&str] = &[".local/bin", ".cargo/bin"];
+
+    /// `/bin/sh` rather than `/bin/bash`: POSIX guarantees it exists, and in login mode
+    /// it reads `/etc/profile` and `~/.profile` — which on a Debian derivative is
+    /// exactly where `~/.local/bin` gets onto `PATH`.
+    pub(super) const DEFAULT_SHELL: &str = "/bin/sh";
+
+    #[cfg(test)]
+    pub(super) const NAME: &str = "linux";
+}
+
+/// The fallback floor, with `$HOME`-relative entries expanded and placed first.
+///
+/// On macOS `HOME_FALLBACK_DIRS` is empty, so this returns exactly
+/// `FALLBACK_DIRS.join(":")` — the identical string the old constant produced.
+fn fallback_path() -> String {
+    let mut dirs: Vec<String> = Vec::new();
+
+    if let Some(home) = home_dir() {
+        dirs.extend(
+            platform::HOME_FALLBACK_DIRS
+                .iter()
+                .map(|relative| home.join(relative).to_string_lossy().into_owned()),
+        );
+    }
+    dirs.extend(platform::FALLBACK_DIRS.iter().map(|d| (*d).to_owned()));
+
+    dirs.join(":")
+}
 
 /// A resolved execution environment: the `PATH` to use and how it was obtained.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,11 +149,22 @@ impl ResolvedPath {
 
         let inherited = std::env::var("PATH").unwrap_or_default();
 
+        // The floor is appended in *both* arms, always last.
+        //
+        // It used to be applied only when the probe failed, which made the resolved PATH
+        // depend on whether a login shell happened to answer — so "the floor is always
+        // there" was not a property anyone could rely on or test, and the test that tried
+        // could only pass by accident. Appending it unconditionally cannot shadow anything:
+        // `merge_paths` keeps first-seen order, so every entry that resolved before still
+        // resolves to the same absolute path. The only difference is that a program which
+        // previously failed to resolve may now be found — the floor doing its stated job.
+        let floor = fallback_path();
+
         match probe_login_shell() {
             Some(probed) if !probed.trim().is_empty() => {
                 tracing::debug!(path = %probed, "resolved PATH from login shell");
                 Self {
-                    value: merge_paths(&[&probed, &inherited]),
+                    value: merge_paths(&[&probed, &inherited, &floor]),
                     source: PathSource::LoginShell,
                 }
             }
@@ -96,9 +174,8 @@ impl ResolvedPath {
                      If a bundled app cannot find `just`/`acli`/`docker`, set exec.path in \
                      ~/.config/wtm/config.toml"
                 );
-                let fallback = FALLBACK_DIRS.join(":");
                 Self {
-                    value: merge_paths(&[&inherited, &fallback]),
+                    value: merge_paths(&[&inherited, &floor]),
                     source: PathSource::Inherited,
                 }
             }
@@ -184,7 +261,7 @@ fn is_stripped(key: &str) -> bool {
 /// Returns `None` on any failure — a missing shell, a non-zero exit, a timeout, or
 /// non-UTF-8 output. Callers fall back.
 fn probe_login_shell() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| platform::DEFAULT_SHELL.to_owned());
 
     // The one place in the codebase that spawns without going through `Runner`,
     // because `Runner` cannot be constructed until the PATH is known. Kept to a
@@ -308,21 +385,27 @@ mod tests {
     }
 
     #[test]
-    fn the_real_probe_finds_homebrew() {
-        // The actual mitigation, verified end to end: whatever the launch context,
-        // the resolved PATH must be able to find a Homebrew tool. This is the test
-        // that would have caught the bundled-app failure.
+    fn the_resolved_path_always_contains_the_platform_floor() {
+        // The actual mitigation, verified end to end: whatever the launch context, the
+        // resolved PATH can find the tools a GUI-launched app would otherwise miss. This
+        // is the test that would have caught the bundled-app failure.
+        //
+        // "Always" is load-bearing and is what `resolve` was changed to make true. The
+        // floor used to be appended only when the login-shell probe failed, so on a
+        // machine where the probe succeeds this asserted nothing — it passed only when
+        // `SHELL` happened to be unset, which is not a property, it is a coincidence.
         let resolved = ResolvedPath::resolve(None);
         assert!(!resolved.value.is_empty());
-        let has_brew_dir = resolved
-            .dirs()
-            .iter()
-            .any(|d| d.starts_with("/opt/homebrew"));
-        assert!(
-            has_brew_dir,
-            "no Homebrew directory in resolved PATH: {}",
-            resolved.value
-        );
+
+        for dir in platform::FALLBACK_DIRS {
+            assert!(
+                resolved.dirs().iter().any(|d| d == dir),
+                "{dir} missing from the resolved PATH: {}",
+                resolved.value
+            );
+        }
+        // Deliberately not asserting HOME_FALLBACK_DIRS: an environment with no `HOME`
+        // is unusual but legal, and it should not turn this red.
     }
 
     #[test]
@@ -393,7 +476,14 @@ mod tests {
     #[test]
     fn os_tokens_are_populated() {
         let tokens = os_tokens();
-        assert_eq!(tokens.get("os.platform").map(String::as_str), Some("macos"));
+        // Not tautological: `os_tokens` derives this from `std::env::consts::OS`, while
+        // `platform::NAME` is written by hand in the cfg'd module above — so this
+        // cross-checks two independent sources and catches an arm that was copy-pasted
+        // and not edited.
+        assert_eq!(
+            tokens.get("os.platform").map(String::as_str),
+            Some(platform::NAME)
+        );
         assert!(tokens.contains_key("os.uid"));
         assert!(tokens.contains_key("os.gid"));
         assert!(tokens["os.uid"].parse::<u32>().is_ok());

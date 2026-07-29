@@ -16,6 +16,35 @@ use std::sync::Arc;
 
 use app::App;
 
+/// Tell the webview which platform it is running on, before it paints.
+///
+/// The frontend needs this for one reason: window chrome. On macOS the traffic lights
+/// are drawn *inside* the webview's rect, so the title strip must reserve a gutter for
+/// them; on Linux the window manager draws its controls on the right, outside the
+/// webview entirely, and that gutter would be 76px of dead space.
+///
+/// That is a first-paint fact, so it cannot arrive over IPC — a `#[tauri::command]`
+/// resolves a frame or two late and the window would visibly reflow on every launch,
+/// which is the exact failure the pre-paint script in `index.html` exists to prevent.
+/// `js_init_script` runs after the global object exists but before the document is
+/// parsed and before any script in the page runs, which is the only slot early enough.
+///
+/// A plugin declaring no commands needs no entry in `capabilities/default.json`.
+///
+/// No `#[cfg]` here: `std::env::consts::OS` is already the right runtime constant, and
+/// it is the same vocabulary `os.platform` hands to config templates — one set of
+/// names, two consumers.
+fn platform_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("wtm-platform")
+        // `{:?}` on a `&str` produces a valid JS string literal, and the value is one of
+        // a fixed set from libstd — never user input.
+        .js_init_script(format!(
+            "window.__WTM_PLATFORM__ = {:?};",
+            std::env::consts::OS
+        ))
+        .build()
+}
+
 /// Start the application.
 ///
 /// # Panics
@@ -30,6 +59,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(app)
+        .plugin(platform_plugin())
         .invoke_handler(tauri::generate_handler![
             commands::list_projects,
             commands::register_project,

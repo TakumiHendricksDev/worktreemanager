@@ -492,13 +492,26 @@ mod tests {
 
     #[test]
     fn the_resolved_path_is_used_not_the_inherited_one() {
-        let restricted = Runner::new(ResolvedPath::resolve(Some("/usr/bin:/bin")));
-        assert!(restricted.which("sh").is_some());
-        // `just` lives in /opt/homebrew/bin, which this PATH excludes — the exact
-        // situation a bundled .app finds itself in.
+        // Construct the situation rather than lean on what this machine has installed.
+        // The previous version asserted that `just` was *not* findable under
+        // `/usr/bin:/bin`, which was true only because `just` happens to live in
+        // /opt/homebrew/bin here — one `apt install just` away from being wrong, and a
+        // test that passes for a reason unrelated to what it claims.
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("wtm-path-marker");
+        std::fs::write(&marker, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&marker, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+
+        let restricted = Runner::new(ResolvedPath::resolve(Some(&dir.path().to_string_lossy())));
+
+        // The resolved PATH is consulted…
+        assert_eq!(restricted.which("wtm-path-marker"), Some(marker));
+        // …and nothing else is. `sh` is certainly on the inherited PATH and certainly
+        // not in this tempdir, so finding it would prove the inherited one leaked in.
         assert!(
-            restricted.which("just").is_none(),
-            "restricted PATH must not find just"
+            restricted.which("sh").is_none(),
+            "the inherited PATH must not leak into a resolved one"
         );
     }
 

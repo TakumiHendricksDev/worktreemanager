@@ -85,8 +85,13 @@
     }
 
     const created = new Terminal({
+      // Collapsed to one line before handing it over: `--font-mono` is declared across
+      // two source lines, so the computed value carries a newline and the indentation
+      // with it. xterm uses this string to measure a character cell and as a cache key,
+      // neither of which wants embedded whitespace.
       fontFamily: getComputedStyle(document.documentElement)
         .getPropertyValue('--font-mono')
+        .replace(/\s+/g, ' ')
         .trim(),
       fontSize: 12,
       // The DOM renderer, deliberately: the WebGL addon is incompatible with xterm 6 and the

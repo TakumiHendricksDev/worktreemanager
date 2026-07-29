@@ -363,8 +363,23 @@ pub async fn reveal_env_value(
 /// URLs come from `[[display.link]]` templates, which come from a config file inside a
 /// repository — so without this check a config could hand the OS a `file://` path or a
 /// custom scheme registered by some other application and have it opened on demand.
+///
+/// The two checks below are what make handing a string to a shell-out safe, and the
+/// scheme check is doing more work than it looks: a URL that begins with `http://` or
+/// `https://` cannot begin with `-`, so neither opener can parse it as a flag.
 #[tauri::command]
 pub async fn open_url(app: AppState<'_>, url: String) -> Reply<()> {
+    // The OS's "hand this to the default handler" front end. There is no portable name
+    // for it, and this is the only place in the app that needs one.
+    //
+    // `not(macos)` rather than `linux` so the BSDs get the right answer too. Windows
+    // would need a third arm, and would not be a one-word change — `start` is a shell
+    // builtin, not a program.
+    #[cfg(target_os = "macos")]
+    const OPENER: &str = "open";
+    #[cfg(not(target_os = "macos"))]
+    const OPENER: &str = "xdg-open";
+
     let app = Arc::clone(&app);
     blocking(move || {
         if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -374,7 +389,10 @@ pub async fn open_url(app: AppState<'_>, url: String) -> Reply<()> {
             ));
         }
         // A URL containing whitespace or a control character is malformed and could be
-        // an attempt to smuggle a second argument past `open`.
+        // an attempt to smuggle a second argument past the opener. This matters more on
+        // Linux, not less: `xdg-open` is a shell script that dispatches to a
+        // desktop-specific opener, so although we pass one argv element and never a
+        // command line, it is defence that now guards two paths.
         if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
             return Err(ErrorView::new(
                 "badUrl",
@@ -383,7 +401,7 @@ pub async fn open_url(app: AppState<'_>, url: String) -> Reply<()> {
         }
 
         let inv = wtm_core::ports::exec::Invocation::new(
-            vec!["open".to_owned(), url],
+            vec![OPENER.to_owned(), url],
             std::env::temp_dir(),
             10_000,
         );

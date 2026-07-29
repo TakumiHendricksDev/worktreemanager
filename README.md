@@ -1,6 +1,6 @@
 # wtm — Worktree Manager
 
-A macOS app for managing git worktrees across projects. Worktrees are tabs down the left, details and a
+A desktop app for managing git worktrees across projects — macOS and Linux. Worktrees are tabs down the left, details and a
 live terminal on the right, and the **New Worktree** form is defined by each project itself in a
 `wtm.toml` — including dropdowns populated by your own shell commands (branch lists, Jira issues via
 `acli`, anything that prints to stdout).
@@ -14,7 +14,8 @@ Built with Tauri v2 + Rust + Svelte 5.
 ![screenshot](docs/screenshot.png)
 <!-- placeholder: 1180×760 @2x, light + dark side by side -->
 
-**Status:** personal tool. Unsigned, Apple silicon, macOS 13+. Not distributed.
+**Status:** personal tool, not distributed. macOS 13+ (Apple silicon, unsigned `.app`) and Linux
+(x86-64 AppImage, WebKitGTK 2.42+ / glibc 2.39+ — Ubuntu 24.04, Fedora 39+, Debian 13).
 
 ### What works today
 
@@ -65,15 +66,32 @@ project's convention. With the variable unset the tests skip.
 | Tool | Version | Install |
 |---|---|---|
 | macOS | 13+, Apple silicon | — |
-| Xcode Command Line Tools | any | `xcode-select --install` |
-| Rust | pinned to 1.97.1 by `rust-toolchain.toml` | see below — **rustup, not Homebrew** |
-| Node | 20.19+ / 22.12+ | `brew install node` |
+| …or Linux | WebKitGTK 2.42+, glibc 2.39+ | Ubuntu 24.04, Fedora 39+, Debian 13 |
+| Xcode Command Line Tools *(macOS)* | any | `xcode-select --install` |
+| GTK/WebKit dev packages *(Linux)* | — | see below |
+| Rust | pinned to 1.97.1 by `rust-toolchain.toml` | see below — **rustup, not a package manager** |
+| Node | 20.19+ / 22.12+ | `brew install node`, or nodesource on Linux |
 | bun | 1.x | `curl -fsSL https://bun.sh/install \| bash` |
-| `just` *(optional)* | 1.50+ | `brew install just` — only needed by projects whose config calls it |
+| `just` *(optional)* | 1.50+ | only needed by projects whose config calls it |
 | `acli` *(optional)* | any | Atlassian CLI — only for Jira-backed form fields |
 | `gh`, `docker` *(optional)* | any | only if a project's config uses them |
 
-**Full Xcode is not required.** Command Line Tools is enough for desktop Tauri.
+**macOS: full Xcode is not required.** Command Line Tools is enough for desktop Tauri.
+
+**Linux: install Tauri's build dependencies first**, or the build dies with *"The system library
+glib-2.0 required by crate glib-sys was not found"*, which says nothing about how to fix it:
+
+```bash
+sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+  librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file
+```
+
+`just doctor` checks each of these by name and prints that line if any are missing.
+
+The WebKitGTK floor is real, not conservative: the UI uses `color-mix()` (WebKitGTK 2.40) and
+`:has()` (2.42) with no fallbacks, so on an older webview the sidebar and every tinted banner
+lose their backgrounds outright rather than degrading. The glibc floor follows from building
+the AppImage on Ubuntu 24.04.
 
 Install Rust:
 
@@ -83,9 +101,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profil
 
 Then restart your shell, or `. "$HOME/.cargo/env"`.
 
-> **Do not `brew install rust`.** Homebrew's Rust ignores `rust-toolchain.toml`, cannot add build
-> targets, and upgrades itself during unrelated `brew upgrade` runs — which invalidates `target/` and
-> costs you a full rebuild. `just doctor` warns if a Homebrew rust is shadowing the rustup shims.
+> **Do not install Rust from a package manager** — not `brew install rust`, not `apt install rustc`.
+> Those builds ignore `rust-toolchain.toml`, cannot add build targets, and upgrade themselves during
+> unrelated system upgrades — which invalidates `target/` and costs you a full rebuild. `just doctor`
+> warns if a packaged rust is shadowing the rustup shims.
 
 ## Setup
 
@@ -242,11 +261,20 @@ git add -A && git commit -m "Initial commit"
 ## Build & install
 
 ```bash
-just build         # .app → target/release/bundle/macos/  (~2 min warm, 5–12 min cold)
+just build         # the bundle for this OS  (~2 min warm, 5–12 min cold)
 just run           # build, then launch it
-just install-app   # build, then copy into /Applications
-just build-dmg     # ⚠️ prompts for Finder Automation permission the first time
+just install-app   # build, then install it
+just build-dmg     # macOS only ⚠️ prompts for Finder Automation permission the first time
 ```
+
+`build` produces whatever this platform installs — a `.app` under
+`target/release/bundle/macos/` on macOS, an AppImage under
+`target/release/bundle/appimage/` on Linux — and `install-app` puts it where that platform
+expects: `/Applications`, or `~/.local/bin/wtm`. The macOS-only recipes exist on Linux too, and
+fail with a reason rather than "no such recipe".
+
+CI builds both on every push and uploads the AppImage as an artifact, so the Linux binary is
+downloadable without building it.
 
 **The build is unsigned, by design** — this is a personal tool.
 
@@ -258,6 +286,22 @@ just build-dmg     # ⚠️ prompts for Finder Automation permission the first t
   leaves the recipient approving it under Privacy & Security.
 - Universal binary: `rustup target add x86_64-apple-darwin && just build-universal`. Roughly doubles
   build time.
+
+### The Linux build has never been run by a human
+
+Worth stating plainly. CI proves the Linux build compiles, passes every test, links against
+WebKitGTK and produces an AppImage — but nothing in CI *launches* the app, and it was developed on
+a Mac. The window chrome is platform-conditional by construction (native WM decorations, no
+traffic-light gutter, opaque window) and none of that has been looked at on a real desktop.
+
+If you are the first to run it, this is the list worth walking:
+
+- [ ] It launches, and the window is not black or transparent-with-garbage (needs a compositor check)
+- [ ] The title bar reads as deliberate — no dead space on the left where the traffic lights aren't
+- [ ] Light/dark toggles, and "system" follows the desktop theme
+- [ ] Fonts look right, and terminal columns line up in a worktree's Terminal action
+- [ ] A `[[display.link]]` opens in a browser (this is the `xdg-open` path)
+- [ ] Starring a worktree, creating one, and removing one all work
 
 ## Troubleshooting
 
@@ -309,10 +353,15 @@ Two things the config decides deliberately, both written down in [`deny.toml`](d
   right call and what this gate relies on.
 - **`unmaintained` is scoped to crates this workspace chose.** Seventeen unmaintained advisories
   come through Tauri: `unic-*` via `urlpattern`, whose advisory says outright that no safe upgrade
-  exists, and ten gtk-rs crates that are Linux-only and never enter the macOS dependency graph at
-  all — `cargo tree -e normal --target aarch64-apple-darwin | grep gtk` prints nothing. Denying
-  those would mean a permanent seventeen-ID ignore list, which is where a real advisory goes to
-  hide. If *we* add an unmaintained crate, it still fails.
+  exists, and ten gtk-rs crates that Tauri pulls on Linux. Denying those would mean a permanent
+  seventeen-ID ignore list, which is where a real advisory goes to hide. If *we* add an
+  unmaintained crate, it still fails.
+
+  That gtk clause used to say those crates "never enter the macOS dependency graph". True, and
+  beside the point twice over: wtm ships a Linux build now, and `deny.toml` has no `[targets]`
+  filter, so cargo-deny has been evaluating the union of all platforms — and seeing them — the
+  whole time. The scoping above is what was already absorbing them; nothing changed when Linux
+  was added.
 
 One version is pinned rather than current: **TypeScript is held at `~6.0.3`** because
 `svelte-check@4.7.4` peers `^5 || ^6`. `latest` is 7.x and would break the type gate.

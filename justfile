@@ -14,6 +14,12 @@ export PATH := env("HOME") + "/.cargo/bin:" + env("HOME") + "/.bun/bin:" + env("
 pm  := "bun"
 pmx := "bun x"
 
+# The bundle this OS installs, and the "hand it to the default handler" front end.
+# Two one-liners here keep the recipes below from each having to know about platforms;
+# only the recipes whose *bodies* genuinely differ get [macos]/[linux] attributes.
+bundles := if os() == "macos" { "app" } else { "appimage" }
+opener  := if os() == "macos" { "open" } else { "xdg-open" }
+
 default:
     @just --list --unsorted
 
@@ -104,18 +110,34 @@ audit:
 
 # ─────────────────────────────── build ───────────────────────────────
 
-# .app only — fast, and triggers no permission prompts.
+# The installable bundle for this OS: .app on macOS, AppImage on Linux. Fast, and
+# triggers no permission prompts on either.
 build:
-    {{ pmx }} tauri build --bundles app
+    {{ pmx }} tauri build --bundles {{ bundles }}
 
 # Requires: rustup target add x86_64-apple-darwin  (roughly doubles build time)
+[macos]
 build-universal:
     {{ pmx }} tauri build --bundles app --target universal-apple-darwin
 
 # WARNING: DMG bundling drives Finder over AppleScript, so macOS shows an
 # Automation permission prompt the first time. Not CI-friendly.
+[macos]
 build-dmg:
     {{ pmx }} tauri build --bundles dmg
+
+# Stubs so the macOS-only recipes fail with a reason. Without them just reports
+# "Justfile does not contain recipe 'build-dmg'", which reads as a broken justfile
+# rather than as a recipe that does not apply here.
+[linux]
+build-universal:
+    @just _err "build-universal is macOS-only (it builds a universal Mach-O binary)"
+    @exit 1
+
+[linux]
+build-dmg:
+    @just _err "build-dmg is macOS-only — 'just build' produces an AppImage"
+    @exit 1
 
 # Run the app from the built bundle, so it activates like a real app rather than
 # launching behind whatever window has focus.
@@ -123,21 +145,38 @@ build-dmg:
 # The lsregister step is not superstition: rebuilding over the same bundle path leaves
 # LaunchServices holding a stale record, and `open` then fails with a bare
 # "error -600" that looks like the app is broken. Re-registering costs nothing.
+[macos]
 run: build
     @just _register
     open "target/release/bundle/macos/Worktree Manager.app"
 
+# Linux has neither problem: no LaunchServices record to go stale, and no
+# activation quirk — the WM raises whatever was just launched.
+[linux]
+run: build
+    "target/release/bundle/appimage/Worktree Manager"*.AppImage
+
+[macos]
 _register:
     @/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
         -f "target/release/bundle/macos/Worktree Manager.app" 2>/dev/null || true
 
 # Install the built .app into /Applications.
+[macos]
 install-app: build
     rm -rf "/Applications/Worktree Manager.app"
     cp -R "target/release/bundle/macos/Worktree Manager.app" /Applications/
     @/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
         -f "/Applications/Worktree Manager.app" 2>/dev/null || true
     @just _ok "installed to /Applications — open it from Spotlight"
+
+# Install the AppImage onto PATH. Deliberately not writing a .desktop entry: the
+# AppImage carries one, and whether to integrate it with the menu is the user's call.
+[linux]
+install-app: build
+    install -Dm755 "target/release/bundle/appimage/Worktree Manager"*.AppImage \
+        "$HOME/.local/bin/wtm"
+    @just _ok "installed to ~/.local/bin/wtm — make sure that is on your PATH"
 
 # ───────────────────────────── utilities ─────────────────────────────
 
@@ -147,7 +186,7 @@ logs:
 
 # Open the user config in $EDITOR.
 config:
-    ${EDITOR:-open} "${XDG_CONFIG_HOME:-$HOME/.config}/wtm/config.toml"
+    ${EDITOR:-{{ opener }}} "${XDG_CONFIG_HOME:-$HOME/.config}/wtm/config.toml"
 
 # Install a config into a repo's git dir as `wtm.local.toml`.
 #

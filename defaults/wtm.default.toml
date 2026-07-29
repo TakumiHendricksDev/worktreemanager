@@ -78,10 +78,14 @@ warn_if_unmerged = true
 
 # ─────────────────────────────── actions ───────────────────────────────
 
+# `$SHELL` is what actually gets used; the fallback is the floor for the rare session
+# that does not set it. `/bin/bash` rather than `/bin/sh` because this is a shell a
+# person types into and `dash` has no line editing — and rather than `/bin/zsh`, which
+# is the macOS default but frequently absent on Linux.
 [[action]]
 id = "shell"
 label = "Open shell"
-run = ["{{ env.SHELL | default_if_empty('/bin/zsh') }}", "-l"]
+run = ["{{ env.SHELL | default_if_empty('/bin/bash') }}", "-l"]
 cwd = "worktree"
 pty = true
 

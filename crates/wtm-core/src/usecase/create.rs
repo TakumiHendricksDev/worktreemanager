@@ -1159,7 +1159,7 @@ impl CreatePipeline {
                     .overridable()
                     .with_hint(
                         "Create the worktree anyway and run setup later, or check \
-                             `just doctor` — a bundled app may not see Homebrew's PATH.",
+                             `just doctor` — a GUI app may not inherit your shell's PATH.",
                     ),
                 );
             }

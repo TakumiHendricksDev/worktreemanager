@@ -387,7 +387,7 @@ link_for = ["HOST_PORT_WEB", "HOST_PORT_MAILPIT_UI", "HOST_PORT_MINIO_CONSOLE"]
 [[action]]
 id = "shell"
 label = "Open shell"
-run = ["{{ env.SHELL | default_if_empty('/bin/zsh') }}", "-l"]
+run = ["{{ env.SHELL | default_if_empty('/bin/bash') }}", "-l"]
 cwd = "worktree"
 pty = true
 

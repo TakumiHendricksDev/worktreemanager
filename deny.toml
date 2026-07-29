@@ -8,10 +8,15 @@ yanked = "warn"
 # the behaviour this gate depends on.
 
 # `unmaintained`, however, is scoped to crates *we* chose. It is not a vulnerability, and for a
-# transitive dependency it is not actionable: Tauri's macOS build pulls `unic-*` through
-# `urlpattern`, and the advisory for those says outright "No safe upgrade is available!". Ten more
-# come from gtk-rs, which is Linux-only and is not in the macOS dependency graph at all — verify
-# with `cargo tree -e normal --target aarch64-apple-darwin | grep gtk`, which prints nothing.
+# transitive dependency it is not actionable: Tauri pulls `unic-*` through `urlpattern`, and the
+# advisory for those says outright "No safe upgrade is available!". Ten more come from gtk-rs,
+# which Tauri pulls on Linux.
+#
+# That gtk clause used to end "…and is not in the macOS dependency graph at all", which was true
+# and is now beside the point twice over. wtm ships a Linux build, so those crates are in a
+# platform we support; and cargo-deny has no `[targets]` filter here, so it evaluates the union of
+# all platforms and has been seeing them since before Linux was a target. Nothing about this file
+# changed when Linux was added — the scoping below is what was already absorbing them.
 #
 # Denying all of them would mean permanently ignoring seventeen advisory IDs by number, and an
 # ignore list that long is where a real advisory goes to hide. Scoped to the workspace, this

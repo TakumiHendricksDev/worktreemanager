@@ -19,6 +19,18 @@
         } catch {
           document.documentElement.dataset.theme = 'light';
         }
+
+        // Window chrome differs by platform and the difference is visible on the very
+        // first frame, so it is resolved here rather than after the bundle boots. The
+        // global is injected by the `wtm-platform` Tauri plugin, which runs before this
+        // script does.
+        //
+        // The `? 'linux' : 'macos'` direction is load-bearing: anything not recognisably
+        // Linux — an absent global under a plain `bun run dev` in a browser, a value from
+        // a future platform — must render the macOS layout rather than a third one
+        // nobody has looked at.
+        document.documentElement.dataset.platform =
+          window.__WTM_PLATFORM__ === 'linux' ? 'linux' : 'macos';
       })();
     </script>
   </head>
