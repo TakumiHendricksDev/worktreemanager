@@ -36,7 +36,7 @@ pub mod runner;
 pub mod signal;
 
 pub use clock::SystemClock;
-pub use path::{PathSource, ResolvedPath, os_tokens};
+pub use path::{PathSource, ResolvedPath, app_bundle, os_tokens};
 pub use pty::PtyHostImpl;
 pub use runner::Runner;
 

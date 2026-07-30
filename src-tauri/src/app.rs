@@ -38,6 +38,9 @@ const KNOWN_TOOLS: &[&str] = &["git", "just", "acli", "docker", "gh", "bun", "np
 pub struct App {
     pub git: Arc<dyn Git>,
     pub runner: Arc<dyn CommandRunner>,
+    /// The same runner as above, un-abstracted, for the one call that is not on the port:
+    /// [`wtm_exec::Runner::launch_detached`]. See [`Self::with_paths`].
+    pub launcher: Arc<wtm_exec::Runner>,
     pub pty: Arc<PtyHostImpl>,
     pub engine: Arc<dyn TemplateEngine>,
     pub files: Arc<dyn FileStore>,
@@ -93,7 +96,15 @@ impl App {
             "resolved execution PATH"
         );
 
-        let runner: Arc<dyn CommandRunner> = Arc::new(runner);
+        // The same object behind two handles. `runner` is the port every use-case sees;
+        // `launcher` is the concrete adapter, kept because `launch_detached` is
+        // deliberately *not* on the port — no use-case launches a desktop application, and
+        // putting it there would hand the domain an opinion about GUIs. Sharing one `Arc`
+        // rather than constructing two runners preserves the invariant in this module's
+        // header: one resolved PATH, so a program can never be findable by one and not the
+        // other.
+        let launcher = Arc::new(runner);
+        let runner: Arc<dyn CommandRunner> = Arc::clone(&launcher) as Arc<dyn CommandRunner>;
         let clock: Arc<dyn Clock> = Arc::new(clock);
         let git: Arc<dyn Git> = Arc::new(GitCli::new(Arc::clone(&runner)));
         let engine: Arc<dyn TemplateEngine> = Arc::new(wtm_render::Engine::new());
@@ -108,6 +119,7 @@ impl App {
         Ok(Self {
             git,
             runner,
+            launcher,
             pty: Arc::new(pty),
             engine,
             files: Arc::new(RealFileStore::new()),
@@ -351,6 +363,16 @@ impl App {
             .ok_or_else(|| WtmError::UnknownWorktree(worktree_id.to_owned()))
     }
 
+    /// How the opener catalogue interrogates this machine.
+    ///
+    /// Borrows the app's own resolved `PATH`, so the picker cannot claim a tool is present
+    /// that a spawn would then fail to find — the two would otherwise drift the moment
+    /// `exec.path` is set.
+    #[must_use]
+    pub fn probe(&self) -> AppProbe<'_> {
+        AppProbe { app: self }
+    }
+
     /// Register a repository, resolving whatever path the user picked to its root.
     ///
     /// Accepting a subdirectory is deliberate: people drag in a folder they happen to be
@@ -360,6 +382,26 @@ impl App {
         let root = self.git.repo_root(&expanded)?;
         self.config.register_project(&root)?;
         Ok(root)
+    }
+}
+
+/// The real machine, as the opener catalogue sees it.
+///
+/// A separate type rather than `impl Probe for App` so the trait stays satisfiable by a
+/// fake: the catalogue's behaviour — "PyCharm is offered when installed" — must be
+/// testable on a machine that does not have PyCharm.
+#[derive(Debug)]
+pub struct AppProbe<'a> {
+    app: &'a App,
+}
+
+impl crate::openers::Probe for AppProbe<'_> {
+    fn which(&self, program: &str) -> bool {
+        self.app.runner.which(program).is_some()
+    }
+
+    fn app_bundle(&self, name: &str) -> bool {
+        wtm_exec::app_bundle(name).is_some()
     }
 }
 

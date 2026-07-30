@@ -187,6 +187,41 @@ pub struct ActionView {
     pub pty: bool,
 }
 
+/// One external tool the worktree can be opened in.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenerView {
+    pub id: String,
+    pub label: String,
+    pub available: bool,
+    /// Why it is unavailable, for a tooltip. `None` when it is available.
+    ///
+    /// Carried rather than left to the frontend because the useful version of this
+    /// sentence names the program that was searched for, which only the catalogue knows.
+    pub detail: Option<String>,
+}
+
+impl From<&crate::openers::Availability> for OpenerView {
+    fn from(availability: &crate::openers::Availability) -> Self {
+        Self {
+            id: availability.id.to_owned(),
+            label: availability.label.to_owned(),
+            available: availability.available(),
+            detail: availability.detail.clone(),
+        }
+    }
+}
+
+/// The whole opener catalogue plus which one the primary button should run.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenersView {
+    pub openers: Vec<OpenerView>,
+    /// `None` only if the catalogue were empty, which it never is — the platform file
+    /// manager has no prerequisites.
+    pub preferred: Option<String>,
+}
+
 /// A preflight finding, ready to render as a checklist row.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

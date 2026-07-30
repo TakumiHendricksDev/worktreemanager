@@ -10,6 +10,7 @@
    */
   import { commands } from '../ipc/commands';
   import { errorMessage, type Worktree } from '../ipc/types';
+  import OpenInButton from './OpenInButton.svelte';
 
   const {
     worktree,
@@ -127,8 +128,16 @@
     </div>
 
     <!-- Actions, pinned right. The path moved into Overview, where it reads as one of the
-         facts rather than as something to click. -->
+         facts rather than as something to click.
+
+         Open-in first, then a divider, then Remove. The gap is not cosmetic: a destructive
+         control sitting flush against a neutral one is how it gets clicked by accident, and
+         these two are the only things in the header. -->
     <div class="row">
+      <OpenInButton {projectId} worktreeId={worktree.id} />
+
+      <span class="divider" aria-hidden="true"></span>
+
       <!-- The main worktree cannot be removed; git refuses, and so does the pipeline. -->
       <button
         class="remove"
@@ -405,12 +414,23 @@
 
   .row {
     display: flex;
-    align-items: center;
+    /* Start, not center: the Open-in control grows downward when it has an error to show,
+       and centring would then drag Remove down with it. */
+    align-items: flex-start;
     gap: var(--sp-2);
     flex: 0 0 auto;
     /* Optically centres the button against the h1's cap-height rather than its line box,
        which top-alignment alone leaves sitting a couple of pixels high. */
     margin-top: 2px;
+  }
+
+  /* Separates the neutral action from the destructive one. A hairline rather than more
+     whitespace, because whitespace alone at this size reads as an accident. */
+  .divider {
+    width: 1px;
+    height: 18px;
+    margin: 3px calc(var(--sp-1) * -1) 0;
+    background: var(--border);
   }
 
   /*

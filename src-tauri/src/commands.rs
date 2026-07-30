@@ -25,12 +25,21 @@ use wtm_core::ports::pty::PtyHost;
 
 use crate::app::App;
 use crate::display;
+use crate::openers;
 use crate::view::{
-    ActionView, DoctorView, ErrorView, FieldView, FormView, ProjectView, WorktreeView,
+    ActionView, DoctorView, ErrorView, FieldView, FormView, OpenersView, ProjectView, WorktreeView,
 };
 
 /// Shared application state.
 pub type AppState<'a> = State<'a, Arc<App>>;
+
+/// Where the chosen "Open in …" tool is remembered.
+///
+/// A plain `ui.*` preference, so it needs no schema in `wtm-config` at all — unknown keys
+/// under that prefix round-trip through `UiPrefs::extra`, the same route `ui.sidebar_width`
+/// takes. Every read goes through [`openers::preferred`] so that making this per-project
+/// later is one function rather than a silent reset of everyone's setting.
+const OPENER_PREF: &str = "ui.opener";
 
 type Reply<T> = Result<T, ErrorView>;
 
@@ -369,17 +378,6 @@ pub async fn reveal_env_value(
 /// `https://` cannot begin with `-`, so neither opener can parse it as a flag.
 #[tauri::command]
 pub async fn open_url(app: AppState<'_>, url: String) -> Reply<()> {
-    // The OS's "hand this to the default handler" front end. There is no portable name
-    // for it, and this is the only place in the app that needs one.
-    //
-    // `not(macos)` rather than `linux` so the BSDs get the right answer too. Windows
-    // would need a third arm, and would not be a one-word change — `start` is a shell
-    // builtin, not a program.
-    #[cfg(target_os = "macos")]
-    const OPENER: &str = "open";
-    #[cfg(not(target_os = "macos"))]
-    const OPENER: &str = "xdg-open";
-
     let app = Arc::clone(&app);
     blocking(move || {
         if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -401,13 +399,123 @@ pub async fn open_url(app: AppState<'_>, url: String) -> Reply<()> {
         }
 
         let inv = wtm_core::ports::exec::Invocation::new(
-            vec![OPENER.to_owned(), url],
+            vec![openers::OPENER.to_owned(), url],
             std::env::temp_dir(),
             10_000,
         );
+        // Deliberately the captured runner, not `launch_detached`: the platform opener
+        // returns within milliseconds and its exit code is real signal — `xdg-open` exits
+        // 3 when no handler is registered, which is worth surfacing. See
+        // `Runner::launch_detached` for why `open_in` needs the opposite.
         app.runner
             .run(&inv, &wtm_core::ports::exec::CancelToken::new())
             .map(|_| ())
+            .map_err(|e| ErrorView::new("exec", e.to_string()))
+    })
+    .await
+}
+
+// ─────────────────────────────── open in ───────────────────────────────
+
+/// Every tool wtm knows how to open a worktree in, resolved against this machine.
+///
+/// The whole catalogue comes back, not just what is installed — see
+/// [`openers::resolve_all`] for why, and for why nothing here is cached.
+#[tauri::command]
+pub async fn list_openers(app: AppState<'_>) -> Reply<OpenersView> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let resolved = openers::resolve_all(&app.probe());
+        let stored = app.config.user_pref(OPENER_PREF)?;
+        let preferred = openers::preferred(&resolved, stored.as_deref()).map(|a| a.id.to_owned());
+
+        Ok(OpenersView {
+            openers: resolved.iter().map(Into::into).collect(),
+            preferred,
+        })
+    })
+    .await
+}
+
+/// Hand a worktree's directory to an external tool.
+///
+/// Spawned through [`wtm_exec::Runner::launch_detached`], which has no deadline. That is
+/// the whole reason it exists: the captured runner terminates the process group on expiry,
+/// and a shim like `code` or the JetBrains launcher stays in the foreground for the
+/// editor's lifetime — so a deadline would kill the application seconds after opening it.
+#[tauri::command]
+pub async fn open_in(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    opener_id: String,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let opener = openers::find(&opener_id).ok_or_else(|| {
+            ErrorView::new(
+                "unknownOpener",
+                format!("wtm has no opener called `{opener_id}`"),
+            )
+        })?;
+
+        let project = app.project(&project_id)?;
+        let worktree = app.worktree(&project, &worktree_id)?;
+
+        // Re-probed rather than trusted from whatever `list_openers` last reported: the
+        // user may have uninstalled the tool since the picker was drawn, and the message
+        // below is better than the bare spawn failure that would otherwise surface.
+        let probe = app.probe();
+        let resolved = openers::resolve_all(&probe);
+        let launch = resolved
+            .iter()
+            .find(|a| a.id == opener.id)
+            .and_then(|a| a.launch)
+            .ok_or_else(|| {
+                ErrorView::new(
+                    "openerUnavailable",
+                    format!(
+                        "{} is not installed, or wtm cannot see it — {}",
+                        opener.label_macos,
+                        resolved
+                            .iter()
+                            .find(|a| a.id == opener.id)
+                            .and_then(|a| a.detail.clone())
+                            .unwrap_or_default()
+                    ),
+                )
+                .with_detail(serde_json::json!({
+                    "openerId": opener.id,
+                    "searched": app.runner.resolved_path(),
+                }))
+            })?;
+
+        // A worktree whose directory has been deleted is still listed by git (as
+        // prunable). Launching an editor at a path that is not there produces a confusing
+        // empty window rather than an error, so catch it here.
+        if !app.files.exists(&worktree.path) {
+            return Err(ErrorView::new(
+                "exec",
+                format!(
+                    "`{}` no longer exists on disk — the worktree may need pruning",
+                    worktree.path.display()
+                ),
+            ));
+        }
+
+        let inv = openers::invocation_for(launch, &worktree.path, &probe)
+            .map_err(|e| ErrorView::new("badPath", e.to_string()))?;
+
+        // Not a defence against a hostile argv: every element is either a literal from the
+        // catalogue or a path git reported, so there is nothing here for a config to
+        // inject. It is called because `[guards].forbid` is the project's stated list of
+        // what must not be spawned in its worktrees, and a spawn site that quietly exempts
+        // itself is how a guard stops meaning what it says. Empty for almost every
+        // project, so it costs an empty `collect`.
+        wtm_config::check_forbidden(&project, &inv.argv)?;
+
+        app.launcher
+            .launch_detached(&inv)
             .map_err(|e| ErrorView::new("exec", e.to_string()))
     })
     .await

@@ -9,6 +9,7 @@
 pub mod app;
 pub mod commands;
 pub mod display;
+pub mod openers;
 pub mod pty_bridge;
 pub mod view;
 
@@ -84,6 +85,8 @@ pub fn run() {
             commands::pty_resize,
             commands::pty_kill,
             commands::open_url,
+            commands::list_openers,
+            commands::open_in,
         ])
         .run(tauri::generate_context!())
         .expect("run the application");

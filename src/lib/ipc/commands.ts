@@ -13,6 +13,7 @@ import type {
   CreateOutcome,
   Doctor,
   Form,
+  Openers,
   Preflight,
   Preview,
   Project,
@@ -115,4 +116,18 @@ export const commands = {
 
   /** Opens an http/https URL. The scheme is validated in Rust — see `open_url`. */
   openUrl: (url: string) => invoke<void>('open_url', { url }),
+
+  // ── open in ──
+  /**
+   * Every tool wtm can open a worktree in, resolved against this machine.
+   *
+   * Returns the whole catalogue, including what is not installed, so the picker can show
+   * a greyed row explaining why rather than silently omitting it. Nothing is cached in
+   * Rust, so calling this again picks up an editor installed since the app started.
+   */
+  listOpeners: () => invoke<Openers>('list_openers'),
+
+  /** Hands the worktree's directory to one of them. Never blocks on the app it starts. */
+  openIn: (projectId: string, worktreeId: string, openerId: string) =>
+    invoke<void>('open_in', { projectId, worktreeId, openerId }),
 };

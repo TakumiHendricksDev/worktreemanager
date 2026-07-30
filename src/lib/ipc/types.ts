@@ -106,6 +106,26 @@ export interface Action {
   pty: boolean;
 }
 
+/** One external tool the selected worktree can be opened in. */
+export interface Opener {
+  id: string;
+  label: string;
+  available: boolean;
+  /**
+   * Why it cannot be used, for a tooltip. Null when it can.
+   *
+   * Composed in Rust because the useful version of this sentence names the program that
+   * was searched for, which only the catalogue knows.
+   */
+  detail: string | null;
+}
+
+export interface Openers {
+  openers: Opener[];
+  /** Which one the primary half of the split button runs. Null only if none exist. */
+  preferred: string | null;
+}
+
 export interface Form {
   projectId: string;
   fields: Field[];

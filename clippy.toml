@@ -31,3 +31,21 @@ disallowed-methods = [
 disallowed-types = [
   { path = "std::sync::Mutex", reason = "prefer parking_lot::Mutex: no poisoning, so no unwrap() on every lock" },
 ]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Product names that `clippy::doc_markdown` would otherwise want in backticks.
+#
+# The lint's job is to catch an unquoted `snake_case` identifier in prose. A
+# product name is not an identifier, and "the `JetBrains` launcher" reads as
+# though JetBrains were a variable. `".."` keeps clippy's own default list
+# (`GitHub`, `JavaScript`, …) rather than replacing it.
+# ─────────────────────────────────────────────────────────────────────────────
+doc-valid-idents = [
+  "..",
+  "IntelliJ",
+  "JetBrains",
+  "PyCharm",
+  "WebStorm",
+  "ToDesktop",
+  "WezTerm",
+]

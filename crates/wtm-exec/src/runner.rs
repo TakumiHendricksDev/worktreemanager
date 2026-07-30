@@ -5,13 +5,22 @@
 //! `clippy.toml` bans `std::process::Command::new` repo-wide via
 //! `disallowed-methods`, so every subprocess in the app funnels through here (and
 //! through [`crate::pty`]). That is not bureaucracy — it is what guarantees, for
-//! every spawn, that:
+//! every *captured* spawn, that:
 //!
 //! - there is a deadline,
 //! - expiry kills the process **group**, not just the direct child,
 //! - the environment is the resolved one (see [`crate::path`]),
 //! - stdin is `/dev/null`, so a prompt fails fast instead of blocking,
 //! - and there is a `tracing` span with the argv and the duration.
+//!
+//! # The one spawn with no deadline
+//!
+//! [`Runner::launch_detached`] deliberately breaks the first two guarantees, and it
+//! is the only thing here that does. Launching a desktop application is not a
+//! command whose output we want — it is a hand-off. Every property above that makes
+//! a captured run safe makes a launch *wrong*: a deadline that terminates the
+//! process group would kill the editor a few seconds after opening it. Read its doc
+//! comment before using it; it is not a general-purpose spawn.
 //!
 //! # Why stdin is null *and* there is a timeout
 //!
@@ -46,6 +55,30 @@ const POLL_INTERVAL: Duration = Duration::from_millis(15);
 /// would exhaust memory before the timeout fired.
 const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
 
+/// What a spawned child does with stdout and stderr.
+///
+/// Named rather than passed as a bare `bool`, because the two modes have opposite
+/// obligations: [`Streams::Captured`] pipes *must* be drained by someone or the child
+/// blocks once the 64 KB buffer fills, while [`Streams::Discarded`] deliberately has
+/// nobody listening at all.
+#[derive(Debug, Clone, Copy)]
+enum Streams {
+    /// Both pipes captured for the caller. Only valid where a reader follows.
+    Captured,
+    /// Both to `/dev/null`. For a launch nobody will ever read the output of, where
+    /// a pipe would be a slow leak waiting for a chatty GUI app to fill it.
+    Discarded,
+}
+
+impl Streams {
+    fn stdio(self) -> Stdio {
+        match self {
+            Self::Captured => Stdio::piped(),
+            Self::Discarded => Stdio::null(),
+        }
+    }
+}
+
 /// Captured-output command runner.
 #[derive(Debug)]
 pub struct Runner {
@@ -69,7 +102,7 @@ impl Runner {
         &self.path
     }
 
-    fn spawn(&self, inv: &Invocation) -> Result<std::process::Child, ExecError> {
+    fn spawn(&self, inv: &Invocation, streams: Streams) -> Result<std::process::Child, ExecError> {
         let program = inv.argv.first().ok_or_else(|| ExecError::Spawn {
             argv: String::new(),
             message: "empty argv".to_owned(),
@@ -99,8 +132,8 @@ impl Runner {
             // whatever the parent process had, and under `cargo tauri dev` that is
             // the developer's terminal.
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(streams.stdio())
+            .stderr(streams.stdio());
 
         // Put the child in its own process group so the whole tree can be
         // signalled together. Without this, killing `worktree.sh` leaves its
@@ -116,13 +149,70 @@ impl Runner {
         })
     }
 
+    /// Start a program and walk away — no deadline, no output, no kill.
+    ///
+    /// For handing a path to a desktop application. Every guarantee in this module's
+    /// header that makes a captured run safe makes a launch wrong:
+    ///
+    /// - **No deadline.** [`Self::run`] terminates the process *group* on expiry
+    ///   (see [`crate::signal::terminate_group`]). A GUI shim like `code`, `subl` or
+    ///   the JetBrains launcher stays in the foreground for the editor's whole
+    ///   lifetime, so a deadline here would not time out a hung command — it would
+    ///   kill the application the user just opened, seconds after it appeared.
+    /// - **No output.** Nothing is captured because nothing will read it.
+    /// - **No exit code.** `Ok(())` means *the program was found and `exec`'d*. It
+    ///   does not mean a window appeared, and it cannot: the process outlives this
+    ///   call by design.
+    ///
+    /// `inv.timeout_ms` is therefore **ignored**. It stays on [`Invocation`] because
+    /// making it optional would weaken the type for every other caller, where a
+    /// missing deadline is the bug this crate exists to prevent.
+    ///
+    /// The child still gets the resolved `PATH`, the requested `cwd`, null stdin and
+    /// its own process group — the last so it is not swept up by a signal aimed at
+    /// wtm.
+    ///
+    /// # Not a replacement for [`Self::run`] on `open`/`xdg-open`
+    ///
+    /// [`crate::path`]'s platform opener returns within milliseconds and its exit
+    /// code is real signal — `xdg-open` exits 3 when no handler is registered, which
+    /// is worth surfacing. `open_url` deliberately keeps using [`Self::run`]. The
+    /// difference between the two call sites is the argv, not the function.
+    ///
+    /// # Errors
+    ///
+    /// [`ExecError::ProgramNotFound`] if the program is not on the resolved `PATH` —
+    /// which, naming what it searched, is the entire diagnostic value of this call —
+    /// or [`ExecError::Spawn`] if `exec` itself fails.
+    pub fn launch_detached(&self, inv: &Invocation) -> Result<(), ExecError> {
+        let span = tracing::debug_span!("launch", argv = %inv.display(), cwd = %inv.cwd.display());
+        let _guard = span.enter();
+
+        let mut child = self.spawn(inv, Streams::Discarded)?;
+        let pid = child.id();
+
+        // Reap on a thread rather than leaking a zombie for the app's lifetime. The
+        // thread parks in `wait()` until the editor exits, which may be hours — that
+        // is the cost, and it is one parked thread (~8 KiB of virtual stack) per
+        // launch, against a process table entry that never goes away otherwise.
+        // Detaching without reaping at all is the usual shortcut and it is wrong
+        // here: wtm is long-lived, and a user who opens ten worktrees a day would
+        // accumulate ten defunct entries a day.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+
+        tracing::debug!(pid, "launched detached");
+        Ok(())
+    }
+
     /// Spawn, stream both pipes on threads, and wait with a deadline.
     fn run_inner(&self, inv: &Invocation, cancel: &CancelToken) -> Result<Output, ExecError> {
         let span = tracing::debug_span!("run", argv = %inv.display(), cwd = %inv.cwd.display());
         let _guard = span.enter();
 
         let started = instant_now();
-        let mut child = self.spawn(inv)?;
+        let mut child = self.spawn(inv, Streams::Captured)?;
         let pid = child.id();
 
         // Drain both pipes concurrently. A single-threaded read of stdout would
@@ -309,6 +399,7 @@ impl CommandRunner for Runner {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::time::Instant;
 
     use super::*;
@@ -534,6 +625,144 @@ mod tests {
         let reported = std::fs::canonicalize(out.stdout.trim()).unwrap();
         let expected = std::fs::canonicalize(dir.path()).unwrap();
         assert_eq!(reported, expected);
+    }
+
+    /// Poll for `path` to appear, up to `limit`. Returns whether it did.
+    ///
+    /// Polling rather than one long sleep: the assertion is "this eventually
+    /// happened", and a fixed sleep either makes the suite slow or makes it flaky on
+    /// a loaded CI runner.
+    fn appeared_within(path: &Path, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if path.exists() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    /// The reason [`Runner::launch_detached`] exists.
+    ///
+    /// Built on `run`, an "Open in PyCharm" button would terminate the process group
+    /// at the deadline — killing the editor it had just opened, seconds later, with
+    /// no error anywhere. The timeout below is deliberately far shorter than the
+    /// child's own sleep, so a deadline of *any* kind would stop the marker being
+    /// written.
+    #[test]
+    fn a_detached_launch_outlives_the_deadline_it_would_have_had() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("survived");
+
+        let started = Instant::now();
+        runner()
+            .launch_detached(&inv(
+                &[
+                    "sh",
+                    "-c",
+                    &format!("sleep 1; : > {}", marker.to_string_lossy()),
+                ],
+                50,
+            ))
+            .unwrap();
+
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "the call must hand off, not wait for the child"
+        );
+        assert!(
+            appeared_within(&marker, Duration::from_secs(10)),
+            "the child was killed; a launched application would have died with it"
+        );
+    }
+
+    #[test]
+    fn a_detached_launch_of_a_missing_program_still_reports_where_it_looked() {
+        let err = runner()
+            .launch_detached(&inv(&["definitely-not-a-real-program-xyz"], 1_000))
+            .unwrap_err();
+        match err {
+            ExecError::ProgramNotFound { program, searched } => {
+                assert_eq!(program, "definitely-not-a-real-program-xyz");
+                assert!(!searched.is_empty(), "must report where it looked");
+            }
+            other => panic!("expected ProgramNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_detached_launch_inherits_the_resolved_path_and_the_requested_cwd() {
+        // The Linux terminal strategy rests entirely on cwd inheritance: rather than
+        // learn each emulator's --working-directory spelling, wtm sets `cwd` and lets
+        // the terminal inherit it. If that broke, every Linux terminal would open in
+        // the wrong place with nothing to indicate why.
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("cwd-was-honoured");
+
+        let command = Invocation::new(
+            vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                // Written relative, so it lands in the marker's directory only if the
+                // child actually started there.
+                "printf %s \"$PATH\" > cwd-was-honoured".to_owned(),
+            ],
+            dir.path(),
+            5_000,
+        );
+        runner().launch_detached(&command).unwrap();
+
+        assert!(
+            appeared_within(&marker, Duration::from_secs(10)),
+            "the child did not run in the requested cwd"
+        );
+        let seen = std::fs::read_to_string(&marker).unwrap();
+        assert_eq!(
+            seen,
+            runner().path().value,
+            "the child must get the resolved PATH, not the inherited one"
+        );
+    }
+
+    /// A zombie answers "alive" to `kill(pid, 0)`, so counting defunct entries is the
+    /// only check that actually distinguishes reaped from leaked.
+    #[test]
+    fn finished_detached_launches_are_reaped_rather_than_left_as_zombies() {
+        let runner = runner();
+        for _ in 0..8 {
+            runner.launch_detached(&inv(&["true"], 1_000)).unwrap();
+        }
+
+        // Give the reaper threads a moment; then read the process table. `-o ppid=,stat=`
+        // is spelled the same on macOS and Linux.
+        let ours = std::process::id().to_string();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let out = runner
+                .run(
+                    &inv(&["ps", "-A", "-o", "ppid=,stat="], 5_000),
+                    &CancelToken::new(),
+                )
+                .unwrap();
+            let zombies = out
+                .stdout
+                .lines()
+                .filter_map(|line| {
+                    let (ppid, stat) = line.trim().split_once(char::is_whitespace)?;
+                    (ppid == ours && stat.starts_with('Z')).then_some(())
+                })
+                .count();
+
+            if zombies == 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{zombies} detached children were left defunct"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]

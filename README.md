@@ -35,6 +35,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | ✅ | Adopting an existing branch instead of creating one — the GUI form of the shell's numbered stdin picker |
 | ✅ | Removing a worktree: the project's teardown steps, then `git worktree remove`, then optionally the branch |
 | ✅ | Live terminal pane for setup output and ad-hoc `[[action]]`s, with input routed back so a prompt is answerable |
+| ✅ | **Open in …** — a split button that hands the worktree to your editor, a terminal, the file manager, or a fresh Claude Code session; see [below](#open-in-) |
 | 🚧 | `[remove] strategy = "command"` — the native path is the default and the one that turns the branch prompt into a checkbox |
 | 🚧 | A command palette, and `notify`-based auto-refresh |
 
@@ -55,7 +56,7 @@ project's convention. With the variable unset the tests skip.
 
 [Install](#install) · [Prerequisites](#prerequisites) · [Setup](#setup) ·
 [First run](#first-run) · [Registering a project](#registering-a-project) ·
-[Writing wtm.toml](#writing-wtmtoml) · [Dev workflow](#dev-workflow) ·
+[Writing wtm.toml](#writing-wtmtoml) · [Open in …](#open-in-) · [Dev workflow](#dev-workflow) ·
 [Build & install](#build--install) · [Troubleshooting](#troubleshooting) ·
 [Logs](#logs) · [Dependencies](#dependencies) · [Architecture](#architecture)
 
@@ -282,6 +283,34 @@ than a policy that has to be kept correct.
 but credentials. It runs as part of `just check` — it no longer needs a real checkout, because
 the guarantee no longer depends on the data.
 
+## Open in …
+
+A split button in the detail header. The left half hands the worktree's directory to your
+preferred tool; the right half is a menu of everything wtm knows about. Picking one launches
+it **and** makes it the default, stored as `ui.opener` in `~/.config/wtm/config.toml`.
+
+Supported: Claude Code, VS Code, Cursor, Windsurf, Zed, PyCharm, IntelliJ IDEA, WebStorm,
+Sublime Text, a terminal, and Finder / your file manager.
+
+Tools you do not have are **listed but disabled**, with the reason — usually *"no `code` on
+wtm's PATH"*. That is deliberate: it doubles as a diagnosis of this app's most likely failure,
+a GUI-launched process that cannot see your shell's `PATH` (see
+[Troubleshooting](#troubleshooting)). On macOS a tool is found either by its shell command or
+by its `.app` bundle, so VS Code works whether or not you ever ran *Shell Command: Install
+'code' command in PATH*.
+
+Two things worth knowing:
+
+- **Open in Claude Session opens a terminal, not the Claude desktop app.** It uses the
+  `claude-cli://open?cwd=…` deep link that the `claude` CLI registers a handler for, and that
+  handler starts a fresh Claude Code session in a terminal emulator — iTerm2 if you have it,
+  otherwise Ghostty, Kitty, Alacritty, WezTerm or Terminal.app, in that order. Claude Desktop
+  has no URL route that accepts a directory. The entry is hidden unless `claude` is on wtm's
+  `PATH`.
+- **Nothing here is a project config concern.** Openers are built in and identical in every
+  repository, so they need no `wtm.toml` entry and trigger no trust prompt. `[[action]]` is
+  still the place for a per-project button.
+
 ## Dev workflow
 
 ```bash
@@ -346,6 +375,12 @@ If you are the first to run it, this is the list worth walking:
 - [ ] Fonts look right, and terminal columns line up in a worktree's Terminal action
 - [ ] A `[[display.link]]` opens in a browser (this is the `xdg-open` path)
 - [ ] Starring a worktree, creating one, and removing one all work
+- [ ] **Open in …** lists the editors you actually have, and disabled rows name the missing
+      command. `Terminal` picks a real emulator, and it opens *in the worktree* — that arm
+      relies on cwd inheritance rather than each emulator's own flag, and it has never run
+- [ ] An editor launched from **Open in …** is still running two minutes later. This is the
+      one that would catch a regression in `launch_detached`: the JetBrains shims stay in the
+      foreground for the IDE's lifetime, so a deadline on that spawn would kill the editor
 
 ## Troubleshooting
 

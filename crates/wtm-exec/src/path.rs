@@ -322,6 +322,85 @@ fn is_executable(path: &Path) -> bool {
     })
 }
 
+/// Where macOS keeps application bundles.
+///
+/// **Not** behind `#[cfg(target_os = "macos")]`, deliberately, and that is the point
+/// worth reading. These directories simply do not exist on Linux, so the probe below
+/// answers `None` there without a compile-time branch — which means a unit test on
+/// *either* platform exercises the real code path, and the macOS half of the opener
+/// catalogue stays under test on a Linux CI runner.
+///
+/// The rule this follows: a `#[cfg(target_os)]` is warranted only where the other
+/// platform's code cannot compile or cannot be expressed. `open` vs `xdg-open`
+/// qualifies — there is no portable name and no runtime way to pick one.
+/// `fs::metadata("/Applications/Zed.app")` does not. Preferring data over a seam is
+/// what keeps both arms testable everywhere.
+///
+/// `/System/Applications/Utilities` is listed because that is where Terminal.app
+/// lives on modern macOS; `/Applications/Utilities` is a symlink to it.
+const APP_DIRS: &[&str] = &[
+    "/Applications",
+    "/System/Applications",
+    "/System/Applications/Utilities",
+];
+
+/// Bundle directories relative to `$HOME`, searched first.
+///
+/// A per-user install beats a system-wide one, the same way `HOME_FALLBACK_DIRS`
+/// precedes `FALLBACK_DIRS` above. Anthropic's `Claude Code URL Handler.app` installs
+/// here, so this is not a hypothetical.
+const HOME_APP_DIRS: &[&str] = &["Applications"];
+
+/// Locate a macOS application bundle by its display name, without the `.app` suffix.
+///
+/// This is `which` for GUI programs. `/Applications` is macOS's `PATH` for things that
+/// have windows, and the two lookups belong side by side: an editor is reachable
+/// through *either* a shim on `PATH` or a bundle here, and on macOS the bundle is the
+/// more reliable of the two. `code` and `cursor` are symlinks that exist only if the
+/// user ran *Shell Command: Install 'code' command in PATH*, which most people never
+/// do — so a `which`-only probe would report VS Code as missing on a machine where it
+/// is plainly installed.
+///
+/// Returns `None` on Linux, where none of the search roots exist.
+///
+/// # Known limitation
+///
+/// `open -a` performs a Launch Services lookup and will therefore start an app
+/// installed somewhere unusual, while this only stats the standard locations. An app
+/// outside them is hidden from the picker even though launching it would work. The
+/// alternative — `mdfind` or `osascript -e 'id of app "X"'` per tool per sweep — is a
+/// subprocess apiece, and Spotlight can be disabled outright, so the false negative is
+/// the better trade.
+#[must_use]
+pub fn app_bundle(name: &str) -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(home) = home_dir() {
+        roots.extend(HOME_APP_DIRS.iter().map(|relative| home.join(relative)));
+    }
+    roots.extend(APP_DIRS.iter().map(PathBuf::from));
+
+    app_bundle_in(name, &roots)
+}
+
+/// The search itself, with the roots injected so it is testable against a tempdir.
+fn app_bundle_in(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
+    // A name is only ever a literal from the opener catalogue, so this cannot be
+    // reached with a hostile value today. It is checked anyway because `join` treats
+    // an absolute or `..`-bearing component as an escape, and the cost of being wrong
+    // later — a probe that reports an arbitrary directory as an installed editor — is
+    // out of proportion to one comparison.
+    if name.is_empty() || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+
+    roots
+        .iter()
+        .map(|root| root.join(format!("{name}.app")))
+        // `is_dir`, not `exists`: a bundle is a directory, and a stray file named
+        // `Zed.app` is not something `open -a` could launch.
+        .find(|candidate| candidate.is_dir())
+}
+
 /// `os.*` template tokens.
 #[must_use]
 pub fn os_tokens() -> BTreeMap<String, String> {
@@ -358,6 +437,70 @@ fn home_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Roots are injected so this runs identically on Linux, where none of the real
+    /// `APP_DIRS` exist. That is the whole reason the probe is data rather than a
+    /// `#[cfg]`: the macOS behaviour stays under test on a Linux CI runner.
+    #[test]
+    fn an_application_bundle_is_found_by_name_in_a_directory_that_holds_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Some Editor.app")).unwrap();
+        let roots = vec![dir.path().to_path_buf()];
+
+        assert_eq!(
+            app_bundle_in("Some Editor", &roots),
+            Some(dir.path().join("Some Editor.app")),
+            "a name with a space is the common case, not an edge case"
+        );
+        assert_eq!(
+            app_bundle_in("Some Other Editor", &roots),
+            None,
+            "a bundle that is not there is absent, not an error"
+        );
+    }
+
+    #[test]
+    fn the_first_root_holding_a_bundle_wins_so_a_user_install_beats_a_system_one() {
+        let user = tempfile::tempdir().unwrap();
+        let system = tempfile::tempdir().unwrap();
+        std::fs::create_dir(user.path().join("Zed.app")).unwrap();
+        std::fs::create_dir(system.path().join("Zed.app")).unwrap();
+
+        assert_eq!(
+            app_bundle_in(
+                "Zed",
+                &[user.path().to_path_buf(), system.path().to_path_buf()]
+            ),
+            Some(user.path().join("Zed.app"))
+        );
+    }
+
+    #[test]
+    fn a_plain_file_is_not_mistaken_for_a_bundle() {
+        // A bundle is a directory. `open -a` cannot launch a regular file that happens
+        // to be named like one, so reporting it as installed would offer a button that
+        // could only fail.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Impostor.app"), "not a bundle").unwrap();
+
+        assert_eq!(app_bundle_in("Impostor", &[dir.path().to_path_buf()]), None);
+    }
+
+    #[test]
+    fn a_name_containing_a_separator_cannot_escape_the_search_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("Escaped.app")).unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+
+        assert_eq!(
+            app_bundle_in("../outside/Escaped", std::slice::from_ref(&root)),
+            None,
+            "`join` would happily follow this out of the search root"
+        );
+        assert_eq!(app_bundle_in("/Applications/Safari", &[root]), None);
+    }
 
     #[test]
     fn merge_preserves_order_and_drops_duplicates() {
