@@ -72,6 +72,24 @@ const CLAUDE_DEEP_LINK: &str = "claude-cli://open?cwd=";
 /// The Claude handler's own limit on the `cwd` parameter, measured after encoding.
 const CLAUDE_CWD_LIMIT: usize = 4096;
 
+/// Appended to the deep link to hand the new session straight to Claude Desktop.
+///
+/// `q` is the handler's prompt parameter; it becomes `--prefill-b64` on the launched CLI,
+/// and `/desktop` is a built-in command — *"Continue the current session in Claude
+/// Desktop"*.
+///
+/// # This pre-fills, it does not send, and that is not a limitation to route around
+///
+/// Claude Code deliberately refuses to submit a prompt that arrived from an external link.
+/// It types it into the composer and shows *"Prompt from an external link · review before
+/// pressing Enter"*. Verified by running it. So this opener gets you a session in the right
+/// worktree with the handoff queued up, and you press Enter — one keystroke, and the
+/// keystroke is a security boundary: without it, any web page could make your Claude Code
+/// run an arbitrary prompt. Do not try to defeat it by other means.
+///
+/// Already percent-encoded, because it is a literal rather than user data: `%2F` is `/`.
+const CLAUDE_HANDOFF: &str = "&q=%2Fdesktop";
+
 /// How one tool gets launched, and therefore also how its presence is detected.
 ///
 /// Arms are tried in order and the first whose probe succeeds is the one used.
@@ -105,7 +123,11 @@ pub enum Launch {
     /// Without this the entry would report itself available on every machine, become the
     /// default for people who have never installed it, and fail silently on click.
     Url {
+        /// Everything before the encoded path.
         template: &'static str,
+        /// Everything after it — further query parameters, already encoded because they are
+        /// literals rather than user data.
+        suffix: &'static str,
         requires: &'static str,
     },
     /// `<OPENER> <path>` — the platform file manager. Always available: it is the same
@@ -155,8 +177,22 @@ pub const CATALOGUE: &[Opener] = &[
         label_other: "Claude Session",
         launch: &[Launch::Url {
             template: CLAUDE_DEEP_LINK,
+            suffix: "",
             // The CLI auto-registers the URL handler at startup, so its presence on PATH is
             // the closest available proxy for "the scheme resolves to something".
+            requires: "claude",
+        }],
+    },
+    // Same deep link, plus a queued `/desktop`. A separate entry rather than a replacement
+    // because the two genuinely differ in where you end up, and someone who lives in a
+    // terminal should not have to route through the desktop app to get there.
+    Opener {
+        id: "claude-desktop",
+        label_macos: "Claude Desktop",
+        label_other: "Claude Desktop",
+        launch: &[Launch::Url {
+            template: CLAUDE_DEEP_LINK,
+            suffix: CLAUDE_HANDOFF,
             requires: "claude",
         }],
     },
@@ -494,12 +530,16 @@ pub fn argv_for(launch: Launch, path: &Path) -> Result<Vec<String>, PathRejectio
             names.first().copied().unwrap_or_default().to_owned(),
             path_arg,
         ],
-        Launch::Url { template, .. } => {
+        Launch::Url {
+            template, suffix, ..
+        } => {
             let encoded = percent_encode_path(&path_arg);
+            // The handler's limit is on `cwd`, so it is the encoded *path* that is measured
+            // — not the whole URL, which also carries the scheme and any suffix.
             if encoded.len() > CLAUDE_CWD_LIMIT {
                 return Err(PathRejection::TooLongForScheme);
             }
-            vec![OPENER.to_owned(), format!("{template}{encoded}")]
+            vec![OPENER.to_owned(), format!("{template}{encoded}{suffix}")]
         }
         Launch::Reveal => vec![OPENER.to_owned(), path_arg],
         // The path is not an argument at all — it is the cwd. See `Launch::Terminal`.
@@ -659,6 +699,37 @@ mod tests {
     }
 
     #[test]
+    fn the_desktop_handoff_queues_a_slash_command_after_the_encoded_path() {
+        let argv = argv_for(
+            Launch::Url {
+                template: CLAUDE_DEEP_LINK,
+                suffix: CLAUDE_HANDOFF,
+                requires: "claude",
+            },
+            Path::new("/Users/dev/My Repo/app"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            argv[1], "claude-cli://open?cwd=/Users/dev/My%20Repo/app&q=%2Fdesktop",
+            "the suffix must follow the path, or `cwd` would swallow `&q=` as part of itself"
+        );
+    }
+
+    #[test]
+    fn both_claude_entries_share_one_probe_so_they_appear_and_vanish_together() {
+        // They are the same deep link and the same handler; offering one without the other
+        // would imply a difference in availability that does not exist.
+        let with = resolve_all(&FakeProbe::with_programs(&["claude"]));
+        let without = resolve_all(&FakeProbe::bare());
+
+        for id in ["claude", "claude-desktop"] {
+            assert!(with.iter().find(|a| a.id == id).unwrap().available());
+            assert!(!without.iter().find(|a| a.id == id).unwrap().available());
+        }
+    }
+
+    #[test]
     fn the_file_manager_is_available_on_a_machine_with_nothing_installed() {
         // The floor that keeps the split button from ever having nothing to run.
         let resolved = resolve_all(&FakeProbe::bare());
@@ -790,6 +861,7 @@ mod tests {
         let argv = argv_for(
             Launch::Url {
                 template: CLAUDE_DEEP_LINK,
+                suffix: "",
                 requires: "claude",
             },
             Path::new("/Users/dev/My Repo#2/app"),
@@ -815,6 +887,7 @@ mod tests {
         let err = argv_for(
             Launch::Url {
                 template: CLAUDE_DEEP_LINK,
+                suffix: "",
                 requires: "claude",
             },
             Path::new(&long),
