@@ -400,6 +400,10 @@ WebKitGTK and produces an AppImage — but nothing in CI *launches* the app, and
 a Mac. The window chrome is platform-conditional by construction (native WM decorations, no
 traffic-light gutter, opaque window) and none of that has been looked at on a real desktop.
 
+One data point since this was written: it launches and renders correctly on Hyprland with an
+NVIDIA GPU, but only after `WEBKIT_DISABLE_DMABUF_RENDERER=1` — without it the window is blank.
+See [Troubleshooting](#troubleshooting). Nothing else on the list below has been checked.
+
 If you are the first to run it, this is the list worth walking:
 
 - [ ] It launches, and the window is not black or transparent-with-garbage (needs a compositor check)
@@ -427,6 +431,9 @@ If you are the first to run it, this is the list worth walking:
 | `svelte-check` errors about the TypeScript version | `typescript@7` is `latest` but `svelte-check` peers `^5 \|\| ^6` | TypeScript is pinned to `~6.0.3` in `package.json` — don't bump it to `latest` |
 | `vite build` fails with "Failed to load `transformWithEsbuild`" | Vite 8 uses Rolldown/Oxc; the esbuild minifier is now a separate install | `vite.config.ts` sets `minify: 'oxc'`. Don't change it back to `'esbuild'`. |
 | The app window opens behind another app | A bare binary launched from a shell does not activate | Use `just run`, or `open "…/Worktree Manager.app"` — a bundled app activates properly |
+| Linux: the window opens but stays blank, with `Failed to create GBM buffer … Invalid argument` on stderr | WebKitGTK's DMABUF renderer cannot allocate through the proprietary NVIDIA driver under a Wayland compositor. The webview process starts, gets no rendering surface, and paints nothing. | `WEBKIT_DISABLE_DMABUF_RENDERER=1 wtm`. To make it stick across launcher clicks too, set it in the `.desktop` entry rather than your shell profile — a GUI launch never reads `.zshrc`. |
+| Linux: `just build` fails with `failed to run linuxdeploy` after Rust compiles cleanly | linuxdeploy's bundled `strip` is too old to parse `.relr.dyn`, which Arch and other packed-relative-relocation distributions emit in every system library | `just build` passes `NO_STRIP=1` for exactly this. If you invoke `tauri build` directly, set it yourself. |
+| Linux: the AppImage logs `GStreamer element appsink not found` | Cosmetic. `linuxdeploy-plugin-gstreamer` bundles a partial GStreamer into the AppDir and repoints the plugin path inside the mount, where `appsink` is absent — your system packages are fine. | Ignore it unless you play media in the webview. `just dev` uses the system GStreamer and won't show it. |
 | `open` fails with `error -600` | Rebuilding over the same bundle path leaves LaunchServices holding a stale record | `just run` re-registers the bundle first. By hand: `lsregister -f "…/Worktree Manager.app"` |
 | `@tauri-apps/cli` "cli-darwin-arm64 not found" | bun didn't resolve the platform-specific optional dependency | `rm -rf node_modules bun.lock && bun install` |
 | Setup command hangs forever with no output | The project's command is prompting on stdin, and a `confirm()`-style helper can loop forever on EOF rather than giving up. | Every captured command has a mandatory timeout; PTY commands are interactive — answer in the Terminal tab, or Cancel. Add the command to `[[guards.forbid]]` so it can't be run again. |

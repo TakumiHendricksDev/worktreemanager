@@ -17,8 +17,17 @@ pmx := "bun x"
 # The bundle this OS installs, and the "hand it to the default handler" front end.
 # Two one-liners here keep the recipes below from each having to know about platforms;
 # only the recipes whose *bodies* genuinely differ get [macos]/[linux] attributes.
-bundles := if os() == "macos" { "app" } else { "appimage" }
-opener  := if os() == "macos" { "open" } else { "xdg-open" }
+bundles  := if os() == "macos" { "app" } else { "appimage" }
+opener   := if os() == "macos" { "open" } else { "xdg-open" }
+
+# linuxdeploy carries its own `strip`, built against a binutils too old to know
+# `.relr.dyn` (SHT_RELR). A distribution that links its system libraries with packed
+# relative relocations — Arch today, others as binutils spreads — therefore fails every
+# strip call linuxdeploy makes while filling the AppDir, and bundling dies having only
+# said `failed to run linuxdeploy`. Stripping sheds debug symbols from bundled system
+# libraries and nothing else, so declining it costs bundle size alone. Empty on macOS,
+# whose bundler never invokes linuxdeploy at all.
+no_strip := if os() == "macos" { "" } else { "NO_STRIP=1" }
 
 default:
     @just --list --unsorted
@@ -113,7 +122,7 @@ audit:
 # The installable bundle for this OS: .app on macOS, AppImage on Linux. Fast, and
 # triggers no permission prompts on either.
 build:
-    {{ pmx }} tauri build --bundles {{ bundles }}
+    {{ no_strip }} {{ pmx }} tauri build --bundles {{ bundles }}
 
 # Requires: rustup target add x86_64-apple-darwin  (roughly doubles build time)
 [macos]
