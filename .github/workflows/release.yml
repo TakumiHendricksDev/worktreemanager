@@ -1,0 +1,161 @@
+name: Release
+
+# Tag-triggered, because a release is a deliberate act. `just check` and the CI
+# matrix already gate every push; this only packages what those proved.
+#
+#     git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must match the version in tauri.conf.json — `verify version` below fails
+# the run if it does not, before anything is built or published.
+on:
+  push:
+    tags: ['v*']
+
+# The workflow creates a Release, which needs write access to the repo's contents.
+# Nothing else does, so nothing else is granted.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macos-arm64
+          - os: ubuntu-24.04
+            label: linux-x86_64
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify the tag matches the app version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          conf="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' src-tauri/tauri.conf.json | head -1)"
+          if [ "$tag" != "$conf" ]; then
+            echo "::error::tag v$tag does not match tauri.conf.json version $conf"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_ENV"
+
+      - name: System dependencies (Tauri v2 / WebKitGTK)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential curl wget file
+
+      - uses: oven-sh/setup-bun@v2
+      - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun x tauri build --bundles ${{ runner.os == 'macOS' && 'app' || 'appimage' }}
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+
+      # `ditto`, not `zip`: a .app is a bundle with symlinks and extended attributes,
+      # and plain `zip -r` quietly mangles them into something that will not launch.
+      # `--keepParent` puts `Worktree Manager.app` at the archive root, which is what
+      # the Homebrew cask's `app` stanza expects to find.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist-release
+          ditto -c -k --sequesterRsrc --keepParent \
+            "target/release/bundle/macos/Worktree Manager.app" \
+            "dist-release/wtm-${{ env.version }}-macos-arm64.zip"
+
+      # Renamed off Tauri's default, which contains a space (productName is
+      # "Worktree Manager"). A space in a download URL is a papercut for every
+      # consumer — curl, the cask, and anyone pasting it into a terminal.
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist-release
+          mv target/release/bundle/appimage/*.AppImage \
+            "dist-release/wtm-${{ env.version }}-linux-x86_64.AppImage"
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist-release
+          shasum -a 256 * | tee "../checksums-${{ matrix.label }}.txt"
+          mv "../checksums-${{ matrix.label }}.txt" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.label }}
+          path: dist-release/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist-release
+
+      # A draft, deliberately. The macOS build is unsigned, so the release notes
+      # carry install instructions that have to be right — and the Homebrew cask
+      # needs the published sha256 before anyone can install. Review, then publish.
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cd dist-release
+          {
+            echo "## Install"
+            echo
+            echo '### macOS'
+            echo
+            echo '```bash'
+            echo "brew install --cask --no-quarantine takumihendricksdev/tap/wtm"
+            echo '```'
+            echo
+            echo 'The `--no-quarantine` flag is required because the app is unsigned —'
+            echo 'without it macOS reports it as "damaged and can'"'"'t be opened".'
+            echo
+            echo 'Or download the zip below. Fetch it with `curl`/`gh` rather than a'
+            echo 'browser: browsers set the quarantine attribute, the CLI does not.'
+            echo
+            echo '### Linux'
+            echo
+            echo '```bash'
+            echo "gh release download v$version --repo ${GITHUB_REPOSITORY} --pattern '*.AppImage'"
+            echo "chmod +x wtm-$version-linux-x86_64.AppImage"
+            echo '```'
+            echo
+            echo 'Needs WebKitGTK 2.42+ and glibc 2.39+ (Ubuntu 24.04, Fedora 39+, Debian 13).'
+            echo
+            echo '### Checksums'
+            echo
+            echo '```'
+            cat checksums-*.txt
+            echo '```'
+          } > notes.md
+
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            wtm-*.zip wtm-*.AppImage checksums-*.txt
