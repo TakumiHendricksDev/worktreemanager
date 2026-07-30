@@ -133,15 +133,27 @@ pub enum Launch {
     /// `<OPENER> <path>` — the platform file manager. Always available: it is the same
     /// program the app already relies on to open links.
     Reveal,
-    /// The first terminal emulator found on PATH, launched with **cwd set to the
-    /// worktree** rather than a flag.
+    /// The first of `candidates` found on PATH, run with `args` and **cwd set to the
+    /// worktree** — the path is never an argument at all.
     ///
-    /// Every emulator spells its working-directory option differently
-    /// (`--working-directory=`, `--workdir`, `--directory`, `start --cwd`, and `xterm` has
-    /// none at all), but all of them inherit the cwd they are spawned with — including
-    /// gnome-terminal, which forwards the client's cwd to `gnome-terminal-server`. Setting
-    /// the cwd deletes the entire flag matrix.
-    Terminal(&'static [&'static str]),
+    /// For tools that act on "wherever you are" rather than on a path they are handed. Two
+    /// unrelated cases need it, which is why it is a general arm rather than a terminal one:
+    ///
+    /// - **Terminals.** Every emulator spells its working-directory option differently
+    ///   (`--working-directory=`, `--workdir`, `--directory`, `start --cwd`, and `xterm` has
+    ///   none at all), but all of them inherit the cwd they are spawned with — including
+    ///   gnome-terminal, which forwards the client's cwd to `gnome-terminal-server`. Setting
+    ///   the cwd deletes the entire flag matrix.
+    /// - **Fork**, whose CLI is `fork [<options>] <command>`. A bare path there is parsed as
+    ///   a *command name*, not a repository — `fork open` acts on the current one. It does
+    ///   have `-C <path>`, but using the cwd keeps this arm's single shape.
+    ///
+    /// The candidate list is tried in order, which is what lets one entry cover the ten
+    /// terminal emulators a Linux desktop might have.
+    InWorktree {
+        candidates: &'static [&'static str],
+        args: &'static [&'static str],
+    },
 }
 
 /// One launchable tool.
@@ -313,18 +325,36 @@ pub const CATALOGUE: &[Opener] = &[
             // `x-terminal-emulator` is Debian's alternatives symlink and so is the most
             // likely to be right when it exists. `xterm` is last because it is the one
             // everybody has and nobody wants.
-            Launch::Terminal(&[
-                "x-terminal-emulator",
-                "gnome-terminal",
-                "konsole",
-                "xfce4-terminal",
-                "tilix",
-                "kitty",
-                "alacritty",
-                "wezterm",
-                "foot",
-                "xterm",
-            ]),
+            Launch::InWorktree {
+                candidates: &[
+                    "x-terminal-emulator",
+                    "gnome-terminal",
+                    "konsole",
+                    "xfce4-terminal",
+                    "tilix",
+                    "kitty",
+                    "alacritty",
+                    "wezterm",
+                    "foot",
+                    "xterm",
+                ],
+                args: &[],
+            },
+        ],
+    },
+    // A git GUI rather than an editor, which is why it earns a place in a worktree
+    // manager specifically: "show me this branch's history" is the other question the app
+    // exists to shorten.
+    Opener {
+        id: "fork",
+        label_macos: "Fork",
+        label_other: "Fork",
+        launch: &[
+            Launch::InWorktree {
+                candidates: &["fork"],
+                args: &["open"],
+            },
+            Launch::MacApp(&["Fork"]),
         ],
     },
     Opener {
@@ -389,7 +419,7 @@ pub fn resolve_all(probe: &dyn Probe) -> Vec<Availability> {
             let launch = opener.launch.iter().copied().find(|arm| match arm {
                 Launch::Cli { program, .. } => probe.which(program),
                 Launch::MacApp(names) => names.iter().any(|n| probe.app_bundle(n)),
-                Launch::Terminal(candidates) => candidates.iter().any(|c| probe.which(c)),
+                Launch::InWorktree { candidates, .. } => candidates.iter().any(|c| probe.which(c)),
                 Launch::Url { requires, .. } => probe.which(requires),
                 // The platform opener is the same program the app already uses for links.
                 // If it were missing, opening a link would be broken too.
@@ -417,7 +447,7 @@ fn unavailable_reason(opener: &Opener) -> String {
     for arm in opener.launch {
         match arm {
             Launch::Cli { program, .. } => programs.push(program),
-            Launch::Terminal(candidates) => programs.extend(candidates.iter().copied()),
+            Launch::InWorktree { candidates, .. } => programs.extend(candidates.iter().copied()),
             Launch::MacApp(names) => bundles.extend(names.iter().copied()),
             Launch::Url { requires, .. } => programs.push(requires),
             Launch::Reveal => {}
@@ -542,14 +572,15 @@ pub fn argv_for(launch: Launch, path: &Path) -> Result<Vec<String>, PathRejectio
             vec![OPENER.to_owned(), format!("{template}{encoded}{suffix}")]
         }
         Launch::Reveal => vec![OPENER.to_owned(), path_arg],
-        // The path is not an argument at all — it is the cwd. See `Launch::Terminal`.
-        Launch::Terminal(_) => vec![String::new()],
+        // The path is not an argument at all — it is the cwd, so `invocation_for` builds
+        // this arm itself and never reaches here. See `Launch::InWorktree`.
+        Launch::InWorktree { .. } => vec![String::new()],
     })
 }
 
 /// Build the invocation for one launch.
 ///
-/// [`Launch::Terminal`] is the only arm whose `cwd` is the worktree rather than a scratch
+/// [`Launch::InWorktree`] is the only arm whose `cwd` is the worktree rather than a scratch
 /// directory, and that is load-bearing rather than incidental: it is how the terminal
 /// starts in the right place without wtm knowing each emulator's flag spelling.
 ///
@@ -560,7 +591,7 @@ pub fn invocation_for(
     path: &Path,
     probe: &dyn Probe,
 ) -> Result<Invocation, PathRejection> {
-    if let Launch::Terminal(candidates) = launch {
+    if let Launch::InWorktree { candidates, args } = launch {
         if !path.is_absolute() {
             return Err(PathRejection::NotAbsolute);
         }
@@ -569,7 +600,9 @@ pub fn invocation_for(
             .find(|c| probe.which(c))
             .copied()
             .unwrap_or(candidates[0]);
-        return Ok(Invocation::new(vec![program.to_owned()], path, 10_000));
+        let mut argv = vec![program.to_owned()];
+        argv.extend(args.iter().map(|a| (*a).to_owned()));
+        return Ok(Invocation::new(argv, path, 10_000));
     }
 
     Ok(Invocation::new(
@@ -730,6 +763,32 @@ mod tests {
     }
 
     #[test]
+    fn fork_is_run_from_inside_the_worktree_because_its_cli_takes_a_command_not_a_path() {
+        // `fork [<options>] <command>` — a bare path lands in the *command* slot and Fork
+        // reports an unknown command. `fork open` acts on the current repository, so the
+        // worktree has to arrive as the cwd. Appending the path here would look right and
+        // fail at runtime, which is exactly the kind of thing a test should hold still.
+        let probe = FakeProbe::with_programs(&["fork"]);
+        let inv = invocation_for(
+            Launch::InWorktree {
+                candidates: &["fork"],
+                args: &["open"],
+            },
+            &wt(),
+            &probe,
+        )
+        .unwrap();
+
+        assert_eq!(inv.argv, vec!["fork", "open"]);
+        assert_eq!(inv.cwd, wt(), "the repository is conveyed by the cwd");
+        assert!(
+            !inv.argv.iter().any(|a| a.contains("repo-feature")),
+            "the path must not also be passed as an argument: {:?}",
+            inv.argv
+        );
+    }
+
+    #[test]
     fn the_file_manager_is_available_on_a_machine_with_nothing_installed() {
         // The floor that keeps the split button from ever having nothing to run.
         let resolved = resolve_all(&FakeProbe::bare());
@@ -813,7 +872,7 @@ mod tests {
         for opener in CATALOGUE {
             for arm in opener.launch {
                 // The terminal arm carries the path as cwd, not as an argument.
-                if matches!(arm, Launch::Terminal(_)) {
+                if matches!(arm, Launch::InWorktree { .. }) {
                     continue;
                 }
                 let argv = argv_for(*arm, &path).unwrap();
@@ -909,7 +968,10 @@ mod tests {
     fn the_terminal_opener_carries_the_worktree_as_cwd_rather_than_as_a_flag() {
         let probe = FakeProbe::with_programs(&["gnome-terminal"]);
         let inv = invocation_for(
-            Launch::Terminal(&["xterm", "gnome-terminal"]),
+            Launch::InWorktree {
+                candidates: &["xterm", "gnome-terminal"],
+                args: &[],
+            },
             &wt(),
             &probe,
         )
@@ -978,7 +1040,9 @@ mod tests {
                     Launch::Cli { program, args } => std::iter::once(*program)
                         .chain(args.iter().copied())
                         .collect(),
-                    Launch::Terminal(candidates) => candidates.to_vec(),
+                    Launch::InWorktree { candidates, args } => {
+                        candidates.iter().chain(args.iter()).copied().collect()
+                    }
                     Launch::MacApp(_) | Launch::Url { .. } | Launch::Reveal => continue,
                 };
                 for token in tokens {

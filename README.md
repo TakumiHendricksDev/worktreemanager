@@ -290,8 +290,8 @@ preferred tool; the right half is a menu of everything wtm knows about. Picking 
 it **and** makes it the default, stored as `ui.opener` in `~/.config/wtm/config.toml`.
 
 Supported: Claude Code (in a terminal, or handed to Claude Desktop), VS Code, Cursor,
-Windsurf, Zed, PyCharm, IntelliJ IDEA, WebStorm, Sublime Text, a terminal, and Finder / your
-file manager.
+Windsurf, Zed, PyCharm, IntelliJ IDEA, WebStorm, Sublime Text, Fork, a terminal, and Finder /
+your file manager.
 
 Tools you do not have are **listed but disabled**, with the reason — usually *"no `code` on
 wtm's PATH"*. That is deliberate: it doubles as a diagnosis of this app's most likely failure,
@@ -314,9 +314,16 @@ Two things worth knowing:
   *"Prompt from an external link · review before pressing Enter"*, and you press Enter.
   Claude Code will not auto-submit a prompt that arrived from a URL, deliberately: otherwise
   any web page could make your Claude Code run anything. The keypress is the feature.
+- **Fork opens the worktree, not the repository it was cut from.** Its CLI takes a *command*
+  rather than a path (`fork open`), so wtm runs it with the worktree as the working
+  directory — same mechanism the terminal opener uses. Verified against a real linked
+  worktree, where `.git` is a file rather than a directory: Fork resolves it correctly and
+  lands on that worktree's branch.
 - **Nothing here is a project config concern.** Openers are built in and identical in every
   repository, so they need no `wtm.toml` entry and trigger no trust prompt. `[[action]]` is
-  still the place for a per-project button.
+  still the place for a per-project button. The catalogue is compiled in, so adding a tool
+  is currently a one-entry code change in `src-tauri/src/openers.rs` rather than something
+  you can do from a config file.
 
 ## Dev workflow
 
