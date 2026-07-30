@@ -154,7 +154,11 @@ jobs:
             echo '```'
           } > notes.md
 
+          # `--repo` is required: this job deliberately has no checkout — it only
+          # needs the built artifacts — and without a .git directory `gh` cannot
+          # infer which repository it is talking about.
           gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
             --draft \
             --title "$GITHUB_REF_NAME" \
             --notes-file notes.md \
