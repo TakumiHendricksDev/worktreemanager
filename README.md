@@ -54,7 +54,8 @@ project's convention. With the variable unset the tests skip.
 
 ## Contents
 
-[Install](#install) · [Prerequisites](#prerequisites) · [Setup](#setup) ·
+[Install](#install) · [Updating](#updating-an-install-you-already-have) ·
+[Prerequisites](#prerequisites) · [Setup](#setup) ·
 [First run](#first-run) · [Registering a project](#registering-a-project) ·
 [Writing wtm.toml](#writing-wtmtoml) · [Open in …](#open-in-) · [Dev workflow](#dev-workflow) ·
 [Build & install](#build--install) · [Troubleshooting](#troubleshooting) ·
@@ -94,6 +95,27 @@ chmod +x wtm-*-linux-x86_64.AppImage
 ```
 
 Ubuntu 24.04, Fedora 39+ or Debian 13. No signing to work around, and nothing to install.
+
+### Updating an install you already have
+
+```bash
+brew update && brew upgrade --cask wtm
+```
+
+`brew update` is not optional here — it is what fetches the tap's new cask. Without it
+Homebrew still holds the recipe it last saw and will report wtm as up to date whatever
+has been released. The upgrade backs up the old `.app`, swaps in the new one, and re-runs
+the quarantine bypass, so nothing about Gatekeeper needs doing a second time.
+
+`brew list --cask --versions wtm` says which version you actually have, which is worth
+checking against the [latest release](https://github.com/TakumiHendricksDev/worktreemanager/releases/latest)
+if a feature you expect is missing.
+
+On Linux, download the new AppImage over the old one. **There is no in-app updater on
+either platform** and no update check — wtm will not tell you a new version exists.
+
+To remove it: `brew uninstall --cask wtm`, or `brew uninstall --zap --cask wtm` to take
+`~/.config/wtm` (your preferences, trust decisions and log) with it.
 
 ### Or the raw artifacts
 
