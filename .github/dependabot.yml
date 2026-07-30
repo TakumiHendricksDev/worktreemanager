@@ -1,0 +1,47 @@
+# Dependency updates.
+#
+# Grouped and monthly rather than individual and weekly, deliberately. A solo-maintained
+# project with a five-job CI matrix cannot absorb a PR per patch bump, and a queue nobody
+# reads is worse than no queue — it trains you to ignore the one that matters.
+#
+# Security advisories are *not* subject to this schedule: Dependabot raises those
+# immediately regardless of `interval`, which is the behaviour worth having.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the whole tree. Tauri, wry and tao move together and are meaningless
+      # to review apart.
+      rust-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      frontend-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+
+  # The one that actually bites: a pinned action going stale shows up as a deprecation
+  # warning on every run until something breaks.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"

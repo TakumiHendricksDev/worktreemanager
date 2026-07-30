@@ -1,0 +1,12 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/TakumiHendricksDev/worktreemanager/security/advisories/new
+    about: >-
+      Please report privately rather than in a public issue. wtm executes commands from
+      config files, so a real finding deserves a window to fix before it is public.
+  - name: Question about writing a wtm.toml
+    url: https://github.com/TakumiHendricksDev/worktreemanager/blob/main/examples/webapp.wtm.toml
+    about: >-
+      The annotated reference config documents every section. Open a normal issue if it
+      does not answer your question — that usually means the docs need fixing.

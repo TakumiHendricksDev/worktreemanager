@@ -1,0 +1,90 @@
+name: Bug report
+description: Something does not work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if a tool is missing or a command is not found, open **Diagnostics**
+        in the app first. It shows the `PATH` wtm actually resolved, which answers that
+        class of bug immediately — see [the PATH problem](../../blob/main/README.md#troubleshooting).
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Register a repository with …
+        2. Click …
+        3. …
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: wtm version
+      description: "`brew list --cask --versions wtm`, or the version in the release you downloaded."
+      placeholder: "0.2.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple silicon)
+        - Linux (AppImage)
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS version
+      placeholder: "macOS 15.2, or Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew cask
+        - Downloaded from the releases page
+        - Built from source
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: |
+        The part of your `wtm.toml` involved, if any.
+
+        **Check it for anything private first** — hostnames, ticket keys, internal
+        project names. Redact freely; the shape usually matters more than the values.
+      render: toml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: |
+        `just logs`, or `~/.config/wtm/wtm.log`.
+
+        The log deliberately never contains an environment *value*, but it does contain
+        paths and command lines — skim before pasting.
+      render: shell

@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest something wtm should be able to do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most useful thing you can put here is the *situation*, not the solution. What
+        were you trying to do when you wanted this?
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The workflow, not the feature. What is slow, repetitive, or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like wtm to do?
+      description: If you have a shape in mind. Leave it blank if you only have the problem.
+
+  - type: dropdown
+    id: shape
+    attributes:
+      label: Does this belong in wtm itself, or in a project's config?
+      description: |
+        wtm aims to know nothing about any particular repository — naming, setup and teardown
+        all come from a project's own `wtm.toml`. Some requests are better served by a config
+        feature than by app behaviour. Guessing wrong here is fine; it is a useful thing to
+        talk about.
+      options:
+        - In the app — it should work this way for everyone
+        - In config — projects should be able to declare this
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do instead today?
+      description: A workaround, however ugly, is strong evidence the problem is real.

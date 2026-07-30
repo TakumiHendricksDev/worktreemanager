@@ -4,6 +4,15 @@
   "version": "0.2.1",
   "type": "module",
   "description": "Worktree Manager — a desktop app for managing git worktrees across projects",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TakumiHendricksDev/worktreemanager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TakumiHendricksDev/worktreemanager/issues"
+  },
+  "homepage": "https://github.com/TakumiHendricksDev/worktreemanager#readme",
   "scripts": {
     "dev": "vite",
     "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
