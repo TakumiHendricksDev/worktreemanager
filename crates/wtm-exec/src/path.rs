@@ -57,9 +57,25 @@ mod platform {
     pub(super) const FALLBACK_DIRS: &[&str] =
         &["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"];
 
-    /// Floor entries relative to `$HOME`. Empty here on purpose: the macOS floor is
-    /// long-standing and the Linux port is not a reason to change it.
-    pub(super) const HOME_FALLBACK_DIRS: &[&str] = &[];
+    /// Floor entries relative to `$HOME`, ahead of the system directories above.
+    ///
+    /// This was empty for a long time, on the reasoning that the macOS floor was
+    /// long-standing and the Linux port was not a reason to change it. That turned out to
+    /// be wrong, and the failure is worth recording because it is the exact bug this
+    /// module's header describes, found in the wild:
+    ///
+    /// `~/.local/bin` is where the Claude Code CLI, `uv`, `pipx` and `rustup`'s `env`
+    /// script all install on macOS — but it is conventionally added to `PATH` in
+    /// `~/.zshrc`, and `.zshrc` is read only by *interactive* shells. The probe runs
+    /// `$SHELL -lc`, which is a login shell but a non-interactive one, so it never sees
+    /// that line. Launch the app from Finder and a tool that is plainly on your `PATH` in
+    /// a terminal is simply invisible — with no error, because nothing went wrong.
+    ///
+    /// A floor entry fixes it for everyone without asking anyone to reorganize their
+    /// dotfiles, and it cannot shadow anything: `merge_paths` preserves first-seen order
+    /// and the floor is appended last, so a directory the probe already reported keeps its
+    /// position.
+    pub(super) const HOME_FALLBACK_DIRS: &[&str] = &[".local/bin", ".cargo/bin"];
 
     /// Only consulted when `SHELL` is unset, which `launchd` essentially never leaves it.
     pub(super) const DEFAULT_SHELL: &str = "/bin/zsh";
@@ -547,8 +563,36 @@ mod tests {
                 resolved.value
             );
         }
-        // Deliberately not asserting HOME_FALLBACK_DIRS: an environment with no `HOME`
-        // is unusual but legal, and it should not turn this red.
+        // Deliberately not asserting HOME_FALLBACK_DIRS here: an environment with no
+        // `HOME` is unusual but legal, and it should not turn this red. The test below
+        // covers them, guarded on `HOME` being present.
+    }
+
+    /// The regression test for a bug found by running the app, not by reading the code.
+    ///
+    /// `~/.local/bin` holds the Claude Code CLI, `uv` and `pipx` on macOS, and is
+    /// conventionally added to `PATH` in `~/.zshrc`. The probe runs `$SHELL -lc` — a
+    /// login shell, but a *non-interactive* one, which never reads `.zshrc`. So a tool
+    /// that is obviously present in a terminal was invisible to the app, silently,
+    /// because nothing had failed.
+    #[test]
+    fn the_home_relative_floor_reaches_the_resolved_path() {
+        let Some(home) = home_dir() else {
+            // No `HOME` is legal, if unusual. Nothing to assert.
+            return;
+        };
+
+        let resolved = ResolvedPath::resolve(None);
+        for relative in platform::HOME_FALLBACK_DIRS {
+            let expected = home.join(relative);
+            let expected = expected.to_string_lossy();
+            assert!(
+                resolved.dirs().iter().any(|d| *d == expected),
+                "{expected} missing from the resolved PATH — a GUI-launched app would not \
+                 find anything installed there: {}",
+                resolved.value
+            );
+        }
     }
 
     #[test]

@@ -324,18 +324,15 @@ by its `.app` bundle, so VS Code works whether or not you ever ran *Shell Comman
 
 Two things worth knowing:
 
-- **Open in Claude Session opens a terminal, not the Claude desktop app.** It uses the
-  `claude-cli://open?cwd=…` deep link that the `claude` CLI registers a handler for, and that
-  handler starts a fresh Claude Code session in a terminal emulator — iTerm2 if you have it,
-  otherwise Ghostty, Kitty, Alacritty, WezTerm or Terminal.app, in that order. Claude Desktop
-  has no URL route that accepts a directory. Both Claude entries are hidden unless `claude`
-  is on wtm's `PATH`.
-- **Open in Claude Desktop needs one keypress.** It is the same deep link with `&q=/desktop`
-  appended — `/desktop` being the CLI's built-in *"continue the current session in Claude
-  Desktop"*. The terminal opens with that queued in the composer and a notice reading
-  *"Prompt from an external link · review before pressing Enter"*, and you press Enter.
-  Claude Code will not auto-submit a prompt that arrived from a URL, deliberately: otherwise
-  any web page could make your Claude Code run anything. The keypress is the feature.
+- **The two Claude entries go to different places, and are detected separately.** *Claude
+  Session* uses the `claude-cli://open?cwd=…` deep link the `claude` CLI registers, and that
+  handler starts a session in a **terminal emulator** — iTerm2 if you have it, otherwise
+  Ghostty, Kitty, Alacritty, WezTerm or Terminal.app, in that order. It needs `claude` on
+  wtm's `PATH`. *Claude Desktop* uses `claude://code/new?folder=…`, which the desktop app
+  itself registers, and lands in the app with no terminal involved; it needs the app
+  installed, not the CLI. Either can be offered without the other.
+- **Claude Desktop asks to trust the folder the first time.** That prompt is the app's own,
+  once per directory, and wtm neither suppresses nor pre-answers it.
 - **Fork opens the worktree, not the repository it was cut from.** Its CLI takes a *command*
   rather than a path (`fork open`), so wtm runs it with the worktree as the working
   directory — same mechanism the terminal opener uses. Verified against a real linked

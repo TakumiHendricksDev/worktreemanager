@@ -233,8 +233,15 @@ fn an_opener_offered_via_an_application_bundle_really_has_one_on_disk() {
     let h = Harness::with_programs(&[]);
 
     for entry in h.resolved() {
-        let Some(openers::Launch::MacApp(names)) = entry.launch else {
-            continue;
+        let names = match entry.launch {
+            Some(openers::Launch::MacApp(names)) => names,
+            // A deep-link entry can also be offered on the strength of a bundle — that is
+            // how Claude Desktop is detected, since it registers `claude:` itself and ships
+            // no shell command. The claim needs checking on exactly the same terms.
+            Some(openers::Launch::Url {
+                requires, bundles, ..
+            }) if !h.app.probe().which(requires) => bundles,
+            _ => continue,
         };
         assert!(
             names.iter().any(|n| wtm_exec::app_bundle(n).is_some()),
@@ -242,6 +249,31 @@ fn an_opener_offered_via_an_application_bundle_really_has_one_on_disk() {
             entry.id
         );
     }
+}
+
+#[test]
+fn the_desktop_deep_link_carries_a_real_worktree_path_as_a_folder_parameter() {
+    // The sibling of the `claude-cli:` test below, for the other scheme. They differ in
+    // every part that matters — host, path and parameter name — and the app drops anything
+    // it does not recognise with a log line the user never sees, so a typo here would look
+    // exactly like a silent no-op.
+    let h = Harness::with_programs(&[]);
+    h.fixture.add_worktree("with space", "topic/spaced");
+    let path = h.path_of(&h.id_of("with space"));
+
+    let desktop = openers::find("claude-desktop").unwrap();
+    let argv = openers::argv_for(desktop.launch[0], &path).unwrap();
+
+    assert!(
+        argv[1].starts_with("claude://code/new?folder="),
+        "the app dispatches on host `code` and accepts no path but `/new`: {}",
+        argv[1]
+    );
+    assert!(
+        argv[1].contains("with%20space"),
+        "the path must survive encoding, not be dropped: {}",
+        argv[1]
+    );
 }
 
 #[test]

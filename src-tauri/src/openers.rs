@@ -58,9 +58,8 @@ pub const OPENER: &str = "xdg-open";
 /// at 4096 characters. Anything else exits with a parse error.
 ///
 /// Note what this actually does: it opens a **terminal emulator** running `claude` in that
-/// directory. It does not open the Claude desktop app, which has no route accepting a
-/// directory at all — its only URL routes are auth callbacks, a shared-artifact viewer and
-/// `resume`.
+/// directory. For the desktop app, see [`CLAUDE_DESKTOP_DEEP_LINK`] — a different scheme
+/// with a different handler.
 ///
 /// Which terminal is the handler's choice, not ours: on macOS it walks
 /// iTerm2 → Ghostty → Kitty → Alacritty → WezTerm → Terminal.app by bundle id and takes the
@@ -69,26 +68,29 @@ pub const OPENER: &str = "xdg-open";
 /// genuinely confusing five minutes if you are expecting otherwise.
 const CLAUDE_DEEP_LINK: &str = "claude-cli://open?cwd=";
 
-/// The Claude handler's own limit on the `cwd` parameter, measured after encoding.
-const CLAUDE_CWD_LIMIT: usize = 4096;
+/// The deep link the Claude **desktop app** registers, which lands directly in a session.
+///
+/// A different scheme and a different handler from [`CLAUDE_DEEP_LINK`]: `claude:` is
+/// claimed by the app bundle rather than by the CLI, and it opens a Claude Code session in
+/// the app itself — no terminal, and no keystroke to confirm.
+///
+/// The grammar was read out of the shipping app's protocol handler, which dispatches on
+/// `url.host` against a fixed set (`hotkey`, `login`, `claude.ai`, `preview`, `cowork`,
+/// `code`, `debug-handoff`). The `code` host accepts exactly one path — `/new`, anything
+/// else is logged as *"unrecognized code path"* and dropped — and reads `folder` (which it
+/// collects with `getAll`, so it repeats), `file`, and `q`. Confirmed by firing it and
+/// watching the app log `LocalSessions.checkTrust: cwd=…` for the directory sent.
+///
+/// Opening a directory this way prompts for workspace trust on first use, which is the
+/// app's own boundary and not something wtm should try to pre-empt.
+const CLAUDE_DESKTOP_DEEP_LINK: &str = "claude://code/new?folder=";
 
-/// Appended to the deep link to hand the new session straight to Claude Desktop.
+/// The Claude handler's own limit on the `cwd` parameter, measured after encoding.
 ///
-/// `q` is the handler's prompt parameter; it becomes `--prefill-b64` on the launched CLI,
-/// and `/desktop` is a built-in command — *"Continue the current session in Claude
-/// Desktop"*.
-///
-/// # This pre-fills, it does not send, and that is not a limitation to route around
-///
-/// Claude Code deliberately refuses to submit a prompt that arrived from an external link.
-/// It types it into the composer and shows *"Prompt from an external link · review before
-/// pressing Enter"*. Verified by running it. So this opener gets you a session in the right
-/// worktree with the handoff queued up, and you press Enter — one keystroke, and the
-/// keystroke is a security boundary: without it, any web page could make your Claude Code
-/// run an arbitrary prompt. Do not try to defeat it by other means.
-///
-/// Already percent-encoded, because it is a literal rather than user data: `%2F` is `/`.
-const CLAUDE_HANDOFF: &str = "&q=%2Fdesktop";
+/// Enforced for both schemes. The `claude:` handler declares no folder limit of its own,
+/// but a path that overflows one URL will overflow the other, and one number is easier to
+/// keep true than two.
+const CLAUDE_CWD_LIMIT: usize = 4096;
 
 /// How one tool gets launched, and therefore also how its presence is detected.
 ///
@@ -116,19 +118,28 @@ pub enum Launch {
     /// `<OPENER> <url>`, with the worktree path percent-encoded onto the end of
     /// `template`.
     ///
-    /// `requires` is the program whose presence stands in for "a handler for this scheme is
-    /// registered". There is no portable way to ask the OS that question — macOS would need
-    /// Launch Services and Linux an `xdg-mime query`, a subprocess apiece — but the CLI that
-    /// registers the handler is on `PATH`, and its absence is the case worth catching.
-    /// Without this the entry would report itself available on every machine, become the
-    /// default for people who have never installed it, and fail silently on click.
+    /// `requires`/`bundles` stand in for "a handler for this scheme is registered". There is
+    /// no portable way to ask the OS that question — macOS would need Launch Services and
+    /// Linux an `xdg-mime query`, a subprocess apiece — but whatever registers the handler
+    /// is itself detectable, and its absence is the case worth catching. Without this the
+    /// entry would report itself available on every machine, become the default for people
+    /// who have never installed it, and fail silently on click.
+    ///
+    /// Both are checked because the two Claude schemes are registered by different things:
+    /// `claude-cli:` by the CLI on `PATH`, `claude:` by the desktop app — which is a bundle
+    /// on macOS and a `claude-desktop` binary on Linux. One field could not cover both
+    /// without making the macOS half undetectable.
     Url {
         /// Everything before the encoded path.
         template: &'static str,
         /// Everything after it — further query parameters, already encoded because they are
         /// literals rather than user data.
         suffix: &'static str,
+        /// A program on wtm's PATH that registers this scheme.
         requires: &'static str,
+        /// Application bundles that register it. Checked when `requires` does not resolve,
+        /// so a desktop-only install is still offered.
+        bundles: &'static [&'static str],
     },
     /// `<OPENER> <path>` — the platform file manager. Always available: it is the same
     /// program the app already relies on to open links.
@@ -193,19 +204,25 @@ pub const CATALOGUE: &[Opener] = &[
             // The CLI auto-registers the URL handler at startup, so its presence on PATH is
             // the closest available proxy for "the scheme resolves to something".
             requires: "claude",
+            // `claude-cli:` is the CLI's own scheme; no bundle claims it.
+            bundles: &[],
         }],
     },
-    // Same deep link, plus a queued `/desktop`. A separate entry rather than a replacement
-    // because the two genuinely differ in where you end up, and someone who lives in a
-    // terminal should not have to route through the desktop app to get there.
+    // A different scheme, a different handler, and a genuinely different destination — you
+    // land in the desktop app rather than in a terminal. Two entries rather than one
+    // because someone who lives in a terminal should not have to route through the app to
+    // get there, and the two have independent availability: either can be installed alone.
     Opener {
         id: "claude-desktop",
         label_macos: "Claude Desktop",
         label_other: "Claude Desktop",
         launch: &[Launch::Url {
-            template: CLAUDE_DEEP_LINK,
-            suffix: CLAUDE_HANDOFF,
-            requires: "claude",
+            template: CLAUDE_DESKTOP_DEEP_LINK,
+            suffix: "",
+            // The Linux package installs this binary; macOS ships the bundle below. Neither
+            // platform has both, which is why the probe checks both.
+            requires: "claude-desktop",
+            bundles: &["Claude"],
         }],
     },
     Opener {
@@ -420,7 +437,9 @@ pub fn resolve_all(probe: &dyn Probe) -> Vec<Availability> {
                 Launch::Cli { program, .. } => probe.which(program),
                 Launch::MacApp(names) => names.iter().any(|n| probe.app_bundle(n)),
                 Launch::InWorktree { candidates, .. } => candidates.iter().any(|c| probe.which(c)),
-                Launch::Url { requires, .. } => probe.which(requires),
+                Launch::Url {
+                    requires, bundles, ..
+                } => probe.which(requires) || bundles.iter().any(|b| probe.app_bundle(b)),
                 // The platform opener is the same program the app already uses for links.
                 // If it were missing, opening a link would be broken too.
                 Launch::Reveal => true,
@@ -449,7 +468,14 @@ fn unavailable_reason(opener: &Opener) -> String {
             Launch::Cli { program, .. } => programs.push(program),
             Launch::InWorktree { candidates, .. } => programs.extend(candidates.iter().copied()),
             Launch::MacApp(names) => bundles.extend(names.iter().copied()),
-            Launch::Url { requires, .. } => programs.push(requires),
+            Launch::Url {
+                requires,
+                bundles: names,
+                ..
+            } => {
+                programs.push(requires);
+                bundles.extend(names.iter().copied());
+            }
             Launch::Reveal => {}
         }
     }
@@ -732,33 +758,61 @@ mod tests {
     }
 
     #[test]
-    fn the_desktop_handoff_queues_a_slash_command_after_the_encoded_path() {
-        let argv = argv_for(
-            Launch::Url {
-                template: CLAUDE_DEEP_LINK,
-                suffix: CLAUDE_HANDOFF,
-                requires: "claude",
-            },
-            Path::new("/Users/dev/My Repo/app"),
-        )
-        .unwrap();
+    fn the_desktop_entry_targets_the_apps_own_scheme_and_not_the_clis() {
+        // The two are not interchangeable. `claude-cli:` opens a terminal emulator running
+        // the CLI; `claude:` is claimed by the app bundle and lands in the app itself. The
+        // handler drops any `code` path but `/new`, and reads the directory from `folder`
+        // rather than `cwd`, so every part of this string is load-bearing.
+        let desktop = find("claude-desktop").unwrap();
+        let argv = argv_for(desktop.launch[0], Path::new("/Users/dev/My Repo/app")).unwrap();
 
         assert_eq!(
-            argv[1], "claude-cli://open?cwd=/Users/dev/My%20Repo/app&q=%2Fdesktop",
-            "the suffix must follow the path, or `cwd` would swallow `&q=` as part of itself"
+            argv[1], "claude://code/new?folder=/Users/dev/My%20Repo/app",
+            "the app's handler dispatches on host `code` and path `/new`"
         );
     }
 
     #[test]
-    fn both_claude_entries_share_one_probe_so_they_appear_and_vanish_together() {
-        // They are the same deep link and the same handler; offering one without the other
-        // would imply a difference in availability that does not exist.
-        let with = resolve_all(&FakeProbe::with_programs(&["claude"]));
-        let without = resolve_all(&FakeProbe::bare());
+    fn the_desktop_entry_is_offered_for_an_installed_app_with_no_cli_on_the_path() {
+        // The case that made this a bundle probe rather than a `which`. Someone with the
+        // desktop app and no CLI is the *common* install, and reusing the CLI's probe would
+        // have reported the app missing on every one of those machines.
+        let resolved = resolve_all(&FakeProbe::with_bundles(&["Claude"]));
+
+        let desktop = resolved.iter().find(|a| a.id == "claude-desktop").unwrap();
+        assert!(desktop.available(), "Claude.app registers `claude:` itself");
+
+        let cli = resolved.iter().find(|a| a.id == "claude").unwrap();
+        assert!(
+            !cli.available(),
+            "the terminal session needs the CLI, which this machine does not have"
+        );
+    }
+
+    #[test]
+    fn the_desktop_entry_is_offered_for_the_linux_binary_with_no_bundle_anywhere() {
+        // The other half: no `.app` exists on Linux, so the package's `claude-desktop`
+        // binary is the only signal. Asserted on either host because the catalogue is data
+        // rather than a `#[cfg]`.
+        let resolved = resolve_all(&FakeProbe::with_programs(&["claude-desktop"]));
+
+        assert!(
+            resolved
+                .iter()
+                .find(|a| a.id == "claude-desktop")
+                .unwrap()
+                .available()
+        );
+    }
+
+    #[test]
+    fn a_machine_with_neither_claude_installed_offers_neither_entry() {
+        let bare = resolve_all(&FakeProbe::bare());
 
         for id in ["claude", "claude-desktop"] {
-            assert!(with.iter().find(|a| a.id == id).unwrap().available());
-            assert!(!without.iter().find(|a| a.id == id).unwrap().available());
+            let entry = bare.iter().find(|a| a.id == id).unwrap();
+            assert!(!entry.available(), "`{id}` was offered with nothing to run");
+            assert!(entry.detail.is_some(), "`{id}` must say what it looked for");
         }
     }
 
@@ -922,6 +976,7 @@ mod tests {
                 template: CLAUDE_DEEP_LINK,
                 suffix: "",
                 requires: "claude",
+                bundles: &[],
             },
             Path::new("/Users/dev/My Repo#2/app"),
         )
@@ -948,6 +1003,7 @@ mod tests {
                 template: CLAUDE_DEEP_LINK,
                 suffix: "",
                 requires: "claude",
+                bundles: &[],
             },
             Path::new(&long),
         )
