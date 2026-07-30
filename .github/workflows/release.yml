@@ -129,11 +129,12 @@ jobs:
             echo '### macOS'
             echo
             echo '```bash'
-            echo "brew install --cask --no-quarantine takumihendricksdev/tap/wtm"
+            echo "brew install --cask takumihendricksdev/tap/wtm"
             echo '```'
             echo
-            echo 'The `--no-quarantine` flag is required because the app is unsigned —'
-            echo 'without it macOS reports it as "damaged and can'"'"'t be opened".'
+            echo 'The app is unsigned, so macOS would otherwise refuse to open it and'
+            echo 'report it as "damaged". The cask clears the quarantine attribute after'
+            echo 'installing — a deliberate Gatekeeper bypass, documented in the tap.'
             echo
             echo 'Or download the zip below. Fetch it with `curl`/`gh` rather than a'
             echo 'browser: browsers set the quarantine attribute, the CLI does not.'

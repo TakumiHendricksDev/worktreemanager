@@ -53,11 +53,55 @@ project's convention. With the variable unset the tests skip.
 
 ## Contents
 
-[Prerequisites](#prerequisites) · [Setup](#setup) · [First run](#first-run) ·
-[Registering a project](#registering-a-project) · [Writing wtm.toml](#writing-wtmtoml) ·
-[Dev workflow](#dev-workflow) · [Build & install](#build--install) ·
-[Troubleshooting](#troubleshooting) · [Logs](#logs) · [Dependencies](#dependencies) ·
-[Architecture](#architecture)
+[Install](#install) · [Prerequisites](#prerequisites) · [Setup](#setup) ·
+[First run](#first-run) · [Registering a project](#registering-a-project) ·
+[Writing wtm.toml](#writing-wtmtoml) · [Dev workflow](#dev-workflow) ·
+[Build & install](#build--install) · [Troubleshooting](#troubleshooting) ·
+[Logs](#logs) · [Dependencies](#dependencies) · [Architecture](#architecture)
+
+---
+
+## Install
+
+You do not need to clone this repository to use wtm. Everything below is
+[the latest release](https://github.com/TakumiHendricksDev/worktreemanager/releases/latest).
+
+### macOS (Apple silicon, 13+)
+
+```bash
+brew install --cask takumihendricksdev/tap/wtm
+```
+
+wtm is **not code-signed or notarized**, so macOS would refuse to open it and report it
+as *"damaged and can't be opened"* — which is Gatekeeper's phrasing for *"nobody paid
+Apple to vouch for this"*, not a claim about the download. The
+[cask](https://github.com/TakumiHendricksDev/homebrew-tap) therefore clears the
+quarantine attribute after installing.
+
+That is a deliberate Gatekeeper bypass, and it should be a thing you know is happening
+rather than a surprise. Homebrew used to expose `--no-quarantine` for exactly this case;
+as of Homebrew 6 the flag is rejected and the `HOMEBREW_CASK_OPTS` path is dead code, so
+a cask for an unsigned app has no supported opt-out left. If you would rather macOS made
+the call, take the zip below instead of the tap.
+
+### Linux (x86-64, WebKitGTK 2.42+, glibc 2.39+)
+
+```bash
+gh release download --repo TakumiHendricksDev/worktreemanager --pattern '*.AppImage'
+chmod +x wtm-*-linux-x86_64.AppImage
+./wtm-*-linux-x86_64.AppImage
+```
+
+Ubuntu 24.04, Fedora 39+ or Debian 13. No signing to work around, and nothing to install.
+
+### Or the raw artifacts
+
+Both are on the [releases page](https://github.com/TakumiHendricksDev/worktreemanager/releases)
+with SHA-256 checksums. Fetch the macOS zip with `curl` or `gh` rather than a browser —
+browsers set the quarantine attribute, the CLI does not, so a CLI download of an unsigned
+app opens without any of the above applying.
+
+Everything from here on is about building it yourself.
 
 ---
 
