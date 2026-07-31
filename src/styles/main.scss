@@ -68,6 +68,8 @@
 @use 'components/preflight';
 @use 'components/section-heading';
 @use 'components/status';
+@use 'components/terminal';
+@use 'components/worktree-tab';
 
 /* Utilities — one property each. The only layer allowed `!important`. */
 @use 'utilities/a11y';

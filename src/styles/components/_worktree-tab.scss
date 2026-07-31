@@ -1,0 +1,136 @@
+/*
+ * One worktree row in the sidebar list.
+ *
+ * The star is a *sibling* of the tab, overlaid on its right edge, not a child — a button
+ * inside a button is invalid HTML, and nesting one inside `role="tab"` would break both the
+ * tab's click target and its accessible name. Hence the wrapper, and hence `position:
+ * relative` here rather than on the tab itself.
+ *
+ * This block previously owned nine of the app's most collision-prone class names — `.row`,
+ * `.name`, `.meta`, `.branch`, `.pill`, `.flag`, `.star`, `.selected`, `.on` — each of which
+ * meant something different in at least one other component. `.on` was the worst: a
+ * two-character global class is a bug waiting to be written.
+ */
+
+.c-worktree-tab {
+  position: relative;
+  min-width: 0;
+}
+
+.c-worktree-tab__button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  /* Room for the star, reserved unconditionally: revealing it on hover must not re-truncate
+     the name underneath it. */
+  padding-right: 26px;
+  border-radius: var(--r-md);
+  text-align: left;
+  color: var(--fg);
+  transition: background var(--dur-fast) var(--ease);
+  /* Long branch names must not widen the sidebar. */
+  min-width: 0;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-selected {
+    background: var(--bg-active);
+  }
+}
+
+.c-worktree-tab__star {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-sm);
+  color: var(--fg-subtle);
+  /* Hidden until it is relevant: a column of empty outlines down the sidebar is clutter, and
+     the group heading already says which rows are starred. */
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--star);
+  }
+
+  &.is-on {
+    opacity: 1;
+    color: var(--star);
+  }
+}
+
+/*
+ * Revealed on hover, and on keyboard focus anywhere in the row.
+ *
+ * `:focus-within` is not decoration — an arrow-key user never hovers, so without it the star
+ * is unreachable by keyboard despite being a tab stop. If this ever regresses the symptom is
+ * silent: the button still focuses, it is just invisible while it does.
+ */
+.c-worktree-tab:hover .c-worktree-tab__star,
+.c-worktree-tab:focus-within .c-worktree-tab__star {
+  opacity: 1;
+}
+
+.c-worktree-tab__line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.c-worktree-tab__name {
+  font-size: var(--step-0);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-worktree-tab__meta {
+  color: var(--fg-muted);
+}
+
+.c-worktree-tab__branch {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Truncating from the left keeps the distinguishing tail of
+     `task/ACME-1234-stretch-…` visible instead of the shared prefix. */
+  direction: rtl;
+  text-align: left;
+}
+
+.c-worktree-tab__pill {
+  flex: 0 0 auto;
+  font-size: var(--step--2);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/*
+ * The status flags row is monospace, and that is why the arrows and the bullet in it stay as
+ * text characters rather than becoming icons: `↑2↓1` interleaves glyphs with digits, and in a
+ * monospace face they are metrically correct by construction. This is the one place where a
+ * text glyph is the right answer rather than the lazy one.
+ */
+.c-worktree-tab__flags {
+  gap: var(--sp-2);
+  font-size: var(--step--2);
+  font-family: var(--font-mono);
+}

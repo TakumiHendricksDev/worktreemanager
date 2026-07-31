@@ -1,0 +1,36 @@
+/*
+ * The live terminal view.
+ *
+ * `min-height: 0` on the container is the load-bearing declaration and the one that looks
+ * removable: a flex item's default `min-height: auto` refuses to shrink below its content, so
+ * without it the xterm canvas pushes the container past its parent and the transcript scrolls
+ * the whole pane instead of itself.
+ *
+ * The status line is monospace because it reports process facts — exit codes, signal names —
+ * that sit directly beneath monospace output and would otherwise not line up with it.
+ */
+
+.c-terminal {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  gap: var(--sp-2);
+}
+
+.c-terminal__screen {
+  flex: 1 1 auto;
+  min-height: 180px;
+  padding: var(--sp-2);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.c-terminal__status {
+  flex: 0 0 auto;
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}

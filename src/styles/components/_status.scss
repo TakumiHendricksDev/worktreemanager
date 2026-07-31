@@ -31,3 +31,9 @@
 .c-status--muted {
   color: var(--fg-muted);
 }
+
+/* One step quieter than `--muted`. For a count that should register only when you look for it
+   — the untracked-file tally beside a worktree's name. */
+.c-status--subtle {
+  color: var(--fg-subtle);
+}
