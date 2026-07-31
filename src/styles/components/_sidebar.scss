@@ -1,0 +1,146 @@
+/*
+ * The left rail: filter field, worktree list, status line, New Worktree.
+ *
+ * `input {}` was a bare element selector here. Scoped, it dressed one search field. Global, it
+ * would have made every text input in the app 28px tall with 26px of side padding — including
+ * the ones in the schema form and the Add a repository dialog.
+ *
+ * The search field keeps its own block rather than using `c-input`: it is 28px rather than the
+ * form default, and it reserves space on both sides for an icon and a clear button. That is a
+ * genuinely different control, not a variant of the form one.
+ */
+
+.c-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+}
+
+.c-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: var(--sp-3) var(--sp-3) var(--sp-2);
+  flex: 0 0 auto;
+}
+
+/*
+ * The magnifier. `top: 50%` + `translateY(-50%)` rather than relying on the abspos static
+ * position: the icon is now an SVG with a real box, so it can be centred exactly rather than
+ * approximately — which is what the glyph it replaced could never do.
+ */
+.c-search__icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--fg-subtle);
+  pointer-events: none;
+}
+
+.c-search__input {
+  width: 100%;
+  height: 28px;
+  /* Left room for the icon, right room for the clear button. */
+  padding: 0 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: var(--step--1);
+
+  /* WebKit draws its own decorations on `type=search`; they do not match anything else here,
+     and the clear button below would be a duplicate of the native one. */
+  &::-webkit-search-decoration,
+  &::-webkit-search-cancel-button {
+    appearance: none;
+  }
+
+  &::placeholder {
+    color: var(--fg-subtle);
+  }
+
+  &:focus-visible {
+    border-color: var(--border-focus);
+  }
+}
+
+/*
+ * Round, and it stays round when focused — which it did not before. The global focus rule used
+ * to set `border-radius: var(--r-sm)` on the focused element itself, so tabbing to this button
+ * turned the circle into a rounded square. That declaration is gone from `elements/_focus.scss`
+ * and this is the control that proved it had to be.
+ */
+.c-search__clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--fg-muted);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+}
+
+.c-sidebar__list-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--sp-2) var(--sp-2);
+}
+
+.c-sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-sidebar__group {
+  padding: var(--sp-3) var(--sp-3) 2px;
+  font-size: var(--step--2);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+
+  /* No leading gap above the first heading; it sits directly under the project picker. */
+  &:first-child {
+    padding-top: var(--sp-1);
+  }
+}
+
+.c-sidebar__empty {
+  padding: var(--sp-4) var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.c-sidebar__foot {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+/* Fixed height whether or not it says anything, so appearing text cannot shift the button
+   below it. A status line that moves the thing you were about to click is worse than none. */
+.c-sidebar__status {
+  height: 1.1em;
+  margin-bottom: 4px;
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
