@@ -1,0 +1,24 @@
+/*
+ * Accessibility utilities.
+ */
+
+/// Hide from sight, keep for a screen reader.
+///
+/// `!important` is correct here, and is why Utilities is the last layer. In a global
+/// stylesheet any component rule can out-specify a single class, and out-specifying this one
+/// puts a screen-reader-only label back on screen — a stray "Project" or "Open this worktree
+/// in…" floating in the chrome. A utility states one thing unconditionally; that is the whole
+/// contract, and `!important` is how it is kept.
+///
+/// Renamed from `.visually-hidden` when the stylesheet went global, with no back-compat alias:
+/// an alias would make the rename optional, and an optional rename is one that never finishes.
+.u-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+}

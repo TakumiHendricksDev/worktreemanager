@@ -1,0 +1,21 @@
+/*
+ * Sass-only settings. Emits nothing.
+ *
+ * The distinction from the token files beside it: a value belongs here when it is needed at
+ * *build* time — in a media query, in a comparison, in arithmetic — where a CSS custom
+ * property cannot be used. Everything a component reads at runtime is a custom property, so
+ * this file stays very short. If it starts growing, something is being resolved at build time
+ * that should have stayed themeable.
+ */
+
+/// The single breakpoint. Below this the New Worktree pane stops being two columns.
+///
+/// A media query cannot read a custom property, which is the whole reason this is a Sass
+/// variable and the colours are not.
+$bp-narrow: 900px;
+
+/// The two stacking levels the app has. Both belong to the modal: the scrim covers the app,
+/// the dialog sits on the scrim. Nothing else in the app sets `z-index`, and nothing should
+/// without appearing here — a z-index chosen locally is one nobody can reason about.
+$z-scrim: 10;
+$z-dialog: 11;

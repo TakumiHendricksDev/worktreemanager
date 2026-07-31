@@ -1,0 +1,33 @@
+/*
+ * Theme tokens, layer 3: platform.
+ *
+ * The only place a windowing-system fact may live. Same rule as the two layers
+ * above: a token belongs here when its *reason to exist* is something the OS
+ * draws — the window's own backdrop, chrome insets, scrollbars. Nothing about
+ * the app's visual language goes here; that is Layer 2's job.
+ *
+ * macOS is the unattributed default, and `data-platform` is only ever set to
+ * `linux` (see index.html). So every macOS value survives even if the attribute
+ * never arrives — which is what makes "the mac branch cannot regress" a
+ * structural property rather than something a test has to catch.
+ */
+
+:root {
+  /* What sits behind the app. On macOS: nothing — the window is transparent and
+     the native sidebar vibrancy shows through it. */
+  --under-window: transparent;
+  /* Room for the traffic lights, which macOS draws *inside* the webview's rect.
+     Three 12pt buttons with 8pt gaps span 52pt from `trafficLightPosition.x:
+     16`, so content must start past 68 — 76 leaves a margin. */
+  --titlebar-lead: 76px;
+}
+
+:root[data-platform='linux'] {
+  /* No vibrancy to reveal, and no guarantee of a compositing WM, so the window
+     is opaque and paints its own background. Pairs with `transparent: false` in
+     tauri.linux.conf.json — change one and the other is wrong. */
+  --under-window: var(--bg);
+  /* The window manager draws the controls, on the right, outside the webview.
+     There is nothing to reserve, so this is an ordinary leading inset. */
+  --titlebar-lead: var(--sp-2);
+}

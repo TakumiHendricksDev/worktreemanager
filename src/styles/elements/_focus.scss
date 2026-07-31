@@ -1,0 +1,31 @@
+/*
+ * A visible focus ring, always.
+ *
+ * This is a keyboard-driven app; removing the outline to "clean up" the design would make it
+ * unusable without a mouse.
+ *
+ * # Why this is an Element rule and not a Generic one
+ *
+ * `:focus-visible` has the specificity of a class, (0,1,0) — the same as `.c-split-button`.
+ * Placing it here, before Objects and Components, is what lets a component override it when
+ * it genuinely must: the split button draws its ring inset because the global one, with its
+ * 2px offset, is clipped by the parent's `overflow: hidden`. Later layer, same specificity,
+ * component wins. Put this in Generic and that stops being true.
+ *
+ * # There is deliberately no `border-radius` here
+ *
+ * There used to be — `border-radius: var(--r-sm)` — and it applied to *the focused element
+ * itself*, not to the ring. Keyboard-focusing the round clear button in the sidebar filter
+ * turned it into a rounded square, and every shared control this design system introduces
+ * would have inherited the same trap. WebKit follows the element's own radius when drawing an
+ * outline, so removing the declaration is also what makes the ring correct.
+ */
+
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}

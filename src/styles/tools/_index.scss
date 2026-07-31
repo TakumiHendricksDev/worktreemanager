@@ -1,0 +1,16 @@
+/*
+ * One import for everything in `tools/`.
+ *
+ * `@use` is not transitive: a partial that calls `control()` has to load the module itself,
+ * and doing that per-mixin would mean three `@use` lines at the top of every component file.
+ * This forwards all of them so it is one.
+ *
+ * Everything reachable from here MUST emit zero bytes. That is not tidiness — it is what
+ * makes the layer order in `main.scss` true. `@use` loads a module once, at the position of
+ * its first load; if `tools/` emitted CSS, that CSS would land wherever the first component
+ * happened to pull it in, ahead of layers that are supposed to precede it.
+ */
+
+@forward 'a11y';
+@forward 'control';
+@forward 'media';

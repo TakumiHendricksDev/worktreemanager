@@ -1,0 +1,23 @@
+/*
+ * The page itself.
+ *
+ * Elements is the only layer permitted a naked element selector, and everything in it has to
+ * be defensible as an app-wide default. That is the test to apply before adding anything
+ * here: not "does this element need styling" but "does *every* one of these need it".
+ */
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  color: var(--fg);
+  /* On macOS: transparent, so the native window vibrancy shows through the chrome.
+     On Linux: opaque, because there is no vibrancy and no guaranteed compositor. */
+  background: var(--under-window);
+  /* No-op on WebKitGTK, which does not implement it. Left ungated: if Linux text
+     ever reads too thin, this is where a platform gate would go. */
+  -webkit-font-smoothing: antialiased;
+  /* A desktop app is not a document: rubber-band scrolling on the window itself
+     reveals whatever is behind it and looks broken. */
+  overflow: hidden;
+}

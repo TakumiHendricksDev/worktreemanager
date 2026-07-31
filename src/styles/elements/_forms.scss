@@ -1,0 +1,27 @@
+/*
+ * Form control defaults.
+ *
+ * Both rules are corrections to browser defaults rather than design. Form controls do not
+ * inherit the page font — a decision from the 1990s that no application has ever wanted — and
+ * a `<button>` arrives with chrome that any styled button has to undo first.
+ *
+ * Note what is deliberately absent: no padding, no border, no background, no size. Those
+ * belong to `.c-button`, `.c-input` and friends. An element rule here would reach every
+ * control in the app including ones inside third-party markup, and undoing it costs more
+ * specificity than setting it did.
+ */
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}

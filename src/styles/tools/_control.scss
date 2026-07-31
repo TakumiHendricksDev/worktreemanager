@@ -1,0 +1,36 @@
+/*
+ * Control geometry. Emits nothing until included.
+ *
+ * There were seven button paddings in this app across buttons nobody could tell apart —
+ * `7px 14px` in three dialogs verbatim, `6px 12px` in the trust banner, `7px 10px` in the
+ * sidebar, `4px 10px` in two headers, `8px 16px` on the empty-state call to action. None of
+ * that was designed; each site picked a number in isolation and they never got reconciled.
+ *
+ * Three sizes, defined once. If a new control needs a fourth, that is a design decision and
+ * it belongs here where the other three are visible — not inlined at the call site, which is
+ * how there came to be seven.
+ */
+
+/// Padding and type size for a control.
+///
+/// Deliberately does not set `font-weight`, `border-radius` or colour: those belong to the
+/// block, not to its size, and a mixin that sets them makes every variant fight it.
+///
+/// @param {String} $size - `sm`, `md` or `lg`.
+@mixin control($size) {
+  @if $size == sm {
+    // Header affordances that must not compete with the title beside them.
+    padding: 4px 10px;
+    font-size: var(--step--2);
+  } @else if $size == md {
+    // The default. Dialog footers, action rows, anything in a form.
+    padding: 7px 14px;
+    font-size: var(--step--1);
+  } @else if $size == lg {
+    // For a button that is the only thing on the screen.
+    padding: 8px 16px;
+    font-size: var(--step--1);
+  } @else {
+    @error "control(): unknown size `#{$size}`. Expected sm, md or lg.";
+  }
+}

@@ -1,0 +1,61 @@
+/*
+ * The stylesheet. `src/main.ts` imports this file and nothing else.
+ *
+ * THE ORDER BELOW IS THE ARCHITECTURE.
+ *
+ * It is ITCSS: layers are arranged so that specificity and reach climb monotonically from top
+ * to bottom. Settings emit tokens and no rules. Generic and Elements are far-reaching and
+ * low-specificity. Objects and Components are single classes. Utilities come last and are the
+ * only layer allowed `!important`.
+ *
+ * What that buys is the absence of specificity fights. A later layer can always override an
+ * earlier one with a plain single-class selector, so nothing in this app needs `!important`
+ * to win, needs a selector three levels deep to win, or needs to be moved up the file to win.
+ * The day someone reaches for one of those, the cause is almost always that a rule is in the
+ * wrong layer.
+ *
+ * Sorting this list alphabetically, or appending to whichever group is nearest, is how that
+ * stops being true. If you add a file: say which layer it belongs to, and why it cannot live
+ * in an earlier one.
+ *
+ * Two rules that follow from the order and are easy to break by accident:
+ *
+ *   - `@use`, never `@import`. Dart Sass removes `@import` in 3.0, and `@use` loads a module
+ *     exactly once — which is the guarantee this ordering depends on.
+ *   - `@extend` is banned. It hoists the extending selector up to the position of the rule it
+ *     extends, which silently reorders the layers. Use a mixin: it duplicates a few bytes and
+ *     keeps the cascade honest.
+ *
+ * Components carry class names only. There are no `<style>` blocks in `.svelte` files.
+ */
+
+/* Settings — custom properties. No rules, so no position in the cascade to get wrong.
+   Flat names, no dots: Sass takes a module's namespace from the segment before the first
+   `.`, so `tokens.primitives` and `tokens.semantic` would both want to be `tokens`. */
+@use 'settings/primitives';
+@use 'settings/semantic';
+@use 'settings/platform';
+
+/* Generic — reaches everything, decides nothing. */
+@use 'generic/reset';
+@use 'generic/motion';
+
+/* Elements — bare element selectors. The only layer permitted them. */
+@use 'elements/page';
+@use 'elements/forms';
+@use 'elements/links';
+@use 'elements/code';
+@use 'elements/focus';
+@use 'elements/scrollbars';
+
+/*
+ * Objects — geometry, no cosmetics. Reusable across unrelated components.
+ * Components — one partial per block, alphabetical within the layer.
+ *
+ * Both layers arrive with the component library; their `@use` lines go here, between Elements
+ * above and Utilities below.
+ */
+
+/* Utilities — one property each. The only layer allowed `!important`. */
+@use 'utilities/a11y';
+@use 'utilities/text';

@@ -1,0 +1,15 @@
+/*
+ * Monospace runs.
+ *
+ * `0.925em`, not a step from the type scale, and relative on purpose: a mono face at the same
+ * nominal size as the surrounding text reads larger, so it needs to come down slightly
+ * wherever it appears — inside `--step--2` help text as much as inside a heading. An absolute
+ * size would only be right at one of those.
+ */
+
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.925em;
+}

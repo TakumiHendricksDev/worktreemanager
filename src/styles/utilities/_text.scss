@@ -1,0 +1,33 @@
+/*
+ * Text utilities.
+ *
+ * Deliberately five, and deliberately not colours.
+ *
+ * `.u-ok` / `.u-warn` / `.u-danger` would be the obvious additions — the four components that
+ * each re-declared those one-liners are why this layer exists at all. They are not here,
+ * because `<span class="u-danger">dirty</span>` styles a *status* with a *colour*, and the day
+ * a status needs to become a chip (the sidebar already renders one as a pill) every call site
+ * has to change. `.c-status--danger` says what the thing is and can be restyled once. A
+ * utility layer that grows is a design system that has stopped being one.
+ */
+
+/// De-emphasised text, where a whole `.c-note` would be too much structure.
+.u-muted {
+  color: var(--fg-muted);
+}
+
+/// A path, a hash, a command — anything the eye needs to compare character by character.
+.u-mono {
+  font-family: var(--font-mono);
+}
+
+.u-nowrap {
+  white-space: nowrap;
+}
+
+/// Requires a bounded width from the parent; on its own it does nothing.
+.u-truncate {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
