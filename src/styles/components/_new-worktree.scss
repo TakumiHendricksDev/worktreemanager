@@ -1,0 +1,169 @@
+/*
+ * The create pipeline as a full pane: form beside review, then the run.
+ *
+ * This file held `.actions button, .remedies button {}` — the single most dangerous selector
+ * in the app. Scoped, it sized four buttons in one pane. Global, it would have restyled the
+ * title bar's actions and the trust banner's Approve/Reject, because all three used `.actions`
+ * for the same reason and none knew about the others. It is gone entirely; those buttons are
+ * `c-button--md` now.
+ */
+
+@use '../tools' as t;
+
+.c-new-worktree {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.c-new-worktree__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+}
+
+.c-new-worktree__titles {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.c-new-worktree__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--sp-5) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* Form beside review, so what you type and what it produces are visible together — the thing a
+   modal could not do. Collapses to one column when the window is narrow. */
+.c-new-worktree__columns {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(300px, 1.1fr);
+  gap: var(--sp-6);
+  align-items: start;
+
+  @include t.narrow {
+    grid-template-columns: 1fr;
+    gap: var(--sp-5);
+  }
+}
+
+.c-new-worktree__col {
+  min-width: 0;
+}
+
+/* The divider between the two columns becomes a rule *above* the review when they stack,
+   because a left border on a full-width block reads as an indent rather than a separator. */
+.c-new-worktree__review-col {
+  border-left: 1px solid var(--border);
+  padding-left: var(--sp-5);
+
+  @include t.narrow {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    padding-top: var(--sp-4);
+  }
+}
+
+/* Info-toned rather than warning-toned: adopting a branch is a normal choice, not a mistake.
+   It only needs to be legible, not alarming. */
+.c-new-worktree__adopting {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-md);
+  background: var(--info-soft);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+
+  code {
+    color: var(--fg);
+  }
+}
+
+.c-new-worktree__foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: var(--sp-3) var(--sp-5);
+}
+
+/* The run view. Fills the body so the transcript gets the room it needs. */
+.c-new-worktree__run {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.c-new-worktree__run-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.c-new-worktree__stage {
+  font-size: var(--step-1);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  margin: 0;
+
+  code {
+    font-size: inherit;
+  }
+}
+
+/* Tabular figures so "step 3 of 7" does not jitter as the numbers change. */
+.c-new-worktree__count {
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Takes the remaining height rather than a fixed box: the transcript is the thing you watch,
+   and it should grow with the window instead of scrolling inside a short frame. */
+.c-new-worktree__terminal {
+  flex: 1 1 auto;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+}
+
+.c-new-worktree__remedies {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.c-command {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+
+  code {
+    font-size: var(--step--2);
+    overflow-wrap: anywhere;
+  }
+}
+
+.c-command__cwd {
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}

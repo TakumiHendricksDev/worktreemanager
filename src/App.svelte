@@ -16,6 +16,9 @@
   import Sidebar from './lib/components/Sidebar.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
   import TrustBanner from './lib/components/TrustBanner.svelte';
+  import Banner from './lib/components/ui/Banner.svelte';
+  import Button from './lib/components/ui/Button.svelte';
+  import Icon from './lib/components/ui/Icon.svelte';
   import { commands } from './lib/ipc/commands';
   import { errorMessage } from './lib/ipc/types';
   import { theme } from './lib/state/theme.svelte';
@@ -126,11 +129,11 @@
   }
 </script>
 
-<div class="shell" style:--sidebar-w="{sidebarWidth}px">
+<div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
   <TitleBar onaddproject={addProject} />
 
-  <div class="columns" class:dragging>
-    <aside class="col-sidebar">
+  <div class="c-shell__columns" class:is-dragging={dragging}>
+    <aside class="c-shell__col">
       <Sidebar
         onnew={() => (mainView = 'new')}
         onselectworktree={() => (mainView = 'worktree')}
@@ -146,7 +149,7 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
-      class="splitter"
+      class="c-shell__splitter"
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize the sidebar"
@@ -158,19 +161,27 @@
       onkeydown={onSplitterKey}
     ></div>
 
-    <main class="col-detail">
+    <main class="c-shell__col c-shell__col--detail">
       {#if addError}
-        <div class="banner error" role="alert">
-          <span>{addError}</span>
-          <button onclick={() => (addError = null)} aria-label="Dismiss">✕</button>
-        </div>
+        <Banner>
+          {addError}
+          {#snippet action()}
+            <Button variant="inline" onclick={() => (addError = null)} ariaLabel="Dismiss">
+              <Icon name="close" size={12} />
+            </Button>
+          {/snippet}
+        </Banner>
       {/if}
 
       {#if workspace.error}
-        <div class="banner error" role="alert">
-          <span>{workspace.error}</span>
-          <button onclick={() => workspace.refreshWorktrees()}>Retry</button>
-        </div>
+        <Banner>
+          {workspace.error}
+          {#snippet action()}
+            <Button variant="inline" onclick={() => workspace.refreshWorktrees()}
+              >Retry</Button
+            >
+          {/snippet}
+        </Banner>
       {/if}
 
       {#each workspace.brokenProjects as project (project.id)}
@@ -178,21 +189,21 @@
       {/each}
 
       {#if !booted}
-        <div class="placeholder"><p>Starting…</p></div>
+        <div class="c-placeholder"><p>Starting…</p></div>
       {:else if mainView === 'new' && workspace.activeProjectId}
         <NewWorktreePane
           projectId={workspace.activeProjectId}
           onclose={() => (mainView = 'worktree')}
         />
       {:else if workspace.projects.length === 0}
-        <div class="placeholder">
-          <h2>No projects yet</h2>
-          <p>
+        <div class="c-placeholder">
+          <h2 class="c-placeholder__title">No projects yet</h2>
+          <p class="c-placeholder__prose">
             Add a git repository and its worktrees appear as tabs on the left. Any repo
             works — a project can describe its own New Worktree form in a
             <code>wtm.toml</code>, but nothing is required.
           </p>
-          <button class="cta" onclick={addProject}>Add a repository</button>
+          <Button variant="accent" size="lg" onclick={addProject}>Add a repository</Button>
         </div>
       {:else if workspace.selected}
         <Detail
@@ -205,7 +216,7 @@
           }}
         />
       {:else if !workspace.loadingWorktrees}
-        <div class="placeholder">
+        <div class="c-placeholder">
           <p>Select a worktree on the left.</p>
         </div>
       {/if}
@@ -224,118 +235,3 @@
     />
   {/if}
 </div>
-
-<style>
-  .shell {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    /* The window itself is transparent for the native vibrancy; this paints the app. */
-    background: var(--bg);
-  }
-
-  .columns {
-    display: grid;
-    grid-template-columns: var(--sidebar-w) 1px 1fr;
-    flex: 1 1 auto;
-    min-height: 0;
-  }
-
-  /* While dragging, suppress text selection across the whole app — otherwise a drag
-     that crosses into the detail pane highlights everything it passes over. */
-  .columns.dragging {
-    user-select: none;
-    -webkit-user-select: none;
-    cursor: col-resize;
-  }
-
-  .col-sidebar,
-  .col-detail {
-    min-height: 0;
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .col-detail {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .splitter {
-    background: var(--border);
-    cursor: col-resize;
-    /* A 1px target is unhittable, so widen the hit area without widening the line. */
-    position: relative;
-  }
-
-  .splitter::after {
-    content: '';
-    position: absolute;
-    inset: 0 -3px;
-  }
-
-  .splitter:hover {
-    background: var(--border-strong);
-  }
-
-  .banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--sp-3);
-    margin: var(--sp-3) var(--sp-5) 0;
-    padding: var(--sp-2) var(--sp-3);
-    border-radius: var(--r-md);
-    font-size: var(--step--1);
-    flex: 0 0 auto;
-  }
-
-  .banner.error {
-    background: color-mix(in oklab, var(--danger) 14%, transparent);
-    color: var(--danger);
-    border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent);
-  }
-
-  .banner button {
-    flex: 0 0 auto;
-    color: inherit;
-    font-weight: 500;
-    text-decoration: underline;
-  }
-
-  .placeholder {
-    flex: 1 1 auto;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: var(--sp-3);
-    padding: var(--sp-6);
-    text-align: center;
-    color: var(--fg-muted);
-  }
-
-  .placeholder h2 {
-    font-size: var(--step-2);
-    font-weight: 600;
-    color: var(--fg);
-  }
-
-  .placeholder p {
-    max-width: 46ch;
-    line-height: 1.65;
-  }
-
-  .cta {
-    padding: 8px 16px;
-    border-radius: var(--r-md);
-    background: var(--accent);
-    color: var(--fg-on-accent);
-    font-weight: 500;
-    font-size: var(--step--1);
-  }
-
-  .cta:hover {
-    background: var(--accent-hover);
-  }
-</style>

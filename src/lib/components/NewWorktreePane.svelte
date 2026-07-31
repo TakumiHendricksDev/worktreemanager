@@ -34,6 +34,8 @@
   import ReviewPanel from './ReviewPanel.svelte';
   import SchemaForm from './SchemaForm.svelte';
   import Terminal from './Terminal.svelte';
+  import Button from './ui/Button.svelte';
+  import Icon from './ui/Icon.svelte';
 
   const {
     projectId,
@@ -320,26 +322,26 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<section class="pane" aria-label="New worktree">
-  <header class="head">
-    <div class="titles">
-      <h1>New Worktree</h1>
+<section class="c-new-worktree" aria-label="New worktree">
+  <header class="c-new-worktree__head">
+    <div class="c-new-worktree__titles">
+      <h1 class="c-pane-title">New Worktree</h1>
     </div>
-    <button class="back" onclick={onclose} disabled={phase === 'running'}>
-      {phase === 'done' ? 'Done' : 'Cancel'}
-    </button>
+    <Button variant="quiet" size="sm" onclick={onclose} disabled={phase === 'running'}
+      >{phase === 'done' ? 'Done' : 'Cancel'}</Button
+    >
   </header>
 
-  <div class="body">
+  <div class="c-new-worktree__body">
     {#if loadError}
-      <p class="error">{loadError}</p>
+      <p class="c-status--danger">{loadError}</p>
     {:else if phase === 'form'}
       {#if !form}
-        <p class="muted">Loading the project's form…</p>
+        <p class="c-status--muted">Loading the project's form…</p>
       {:else}
-        <div class="columns">
-          <div class="col form-col">
-            <h2>Details</h2>
+        <div class="c-new-worktree__columns">
+          <div class="c-new-worktree__col">
+            <h2 class="c-section-heading">Details</h2>
 
             <!--
               Adopting an existing branch takes the branch *and* the directory from that
@@ -354,7 +356,7 @@
               very much do, and "the form is ignored" would be a dangerous thing to imply.
             -->
             {#if adoptBranch}
-              <p class="adopting">
+              <p class="c-new-worktree__adopting">
                 Adopting <code>{adoptBranch}</code>. Its name and directory are used as they
                 are, so the fields below no longer affect them — the rest still apply to
                 setup.
@@ -372,10 +374,10 @@
             />
           </div>
 
-          <div class="col review-col">
-            <h2>Review</h2>
+          <div class="c-new-worktree__col c-new-worktree__review-col">
+            <h2 class="c-section-heading">Review</h2>
             {#if previewError}
-              <p class="error">{previewError}</p>
+              <p class="c-status--danger">{previewError}</p>
             {:else if preview}
               <ReviewPanel
                 {preview}
@@ -384,15 +386,17 @@
                 onadopt={(branch) => (adoptBranch = branch)}
               />
             {:else if previewing}
-              <p class="muted">Planning…</p>
+              <p class="c-status--muted">Planning…</p>
             {:else}
-              <p class="muted">Fill in the required fields to see what will be created.</p>
+              <p class="c-status--muted">
+                Fill in the required fields to see what will be created.
+              </p>
             {/if}
           </div>
         </div>
 
         {#if runError}
-          <p class="error">{runError}</p>
+          <p class="c-status--danger">{runError}</p>
         {/if}
       {/if}
     {:else}
@@ -402,448 +406,114 @@
         before a session exists — because that is what lets it catch the first line of output
         rather than joining a run already in progress.
       -->
-      <div class="run">
-        <div class="runhead">
+      <div class="c-new-worktree__run">
+        <div class="c-new-worktree__run-head">
           {#if phase === 'running'}
-            <h2 class="stage">{currentStep?.label ?? 'Starting…'}</h2>
-            <span class="count">
+            <h2 class="c-new-worktree__stage">{currentStep?.label ?? 'Starting…'}</h2>
+            <span class="c-new-worktree__count">
               {#if currentStep}step {currentStep.index} of {currentStep.total}{/if}
             </span>
           {:else if outcome?.kind === 'created'}
-            <h2 class="stage ok">
+            <h2 class="c-new-worktree__stage c-status--ok">
               Created <code>{outcome.worktree.dirname}</code>
             </h2>
-            <span class="count">on {outcome.worktree.branch ?? 'a detached HEAD'}</span>
+            <span class="c-new-worktree__count"
+              >on {outcome.worktree.branch ?? 'a detached HEAD'}</span
+            >
           {:else if outcome?.kind === 'setup_failed'}
-            <h2 class="stage warn">
+            <h2 class="c-new-worktree__stage c-status--warn">
               Setup {outcome.outcome.kind === 'timed_out' ? 'timed out' : 'failed'}
             </h2>
-            <span class="count">the worktree was created and kept</span>
+            <span class="c-new-worktree__count">the worktree was created and kept</span>
           {:else if outcome?.kind === 'cancelled'}
-            <h2 class="stage warn">Cancelled</h2>
+            <h2 class="c-new-worktree__stage c-status--warn">Cancelled</h2>
           {:else}
-            <h2 class="stage">Finished</h2>
+            <h2 class="c-new-worktree__stage">Finished</h2>
           {/if}
         </div>
 
         <div
-          class="bar"
-          class:indeterminate={phase === 'running' && !currentStep}
+          class="c-progress"
+          class:is-indeterminate={phase === 'running' && !currentStep}
           role="progressbar"
           aria-valuenow={percent}
           aria-valuemin="0"
           aria-valuemax="100"
           aria-label="Create progress"
         >
-          <div class="fill" style:width="{percent}%"></div>
+          <div class="c-progress__fill" style:width="{percent}%"></div>
         </div>
 
         {#if steps.length > 0}
-          <ol class="steps">
+          <ol class="c-steps o-plain-list">
             {#each steps as step (step.id)}
-              <li class:done={step.done} class:active={!step.done && phase === 'running'}>
-                <span class="mark" aria-hidden="true">{step.done ? '✓' : '›'}</span>
-                <span class="label">{step.label}</span>
+              <li
+                class="c-steps__item"
+                class:is-done={step.done}
+                class:is-active={!step.done && phase === 'running'}
+              >
+                <span class="c-steps__mark">
+                  <Icon name={step.done ? 'check' : 'chevron-right'} size={12} />
+                </span>
+                <span>{step.label}</span>
               </li>
             {/each}
           </ol>
         {/if}
 
         {#if currentCommand}
-          <div class="cmd">
+          <div class="c-command">
             <code>{currentCommand.argv.join(' ')}</code>
-            <span class="cwd">in {currentCommand.cwd}</span>
+            <span class="c-command__cwd">in {currentCommand.cwd}</span>
           </div>
         {/if}
 
         {#each notes as note (note.id)}
-          <p class={note.kind === 'warning' ? 'warn' : 'muted'}>{note.text}</p>
+          <p class={note.kind === 'warning' ? 'c-status--warn' : 'c-status--muted'}>
+            {note.text}
+          </p>
         {/each}
 
         {#if outcome?.kind === 'setup_failed'}
-          <p class="note">
+          <p class="c-note">
             It has <strong>not</strong> been removed. Setup may already have written an environment
             file, allocated ports or cloned a database volume — deleting the worktree would leak
             those and lose work that is usually one command from fixed.
           </p>
-          <div class="remedies">
-            <button class="secondary" onclick={retrySetup}>Re-run setup</button>
-            <button class="secondary danger" onclick={removeIt}>Remove the worktree</button>
+          <div class="c-new-worktree__remedies">
+            <Button variant="neutral" onclick={retrySetup}>Re-run setup</Button>
+            <Button variant="danger-outline" onclick={removeIt}>Remove the worktree</Button>
           </div>
         {/if}
 
         {#if runError}
-          <p class="error">{runError}</p>
+          <p class="c-status--danger">{runError}</p>
         {/if}
 
-        <div class="termwrap">
+        <div class="c-new-worktree__terminal">
           <Terminal {session} />
         </div>
       </div>
     {/if}
   </div>
 
-  <footer>
-    <div class="actions">
+  <footer class="c-new-worktree__foot">
+    <div class="o-row o-row--end">
       {#if phase === 'form'}
-        <button class="primary" onclick={create} disabled={!canCreate || previewing}>
+        <Button variant="accent" onclick={create} disabled={!canCreate || previewing}>
           {previewing ? 'Planning…' : 'Create worktree'}
-        </button>
+        </Button>
       {:else if phase === 'running'}
-        <button
-          class="secondary"
+        <Button
+          variant="neutral"
           onclick={() => session && commands.ptyKill(session)}
           disabled={!session}
         >
           Cancel setup
-        </button>
+        </Button>
       {:else}
-        <button class="primary" onclick={onclose}>Back to worktrees</button>
+        <Button variant="accent" onclick={onclose}>Back to worktrees</Button>
       {/if}
     </div>
   </footer>
 </section>
-
-<style>
-  .pane {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    background: var(--bg);
-  }
-
-  .head {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--sp-3);
-    padding: var(--sp-4) var(--sp-5) var(--sp-3);
-  }
-
-  .titles {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-  }
-
-  h1 {
-    font-size: var(--step-2);
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-
-  h2 {
-    font-size: var(--step--1);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--fg-muted);
-    margin-bottom: var(--sp-3);
-  }
-
-  /* The run view. Fills the body so the transcript gets the room it needs. */
-  .run {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-3);
-  }
-
-  .runhead {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--sp-3);
-    flex-wrap: wrap;
-  }
-
-  .stage {
-    font-size: var(--step-1);
-    font-weight: 600;
-    text-transform: none;
-    letter-spacing: -0.01em;
-    color: var(--fg);
-    margin: 0;
-  }
-
-  .stage code {
-    font-size: inherit;
-  }
-
-  .count {
-    font-size: var(--step--2);
-    color: var(--fg-muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .bar {
-    flex: 0 0 auto;
-    height: 4px;
-    border-radius: 999px;
-    background: var(--bg-active);
-    overflow: hidden;
-  }
-
-  .fill {
-    height: 100%;
-    background: var(--accent);
-    border-radius: inherit;
-    transition: width var(--dur-slow) var(--ease);
-  }
-
-  /* Before the first stage lands there is no honest percentage to show, so sweep instead of
-     claiming zero progress. */
-  .bar.indeterminate .fill {
-    width: 35% !important;
-    animation: sweep 1.4s var(--ease) infinite;
-  }
-
-  @keyframes sweep {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(340%);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .bar.indeterminate .fill {
-      animation: none;
-    }
-    .fill {
-      transition: none;
-    }
-  }
-
-  .steps {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-size: var(--step--1);
-    list-style: none;
-  }
-
-  .steps li {
-    display: flex;
-    align-items: baseline;
-    gap: var(--sp-2);
-    color: var(--fg-muted);
-  }
-
-  .steps li.active {
-    color: var(--fg);
-    font-weight: 500;
-  }
-
-  .steps .mark {
-    width: 1em;
-    flex: 0 0 auto;
-    text-align: center;
-  }
-
-  .steps li.done .mark {
-    color: var(--ok);
-  }
-
-  .steps li.active .mark {
-    color: var(--accent);
-  }
-
-  .cmd {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: var(--sp-2) var(--sp-3);
-    background: var(--bg-code);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-  }
-
-  .cmd code {
-    font-size: var(--step--2);
-    overflow-wrap: anywhere;
-  }
-
-  .cwd {
-    font-size: var(--step--2);
-    color: var(--fg-muted);
-  }
-
-  .back {
-    font-size: var(--step--1);
-    color: var(--fg-muted);
-    padding: 4px 8px;
-    border-radius: var(--r-md);
-  }
-
-  .back:hover:not(:disabled) {
-    background: var(--bg-hover);
-    color: var(--fg);
-  }
-
-  .back:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 0 var(--sp-5) var(--sp-4);
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-3);
-  }
-
-  /* Form beside review, so what you type and what it produces are visible together — the
-     thing a modal could not do. Collapses to one column when the window is narrow. */
-  .columns {
-    display: grid;
-    grid-template-columns: minmax(280px, 1fr) minmax(300px, 1.1fr);
-    gap: var(--sp-6);
-    align-items: start;
-  }
-
-  @media (max-width: 900px) {
-    .columns {
-      grid-template-columns: 1fr;
-      gap: var(--sp-5);
-    }
-  }
-
-  .col {
-    min-width: 0;
-  }
-
-  /* Info-toned rather than warning-toned: adopting a branch is a normal choice, not a
-     mistake. It only needs to be legible, not alarming. */
-  .adopting {
-    margin-bottom: var(--sp-3);
-    padding: var(--sp-2) var(--sp-3);
-    border: 1px solid color-mix(in oklab, var(--info) 35%, transparent);
-    border-radius: var(--r-md);
-    background: color-mix(in oklab, var(--info) 8%, transparent);
-    color: var(--fg-muted);
-    font-size: var(--step--2);
-    line-height: 1.5;
-  }
-
-  .adopting code {
-    color: var(--fg);
-  }
-
-  .review-col {
-    border-left: 1px solid var(--border);
-    padding-left: var(--sp-5);
-  }
-
-  @media (max-width: 900px) {
-    .review-col {
-      border-left: none;
-      padding-left: 0;
-      border-top: 1px solid var(--border);
-      padding-top: var(--sp-4);
-    }
-  }
-
-  footer {
-    flex: 0 0 auto;
-    border-top: 1px solid var(--border);
-    padding: var(--sp-3) var(--sp-5);
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--sp-2);
-  }
-
-  .actions button,
-  .remedies button {
-    padding: 7px 14px;
-    border-radius: var(--r-md);
-    font-size: var(--step--1);
-    font-weight: 500;
-  }
-
-  .secondary {
-    border: 1px solid var(--border-strong);
-    color: var(--fg);
-  }
-
-  .secondary:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-
-  /* Same treatment as the detail pane's Remove button — one look for "this destroys
-     something", so the two cannot drift into meaning different things. */
-  .secondary.danger {
-    color: var(--danger);
-    border-color: color-mix(in oklab, var(--danger) 40%, transparent);
-    background: color-mix(in oklab, var(--danger) 8%, transparent);
-  }
-
-  .secondary.danger:hover:not(:disabled) {
-    background: var(--danger);
-    border-color: var(--danger);
-    color: var(--fg-on-accent);
-  }
-
-  .primary {
-    background: var(--accent);
-    color: var(--fg-on-accent);
-  }
-
-  .primary:hover:not(:disabled) {
-    background: var(--accent-hover);
-  }
-
-  .primary:disabled,
-  .secondary:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .remedies {
-    display: flex;
-    gap: var(--sp-2);
-  }
-
-  /* Takes the remaining height rather than a fixed box: the transcript is the thing you watch,
-     and it should grow with the window instead of scrolling inside a short frame. */
-  .termwrap {
-    flex: 1 1 auto;
-    min-height: 240px;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .note {
-    font-size: var(--step--2);
-    color: var(--fg-muted);
-    line-height: 1.6;
-    max-width: 76ch;
-  }
-
-  .error {
-    color: var(--danger);
-    font-size: var(--step--1);
-  }
-  .ok {
-    color: var(--ok);
-    font-size: var(--step--1);
-  }
-  .warn {
-    color: var(--warn);
-    font-size: var(--step--1);
-  }
-  .muted {
-    color: var(--fg-muted);
-    font-size: var(--step--1);
-  }
-</style>
