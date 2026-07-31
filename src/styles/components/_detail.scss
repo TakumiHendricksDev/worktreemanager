@@ -1,0 +1,281 @@
+/*
+ * The right-hand pane: everything about the selected worktree.
+ *
+ * The largest single block in the app, and the one that had the most bare element selectors —
+ * `h1`, `h2`, `dt`, `dd`, `table`, `th`, `td`. `h2` is the one worth naming: it meant
+ * "uppercase muted section label" here and in two other components, and "dialog title" in two
+ * more. Scoped, both were fine. Global, whichever stylesheet loaded last would have won for
+ * every heading in the app.
+ */
+
+.c-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/*
+ * One row: the name on the left, what you can do to it on the right.
+ *
+ * The actions used to sit on their own line below the title, left-aligned. Two things were
+ * wrong with that. The left edge is where every scan starts, so the first thing met after the
+ * worktree's name was the button that destroys it — a destructive action should be reachable,
+ * not first. And once the path moved into Overview that row held one small button against a
+ * pane's worth of empty space, which reads as an orphan rather than as a toolbar.
+ */
+.c-detail__head {
+  flex: 0 0 auto;
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+
+.c-detail__titles {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  /* Takes the slack, so the actions stay pinned right however many badges wrap. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Always visible here, unlike the sidebar's hover-revealed twin — this is the copy that has to
+   be findable. Deliberately not shared with it for that reason. */
+.c-detail__star {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  /* Pulls the star in from the row's gap so it reads as attached to the title. */
+  margin-right: calc(var(--sp-2) - var(--sp-3));
+  border-radius: var(--r-sm);
+  color: var(--fg-subtle);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--star);
+  }
+
+  &.is-on {
+    color: var(--star);
+  }
+}
+
+.c-detail__actions {
+  display: flex;
+  /* Start, not center: the Open-in control grows downward when it has an error to show, and
+     centring would then drag Remove down with it. */
+  align-items: flex-start;
+  gap: var(--sp-2);
+  flex: 0 0 auto;
+  /* Optically centres the button against the h1's cap-height rather than its line box, which
+     top-alignment alone leaves sitting a couple of pixels high. */
+  margin-top: 2px;
+}
+
+/* Separates the neutral action from the destructive one. A hairline rather than more
+   whitespace, because whitespace alone at this size reads as an accident. */
+.c-detail__divider {
+  width: 1px;
+  height: 18px;
+  margin: 3px calc(var(--sp-1) * -1) 0;
+  background: var(--border);
+}
+
+.c-detail__badges {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.c-badge {
+  font-size: var(--step--2);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.c-badge--accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/*
+ * The path is the one value that can outgrow the pane, so it wraps at any character while the
+ * copy action stays pinned to the first line — `baseline` keeps the label, the first line of
+ * the path and the action all on one line.
+ */
+.c-detail__path-row {
+  display: flex;
+  align-items: baseline;
+
+  code {
+    min-width: 0;
+  }
+}
+
+.c-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-tabs__tab {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--dur-fast) var(--ease);
+
+  &:hover {
+    color: var(--fg);
+  }
+
+  &.is-active {
+    color: var(--fg);
+    border-bottom-color: var(--accent);
+    font-weight: 500;
+  }
+}
+
+.c-tabs__count {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-detail__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-5) var(--sp-6);
+}
+
+.c-detail__statuses {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.c-detail__links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  align-items: flex-start;
+}
+
+.c-link-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: 4px 8px;
+  border-radius: var(--r-md);
+  max-width: 100%;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  code {
+    color: var(--accent);
+    font-size: var(--step--1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.c-link-row__label {
+  font-size: var(--step--1);
+  font-weight: 500;
+  flex: 0 0 auto;
+}
+
+.c-table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 560px;
+
+  th {
+    text-align: left;
+    font-weight: 400;
+    color: var(--fg-muted);
+    font-size: var(--step--1);
+    padding: 3px var(--sp-4) 3px 0;
+    vertical-align: baseline;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 3px 0;
+    vertical-align: baseline;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Environment rows carry long values and have nothing to gain from a measure limit. */
+.c-table--env {
+  max-width: none;
+}
+
+.c-detail__env-note {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.55;
+  max-width: 74ch;
+  margin-bottom: var(--sp-3);
+}
+
+.c-detail__masked {
+  color: var(--fg-subtle);
+  letter-spacing: 1px;
+}
+
+/* A revealed secret should look different from ordinary data, so it is obvious at a glance
+   that something is exposed on screen. `--warn-mark` rather than `--warn-soft`: this sits
+   behind text rather than filling a panel, and needs more presence to read as a highlight. */
+.c-detail__revealed {
+  background: var(--warn-mark);
+  padding: 0 4px;
+  border-radius: var(--r-sm);
+  overflow-wrap: anywhere;
+}
+
+/* A small action beside a row's value — the Path row and every Environment row. One rule for
+   both, so `copy` cannot come to mean two different-looking things one tab apart. */
+.c-row-action {
+  /* Not a flex gap: the Environment rows lay these out inline, not as flex children. */
+  margin-left: var(--sp-2);
+  /* Never shrink or wrap away from the value it acts on. */
+  flex: 0 0 auto;
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+
+  &:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+}
+
+.c-detail__inherited {
+  margin-left: var(--sp-2);
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+}
