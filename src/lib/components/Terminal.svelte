@@ -192,36 +192,9 @@
   });
 </script>
 
-<div class="wrap">
-  <div class="term" bind:this={host}></div>
+<div class="c-terminal">
+  <div class="c-terminal__screen" bind:this={host}></div>
   {#if status}
-    <p class="status">{status}</p>
+    <p class="c-terminal__status">{status}</p>
   {/if}
 </div>
-
-<style>
-  .wrap {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    height: 100%;
-    gap: var(--sp-2);
-  }
-
-  .term {
-    flex: 1 1 auto;
-    min-height: 180px;
-    padding: var(--sp-2);
-    background: var(--bg-code);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    overflow: hidden;
-  }
-
-  .status {
-    flex: 0 0 auto;
-    font-size: var(--step--2);
-    color: var(--fg-muted);
-    font-family: var(--font-mono);
-  }
-</style>
