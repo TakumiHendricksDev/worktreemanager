@@ -56,7 +56,7 @@ portable-pty    = "0.9"
 etcetera        = "0.11"
 shell-words     = "1"
 regex           = "1"
-sha2            = "0.10"
+sha2            = "0.11"
 parking_lot     = "0.12"
 time            = { version = "0.3", features = ["formatting", "parsing", "local-offset"] }
 # `nix`, not `libc`, specifically so `unsafe_code = "forbid"` can stay. Killing a
