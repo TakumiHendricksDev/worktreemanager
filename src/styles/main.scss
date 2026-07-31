@@ -67,8 +67,10 @@
 @use 'components/note';
 @use 'components/preflight';
 @use 'components/section-heading';
+@use 'components/split-button';
 @use 'components/status';
 @use 'components/terminal';
+@use 'components/titlebar';
 @use 'components/worktree-tab';
 
 /* Utilities — one property each. The only layer allowed `!important`. */

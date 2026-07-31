@@ -32,6 +32,7 @@
    * this app's most likely production failure — a bundled app that cannot see Homebrew.
    */
   import { commands } from '../ipc/commands';
+  import Icon from './ui/Icon.svelte';
   import { errorMessage, type Opener } from '../ipc/types';
   import { workspace } from '../state/workspace.svelte';
 
@@ -127,10 +128,10 @@
 </script>
 
 {#if primary}
-  <div class="wrap">
-    <div class="split" class:busy>
+  <div class="o-stack o-stack--tight o-stack--end">
+    <div class="c-split-button" class:is-busy={busy}>
       <button
-        class="primary"
+        class="c-split-button__action"
         onclick={() => launch(primary)}
         disabled={busy}
         title={primary.available
@@ -144,8 +145,8 @@
         {/if}
       </button>
 
-      <div class="more">
-        <span class="caret" aria-hidden="true">⌄</span>
+      <div class="c-split-button__menu o-overlay-select">
+        <Icon name="chevron-down" size={12} />
         <label class="u-visually-hidden" for="open-in-picker">Open this worktree in…</label>
         <!--
           `value` is always the sentinel, never the preference — see the header. The
@@ -154,6 +155,7 @@
         -->
         <select
           id="open-in-picker"
+          class="o-overlay-select__native"
           value=""
           onchange={pick}
           onmousedown={onmenuopen}
@@ -174,91 +176,7 @@
     </div>
 
     {#if failure}
-      <p class="failure" role="alert">{failure}</p>
+      <p class="c-split-button__error" role="alert">{failure}</p>
     {/if}
   </div>
 {/if}
-
-<style>
-  .wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 4px;
-  }
-
-  /* One control, drawn as two: a shared border with a divider, so it reads as a split
-     button rather than as two buttons that happen to be adjacent. */
-  .split {
-    display: flex;
-    align-items: stretch;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--bg-elevated);
-    overflow: hidden;
-  }
-
-  .split.busy {
-    opacity: 0.7;
-  }
-
-  .primary {
-    padding: 4px 10px;
-    color: var(--fg);
-    font-size: var(--step--2);
-    white-space: nowrap;
-    transition: background var(--dur-fast) var(--ease);
-  }
-
-  .primary:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-
-  .more {
-    position: relative;
-    display: grid;
-    place-items: center;
-    width: 22px;
-    border-left: 1px solid var(--border);
-    color: var(--fg-muted);
-    transition: background var(--dur-fast) var(--ease);
-  }
-
-  .more:hover {
-    background: var(--bg-hover);
-    color: var(--fg);
-  }
-
-  .caret {
-    font-size: var(--step--2);
-    line-height: 1;
-    pointer-events: none;
-  }
-
-  /* The real control, stretched invisibly over the caret. A bare select would size itself
-     to its widest option — here a "not found" row — which would strand the caret a couple
-     of hundred pixels away from the button it belongs to. */
-  .more select {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    opacity: 0;
-    cursor: pointer;
-    appearance: none;
-  }
-
-  .more:focus-within {
-    background: var(--bg-hover);
-    outline: 1px solid var(--border-focus);
-    outline-offset: -1px;
-  }
-
-  .failure {
-    max-width: 42ch;
-    color: var(--danger);
-    font-size: var(--step--2);
-    line-height: 1.4;
-    text-align: right;
-  }
-</style>

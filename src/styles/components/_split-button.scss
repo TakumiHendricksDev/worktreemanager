@@ -1,0 +1,79 @@
+/*
+ * The Open-in split button: an action on the left, a menu on the right.
+ *
+ * # Both halves used to be named after other things
+ *
+ * The action half was `.primary`, which in four other components meant the accent call to
+ * action — the opposite of what it is here, where it is the neutral half of a bordered pair.
+ * The menu half was `.more`, which in the trust banner meant a "show all N commands" text
+ * link. Neither name survived, and neither became a `Button` variant: they are elements of
+ * this block, because they have no meaning outside it. That is what BEM's `__` is for.
+ *
+ * # The menu half has no height of its own
+ *
+ * It stretches from `align-items: stretch` on the container, so its height is the action
+ * half's. That is deliberate — the two must always match exactly or the shared border breaks —
+ * but it does mean changing the action's padding silently moves the icon's centring target.
+ */
+
+@use '../tools' as t;
+
+/* One control drawn as two: a shared border with a divider, so it reads as a split button
+   rather than as two buttons that happen to be adjacent. */
+.c-split-button {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  overflow: hidden;
+
+  &.is-busy {
+    opacity: 0.7;
+  }
+}
+
+.c-split-button__action {
+  padding: 4px 10px;
+  color: var(--fg);
+  font-size: var(--step--2);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease);
+
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+}
+
+.c-split-button__menu {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  border-left: 1px solid var(--border);
+  color: var(--fg-muted);
+  transition: background var(--dur-fast) var(--ease);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  /*
+   * The ring is drawn inside the box. The global one has a 2px offset, which the container's
+   * `overflow: hidden` would clip — so the focused half would appear to have no ring at all.
+   */
+  &:focus-within {
+    background: var(--bg-hover);
+    @include t.focus-ring-inset;
+  }
+}
+
+/* Right-aligned and below, so a long failure message cannot move the button it belongs to. */
+.c-split-button__error {
+  max-width: 42ch;
+  color: var(--danger);
+  font-size: var(--step--2);
+  line-height: 1.4;
+  text-align: right;
+}
