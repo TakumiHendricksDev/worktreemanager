@@ -63,7 +63,7 @@ time            = { version = "0.3", features = ["formatting", "parsing", "local
 # process *group* is mandatory here (the real tree is script → shell → docker), and
 # `libc::killpg` is an unsafe extern call. nix wraps exactly these syscalls in a
 # safe, well-maintained API, so this repo contains no `unsafe` at all.
-nix             = { version = "0.30", features = ["signal", "process", "user"] }
+nix             = { version = "0.31", features = ["signal", "process", "user"] }
 uuid            = { version = "1", features = ["v4", "serde"] }
 tracing         = "0.1"
 
