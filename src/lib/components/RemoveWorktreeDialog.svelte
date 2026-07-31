@@ -14,6 +14,10 @@
   import { errorMessage, type Preflight, type Worktree } from '../ipc/types';
   import { workspace } from '../state/workspace.svelte';
   import Terminal from './Terminal.svelte';
+  import Button from './ui/Button.svelte';
+  import Choice from './ui/Choice.svelte';
+  import Dialog from './ui/Dialog.svelte';
+  import PreflightList from './ui/PreflightList.svelte';
 
   const {
     projectId,
@@ -104,277 +108,66 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="scrim" onclick={() => !busy && onclose()}></div>
-
-<div class="dialog" role="dialog" aria-modal="true" aria-label="Remove worktree">
-  <header>
-    <h2>{done ? 'Removed' : 'Remove worktree'}</h2>
-    <button class="close" onclick={onclose} disabled={busy} aria-label="Close">✕</button>
-  </header>
-
-  <div class="body">
+<Dialog title={done ? 'Removed' : 'Remove worktree'} {onclose} closeDisabled={busy} wide>
+  {#snippet body()}
     {#if done}
-      <p class="ok">{done}</p>
+      <p class="c-status--ok">{done}</p>
     {:else}
-      <p class="target">
-        <code>{worktree.path}</code>
-      </p>
+      <p class="c-remove__target"><code>{worktree.path}</code></p>
       {#if worktree.branch}
-        <p class="sub">on <code>{worktree.branch}</code></p>
+        <p class="c-remove__sub">on <code>{worktree.branch}</code></p>
       {:else}
-        <p class="sub muted">detached HEAD</p>
+        <p class="c-remove__sub c-status--muted">detached HEAD</p>
       {/if}
 
-      <label class="check">
-        <input
-          type="checkbox"
-          bind:checked={deleteBranch}
-          disabled={busy || !worktree.branch}
-        />
-        <span>
-          Also delete the branch
-          {#if worktree.branch}<code>{worktree.branch}</code>{/if}
-        </span>
-      </label>
+      <Choice
+        checked={deleteBranch}
+        disabled={busy || !worktree.branch}
+        onchange={(on) => (deleteBranch = on)}
+      >
+        Also delete the branch
+        {#if worktree.branch}<code>{worktree.branch}</code>{/if}
+      </Choice>
 
       {#if loading}
-        <p class="muted">Checking…</p>
+        <p class="c-status--muted">Checking…</p>
       {:else}
-        {#each errors as item (item.id)}
-          <div class="item">
-            <span class="danger">✗ {item.message}</span>
-            {#if item.hint}<span class="hint">{item.hint}</span>{/if}
-            {#if item.overridable}
-              <label class="check small">
-                <input
-                  type="checkbox"
-                  checked={force || acknowledged.includes(item.id)}
-                  disabled={force || busy}
-                  onchange={(e) =>
-                    toggleAck(item.id, (e.currentTarget as HTMLInputElement).checked)}
-                />
-                <span>Remove anyway</span>
-              </label>
-            {/if}
-          </div>
-        {/each}
-        {#each warns as item (item.id)}
-          <div class="item">
-            <span class="warn">! {item.message}</span>
-            {#if item.hint}<span class="hint">{item.hint}</span>{/if}
-          </div>
-        {/each}
+        <PreflightList
+          items={[...errors, ...warns]}
+          acknowledged={force ? errors.map((e) => e.id) : acknowledged}
+          overrideLabel="Remove anyway"
+          disabled={force || busy}
+          onacknowledge={toggleAck}
+        />
       {/if}
 
-      <label class="check small">
-        <input type="checkbox" bind:checked={force} disabled={busy} />
-        <span>Force — discard uncommitted and untracked files</span>
-      </label>
+      <Choice size="sm" checked={force} disabled={busy} onchange={(on) => (force = on)}>
+        Force — discard uncommitted and untracked files
+      </Choice>
 
-      <p class="note">
+      <p class="c-note">
         The project's teardown steps run first, so containers are stopped and root-owned
         files are handed back before git touches the directory.
       </p>
 
       {#if error}
-        <p class="error">{error}</p>
+        <p class="c-status--danger">{error}</p>
       {/if}
     {/if}
 
     {#if session}
-      <div class="termwrap"><Terminal {session} /></div>
+      <div class="c-dialog__terminal"><Terminal {session} /></div>
     {/if}
-  </div>
+  {/snippet}
 
-  <footer>
+  {#snippet footer()}
     {#if done}
-      <button class="primary" onclick={onclose}>Close</button>
+      <Button variant="accent" onclick={onclose}>Close</Button>
     {:else}
-      <button class="secondary" onclick={onclose} disabled={busy}>Cancel</button>
-      <button class="danger-btn" onclick={remove} disabled={!canRemove}>
+      <Button variant="neutral" onclick={onclose} disabled={busy}>Cancel</Button>
+      <Button variant="danger-solid" onclick={remove} disabled={!canRemove}>
         {busy ? 'Removing…' : 'Remove'}
-      </button>
+      </Button>
     {/if}
-  </footer>
-</div>
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: var(--bg-scrim);
-    z-index: 10;
-  }
-
-  .dialog {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(600px, calc(100vw - 4rem));
-    max-height: min(80vh, 780px);
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--r-xl);
-    box-shadow: var(--shadow-lg);
-    z-index: 11;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--sp-4) var(--sp-5) var(--sp-2);
-    flex: 0 0 auto;
-  }
-
-  h2 {
-    font-size: var(--step-1);
-    font-weight: 600;
-  }
-
-  .close {
-    width: 26px;
-    height: 26px;
-    border-radius: var(--r-md);
-    color: var(--fg-muted);
-  }
-
-  .close:hover:not(:disabled) {
-    background: var(--bg-hover);
-    color: var(--fg);
-  }
-
-  .body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--sp-2) var(--sp-5) var(--sp-4);
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-  }
-
-  .target code {
-    font-size: var(--step--1);
-    overflow-wrap: anywhere;
-  }
-
-  .sub {
-    font-size: var(--step--1);
-    color: var(--fg-muted);
-    margin-bottom: var(--sp-2);
-  }
-
-  .check {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    font-size: var(--step--1);
-  }
-
-  .check.small {
-    font-size: var(--step--2);
-    color: var(--fg-muted);
-  }
-
-  .item {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-size: var(--step--1);
-    padding: var(--sp-1) 0;
-  }
-
-  .hint {
-    color: var(--fg-muted);
-    font-size: var(--step--2);
-    line-height: 1.5;
-  }
-
-  .note {
-    font-size: var(--step--2);
-    color: var(--fg-muted);
-    line-height: 1.55;
-    margin-top: var(--sp-2);
-  }
-
-  .termwrap {
-    min-height: 200px;
-    display: flex;
-    flex-direction: column;
-    margin-top: var(--sp-2);
-  }
-
-  footer {
-    flex: 0 0 auto;
-    border-top: 1px solid var(--border);
-    padding: var(--sp-3) var(--sp-5) var(--sp-4);
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--sp-2);
-  }
-
-  footer button {
-    padding: 7px 14px;
-    border-radius: var(--r-md);
-    font-size: var(--step--1);
-    font-weight: 500;
-  }
-
-  .secondary {
-    border: 1px solid var(--border-strong);
-    color: var(--fg);
-  }
-
-  .secondary:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-
-  .primary {
-    background: var(--accent);
-    color: var(--fg-on-accent);
-  }
-
-  /* The solid fill is reserved for this one: the point of no return. Everything upstream
-     that leads here is outlined. */
-  .danger-btn {
-    background: var(--danger);
-    /* Not `--gray-0`: components read the semantic layer, never a primitive. */
-    color: var(--fg-on-accent);
-  }
-
-  .danger-btn:hover:not(:disabled) {
-    filter: brightness(1.1);
-  }
-
-  footer button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .muted {
-    color: var(--fg-muted);
-    font-size: var(--step--1);
-  }
-  .warn {
-    color: var(--warn);
-  }
-  .danger {
-    color: var(--danger);
-  }
-  .error {
-    color: var(--danger);
-    font-size: var(--step--1);
-  }
-  .ok {
-    color: var(--ok);
-    font-size: var(--step--1);
-  }
-</style>
+  {/snippet}
+</Dialog>
