@@ -16,6 +16,7 @@
   import type { Project } from '../ipc/types';
   import { errorMessage } from '../ipc/types';
   import { workspace } from '../state/workspace.svelte';
+  import Button from './ui/Button.svelte';
 
   const { project }: { project: Project } = $props();
 
@@ -37,159 +38,55 @@
   }
 </script>
 
-<section class="banner" class:trust={!!project.trust} role="alert">
+<section class="c-trust" role="alert">
   {#if project.trust}
-    <header>
-      <strong>{project.name} wants to run commands</strong>
-      <code class="path">{project.trust.path}</code>
+    <header class="c-trust__head">
+      <strong class="c-trust__who">{project.name} wants to run commands</strong>
+      <code class="c-trust__path">{project.trust.path}</code>
     </header>
 
-    <p>
+    <p class="c-trust__prose">
       This project's configuration declares the commands below. wtm will not run any of them
       until you approve — and it will ask again if the file changes. Read them the way you
       would read a <code>direnv</code> prompt: approving is the same as running them yourself.
     </p>
 
-    <ul class="commands">
+    <ul class="c-trust__commands">
       {#each expanded ? project.trust.commands : project.trust.commands.slice(0, 4) as argv, i (i)}
         <li><code>{argv.join(' ')}</code></li>
       {/each}
     </ul>
 
     {#if project.trust.commands.length > 4 && !expanded}
-      <button class="more" onclick={() => (expanded = true)}>
+      <Button variant="inline" onclick={() => (expanded = true)}>
         Show all {project.trust.commands.length} commands
-      </button>
+      </Button>
     {/if}
 
     {#if failure}
-      <p class="failure">{failure}</p>
+      <p class="c-status--danger">{failure}</p>
     {/if}
 
-    <div class="actions">
+    <div class="c-trust__actions">
       <!-- Reject first, and neither is autofocused: the safe choice must not require
            more effort than the unsafe one. -->
-      <button class="reject" onclick={() => decide(false)} disabled={busy}>
+      <Button variant="neutral" onclick={() => decide(false)} disabled={busy}>
         Don't run these
-      </button>
-      <button class="approve" onclick={() => decide(true)} disabled={busy}>
+      </Button>
+      <Button variant="accent" onclick={() => decide(true)} disabled={busy}>
         {busy ? 'Saving…' : 'Approve this configuration'}
-      </button>
+      </Button>
     </div>
   {:else}
-    <header>
-      <strong>{project.name} could not be loaded</strong>
+    <header class="c-trust__head">
+      <strong class="c-trust__who">{project.name} could not be loaded</strong>
     </header>
-    <p class="problem">{project.problem}</p>
-    <div class="actions">
-      <button class="reject" onclick={() => workspace.removeProject(project.root)}>
+    <p class="c-status--danger">{project.problem}</p>
+    <div class="c-trust__actions">
+      <Button variant="neutral" onclick={() => workspace.removeProject(project.root)}>
         Remove from wtm
-      </button>
-      <button class="approve" onclick={() => workspace.refreshProjects()}>Retry</button>
+      </Button>
+      <Button variant="accent" onclick={() => workspace.refreshProjects()}>Retry</Button>
     </div>
   {/if}
 </section>
-
-<style>
-  .banner {
-    flex: 0 0 auto;
-    margin: var(--sp-3) var(--sp-5) 0;
-    padding: var(--sp-3) var(--sp-4);
-    border-radius: var(--r-lg);
-    border: 1px solid color-mix(in oklab, var(--warn) 34%, transparent);
-    background: color-mix(in oklab, var(--warn) 10%, transparent);
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-    font-size: var(--step--1);
-  }
-
-  header {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  strong {
-    font-size: var(--step-0);
-  }
-
-  .path {
-    color: var(--fg-muted);
-    font-size: var(--step--2);
-    overflow-wrap: anywhere;
-  }
-
-  p {
-    line-height: 1.6;
-    max-width: 76ch;
-    color: var(--fg);
-  }
-
-  .commands {
-    list-style: none;
-    padding: var(--sp-2) var(--sp-3);
-    margin: 0;
-    background: var(--bg-code);
-    border-radius: var(--r-md);
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    /* Long argv must scroll rather than widen the pane. */
-    overflow-x: auto;
-  }
-
-  .commands code {
-    white-space: pre;
-    font-size: var(--step--2);
-  }
-
-  .more {
-    align-self: flex-start;
-    color: var(--fg-muted);
-    font-size: var(--step--2);
-    text-decoration: underline;
-  }
-
-  .failure,
-  .problem {
-    color: var(--danger);
-  }
-
-  .actions {
-    display: flex;
-    gap: var(--sp-2);
-    margin-top: var(--sp-1);
-  }
-
-  .actions button {
-    padding: 6px 12px;
-    border-radius: var(--r-md);
-    font-size: var(--step--1);
-    font-weight: 500;
-  }
-
-  .reject {
-    border: 1px solid var(--border-strong);
-    background: var(--bg-elevated);
-    color: var(--fg);
-  }
-
-  .reject:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-
-  .approve {
-    background: var(--accent);
-    color: var(--fg-on-accent);
-  }
-
-  .approve:hover:not(:disabled) {
-    background: var(--accent-hover);
-  }
-
-  .actions button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-</style>

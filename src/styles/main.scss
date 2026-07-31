@@ -68,11 +68,13 @@
 @use 'components/preflight';
 @use 'components/review';
 @use 'components/schema-form';
+@use 'components/sidebar';
 @use 'components/section-heading';
 @use 'components/split-button';
 @use 'components/status';
 @use 'components/terminal';
 @use 'components/titlebar';
+@use 'components/trust';
 @use 'components/worktree-tab';
 
 /* Utilities — one property each. The only layer allowed `!important`. */

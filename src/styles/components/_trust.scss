@@ -1,0 +1,75 @@
+/*
+ * The security prompt: every command a project's config would run, verbatim, with Approve and
+ * Reject.
+ *
+ * Banner-shaped, and not a `Banner`. It borrows `c-banner--warn`'s colouring by using the
+ * `-soft`/`-line` role tokens, but its structure is its own — a heading, a path, a paragraph
+ * of prose, a scrollable command list and two buttons. Two components whose only shared
+ * property is a background colour are not the same component.
+ *
+ * `p {}` and `strong {}` were bare element selectors here. Scoped, they dressed this panel.
+ * Global, they would have set `line-height: 1.6; max-width: 76ch` on every paragraph in the
+ * app and resized every bold run in it.
+ */
+
+.c-trust {
+  flex: 0 0 auto;
+  margin: var(--sp-3) var(--sp-5) 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--warn-line);
+  background: var(--warn-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+}
+
+.c-trust__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-trust__who {
+  font-size: var(--step-0);
+}
+
+.c-trust__path {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  overflow-wrap: anywhere;
+}
+
+/* Wider line height than the app default and a measure limit: this is the one place in wtm
+   where someone is expected to read a paragraph carefully before deciding something. */
+.c-trust__prose {
+  line-height: 1.6;
+  max-width: 76ch;
+  color: var(--fg);
+}
+
+.c-trust__commands {
+  list-style: none;
+  padding: var(--sp-2) var(--sp-3);
+  margin: 0;
+  background: var(--bg-code);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  /* Long argv must scroll rather than widen the pane — and must never wrap, because a
+     wrapped command is easy to misread, which is the whole risk this panel exists to manage. */
+  overflow-x: auto;
+
+  code {
+    white-space: pre;
+    font-size: var(--step--2);
+  }
+}
+
+.c-trust__actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
