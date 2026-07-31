@@ -248,9 +248,21 @@ passwords, SMTP credentials — and the app's job involves displaying that file.
 
 **Nothing leaves the machine.** There is no network capability at all: the CSP allows
 `connect-src 'self' ipc:` and nothing else, no HTTP plugin permission is granted, no
-`fetch`/XHR/WebSocket appears in the frontend, and no HTTP client crate is in the dependency
-tree. No telemetry, no analytics, no crash reporting. Verified rather than assumed, and
-cheap to re-verify — the checks are one `grep` each.
+`fetch`/XHR/WebSocket appears in the frontend, and no HTTP client crate is reachable in the
+dependency graph of either platform this app builds for. No telemetry, no analytics, no crash
+reporting. Verified rather than assumed, and cheap to re-verify.
+
+Grepping `Cargo.lock` is the wrong check and will appear to contradict this — a lockfile is
+the union of every platform, so it lists `reqwest`, which Tauri pulls in for mobile targets
+wtm does not build. Ask cargo about a real target instead:
+
+```bash
+cargo tree -i reqwest --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin
+cargo tree -i reqwest --manifest-path src-tauri/Cargo.toml --target x86_64-unknown-linux-gnu
+```
+
+Both answer "nothing to print". (This is the same union-of-all-platforms property that
+`deny.toml` records for `cargo deny`.)
 
 **Nothing is logged.** No `tracing` call carries an environment value. Note that
 `Runner::run_inner` opens a span with the argv at `debug` level, so a config that
