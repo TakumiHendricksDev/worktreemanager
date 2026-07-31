@@ -45,7 +45,7 @@ jobs:
     name: rust (workspace)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Tauri v2's Linux prerequisites, verbatim from its docs. `libssl-dev` and
       # `libxdo-dev` are not actually in this project's dependency graph, but
@@ -94,7 +94,7 @@ jobs:
     name: frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun x prettier --check "src/**/*.{ts,svelte,css}" "*.json"
@@ -125,7 +125,7 @@ jobs:
             bundles: appimage
             artifact: target/release/bundle/appimage/*.AppImage
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: System dependencies (Tauri v2 / WebKitGTK)
         if: runner.os == 'Linux'
@@ -158,7 +158,7 @@ jobs:
           # whole class of "works locally, fails in CI" from the bundling step.
           APPIMAGE_EXTRACT_AND_RUN: 1
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.artifact != ''
         with:
           name: wtm-appimage
@@ -169,5 +169,5 @@ jobs:
     name: licenses + advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
