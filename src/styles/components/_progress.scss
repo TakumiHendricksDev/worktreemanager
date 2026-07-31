@@ -1,0 +1,96 @@
+/*
+ * The create pipeline's progress bar and step list.
+ *
+ * # The indeterminate state exists because zero is a lie
+ *
+ * Before the first stage reports there is no honest percentage to show, and a bar sitting at
+ * 0% says "nothing is happening" when in fact git is working. So it sweeps instead of claiming
+ * a number it does not have, and switches to a real width the moment there is one.
+ *
+ * `!important` on the sweep width is the one use outside `utilities/`, and it is load-bearing:
+ * the fill's width is set inline from the actual progress, and an inline style beats any
+ * selector. It is the exception the layer order cannot express.
+ */
+
+.c-progress {
+  flex: 0 0 auto;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+
+.c-progress__fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width var(--dur-slow) var(--ease);
+}
+
+.c-progress.is-indeterminate .c-progress__fill {
+  width: 35% !important;
+  animation: c-progress-sweep 1.4s var(--ease) infinite;
+}
+
+@keyframes c-progress-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+
+/*
+ * Component-local, and not covered by the global reduced-motion block.
+ *
+ * That block sets `animation-duration: 0.01ms`, which would make this sweep flicker rather than
+ * stop. What is wanted here is for it to hold still — and for the determinate fill to jump to
+ * its new width rather than glide.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .c-progress.is-indeterminate .c-progress__fill {
+    animation: none;
+  }
+
+  .c-progress__fill {
+    transition: none;
+  }
+}
+
+.c-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--step--1);
+  list-style: none;
+}
+
+.c-steps__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  color: var(--fg-muted);
+
+  &.is-active {
+    color: var(--fg);
+    font-weight: 500;
+  }
+}
+
+/* Fixed width so the labels line up whether a step is pending, running or done — a marker that
+   changes width shifts every line beside it. */
+.c-steps__mark {
+  width: 1em;
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+
+  .c-steps__item.is-done & {
+    color: var(--ok);
+  }
+
+  .c-steps__item.is-active & {
+    color: var(--accent);
+  }
+}

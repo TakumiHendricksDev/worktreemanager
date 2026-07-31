@@ -1,0 +1,80 @@
+/*
+ * The window shell: title bar, then a resizable two-column body.
+ *
+ * Last file migrated, deliberately. Its five classes are the only ones in the app that can
+ * break layout for everything else, so every regression before this one was local to a pane.
+ */
+
+.c-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* The window itself is transparent for the native vibrancy; this paints the app. */
+  background: var(--bg);
+}
+
+.c-shell__columns {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1px 1fr;
+  flex: 1 1 auto;
+  min-height: 0;
+
+  /* While dragging, suppress text selection across the whole app — otherwise a drag that
+     crosses into the detail pane highlights everything it passes over. */
+  &.is-dragging {
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: col-resize;
+  }
+}
+
+.c-shell__col {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.c-shell__col--detail {
+  display: flex;
+  flex-direction: column;
+}
+
+.c-shell__splitter {
+  background: var(--border);
+  cursor: col-resize;
+  position: relative;
+
+  /* A 1px target is unhittable, so widen the hit area without widening the line. */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0 -3px;
+  }
+
+  &:hover {
+    background: var(--border-strong);
+  }
+}
+
+.c-placeholder {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.c-placeholder__title {
+  font-size: var(--step-2);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.c-placeholder__prose {
+  max-width: 46ch;
+  line-height: 1.65;
+}

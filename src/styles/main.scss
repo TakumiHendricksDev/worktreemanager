@@ -66,13 +66,16 @@
 @use 'components/field';
 @use 'components/icon';
 @use 'components/input';
+@use 'components/new-worktree';
 @use 'components/note';
 @use 'components/preflight';
+@use 'components/progress';
 @use 'components/remove';
 @use 'components/review';
 @use 'components/schema-form';
 @use 'components/sidebar';
 @use 'components/section-heading';
+@use 'components/shell';
 @use 'components/split-button';
 @use 'components/status';
 @use 'components/terminal';
