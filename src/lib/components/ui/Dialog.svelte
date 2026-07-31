@@ -28,6 +28,7 @@
   const {
     title,
     onclose,
+    onsubmit,
     closeDisabled = false,
     wide = false,
     body,
@@ -35,6 +36,12 @@
   }: {
     title: string;
     onclose: () => void;
+    /**
+     * Supply for a dialog that asks a question, and the body and footer are wrapped in a
+     * `<form>` — which is what makes Enter submit it. Without one, a dialog with a single text
+     * field would need the user to reach for the mouse to answer it.
+     */
+    onsubmit?: (event: Event) => void;
     /** True while an operation is in flight and dismissing would abandon it mid-way. */
     closeDisabled?: boolean;
     wide?: boolean;
@@ -80,6 +87,16 @@
     </Button>
   </div>
 
-  <div class="c-dialog__body">{@render body()}</div>
-  <div class="c-dialog__foot">{@render footer()}</div>
+  {#if onsubmit}
+    <!-- `display: contents` so the form participates in no layout: the panel's flex column
+         still sees the body and footer as its own children, which is what keeps the body
+         scrollable and the footer pinned. -->
+    <form {onsubmit} style="display: contents">
+      <div class="c-dialog__body">{@render body()}</div>
+      <div class="c-dialog__foot">{@render footer()}</div>
+    </form>
+  {:else}
+    <div class="c-dialog__body">{@render body()}</div>
+    <div class="c-dialog__foot">{@render footer()}</div>
+  {/if}
 </div>

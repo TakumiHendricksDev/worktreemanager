@@ -24,6 +24,10 @@
   import { open } from '@tauri-apps/plugin-dialog';
 
   import { errorMessage } from '../ipc/types';
+  import Button from './ui/Button.svelte';
+  import Dialog from './ui/Dialog.svelte';
+  import Field from './ui/Field.svelte';
+  import TextInput from './ui/TextInput.svelte';
   import { workspace } from '../state/workspace.svelte';
 
   const { onclose }: { onclose: () => void } = $props();
@@ -56,8 +60,8 @@
     }
   }
 
-  async function submit(event?: Event) {
-    event?.preventDefault();
+  async function onsubmit(event: Event) {
+    event.preventDefault();
     const trimmed = path.trim().replace(/\/+$/, '');
     if (!trimmed) return;
 
@@ -73,206 +77,33 @@
       busy = false;
     }
   }
-
-  function onKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      onclose();
-    }
-  }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="scrim" onclick={onclose}></div>
-
-<div class="dialog" role="dialog" aria-modal="true" aria-label="Add a repository">
-  <form onsubmit={submit}>
-    <header>
-      <h2>Add a repository</h2>
-      <button type="button" class="close" onclick={onclose} aria-label="Close">✕</button>
-    </header>
-
-    <div class="body">
-      <label for="repo-path">Path to a git repository</label>
-      <div class="pathrow">
-        <input
+<Dialog title="Add a repository" {onclose} {onsubmit} closeDisabled={busy}>
+  {#snippet body()}
+    <Field
+      id="repo-path"
+      label="Path to a git repository"
+      help="Any path inside the repository works — wtm resolves it to the root. Nothing is written to the repository itself."
+      errors={[error]}
+    >
+      <div class="c-add-project__row">
+        <TextInput
           id="repo-path"
-          bind:this={input}
           bind:value={path}
-          type="text"
+          bind:element={input}
+          mono
           placeholder="~/Sites/your-repo"
-          autocapitalize="off"
-          autocorrect="off"
-          spellcheck="false"
         />
-        <button type="button" class="browse" onclick={browse} disabled={busy}
-          >Browse…</button
-        >
+        <Button variant="neutral" onclick={browse} disabled={busy}>Browse…</Button>
       </div>
-      <p class="help">
-        Any path inside the repository works — wtm resolves it to the root. Nothing is
-        written to the repository itself.
-      </p>
-      {#if error}
-        <p class="error">{error}</p>
-      {/if}
-    </div>
+    </Field>
+  {/snippet}
 
-    <footer>
-      <button type="button" class="secondary" onclick={onclose}>Cancel</button>
-      <button type="submit" class="primary" disabled={busy || path.trim() === ''}>
-        {busy ? 'Adding…' : 'Add'}
-      </button>
-    </footer>
-  </form>
-</div>
-
-<style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: var(--bg-scrim);
-    z-index: 10;
-  }
-
-  .dialog {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(520px, calc(100vw - 4rem));
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--r-xl);
-    box-shadow: var(--shadow-lg);
-    z-index: 11;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--sp-4) var(--sp-5) var(--sp-2);
-  }
-
-  h2 {
-    font-size: var(--step-1);
-    font-weight: 600;
-  }
-
-  .close {
-    width: 26px;
-    height: 26px;
-    border-radius: var(--r-md);
-    color: var(--fg-muted);
-  }
-
-  .close:hover {
-    background: var(--bg-hover);
-    color: var(--fg);
-  }
-
-  .body {
-    padding: var(--sp-2) var(--sp-5) var(--sp-4);
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-  }
-
-  label {
-    font-size: var(--step--1);
-    font-weight: 500;
-  }
-
-  /* The field takes the space; the button stays exactly as wide as its label. */
-  .pathrow {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: var(--sp-2);
-  }
-
-  input {
-    width: 100%;
-    padding: 7px 9px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--bg-input);
-    font-family: var(--font-mono);
-    font-size: var(--step--1);
-  }
-
-  input:focus {
-    border-color: var(--border-focus);
-  }
-
-  .browse {
-    padding: 7px 12px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-md);
-    color: var(--fg);
-    font-size: var(--step--1);
-    font-weight: 500;
-    white-space: nowrap;
-  }
-
-  .browse:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-
-  .browse:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-
-  .help {
-    color: var(--fg-muted);
-    font-size: var(--step--2);
-    line-height: 1.55;
-  }
-
-  .error {
-    color: var(--danger);
-    font-size: var(--step--1);
-  }
-
-  footer {
-    border-top: 1px solid var(--border);
-    padding: var(--sp-3) var(--sp-5) var(--sp-4);
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--sp-2);
-  }
-
-  footer button {
-    padding: 7px 14px;
-    border-radius: var(--r-md);
-    font-size: var(--step--1);
-    font-weight: 500;
-  }
-
-  .secondary {
-    border: 1px solid var(--border-strong);
-    color: var(--fg);
-  }
-
-  .secondary:hover {
-    background: var(--bg-hover);
-  }
-
-  .primary {
-    background: var(--accent);
-    color: var(--fg-on-accent);
-  }
-
-  .primary:hover:not(:disabled) {
-    background: var(--accent-hover);
-  }
-
-  .primary:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-</style>
+  {#snippet footer()}
+    <Button variant="neutral" onclick={onclose}>Cancel</Button>
+    <Button type="submit" variant="accent" disabled={busy || path.trim() === ''}>
+      {busy ? 'Adding…' : 'Add'}
+    </Button>
+  {/snippet}
+</Dialog>

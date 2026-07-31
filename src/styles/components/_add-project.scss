@@ -1,0 +1,13 @@
+/*
+ * Add a repository.
+ *
+ * One rule: the field takes the space, the Browse… button stays exactly as wide as its label.
+ * A flex row with `flex: 1` on the input would work too, but the grid says the intent — one
+ * flexible track and one intrinsic one — without either child needing to know about the other.
+ */
+
+.c-add-project__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-2);
+}

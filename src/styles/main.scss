@@ -57,6 +57,7 @@
 @use 'objects/plain-list';
 
 /* Components — one partial per block, alphabetical within the layer. */
+@use 'components/add-project';
 @use 'components/banner';
 @use 'components/button';
 @use 'components/choice';
