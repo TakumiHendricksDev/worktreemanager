@@ -11,6 +11,7 @@
   import { commands } from '../ipc/commands';
   import { errorMessage, type Worktree } from '../ipc/types';
   import OpenInButton from './OpenInButton.svelte';
+  import Icon from './ui/Icon.svelte';
 
   const {
     worktree,
@@ -94,35 +95,35 @@
 </script>
 
 <div
-  class="detail"
+  class="c-detail"
   id="worktree-detail"
   role="tabpanel"
   aria-labelledby={`tab-${worktree.id}`}
   tabindex="-1"
 >
-  <header class="head">
-    <div class="titles">
+  <header class="c-detail__head">
+    <div class="c-detail__titles">
       <!--
         Duplicated from the sidebar on purpose: the one there only appears on hover, which
         is not somewhere a control can be *found*. This is where you learn it exists.
       -->
       <button
-        class="star"
-        class:on={worktree.favorite}
+        class="c-detail__star"
+        class:is-on={worktree.favorite}
         aria-pressed={worktree.favorite}
         title={worktree.favorite ? 'Remove from favorites' : 'Add to favorites'}
         onclick={onfavorite}
       >
-        <span aria-hidden="true">{worktree.favorite ? '★' : '☆'}</span>
+        <Icon name={worktree.favorite ? 'star' : 'star-outline'} size={18} />
         <span class="u-visually-hidden">Favorite</span>
       </button>
-      <h1>{worktree.title}</h1>
-      <div class="badges">
-        {#if worktree.isMain}<span class="badge accent">main worktree</span>{/if}
-        {#if worktree.isBare}<span class="badge">bare</span>{/if}
-        {#if worktree.issueKey}<span class="badge">{worktree.issueKey}</span>{/if}
+      <h1 class="c-pane-title">{worktree.title}</h1>
+      <div class="c-detail__badges">
+        {#if worktree.isMain}<span class="c-badge c-badge--accent">main worktree</span>{/if}
+        {#if worktree.isBare}<span class="c-badge">bare</span>{/if}
+        {#if worktree.issueKey}<span class="c-badge">{worktree.issueKey}</span>{/if}
         {#each worktree.badges as badge (badge.label)}
-          <span class="badge" title={badge.label}>{badge.label}: {badge.value}</span>
+          <span class="c-badge" title={badge.label}>{badge.label}: {badge.value}</span>
         {/each}
       </div>
     </div>
@@ -133,14 +134,14 @@
          Open-in first, then a divider, then Remove. The gap is not cosmetic: a destructive
          control sitting flush against a neutral one is how it gets clicked by accident, and
          these two are the only things in the header. -->
-    <div class="row">
+    <div class="c-detail__actions">
       <OpenInButton {projectId} worktreeId={worktree.id} />
 
-      <span class="divider" aria-hidden="true"></span>
+      <span class="c-detail__divider" aria-hidden="true"></span>
 
       <!-- The main worktree cannot be removed; git refuses, and so does the pipeline. -->
       <button
-        class="remove"
+        class="c-button c-button--danger-outline c-button--sm"
         onclick={onremove}
         disabled={worktree.isMain}
         title={worktree.isMain
@@ -152,20 +153,28 @@
     </div>
   </header>
 
-  <nav class="tabs" aria-label="Worktree details">
-    <button class:active={tab === 'overview'} onclick={() => (tab = 'overview')}>
+  <nav class="c-tabs" aria-label="Worktree details">
+    <button
+      class="c-tabs__tab"
+      class:is-active={tab === 'overview'}
+      onclick={() => (tab = 'overview')}
+    >
       Overview
     </button>
     {#if envEntries.length > 0}
-      <button class:active={tab === 'env'} onclick={() => (tab = 'env')}>
-        Environment <span class="count">{envEntries.length}</span>
+      <button
+        class="c-tabs__tab"
+        class:is-active={tab === 'env'}
+        onclick={() => (tab = 'env')}
+      >
+        Environment <span class="c-tabs__count">{envEntries.length}</span>
       </button>
     {/if}
   </nav>
 
-  <div class="body">
+  <div class="c-detail__body">
     {#if tab === 'overview'}
-      <dl class="facts">
+      <dl class="o-facts">
         <!--
           First, because "where is this on disk" is the question the app exists to answer
           quickly. It is a fact, so it is rendered like the other values rather than as the
@@ -176,9 +185,9 @@
           segment of this path, so it was the same fact written twice, one line apart.
         -->
         <dt>Path</dt>
-        <dd class="pathrow">
+        <dd class="c-detail__path-row">
           <code>{worktree.path}</code>
-          <button class="rowaction" onclick={copyPath}>
+          <button class="c-row-action" onclick={copyPath}>
             {copied ? 'copied' : 'copy'}
           </button>
         </dd>
@@ -189,7 +198,7 @@
             <code>{worktree.branch}</code>
           {:else}
             <!-- Never substitute the directory name here: they legitimately disagree. -->
-            <span class="muted">detached HEAD</span>
+            <span class="c-status--muted">detached HEAD</span>
           {/if}
         </dd>
 
@@ -201,22 +210,24 @@
         <dt>Status</dt>
         <dd>
           {#if worktree.dirty || worktree.untracked > 0 || worktree.staged > 0}
-            <span class="statuses">
-              {#if worktree.staged > 0}<span class="ok">{worktree.staged} staged</span>{/if}
-              {#if worktree.dirty}<span class="warn">modified</span>{/if}
+            <span class="c-detail__statuses">
+              {#if worktree.staged > 0}<span class="c-status--ok"
+                  >{worktree.staged} staged</span
+                >{/if}
+              {#if worktree.dirty}<span class="c-status--warn">modified</span>{/if}
               {#if worktree.untracked > 0}
-                <span class="muted">{worktree.untracked} untracked</span>
+                <span class="c-status--muted">{worktree.untracked} untracked</span>
               {/if}
             </span>
           {:else}
-            <span class="ok">clean</span>
+            <span class="c-status--ok">clean</span>
           {/if}
         </dd>
 
         {#if worktree.ahead > 0 || worktree.behind > 0}
           <dt>Divergence</dt>
           <dd>
-            <span class="info">
+            <span class="c-status--info">
               {worktree.ahead} ahead, {worktree.behind} behind
             </span>
           </dd>
@@ -224,23 +235,25 @@
 
         {#if worktree.locked}
           <dt>Locked</dt>
-          <dd><span class="warn">{worktree.locked || 'no reason given'}</span></dd>
+          <dd>
+            <span class="c-status--warn">{worktree.locked || 'no reason given'}</span>
+          </dd>
         {/if}
 
         {#if worktree.prunable}
           <dt>Stale</dt>
           <dd>
-            <span class="danger">{worktree.prunable}</span>
+            <span class="c-status--danger">{worktree.prunable}</span>
           </dd>
         {/if}
       </dl>
 
       {#if worktree.links.length > 0}
-        <h2>Links</h2>
-        <div class="links">
+        <h2 class="c-section-heading">Links</h2>
+        <div class="c-detail__links">
           {#each worktree.links as link (link.label)}
-            <button class="link" onclick={() => open(link.url)}>
-              <span class="label">{link.label}</span>
+            <button class="c-link-row" onclick={() => open(link.url)}>
+              <span class="c-link-row__label">{link.label}</span>
               <code>{link.url}</code>
             </button>
           {/each}
@@ -248,16 +261,17 @@
       {/if}
 
       {#if worktree.table.length > 0}
-        <h2>Ports</h2>
-        <table>
+        <h2 class="c-section-heading">Ports</h2>
+        <table class="c-table">
           <tbody>
             {#each worktree.table as row (row.label)}
               <tr>
                 <th>{row.label}</th>
                 <td>
                   {#if row.url}
-                    <button class="inline" onclick={() => open(row.url!)}
-                      >{row.value}</button
+                    <button
+                      class="c-button c-button--link c-button--sm c-detail__port"
+                      onclick={() => open(row.url!)}>{row.value}</button
                     >
                   {:else}
                     <code>{row.value}</code>
@@ -266,7 +280,7 @@
                     <!-- An absent variable means the base value is in effect. Invisible
                          unless we say so, and then confusing. -->
                     <span
-                      class="inherited"
+                      class="c-detail__inherited"
                       title="Not set for this worktree — the project default applies"
                     >
                       default
@@ -280,26 +294,26 @@
       {/if}
     {:else}
       {#if revealError}
-        <p class="revealerror">{revealError}</p>
+        <p class="c-status--danger">{revealError}</p>
       {/if}
-      <p class="envnote">
+      <p class="c-detail__env-note">
         No values are sent to this window. Reveal one at a time; each is read from disk when
         you ask for it and never kept.
       </p>
-      <table class="env">
+      <table class="c-table c-table--env">
         <tbody>
           {#each envEntries as key (key)}
             <tr>
               <th><code>{key}</code></th>
               <td>
                 {#if revealed[key] !== undefined}
-                  <code class="revealed">{revealed[key]}</code>
-                  <button class="rowaction" onclick={() => hide(key)}>hide</button>
+                  <code class="c-detail__revealed">{revealed[key]}</code>
+                  <button class="c-row-action" onclick={() => hide(key)}>hide</button>
                 {:else}
-                  <code class="masked" aria-label="hidden value">••••••••</code>
-                  <button class="rowaction" onclick={() => reveal(key)}>reveal</button>
+                  <code class="c-detail__masked" aria-label="hidden value">••••••••</code>
+                  <button class="c-row-action" onclick={() => reveal(key)}>reveal</button>
                 {/if}
-                <button class="rowaction" onclick={() => copyValue(key)}>
+                <button class="c-row-action" onclick={() => copyValue(key)}>
                   {copiedKey === key ? 'copied' : 'copy'}
                 </button>
               </td>
@@ -310,392 +324,3 @@
     {/if}
   </div>
 </div>
-
-<style>
-  .detail {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    background: var(--bg);
-  }
-
-  /*
-    One row: the name on the left, what you can do to it on the right.
-
-    The actions used to sit on their own line below the title, left-aligned. Two things were
-    wrong with that. The left edge is where every scan starts, so the first thing met after
-    the worktree's name was the button that destroys it — a destructive action should be
-    reachable, not first. And once the path moved into Overview that row held one small
-    button against a pane's worth of empty space, which reads as an orphan rather than as a
-    toolbar.
-  */
-  .head {
-    flex: 0 0 auto;
-    padding: var(--sp-4) var(--sp-5) var(--sp-3);
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--sp-4);
-  }
-
-  .titles {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-    flex-wrap: wrap;
-    /* Takes the slack, so the actions stay pinned right however many badges wrap. */
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  h1 {
-    font-size: var(--step-2);
-    font-weight: 600;
-    letter-spacing: -0.01em;
-  }
-
-  /* Always visible here, unlike the sidebar's hover-revealed twin — this is the copy that
-     has to be findable. */
-  .star {
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    /* Pulls the star in from the row's gap so it reads as attached to the title. */
-    margin-right: calc(var(--sp-2) - var(--sp-3));
-    border-radius: var(--r-sm);
-    font-size: var(--step-1);
-    line-height: 1;
-    color: var(--fg-subtle);
-    transition:
-      background var(--dur-fast) var(--ease),
-      color var(--dur-fast) var(--ease);
-  }
-
-  .star.on {
-    color: var(--star);
-  }
-
-  .star:hover {
-    background: var(--bg-hover);
-    color: var(--star);
-  }
-
-  h2 {
-    font-size: var(--step--1);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--fg-muted);
-    margin-top: var(--sp-5);
-    margin-bottom: var(--sp-2);
-  }
-
-  .badges {
-    display: flex;
-    gap: var(--sp-2);
-    flex-wrap: wrap;
-  }
-
-  .badge {
-    font-size: var(--step--2);
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: var(--bg-hover);
-    color: var(--fg-muted);
-    white-space: nowrap;
-  }
-
-  .badge.accent {
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-
-  .row {
-    display: flex;
-    /* Start, not center: the Open-in control grows downward when it has an error to show,
-       and centring would then drag Remove down with it. */
-    align-items: flex-start;
-    gap: var(--sp-2);
-    flex: 0 0 auto;
-    /* Optically centres the button against the h1's cap-height rather than its line box,
-       which top-alignment alone leaves sitting a couple of pixels high. */
-    margin-top: 2px;
-  }
-
-  /* Separates the neutral action from the destructive one. A hairline rather than more
-     whitespace, because whitespace alone at this size reads as an accident. */
-  .divider {
-    width: 1px;
-    height: 18px;
-    margin: 3px calc(var(--sp-1) * -1) 0;
-    background: var(--border);
-  }
-
-  /*
-    Never shrinks and never wraps. The label used to be "Remove…", following the macOS
-    convention that a trailing ellipsis means "this opens a dialog" — but next to a path that
-    *does* get ellipsised, it reads as a truncated word rather than an affordance. Spelling it
-    out costs a few pixels the path can give up.
-  */
-  /*
-    Red at rest, not only on hover. This is the one control in the pane that destroys
-    something, and a button you can only identify as destructive *after* reaching for it is
-    doing the job backwards.
-
-    Outlined rather than filled, which puts it a step below the dialog's solid-red confirm:
-    this button opens that dialog, the confirm is the irreversible one. Filling both would
-    make the reversible step look like the point of no return — and a solid red block sitting
-    permanently in the header would fight `New Worktree` for the eye.
-  */
-  .remove {
-    flex: 0 0 auto;
-    white-space: nowrap;
-    padding: 4px 10px;
-    border-radius: var(--r-md);
-    border: 1px solid color-mix(in oklab, var(--danger) 40%, transparent);
-    background: color-mix(in oklab, var(--danger) 8%, transparent);
-    font-size: var(--step--2);
-    font-weight: 500;
-    color: var(--danger);
-    transition:
-      background var(--dur-fast) var(--ease),
-      border-color var(--dur-fast) var(--ease),
-      color var(--dur-fast) var(--ease);
-  }
-
-  .remove:hover:not(:disabled) {
-    background: var(--danger);
-    border-color: var(--danger);
-    color: var(--fg-on-accent);
-  }
-
-  /* Neutral when unavailable, rather than a faded red. Red should mean "this will destroy
-     something you can actually destroy"; on the main worktree it never fires. */
-  .remove:disabled {
-    border-color: var(--border);
-    background: transparent;
-    color: var(--fg-subtle);
-    opacity: 0.6;
-    cursor: default;
-  }
-
-  /*
-    The path is long enough to be the one value that can outgrow the pane, so it wraps at
-    any character (inherited from `dd`) while the copy action stays pinned to the first line
-    — `baseline` alignment on the grid keeps the label, the first line of the path and the
-    action all sitting on the same line.
-  */
-  .pathrow {
-    display: flex;
-    align-items: baseline;
-  }
-
-  .pathrow code {
-    min-width: 0;
-  }
-
-  .tabs {
-    flex: 0 0 auto;
-    display: flex;
-    gap: var(--sp-1);
-    padding: 0 var(--sp-5);
-    border-bottom: 1px solid var(--border);
-  }
-
-  .tabs button {
-    padding: var(--sp-2) var(--sp-3);
-    font-size: var(--step--1);
-    color: var(--fg-muted);
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    transition: color var(--dur-fast) var(--ease);
-  }
-
-  .tabs button:hover {
-    color: var(--fg);
-  }
-
-  .tabs button.active {
-    color: var(--fg);
-    border-bottom-color: var(--accent);
-    font-weight: 500;
-  }
-
-  .count {
-    font-size: var(--step--2);
-    color: var(--fg-subtle);
-  }
-
-  .body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--sp-4) var(--sp-5) var(--sp-6);
-  }
-
-  .facts {
-    display: grid;
-    grid-template-columns: minmax(110px, max-content) 1fr;
-    gap: var(--sp-2) var(--sp-4);
-    align-items: baseline;
-  }
-
-  dt {
-    color: var(--fg-muted);
-    font-size: var(--step--1);
-  }
-
-  dd {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .statuses {
-    display: flex;
-    gap: var(--sp-3);
-    flex-wrap: wrap;
-  }
-
-  .muted {
-    color: var(--fg-muted);
-  }
-  .ok {
-    color: var(--ok);
-  }
-  .warn {
-    color: var(--warn);
-  }
-  .danger {
-    color: var(--danger);
-  }
-  .info {
-    color: var(--info);
-  }
-
-  .links {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-1);
-    align-items: flex-start;
-  }
-
-  .link {
-    display: flex;
-    align-items: baseline;
-    gap: var(--sp-3);
-    padding: 4px 8px;
-    border-radius: var(--r-md);
-    max-width: 100%;
-  }
-
-  .link:hover {
-    background: var(--bg-hover);
-  }
-
-  .link .label {
-    font-size: var(--step--1);
-    font-weight: 500;
-    flex: 0 0 auto;
-  }
-
-  .link code {
-    color: var(--accent);
-    font-size: var(--step--1);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    max-width: 560px;
-  }
-
-  table.env {
-    max-width: none;
-  }
-
-  th {
-    text-align: left;
-    font-weight: 400;
-    color: var(--fg-muted);
-    font-size: var(--step--1);
-    padding: 3px var(--sp-4) 3px 0;
-    vertical-align: baseline;
-    white-space: nowrap;
-  }
-
-  td {
-    padding: 3px 0;
-    vertical-align: baseline;
-    overflow-wrap: anywhere;
-  }
-
-  .inline {
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: 0.925em;
-  }
-
-  .inline:hover {
-    text-decoration: underline;
-  }
-
-  .envnote {
-    color: var(--fg-muted);
-    font-size: var(--step--2);
-    line-height: 1.55;
-    max-width: 74ch;
-    margin-bottom: var(--sp-3);
-  }
-
-  .revealerror {
-    color: var(--danger);
-    font-size: var(--step--1);
-    margin-bottom: var(--sp-2);
-  }
-
-  .masked {
-    color: var(--fg-subtle);
-    letter-spacing: 1px;
-  }
-
-  .revealed {
-    /* A revealed secret should look different from ordinary data, so it is obvious at a
-       glance that something is exposed on screen. */
-    background: color-mix(in oklab, var(--warn) 16%, transparent);
-    padding: 0 4px;
-    border-radius: var(--r-sm);
-    overflow-wrap: anywhere;
-  }
-
-  /* A small action beside a row's value — the Path row and every Environment row. One rule
-     for both, so `copy` cannot come to mean two different-looking things one tab apart. */
-  .rowaction {
-    /* Not a flex gap: the Environment rows lay these out inline, not as flex children. */
-    margin-left: var(--sp-2);
-    /* Never shrink or wrap away from the value it acts on. */
-    flex: 0 0 auto;
-    font-size: var(--step--2);
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .rowaction:hover {
-    color: var(--accent);
-    text-decoration: underline;
-  }
-
-  .inherited {
-    margin-left: var(--sp-2);
-    font-size: var(--step--2);
-    color: var(--fg-subtle);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0 6px;
-  }
-</style>
