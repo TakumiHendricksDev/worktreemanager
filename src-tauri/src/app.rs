@@ -26,7 +26,7 @@ use wtm_exec::{PtyHostImpl, ResolvedPath};
 use wtm_git::GitCli;
 
 use crate::display;
-use crate::view::{DoctorView, ProjectView, ToolView, TrustPromptView, WorktreeView};
+use crate::view::{DoctorView, PaletteView, ProjectView, ToolView, TrustPromptView, WorktreeView};
 
 /// Tools a project config commonly invokes, reported by the diagnostics panel.
 ///
@@ -354,6 +354,45 @@ impl App {
         }
     }
 
+    /// The palettes the user declared in `[ui.palettes]`, validated for Settings.
+    ///
+    /// Reads the config file directly rather than going through `ConfigStore`, which is the
+    /// same thing `with_paths` does for `exec.path` above. The port's own documentation is
+    /// the reason: it keeps preferences deliberately untyped because "UI preferences are the
+    /// frontend's business, and threading a `UiPrefs` struct through the domain would couple
+    /// this crate to decisions it has no stake in." A palette is exactly such a decision, so
+    /// it stays out of `wtm-core` and is assembled here in the composition root instead.
+    ///
+    /// A fresh read per call. This is opened from a settings dialog, so the cost is a file
+    /// read nobody will measure, and the payoff is that hand-editing the config and
+    /// reopening Settings shows the change without a restart.
+    pub fn palettes(&self) -> Vec<PaletteView> {
+        let config =
+            wtm_config::UserConfig::load(&self.config.paths().config_file).unwrap_or_default();
+
+        config
+            .ui
+            .palettes
+            .iter()
+            .map(|(id, def)| {
+                let name = def.name.clone().unwrap_or_else(|| id.clone());
+                let error = palette_problem(def);
+                PaletteView {
+                    id: id.clone(),
+                    name,
+                    hue: def.hue.unwrap_or_default(),
+                    chroma: def.chroma.unwrap_or(1.0),
+                    brand: if error.is_none() {
+                        def.brand.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    error,
+                }
+            })
+            .collect()
+    }
+
     /// Find a worktree by id within a project.
     pub fn worktree(&self, project: &Project, worktree_id: &str) -> Result<Worktree, WtmError> {
         self.git
@@ -431,6 +470,53 @@ impl App {
             engine: Arc::clone(&self.engine),
         }
     }
+}
+
+/// Why a declared palette cannot be used, or `None` if it can.
+///
+/// Every message names the key and what was wrong with it, because the audience is someone
+/// looking at a TOML file they just edited — "invalid palette" would send them back to the
+/// README to guess which of four fields it meant.
+///
+/// The bounds are the ones the stylesheet's oklch ramp needs. Hue wraps at 360 in CSS, so a
+/// value outside 0–360 renders rather than fails, but it renders as some *other* hue than the
+/// one that was typed — silently, which is worse than being told.
+fn palette_problem(def: &wtm_config::PaletteDef) -> Option<String> {
+    let Some(hue) = def.hue else {
+        return Some("`hue` is required — an oklch hue angle from 0 to 360".to_owned());
+    };
+    if !(0.0..=360.0).contains(&hue) {
+        return Some(format!("`hue` is {hue}, which is outside 0–360"));
+    }
+
+    let chroma = def.chroma.unwrap_or(1.0);
+    if !(0.0..=2.0).contains(&chroma) {
+        return Some(format!("`chroma` is {chroma}, which is outside 0–2"));
+    }
+
+    if def.brand.len() != 4 {
+        return Some(format!(
+            "`brand` needs exactly 4 colours (300, 400, 500, 600); found {}",
+            def.brand.len()
+        ));
+    }
+    for colour in &def.brand {
+        if !is_hex_colour(colour) {
+            return Some(format!("`{colour}` in `brand` is not a #rrggbb colour"));
+        }
+    }
+
+    None
+}
+
+/// `#rrggbb`, and nothing else.
+///
+/// Deliberately strict: no three-digit shorthand, no eight-digit alpha, no named colours.
+/// The value is interpolated straight into a custom property, and the narrow form is the one
+/// the built-in palettes use and the docs show. Accepting more would mean an alpha channel
+/// reaching a token that every surface in the app composites against.
+fn is_hex_colour(value: &str) -> bool {
+    value.len() == 7 && value.starts_with('#') && value[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Expand a leading `~` using the real `HOME`.
@@ -625,5 +711,105 @@ mod tests {
             app.project("/definitely/not/here"),
             Err(WtmError::UnknownProject(_))
         ));
+    }
+
+    fn palette(hue: Option<f64>, chroma: Option<f64>, brand: &[&str]) -> wtm_config::PaletteDef {
+        wtm_config::PaletteDef {
+            name: None,
+            hue,
+            chroma,
+            brand: brand.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    const OK_BRAND: &[&str] = &["#88c0d0", "#81a1c1", "#5e81ac", "#4c688f"];
+
+    #[test]
+    fn a_fully_specified_palette_has_no_problem() {
+        assert_eq!(
+            palette_problem(&palette(Some(245.0), Some(0.8), OK_BRAND)),
+            None
+        );
+    }
+
+    #[test]
+    fn chroma_defaults_to_the_reference_rather_than_being_required() {
+        // Hue is the one thing a palette cannot be guessed from, so it is the one required
+        // field. A palette that only says "make it blue" is a reasonable thing to write.
+        assert_eq!(palette_problem(&palette(Some(245.0), None, OK_BRAND)), None);
+    }
+
+    #[test]
+    fn a_palette_without_a_hue_says_which_field_is_missing() {
+        let problem = palette_problem(&palette(None, Some(1.0), OK_BRAND)).expect("a problem");
+        assert!(problem.contains("hue"), "unhelpful message: {problem}");
+    }
+
+    #[test]
+    fn a_hue_outside_the_circle_is_rejected_rather_than_left_to_wrap() {
+        // CSS wraps it, so this would render — as some other hue than the one typed, with no
+        // indication anything was wrong. Being told beats being surprised.
+        assert!(palette_problem(&palette(Some(400.0), None, OK_BRAND)).is_some());
+        assert!(palette_problem(&palette(Some(-10.0), None, OK_BRAND)).is_some());
+    }
+
+    #[test]
+    fn a_brand_ramp_must_have_exactly_four_steps() {
+        let short = palette_problem(&palette(Some(245.0), None, &OK_BRAND[..3])).expect("problem");
+        assert!(short.contains('4'), "should say how many: {short}");
+        assert!(palette_problem(&palette(Some(245.0), None, &[])).is_some());
+    }
+
+    #[test]
+    fn shorthand_and_alpha_hex_are_both_refused() {
+        // The value is interpolated straight into a custom property. Eight-digit hex would
+        // put an alpha channel behind every surface that composites against the accent.
+        for bad in ["#abc", "#88c0d0ff", "rebeccapurple", "88c0d0"] {
+            let brand = &[bad, "#81a1c1", "#5e81ac", "#4c688f"];
+            assert!(
+                palette_problem(&palette(Some(245.0), None, brand)).is_some(),
+                "{bad} should be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_palette_is_still_listed_so_it_can_be_explained() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[ui.palettes.oops]\nhue = 900\nbrand = [\"#88c0d0\"]\n",
+        )
+        .expect("write config");
+
+        let app = App::with_paths(AppPaths::rooted(dir.path())).expect("app should build");
+        let palettes = app.palettes();
+
+        assert_eq!(palettes.len(), 1, "dropping it would be a mystery");
+        assert_eq!(palettes[0].id, "oops");
+        assert!(palettes[0].error.is_some());
+        assert!(
+            palettes[0].brand.is_empty(),
+            "an unusable ramp must not reach the stylesheet"
+        );
+    }
+
+    #[test]
+    fn a_palette_with_no_name_is_listed_under_its_key() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[ui.palettes.nord]\nhue = 245\n\
+             brand = [\"#88c0d0\", \"#81a1c1\", \"#5e81ac\", \"#4c688f\"]\n",
+        )
+        .expect("write config");
+
+        let app = App::with_paths(AppPaths::rooted(dir.path())).expect("app should build");
+        let palettes = app.palettes();
+        assert_eq!(palettes[0].name, "nord");
+        // An omitted chroma defaults to the reference rather than to zero, which would
+        // silently turn a declared palette monochrome.
+        assert!((palettes[0].chroma - 1.0).abs() < f64::EPSILON);
+        assert!(palettes[0].error.is_none());
     }
 }

@@ -153,7 +153,7 @@
     </div>
   </header>
 
-  <nav class="c-tabs" aria-label="Worktree details">
+  <nav class="c-tabs c-tabs--inset" aria-label="Worktree details">
     <button
       class="c-tabs__tab"
       class:is-active={tab === 'overview'}

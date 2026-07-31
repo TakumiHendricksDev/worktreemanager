@@ -52,14 +52,67 @@ impl Theme {
     }
 }
 
+/// A user-defined colour palette.
+///
+/// The app ships six of these compiled into the stylesheet. This is the same shape,
+/// declared in TOML, for someone who wants a seventh:
+///
+/// ```toml
+/// [ui.palettes.nord]
+/// name   = "Nord"
+/// hue    = 245
+/// chroma = 0.8
+/// brand  = ["#88c0d0", "#81a1c1", "#5e81ac", "#4c688f"]
+/// ```
+///
+/// `hue` and `chroma` drive the neutral ramp, which the stylesheet derives in oklch — so a
+/// custom palette gets the same thirteen greys, at the same lightness, as a built-in one.
+/// `brand` is the accent ramp at 300/400/500/600; dark mode uses the first two and light
+/// mode the last two, which is the constraint to check when picking them.
+///
+/// Deliberately not validated here. This crate's job is to round-trip the file, and a
+/// palette with a bad hex is not a corrupt config — the rest of it must still load. The
+/// frontend validates and falls back to the default, which is where a colour can actually
+/// be checked against the surface it will sit on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PaletteDef {
+    /// What Settings calls it. Falls back to the table key when absent.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// oklch hue angle, 0–360.
+    #[serde(default)]
+    pub hue: Option<f64>,
+    /// Multiplier on the neutral ramp's chroma. 1 is the reference; 0 is achromatic.
+    #[serde(default)]
+    pub chroma: Option<f64>,
+    /// The accent ramp: `#rrggbb` at 300, 400, 500, 600.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brand: Vec<String>,
+}
+
 /// UI preferences.
+///
+/// Field order matters, for the same reason it does in `ProjectEntry`: TOML emits every
+/// plain value before any table, so `palettes` must stay below `theme`, `palette` and
+/// `sidebar_width`. Moving it up makes `save` fail at runtime rather than at compile time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UiPrefs {
     #[serde(default)]
     pub theme: Theme,
+    /// Which colour palette is selected, by id. `None` means the app's default.
+    ///
+    /// A plain string rather than an enum: the set of valid values includes whatever the
+    /// user declared in `palettes` below, so this crate cannot know it. The frontend
+    /// resolves an unrecognised id to the default rather than erroring — a palette that
+    /// was renamed, or a config copied from a newer build, should not stop the app.
+    #[serde(default)]
+    pub palette: Option<String>,
     /// Sidebar width in pixels.
     #[serde(default)]
     pub sidebar_width: Option<u32>,
+    /// User-defined palettes, keyed by id. Empty for almost everyone.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub palettes: BTreeMap<String, PaletteDef>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, toml::Value>,
 }
@@ -240,6 +293,7 @@ impl UserConfig {
     pub fn pref(&self, key: &str) -> Option<String> {
         match key {
             "ui.theme" => Some(self.ui.theme.as_str().to_owned()),
+            "ui.palette" => self.ui.palette.clone(),
             "ui.sidebar_width" => self.ui.sidebar_width.map(|w| w.to_string()),
             "exec.path" => self.exec.path.clone(),
             other => self
@@ -260,6 +314,13 @@ impl UserConfig {
                 } else {
                     tracing::warn!(value, "ignoring unrecognized theme");
                 }
+            }
+            /* Not validated against the known palettes, because this crate does not know
+            them — six live in the stylesheet and the rest in `ui.palettes`. An empty
+            value clears back to the default, which is how Settings offers "use the
+            default" without a sentinel id. */
+            "ui.palette" => {
+                self.ui.palette = (!value.is_empty()).then(|| value.to_owned());
             }
             "ui.sidebar_width" => self.ui.sidebar_width = value.parse().ok(),
             "exec.path" => {
@@ -513,5 +574,83 @@ mod tests {
             assert_eq!(Theme::parse(theme.as_str()), Some(theme));
         }
         assert_eq!(Theme::parse("nope"), None);
+    }
+
+    #[test]
+    fn clearing_the_palette_returns_to_the_default() {
+        let mut config = UserConfig::default();
+        config.set_pref("ui.palette", "harbor");
+        assert_eq!(config.pref("ui.palette").as_deref(), Some("harbor"));
+        config.set_pref("ui.palette", "");
+        assert_eq!(config.ui.palette, None);
+    }
+
+    #[test]
+    fn an_unrecognized_palette_is_stored_rather_than_rejected() {
+        // The valid set includes whatever is in `[ui.palettes]` plus six this crate cannot
+        // see, so refusing an unknown id here would refuse legitimate ones.
+        let mut config = UserConfig::default();
+        config.set_pref("ui.palette", "something-from-a-newer-build");
+        assert_eq!(
+            config.pref("ui.palette").as_deref(),
+            Some("something-from-a-newer-build")
+        );
+    }
+
+    #[test]
+    fn a_hand_written_palette_survives_a_write() {
+        // The whole point of declaring one in TOML: the app rewrites this file whenever any
+        // preference changes, and a palette that did not round-trip would vanish the first
+        // time someone resized the sidebar.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[ui.palettes.nord]\n\
+             name = \"Nord\"\n\
+             hue = 245\n\
+             chroma = 0.8\n\
+             brand = [\"#88c0d0\", \"#81a1c1\", \"#5e81ac\", \"#4c688f\"]\n",
+        )
+        .unwrap();
+
+        let mut config = UserConfig::load(&path).unwrap();
+        config.set_pref("ui.sidebar_width", "300");
+        config.save(&path).unwrap();
+
+        let reloaded = UserConfig::load(&path).unwrap();
+        let nord = reloaded.ui.palettes.get("nord").expect("nord survives");
+        assert_eq!(nord.name.as_deref(), Some("Nord"));
+        assert_eq!(nord.hue, Some(245.0));
+        assert_eq!(nord.chroma, Some(0.8));
+        assert_eq!(nord.brand.len(), 4);
+    }
+
+    #[test]
+    fn a_config_with_no_palettes_writes_no_palettes_table() {
+        // Same argument as `favorites`: a file nobody has customized must look exactly as it
+        // did before this feature existed.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        UserConfig::default().save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("palettes"), "unexpected table in:\n{text}");
+    }
+
+    #[test]
+    fn one_broken_palette_does_not_stop_the_config_loading() {
+        // Validation belongs to the frontend layer, which can check a colour against the
+        // surface it will sit on. Here, a nonsense palette must still parse.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[ui]\ntheme = \"dark\"\n\n[ui.palettes.broken]\nbrand = [\"not-a-colour\"]\n",
+        )
+        .unwrap();
+
+        let config = UserConfig::load(&path).expect("the rest of the file still loads");
+        assert_eq!(config.ui.theme, Theme::Dark);
+        assert!(config.ui.palettes.contains_key("broken"));
     }
 }

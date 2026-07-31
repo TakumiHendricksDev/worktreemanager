@@ -1,0 +1,117 @@
+/*
+ * The Settings dialog's own layout, and the palette picker.
+ *
+ * The picker is the only genuinely new shape in the app: a grid of buttons, each previewing
+ * a palette it is not currently wearing. Everything else in here is spacing.
+ */
+
+.c-settings__panel {
+  padding-top: var(--sp-3);
+}
+
+.c-settings__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--step--1);
+}
+
+/* `auto-fill` rather than a fixed count: six built-ins fit two rows at the dialog's width,
+   and someone with four custom palettes gets a third row instead of a squeeze. */
+.c-settings__palettes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--sp-2);
+}
+
+.c-palette {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  font-size: var(--step--1);
+  text-align: left;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+
+  &:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    background: var(--bg-hover);
+  }
+
+  /*
+   * Selection is a border and a tick, not a fill. A filled state would tint the swatch it
+   * sits around with the *active* palette's accent, which is the one thing this control must
+   * not do — every chip has to show its own palette or the picker is lying.
+   */
+  &.is-selected {
+    border-color: var(--accent);
+  }
+
+  /* A palette whose declaration is broken. Still listed, with the reason on its `title`. */
+  &:disabled {
+    opacity: 0.45;
+  }
+}
+
+.c-palette__chips {
+  display: flex;
+  flex: 0 0 auto;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.c-palette__chip {
+  width: 14px;
+  height: 22px;
+}
+
+/*
+ * Three chips, resolved against whichever palette the parent element names.
+ *
+ * They restate two steps of the neutral ramp rather than referencing `--gray-*`, and that is
+ * the whole trick. `--gray-900` is declared once on `:root`, so it computes with the *root's*
+ * hue and every element inherits that one resolved colour — a chip asking for it would show
+ * the active palette, not its own. Declaring the `oklch()` here instead resolves it against
+ * the `--palette-hue` this element inherits from its own `[data-palette]`.
+ *
+ * The lightness values are `--gray-900` and `--gray-400` from `settings/_primitives.scss`
+ * and have to be kept in step with them by hand. A swatch that drifts promises the wrong
+ * colour, so if those move, move these.
+ *
+ * `--gray-400` and not `--gray-200`, which was the first choice: at 0.911 the chip was very
+ * nearly the card behind it, so a three-chip swatch read as two chips and a gap. The mid
+ * tone is also where a hue tint is most visible, which is the thing the chip is there to
+ * show.
+ */
+.c-palette__chip--bg {
+  background: oklch(0.14 calc(0.014 * var(--palette-chroma)) var(--palette-hue));
+}
+
+.c-palette__chip--surface {
+  background: oklch(0.687 calc(0.025 * var(--palette-chroma)) var(--palette-hue));
+}
+
+/* The one chip that is a literal token: `--brand-500` is set per palette, so it inherits
+   correctly without being recomputed. */
+.c-palette__chip--brand {
+  background: var(--brand-500);
+}
+
+.c-palette__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-palette__tick {
+  flex: 0 0 auto;
+  color: var(--accent);
+}

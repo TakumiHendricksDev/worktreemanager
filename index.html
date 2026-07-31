@@ -5,19 +5,49 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Worktree Manager</title>
     <script>
-      // Resolve the theme before first paint. Without this, the window flashes light
+      // Resolve the appearance before first paint. Without this, the window flashes light
       // while the app boots and asks Rust for the stored preference — which on a dark
       // desktop is a visible, ugly blink on every launch.
+      //
+      // Everything read here is a `localStorage` cache of something in config.toml, which
+      // is the source of truth. `state/theme.svelte.ts` reconciles them a moment later and
+      // rewrites the cache, so a hand-edited config wins — one frame late.
       (() => {
+        const root = document.documentElement;
+
         try {
           const stored = localStorage.getItem('wtm.theme') ?? 'system';
           const dark =
             stored === 'dark' ||
             (stored === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
-          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-          document.documentElement.dataset.themeChoice = stored;
+          root.dataset.theme = dark ? 'dark' : 'light';
+          root.dataset.themeChoice = stored;
         } catch {
-          document.documentElement.dataset.theme = 'light';
+          root.dataset.theme = 'light';
+        }
+
+        try {
+          root.dataset.palette = localStorage.getItem('wtm.palette') ?? 'pine';
+
+          // A user-defined palette is not in the stylesheet, so the attribute alone paints
+          // nothing and the window would come up in the default palette for a frame before
+          // Rust answers. These six values are cached for that one frame; the order matches
+          // `CUSTOM_PROPS` in the appearance store, which is what writes them.
+          const custom = localStorage.getItem('wtm.palette.custom');
+          if (custom) {
+            const v = custom.split(' ');
+            if (v.length === 6) {
+              root.style.setProperty('--palette-hue', v[0]);
+              root.style.setProperty('--palette-chroma', v[1]);
+              root.style.setProperty('--brand-300', v[2]);
+              root.style.setProperty('--brand-400', v[3]);
+              root.style.setProperty('--brand-500', v[4]);
+              root.style.setProperty('--brand-600', v[5]);
+            }
+          }
+        } catch {
+          // The stylesheet's `:root` block is the default palette, so leaving the attribute
+          // unset renders correctly rather than rendering nothing.
         }
 
         // Window chrome differs by platform and the difference is visible on the very

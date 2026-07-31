@@ -51,6 +51,7 @@ export type IconName =
   | 'star-outline'
   | 'plus'
   | 'search'
+  | 'settings'
   | 'theme-system'
   | 'theme-light'
   | 'theme-dark';
@@ -84,6 +85,23 @@ export const icons: Record<IconName, IconSpec> = {
   search: {
     stroke:
       'M7.25 2.5 A4.75 4.75 0 1 0 7.25 12 A4.75 4.75 0 1 0 7.25 2.5 M10.9 10.9 L13.5 13.5',
+  },
+  /*
+   * Sliders, not a cog, and the grammar above is the reason.
+   *
+   * A cog is the more expected glyph, and it was drawn first: a circle with eight teeth on a
+   * 16 grid leaves each tooth about 1.6 long against a 1.5 stroke, so they render as a ring
+   * of blurred dots. Dropping to six teeth trades one kind of illegible for another.
+   *
+   * Two rails and two knobs survive the size, and "adjust these" is the same idea a cog is
+   * standing in for. It is what Lucide and Feather both ship for preferences panels for the
+   * same reason.
+   */
+  settings: {
+    stroke:
+      'M2.5 5.5 H13.5 M2.5 10.5 H13.5 ' +
+      'M10 3.9 A1.6 1.6 0 1 0 10 7.1 A1.6 1.6 0 1 0 10 3.9 ' +
+      'M6 8.9 A1.6 1.6 0 1 0 6 12.1 A1.6 1.6 0 1 0 6 8.9',
   },
   // A circle with its leading half filled — the same "follows the system" idiom as `◐`, which
   // is the character it replaces.

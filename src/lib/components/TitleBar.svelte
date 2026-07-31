@@ -25,7 +25,8 @@
   import Icon from './ui/Icon.svelte';
   import type { IconName } from './ui/icons';
 
-  const { onaddproject }: { onaddproject: () => void } = $props();
+  const { onaddproject, onsettings }: { onaddproject: () => void; onsettings: () => void } =
+    $props();
 
   const themeIcons: Record<ThemeChoice, IconName> = {
     system: 'theme-system',
@@ -110,6 +111,13 @@
   </div>
 
   <div class="c-titlebar__actions">
+    <!--
+      Kept beside Settings rather than absorbed into it. Cycling light and dark is the one
+      appearance change people make several times a day — chasing the sun, or a screen share
+      — and putting it two clicks deep to avoid having two buttons would be the wrong trade.
+      The same control appears in Settings as an explicit three-way choice, which is what the
+      cycle cannot be in 24 pixels.
+    -->
     <Button
       variant="quiet"
       icon="md"
@@ -118,6 +126,21 @@
       ariaLabel={labels[theme.choice]}
     >
       <Icon name={themeIcons[theme.choice]} />
+    </Button>
+
+    <!--
+      On macOS this duplicates the app menu's Settings… item, deliberately. The menu is the
+      convention and carries ⌘,; the button is how anyone finds it without knowing that. On
+      Linux there is no app menu at all, so it is the only affordance.
+    -->
+    <Button
+      variant="quiet"
+      icon="md"
+      onclick={onsettings}
+      title="Settings"
+      ariaLabel="Settings"
+    >
+      <Icon name="settings" />
     </Button>
   </div>
 </header>

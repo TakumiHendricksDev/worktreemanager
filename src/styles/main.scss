@@ -33,6 +33,7 @@
    Flat names, no dots: Sass takes a module's namespace from the segment before the first
    `.`, so `tokens.primitives` and `tokens.semantic` would both want to be `tokens`. */
 @use 'settings/primitives';
+@use 'settings/palettes';
 @use 'settings/semantic';
 @use 'settings/platform';
 
@@ -76,9 +77,11 @@
 @use 'components/schema-form';
 @use 'components/sidebar';
 @use 'components/section-heading';
+@use 'components/settings';
 @use 'components/shell';
 @use 'components/split-button';
 @use 'components/status';
+@use 'components/tabs';
 @use 'components/terminal';
 @use 'components/titlebar';
 @use 'components/trust';

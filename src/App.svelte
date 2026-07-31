@@ -7,12 +7,14 @@
    * up spinning a fan on a laptop. Instead: refresh on window focus, which covers the
    * case that actually matters (you did something in a terminal and came back).
    */
+  import { listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
   import RemoveWorktreeDialog from './lib/components/RemoveWorktreeDialog.svelte';
+  import SettingsDialog from './lib/components/SettingsDialog.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
   import TrustBanner from './lib/components/TrustBanner.svelte';
@@ -43,6 +45,7 @@
   let mainView = $state<'worktree' | 'new'>('worktree');
   let showAddProject = $state(false);
   let showRemove = $state(false);
+  let showSettings = $state(false);
 
   onMount(() => {
     void (async () => {
@@ -63,11 +66,37 @@
     };
     window.addEventListener('focus', onFocus);
 
+    /*
+     * Settings from the macOS app menu.
+     *
+     * AppKit handles ⌘, itself and the keystroke never reaches the webview, so the menu
+     * item emits an event instead — the same route `pty_bridge.rs` uses for progress. The
+     * listener is unconditional because a platform with no menu simply never fires it.
+     */
+    const unlistenSettings = listen('wtm:settings', () => (showSettings = true));
+
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
       if (meta && event.key === 'r') {
         event.preventDefault();
         void workspace.refreshWorktrees();
+      }
+
+      /*
+       * Ctrl-, on Linux only.
+       *
+       * Gated on the platform rather than accepting either modifier the way ⌘R above does,
+       * because on macOS the menu accelerator already fires — handling it here as well would
+       * open Settings and then immediately have the menu open it again.
+       *
+       * The target guard is not shared by the other two shortcuts, and should be: a comma is
+       * a character people type, and xterm sees every keystroke that reaches the window.
+       * Ctrl-R inside a terminal is reverse-search, which this already swallows. Fixing that
+       * is a change to how refresh behaves and belongs on its own.
+       */
+      if (isLinux && event.ctrlKey && event.key === ',' && !inTextEntry(event.target)) {
+        event.preventDefault();
+        showSettings = true;
       }
     };
     window.addEventListener('keydown', onKey);
@@ -75,8 +104,30 @@
     return () => {
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
+      void unlistenSettings.then((off) => off());
     };
   });
+
+  /**
+   * The first TypeScript reader of `data-platform`; until now only CSS consulted it.
+   *
+   * Read once at module scope rather than per keystroke — `index.html` sets it before first
+   * paint and nothing changes it afterwards.
+   */
+  const isLinux = document.documentElement.dataset.platform === 'linux';
+
+  /** Whether a keystroke landed somewhere a character would be typed. */
+  function inTextEntry(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el) return false;
+    // xterm renders into a textarea it keeps focused, so this covers the terminal too.
+    return (
+      el.tagName === 'INPUT' ||
+      el.tagName === 'TEXTAREA' ||
+      el.tagName === 'SELECT' ||
+      el.isContentEditable
+    );
+  }
 
   function startDrag(event: PointerEvent) {
     dragging = true;
@@ -131,7 +182,7 @@
 </script>
 
 <div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
-  <TitleBar onaddproject={addProject} />
+  <TitleBar onaddproject={addProject} onsettings={() => (showSettings = true)} />
 
   <div class="c-shell__columns" class:is-dragging={dragging}>
     <aside class="c-shell__col">
@@ -238,5 +289,9 @@
       worktree={workspace.selected}
       onclose={() => (showRemove = false)}
     />
+  {/if}
+
+  {#if showSettings}
+    <SettingsDialog onclose={() => (showSettings = false)} />
   {/if}
 </div>

@@ -1,0 +1,56 @@
+/*
+ * A strip of tabs with an underline on the active one.
+ *
+ * Lived in `_detail.scss` while the detail pane was the only user, already named as a
+ * standalone block rather than `c-detail__tabs`. Settings is the second user, and it wants
+ * the same strip with different padding — which is the moment a block that only looked
+ * shared becomes shared, the same way `c-field` and `c-choice` did.
+ *
+ * The horizontal inset is the modifier, not the default. Both call sites sit inside a
+ * container that already has its own padding: `.c-detail` does not (its children pad
+ * themselves, which is why the strip needs `--inset` to line up with the pane's other
+ * content), and `.c-dialog__body` does, so an unmodified strip is what lines up there.
+ * Defaulting to zero means the version that needs nothing gets nothing.
+ *
+ * No `role="tab"` here, and none in the markup at either call site. These are buttons that
+ * swap a panel, announced only by an `aria-label` on the `<nav>`. Real tab semantics need
+ * `tablist`/`tab`/`tabpanel`, `aria-selected`, `aria-controls` and arrow-key roving — worth
+ * doing, and worth doing to both call sites at once rather than to whichever one is being
+ * touched today.
+ */
+
+.c-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Line the strip up with a pane that pads its own children rather than itself. */
+.c-tabs--inset {
+  padding: 0 var(--sp-5);
+}
+
+.c-tabs__tab {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--dur-fast) var(--ease);
+
+  &:hover {
+    color: var(--fg);
+  }
+
+  &.is-active {
+    color: var(--fg);
+    border-bottom-color: var(--accent);
+    font-weight: 500;
+  }
+}
+
+.c-tabs__count {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}

@@ -28,7 +28,7 @@ use crate::app::App;
 use crate::display;
 use crate::openers;
 use crate::view::{
-    ActionView, DoctorView, ErrorView, FieldView, FormView, OpenersView, ProjectView,
+    ActionView, DoctorView, ErrorView, FieldView, FormView, OpenersView, PaletteView, ProjectView,
     RegisteredView, WorktreeView,
 };
 
@@ -351,6 +351,21 @@ pub async fn set_pref(app: AppState<'_>, key: String, value: String) -> Reply<()
 pub async fn doctor(app: AppState<'_>) -> Reply<DoctorView> {
     let app = Arc::clone(&app);
     blocking(move || Ok(app.doctor())).await
+}
+
+/// The palettes declared in `[ui.palettes]`, for the Settings picker.
+///
+/// Only the user's own. The six that ship with the app are compiled into the stylesheet and
+/// Rust has never heard of them — which is deliberate: a built-in palette is a set of CSS
+/// custom properties, and routing them through IPC so the frontend could list what it
+/// already contains would be a contract to keep in step for no gain.
+///
+/// Unusable entries come back with `error` set rather than being dropped. See
+/// [`PaletteView`](crate::view::PaletteView).
+#[tauri::command]
+pub async fn list_palettes(app: AppState<'_>) -> Reply<Vec<PaletteView>> {
+    let app = Arc::clone(&app);
+    blocking(move || Ok(app.palettes())).await
 }
 
 /// Return one environment value that was withheld from the worktree listing.

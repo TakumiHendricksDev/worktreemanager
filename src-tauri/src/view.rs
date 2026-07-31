@@ -312,6 +312,29 @@ pub struct ToolView {
     pub path: Option<String>,
 }
 
+/// One user-defined colour palette, as Settings needs it.
+///
+/// Validated here rather than in the frontend, and rather than in `wtm-config`. Not in
+/// `wtm-config` because that crate's contract is to round-trip the file: one unusable
+/// palette must not stop the rest of the config loading. Not in the frontend because then
+/// every rule would live in TypeScript with nothing checking it, and "is this four hex
+/// strings" is not a judgement call.
+///
+/// A broken palette is still returned, carrying `error`, so Settings can show it greyed
+/// out with the reason. Dropping it silently would leave someone staring at a config file
+/// that looks right and a picker that does not list it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaletteView {
+    pub id: String,
+    pub name: String,
+    pub hue: f64,
+    pub chroma: f64,
+    /// The accent ramp at 300, 400, 500, 600. Empty when `error` is set.
+    pub brand: Vec<String>,
+    pub error: Option<String>,
+}
+
 /// The error shape the frontend receives.
 ///
 /// A flat `{ kind, message, detail }` rather than the full nested enum: the UI needs to

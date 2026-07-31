@@ -1,0 +1,169 @@
+/*
+ * Theme tokens, layer 1b: the palettes.
+ *
+ * This is the file you add a colour scheme to, and the only one. A palette is four numbers
+ * and four hex values:
+ *
+ *   hue      the neutral ramp's hue angle, in oklch degrees
+ *   chroma   how much of it to use — 1 is the reference, Slate runs at a third
+ *   brand    the accent ramp: 300, 400, 500, 600
+ *   status   optional, for a brand that lands on top of a status colour
+ *
+ * Everything else — thirteen neutral steps, both light and dark, every semantic role — falls
+ * out of those. `_primitives.scss` explains why lightness lives there rather than here.
+ *
+ * The dark modes take brand 400 and 300 for accent and hover; light takes 500 and 600. So
+ * 300 and 400 must read against a near-black surface and 500 and 600 against a near-white
+ * one, which is the constraint to check when picking them, not "do these four look nice
+ * together".
+ *
+ * # Why `[data-palette]` and not `:root[data-palette]`
+ *
+ * A plain attribute selector so it matches any element, not just `<html>`. The palette
+ * swatches in Settings need a Clay chip to be Clay while the app is Pine, and they get that
+ * by putting `data-palette="clay"` on a `<span>` — custom properties inherit, so a chip
+ * inside it resolves `var(--palette-hue)` to Clay's. That falls out for free, and only
+ * because the selector is not root-anchored. Specificity ties with the `:root` default
+ * below, so source order decides: the default is emitted first, deliberately.
+ *
+ * User-defined palettes from `config.toml` cannot be here — they are not known at build
+ * time. They set the same six properties inline on `<html>`, which beats every selector
+ * here, so they render through this exact path rather than a parallel one.
+ */
+
+@use 'sass:list';
+@use 'sass:map';
+
+/*
+ * Ordered, and the order is what Settings renders. Pine first because it is the default;
+ * Clay second because it is what the app wore before this and the people most likely to go
+ * looking for a palette are the ones who want it back.
+ */
+$palettes: (
+  'pine': (
+    'hue': 158,
+    'chroma': 1,
+    'brand': (
+      #6fcf9a,
+      #3fb27a,
+      #1e7f55,
+      #155f3f,
+    ),
+    /* A green brand beside a green `--ok` is one colour to anyone with a green deficiency,
+       so `--ok` is pulled ~45° yellower here. `_semantic.scss` has the full argument and the
+       measured numbers; the short version is that nothing encodes state in these two alone. */
+    'status': (
+        'green-400': #6fcb63,
+        'green-500': #3c7d2b,
+      ),
+  ),
+  'clay': (
+    'hue': 62,
+    'chroma': 0.85,
+    /*
+     * The terracotta the app wore until the rebrand. This palette exists so nobody loses the
+     * look they chose, so the dark-mode pair (300, 400) is the original hex exactly.
+     *
+     * The light-mode pair is not. `#c96442` as link text on the light background measures
+     * 3.69:1, and as a button label 3.90:1 — both under 4.5, and both true of the app before
+     * palettes existed; it had simply never been measured. Darkened to 4.98 and 5.24. That
+     * makes light-mode Clay very slightly deeper than it used to be, which is the price of
+     * the version that was failing not being the one that ships.
+     */
+    'brand': (
+        #e8a288,
+        #d97757,
+        #b04f2f,
+        #993f24,
+      ),
+  ),
+  'slate': (
+    'hue': 250,
+    /* A third of the reference. Not zero — a dead-neutral grey next to five tinted ones
+       reads as broken rather than as restrained. This is "no colour" with a pulse. */
+    'chroma': 0.33,
+    'brand': (
+      #e2e8ec,
+      #c3ced6,
+      #3a454e,
+      #262e35,
+    ),
+  ),
+  'harbor': (
+    'hue': 248,
+    'chroma': 1,
+    'brand': (
+      #7cc0f0,
+      #4a9fdd,
+      #1f6fb2,
+      #17558a,
+    ),
+    /* `--info` is the one status role in the blue family, and Harbor's accent sits on top of
+       it. Pushed toward cyan so an ahead/behind count stays distinguishable from a link.
+       Only the 400, which is the dark-mode value: light mode takes `--blue-500`, where the
+       accent is already far darker than `--info` and there is nothing to separate. A cyan
+       light-mode `--info` was tried and measured 1.96:1 — legibility lost to a distinction
+       that was not needed. */
+    'status': (
+        'blue-400': #4fc4d6,
+      ),
+  ),
+  'plum': (
+    'hue': 305,
+    'chroma': 0.95,
+    'brand': (
+      #c9a3e8,
+      #a072cc,
+      #7a4fa3,
+      #5e3a80,
+    ),
+  ),
+  'rose': (
+    'hue': 12,
+    'chroma': 0.9,
+    'brand': (
+      #f0a0bf,
+      #db6f96,
+      #b13a63,
+      #8d2c4e,
+    ),
+  ),
+);
+
+$default: 'pine';
+
+@mixin palette($p) {
+  --palette-hue: #{map.get($p, 'hue')};
+  --palette-chroma: #{map.get($p, 'chroma')};
+
+  $brand: map.get($p, 'brand');
+  --brand-300: #{list.nth($brand, 1)};
+  --brand-400: #{list.nth($brand, 2)};
+  --brand-500: #{list.nth($brand, 3)};
+  --brand-600: #{list.nth($brand, 4)};
+
+  /* Guarded rather than iterated directly: `@each` over a missing key walks `null` as a
+     one-element list and emits a nameless `--: ` declaration into every palette that does
+     not override a status colour. Valid CSS, silently, which is the worst kind. */
+  @if map.has-key($p, 'status') {
+    @each $token, $value in map.get($p, 'status') {
+      --#{$token}: #{$value};
+    }
+  }
+}
+
+/*
+ * The default, for the frame before anything sets the attribute and for the case where the
+ * stored palette name is one this build has never heard of. It has to be a real palette
+ * rather than an absence: `--palette-hue` with no value makes every `oklch()` in the neutral
+ * ramp invalid at once, which is a white-on-white window rather than a wrong colour.
+ */
+:root {
+  @include palette(map.get($palettes, $default));
+}
+
+@each $id, $p in $palettes {
+  [data-palette='#{$id}'] {
+    @include palette($p);
+  }
+}

@@ -11,74 +11,99 @@
  * It is also what keeps the two modes from drifting — there is no component holding a
  * hard-coded grey that only looks right in one of them.
  *
- * It is also what made the rebrand off Claude's orange a two-file edit. The ramps below
- * were swapped wholesale and not one component partial had to change.
+ * It is also what made the rebrand off Claude's orange a two-file edit, and what makes six
+ * user-switchable palettes possible without a component knowing there is more than one.
  *
  * These are CSS custom properties and must stay that way. A Sass variable is resolved at
  * build time, which would move theming from "swap an attribute on <html>" to "recompile",
  * and `index.html` sets `data-theme` before first paint precisely so there is no flash.
  * Sass is here for structure — nesting, partials, mixins — not for values.
  *
- * Layer 1 is mode-independent and is never used in a component.
+ * Layer 1 is mode-independent and is never used in a component. The *hue* of the neutral
+ * ramp below is not defined here at all — it comes from `_palettes.scss`, which is the file
+ * a new palette is added to.
  */
 
 :root {
   /*
-   * Still called grey because that is the job it does — the neutral ramp every surface,
-   * border and text colour is drawn from — but every step is tinted toward the brand hue
-   * rather than being achromatic.
+   * The neutral ramp — every surface, border and text colour in the app.
    *
-   * That tint is the identity, not a garnish. The accent lands on about five elements in
-   * any given view, so an app that is green only where the accent falls is an app that
-   * reads grey. Tinting the ramp is what makes it read green with nothing highlighted at
-   * all, and the amount is deliberately small: enough to see beside true grey, not enough
-   * to notice on its own.
+   * Still called grey because that is the job it does, but no step is achromatic: each one
+   * carries a little of the active palette's hue. That tint is the identity, not a garnish.
+   * The accent lands on about five elements in any given view, so an app that is coloured
+   * only where the accent falls is an app that reads grey. The amount is deliberately small
+   * — enough to see beside true grey, not enough to notice on its own.
    *
-   * Lightness per step is carried over from the warm-stone ramp this replaced, so the
-   * light/dark contrast ratios the semantic layer depends on did not move when the hue did.
+   * # Why this is `oklch()` and not thirteen hex values
+   *
+   * It used to be hex, and with one palette that was fine. Six palettes would have made it
+   * seventy-eight, hand-picked, with nothing keeping them consistent: the first time one
+   * step of one ramp was nudged, that palette would quietly stop matching the others.
+   *
+   * Writing it in oklch moves lightness out of the palette's hands. `L` and the chroma
+   * *shape* are fixed here, once; a palette contributes a hue angle and one multiplier. So
+   * every palette has identical lightness at every step by construction, which is what makes
+   * the contrast ratios the semantic layer depends on impossible to break by adding a colour.
+   * The L values are the measured lightness of the hand-tuned green ramp this replaced, so
+   * Pine came through the change looking like itself.
+   *
+   * The chroma multiplier exists because equal chroma is not equal saturation across hues —
+   * a yellow-green at 0.02 reads far stronger than a blue does. Slate runs it near zero,
+   * which is how a palette opts out of colour entirely.
+   *
+   * `--gray-0` stays literal white. It is the one step with no hue to carry: it backs input
+   * fields and elevated surfaces in light mode, where anything but white reads as dirty.
    */
   --gray-0: #ffffff;
-  --gray-50: #f7faf8;
-  --gray-100: #f0f5f2;
-  --gray-150: #e8eeea;
-  --gray-200: #dde6e0;
-  --gray-300: #c6d3cb;
-  --gray-400: #93a79b;
-  --gray-500: #5f7268;
-  --gray-700: #2a3831;
-  --gray-800: #1c2621;
-  --gray-850: #141c18;
-  --gray-900: #0e1512;
-  --gray-950: #080d0b;
-
-  /* The brand. A deep sea-green, low-chroma on purpose: the near-black-plus-acid-green
-     palette is the default every developer tool arrives at, and this is not that. */
-  --pine-300: #6fcf9a;
-  --pine-400: #3fb27a;
-  --pine-500: #1e7f55;
-  --pine-600: #155f3f;
+  --gray-50: oklch(0.982 calc(0.006 * var(--palette-chroma)) var(--palette-hue));
+  --gray-100: oklch(0.963 calc(0.008 * var(--palette-chroma)) var(--palette-hue));
+  --gray-150: oklch(0.94 calc(0.01 * var(--palette-chroma)) var(--palette-hue));
+  --gray-200: oklch(0.911 calc(0.013 * var(--palette-chroma)) var(--palette-hue));
+  --gray-300: oklch(0.842 calc(0.018 * var(--palette-chroma)) var(--palette-hue));
+  --gray-400: oklch(0.687 calc(0.025 * var(--palette-chroma)) var(--palette-hue));
+  --gray-500: oklch(0.503 calc(0.026 * var(--palette-chroma)) var(--palette-hue));
+  --gray-700: oklch(0.297 calc(0.02 * var(--palette-chroma)) var(--palette-hue));
+  --gray-800: oklch(0.222 calc(0.017 * var(--palette-chroma)) var(--palette-hue));
+  --gray-850: oklch(0.176 calc(0.016 * var(--palette-chroma)) var(--palette-hue));
+  --gray-900: oklch(0.14 calc(0.014 * var(--palette-chroma)) var(--palette-hue));
+  --gray-950: oklch(0.098 calc(0.011 * var(--palette-chroma)) var(--palette-hue));
 
   /*
-   * `--green-*` backs `--ok`, and a green brand means two greens on screen. They are held
-   * about 45° of hue apart — grass here, sea green in `--pine-*` — so a done step and a
-   * running one in the same list do not read as the same colour at a glance.
+   * Status colours, shared by every palette.
    *
-   * Hue is all the separation there is: measured against each other the two greens are
-   * 1.11:1 in light and 1.32:1 in dark, so anyone with a green deficiency sees one colour.
-   * That is survivable only because nothing encodes state in these two alone — see the
-   * note in `_semantic.scss` — and it is the reason to keep it that way.
+   * They are not palette-scoped because they do not mean "this app's colour", they mean
+   * "this thing is fine / needs attention / will destroy something". A red that shifted with
+   * the theme would be a red that means less.
    *
-   * Pulling this ramp yellower is what created the gap; it also happened to raise `--ok`
-   * against the light background from 3.84:1 to 4.27:1, which is the direction that number
-   * needed to move anyway.
+   * A palette whose brand lands on top of one of these may override it — see the `status`
+   * key in `_palettes.scss`. Pine does, because a green brand beside a green `--ok` is the
+   * one collision the default palette actually has.
+   *
+   * The `400`/`500` split is by mode, not by intensity: dark themes take the 400s and light
+   * themes the 500s, because a colour that reads on near-black is not the one that reads on
+   * near-white.
+   *
+   * # Three of the light values were failing, and had been all along
+   *
+   * Measured against `--bg` across all six palettes: amber 3.18:1, blue 2.54:1, green
+   * 3.73:1 — all under 4.5, all carrying small text (`● modified`, `↑2↓1`, `clean`). None of
+   * that was introduced by palettes; it had simply never been measured, and adding six
+   * backgrounds was the thing that made measuring it worth automating. They are now 4.79,
+   * 5.09 and 4.64. Blue got a 500 of its own in the process, which every other status
+   * already had.
+   *
+   * Amber also backs `--star` and the `-soft`/`-line`/`-mark` tints, so a filled star and a
+   * warning banner both got slightly deeper. That is a side effect, not the goal: if amber
+   * moves again, look at a filled star before deciding.
    */
-  --green-400: #6fcb63;
-  --green-500: #41862f;
+  --green-400: #5cb860;
+  --green-500: #368036;
   --amber-400: #dfa53a;
-  --amber-500: #c07f00;
+  --amber-500: #96650a;
   --red-400: #e06c6d;
   --red-500: #c8393a;
   --blue-400: #6ba3d6;
+  --blue-500: #2f6ea8;
 
   /*
    * Append-only past the existing entries, never insert or reorder. macOS WebKit

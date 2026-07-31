@@ -17,24 +17,27 @@
  * `--danger-soft`, and the alternative — reaching for a raw percentage in a shared partial —
  * is the thing the layer-1 rule above exists to prevent.
  *
- * # `--accent` and `--ok` are both green, and that is fine
+ * # When `--accent` collides with a status role
  *
  * Same argument as `--star` against `--warn` below: two roles may share a hue family and
- * still have to be able to move independently. `--accent` means brand and interactive;
- * `--ok` means a clean tree, or N files staged. Layer 1 holds them about 45° apart so they
- * do not read as one colour.
+ * still have to move independently. `--accent` means brand and interactive; the status roles
+ * mean a clean tree, a warning, something that will destroy data. Since the accent is now
+ * whichever of six palettes the user picked, some collision is unavoidable — Pine's green
+ * sits near `--ok`, Harbor's blue near `--info`, Rose's magenta near `--danger`.
  *
- * The only place they land side by side is the setup step list, where a done step is `--ok`
- * and the running one is `--accent`. That list does not rely on colour: the marks are
- * different glyphs — `check` against `chevron-right` — and the active row also carries
- * `--fg` and a heavier weight on its label. Shape is doing the work, which matters more
- * than the hue gap does, because the two greens are nearly identical in luminance and a
- * red-green deficiency collapses them into one. The sidebar never puts them together at
- * all: its flag row is warn, info, danger and subtle, and `--ok` only appears in the
- * detail facts.
+ * A palette may push the offending status primitive out of its way, and Pine and Harbor do.
+ * But hue separation is the weaker half of the defence, because two colours 45° apart can be
+ * near-identical in luminance — Pine's accent and `--ok` measure 1.11:1 against each other,
+ * which is one colour to anyone with a red-green deficiency.
  *
- * So the rule this pairing depends on: `--ok` and `--accent` may sit near each other, but
- * neither may ever be the only thing distinguishing two states.
+ * The half that actually holds is that **nothing in this app encodes state in colour alone.**
+ * The setup step list is the only place an accent and a status colour land side by side, and
+ * it distinguishes done from running by glyph — `check` against `chevron-right` — plus `--fg`
+ * and a heavier weight on the active label. The sidebar never pairs them at all.
+ *
+ * So: a palette may put its accent next to a status role, but neither may ever be the only
+ * thing telling two states apart. Adding a palette does not change that rule; adding a
+ * component that breaks it would.
  */
 
 :root[data-theme='light'] {
@@ -59,16 +62,16 @@
 
   --border: var(--gray-200);
   --border-strong: var(--gray-300);
-  --border-focus: var(--pine-500);
+  --border-focus: var(--brand-500);
 
-  --accent: var(--pine-500);
-  --accent-hover: var(--pine-600);
-  --accent-soft: color-mix(in oklab, var(--pine-500) 12%, transparent);
+  --accent: var(--brand-500);
+  --accent-hover: var(--brand-600);
+  --accent-soft: color-mix(in oklab, var(--brand-500) 12%, transparent);
 
   --ok: var(--green-500);
   --warn: var(--amber-500);
   --danger: var(--red-500);
-  --info: var(--blue-400);
+  --info: var(--blue-500);
   /* A filled favorite star. Its own role rather than a reuse of `--warn`: a star is not a
      warning, and the day one of them is retuned the other must not move with it. */
   --star: var(--amber-500);
@@ -78,8 +81,8 @@
   --danger-line: color-mix(in oklab, var(--red-500) 40%, transparent);
   --warn-soft: color-mix(in oklab, var(--amber-500) 10%, transparent);
   --warn-line: color-mix(in oklab, var(--amber-500) 34%, transparent);
-  --info-soft: color-mix(in oklab, var(--blue-400) 8%, transparent);
-  --info-line: color-mix(in oklab, var(--blue-400) 35%, transparent);
+  --info-soft: color-mix(in oklab, var(--blue-500) 8%, transparent);
+  --info-line: color-mix(in oklab, var(--blue-500) 35%, transparent);
   /* Its own role rather than `--warn-soft`: this one sits behind text rather than filling a
      panel, and needs more presence to read as a highlight at all. Same argument as `--star`. */
   --warn-mark: color-mix(in oklab, var(--amber-500) 16%, transparent);
@@ -118,11 +121,11 @@
 
   --border: var(--gray-800);
   --border-strong: var(--gray-700);
-  --border-focus: var(--pine-400);
+  --border-focus: var(--brand-400);
 
-  --accent: var(--pine-400);
-  --accent-hover: var(--pine-300);
-  --accent-soft: color-mix(in oklab, var(--pine-400) 18%, transparent);
+  --accent: var(--brand-400);
+  --accent-hover: var(--brand-300);
+  --accent-soft: color-mix(in oklab, var(--brand-400) 18%, transparent);
 
   --ok: var(--green-400);
   --warn: var(--amber-400);

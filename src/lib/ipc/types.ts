@@ -260,6 +260,27 @@ export interface Doctor {
   tools: Tool[];
 }
 
+/**
+ * A palette declared in `[ui.palettes]`.
+ *
+ * Only ever the user's own. The six built-ins live in the stylesheet as CSS custom
+ * properties and never cross this boundary — see `PALETTES` in `state/theme.svelte.ts`
+ * for the list the picker shows alongside these.
+ *
+ * `error` non-null means the declaration is unusable and `brand` is empty. Settings shows
+ * it disabled with the reason attached rather than hiding it, so an entry that is in the
+ * config file but not in the picker is never a silent mystery.
+ */
+export interface Palette {
+  id: string;
+  name: string;
+  hue: number;
+  chroma: number;
+  /** The accent ramp at 300, 400, 500, 600. Empty when `error` is set. */
+  brand: string[];
+  error: string | null;
+}
+
 /** The error shape every command rejects with. */
 export interface WtmError {
   kind: string;

@@ -59,7 +59,8 @@ project's convention. With the variable unset the tests skip.
 [Install](#install) · [Updating](#updating-an-install-you-already-have) ·
 [Prerequisites](#prerequisites) · [Setup](#setup) ·
 [First run](#first-run) · [Registering a project](#registering-a-project) ·
-[Writing wtm.toml](#writing-wtmtoml) · [Open in …](#open-in-) · [Dev workflow](#dev-workflow) ·
+[Writing wtm.toml](#writing-wtmtoml) · [Open in …](#open-in-) · [Settings](#settings) ·
+[Dev workflow](#dev-workflow) ·
 [Build & install](#build--install) · [Troubleshooting](#troubleshooting) ·
 [Logs](#logs) · [Dependencies](#dependencies) · [Architecture](#architecture)
 
@@ -347,6 +348,53 @@ Two things worth knowing:
   still the place for a per-project button. The catalogue is compiled in, so adding a tool
   is currently a one-entry code change in `src-tauri/src/openers.rs` rather than something
   you can do from a config file.
+
+## Settings
+
+**⌘, on macOS, or the sliders button in the title bar.** Linux has no application menu, so
+there the button and `Ctrl+,` are the way in. Everything applies as you change it; there is
+no OK button.
+
+Three sections, all of them backed by keys that already existed in
+`~/.config/wtm/config.toml` and were previously reachable only by editing that file:
+
+| Section | What is in it |
+| --- | --- |
+| Appearance | Colour palette, and light / dark / follow-the-system |
+| General | Which tool **Open in …** defaults to |
+| Advanced | The `PATH` override, plus read-only diagnostics — the PATH wtm actually resolved, where it came from, and which of the common tools it can find |
+
+Advanced is where to look first when a project's commands work in your terminal and not in
+wtm. See [the PATH problem](#the-path-problem).
+
+### Palettes
+
+Six ship with the app: **Pine** (the default), **Clay** (the terracotta wtm wore before
+v0.4), **Slate** (near-neutral, for no colour at all), **Harbor**, **Plum** and **Rose**.
+Each works in both light and dark.
+
+If none of them suit, declare your own. It appears in the picker beside the built-in six:
+
+```toml
+[ui.palettes.nord]
+name   = "Nord"          # optional; the table key is used when absent
+hue    = 250             # oklch hue angle, 0–360
+chroma = 0.9             # how strongly the greys are tinted. 1 is the reference, 0 is flat
+brand  = ["#88c0d0", "#81a1c1", "#5e81ac", "#4c688f"]
+```
+
+`hue` and `chroma` are all the neutral ramp needs — every surface, border and text colour in
+the app is derived from them in oklch, at lightness values fixed by the stylesheet. That is
+what keeps a hand-written palette as readable as the built-in ones: you choose the hue, and
+the contrast ratios are not yours to get wrong.
+
+`brand` is the accent, from lightest to darkest. **Dark mode uses the first two and light
+mode the last two**, so pick the first pair to read against near-black and the last pair
+against near-white — not to look good as a row of four.
+
+A palette that cannot be used is still listed, greyed out, with the reason on hover. Bad hex,
+a hue outside 0–360, or anything other than exactly four `#rrggbb` colours will do it. The
+rest of your config still loads.
 
 ## Dev workflow
 

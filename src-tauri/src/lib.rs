@@ -46,6 +46,83 @@ fn platform_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+/// The event the Settings menu item fires. `App.svelte` listens for it.
+///
+/// A menu accelerator is handled by `AppKit` and never reaches the webview, so a keydown
+/// handler in the frontend cannot see ⌘, at all. This is the same Rust-to-webview route
+/// [`pty_bridge`] already uses.
+pub const SETTINGS_EVENT: &str = "wtm:settings";
+
+/// The application menu.
+///
+/// # This exists to add one item, and most of it is not that item
+///
+/// Until now the app never called `set_menu`, so Tauri installed its default. Setting one
+/// replaces that default **wholesale** — every submenu, including Edit. An app that builds
+/// only an app menu therefore loses cut, copy, paste and select-all everywhere: in the Add a
+/// repository field, in the New Worktree form, and in the live terminal, where copying a
+/// stack trace out of a failed setup run is much of the point of the pane.
+///
+/// So Edit and Window are rebuilt here explicitly. They are not decoration and they are not
+/// optional; deleting either is the bug this comment exists to prevent.
+///
+/// # No `#[cfg]`, per `tests/platform_seams.rs`
+///
+/// Every item here compiles on both platforms — the four macOS-specific ones (`services`,
+/// `hide`, `hide_others`, `show_all`) are documented as unsupported rather than gated, so
+/// they no-op elsewhere. What is genuinely macOS-only is *installing* the result, because
+/// GTK renders a menu as a bar inside the window and the Linux build deliberately has none.
+/// That decision is a runtime check in [`run`], which keeps this function under test on
+/// either runner.
+fn build_menu<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+
+    // `Settings…` with an ellipsis, and `CmdOrCtrl+,` because that is the platform
+    // convention. A preferences item anywhere else, or bound to anything else, is one
+    // people fail to find.
+    let settings = MenuItemBuilder::new("Settings…")
+        .id(SETTINGS_EVENT)
+        .accelerator("CmdOrCtrl+,")
+        .build(handle)?;
+
+    let app_menu = SubmenuBuilder::new(handle, "Worktree Manager")
+        .about(Some(AboutMetadata::default()))
+        .separator()
+        .item(&settings)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    // Load-bearing. See the header.
+    let edit_menu = SubmenuBuilder::new(handle, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(handle, "Window")
+        .minimize()
+        .separator()
+        .close_window()
+        .build()?;
+
+    MenuBuilder::new(handle)
+        .items(&[&app_menu, &edit_menu, &window_menu])
+        .build()
+}
+
 /// Start the application.
 ///
 /// # Panics
@@ -64,6 +141,28 @@ pub fn run() {
         // Unlike `platform_plugin` above, this one declares commands, so it *does* need an
         // entry in `capabilities/default.json` — `dialog:allow-open`, and nothing else.
         .plugin(tauri_plugin_dialog::init())
+        .setup(|handle| {
+            // A runtime check rather than `#[cfg]`, the same way `platform_plugin` reads
+            // `std::env::consts::OS`: both arms compile, so `build_menu` stays under test on
+            // a Linux runner. See `tests/platform_seams.rs` for why that is a rule here.
+            //
+            // Only the *install* is conditional. On GTK a menu becomes a bar inside the
+            // window, and this app's Linux build is an ordinary decorated window with none —
+            // there the title bar's gear and Ctrl-, are the whole story.
+            if std::env::consts::OS == "macos" {
+                handle.set_menu(build_menu(handle.handle())?)?;
+            }
+            Ok(())
+        })
+        .on_menu_event(|handle, event| {
+            use tauri::Emitter;
+
+            if event.id() == SETTINGS_EVENT {
+                // A failed emit means the webview is gone, which is not something a menu
+                // handler can do anything about.
+                let _ = handle.emit(SETTINGS_EVENT, ());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_projects,
             commands::register_project,
@@ -77,6 +176,7 @@ pub fn run() {
             commands::get_pref,
             commands::set_pref,
             commands::doctor,
+            commands::list_palettes,
             commands::reveal_env_value,
             commands::preview_worktree,
             commands::create_worktree,
