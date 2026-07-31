@@ -37,6 +37,28 @@ pub struct ProjectView {
     pub trust: Option<TrustPromptView>,
 }
 
+/// The new project list, plus which entry the operation actually landed on.
+///
+/// The id is here because **the frontend cannot compute it**. Registration accepts any path
+/// inside a repository and resolves it to the toplevel, so what the user typed and what got
+/// registered are routinely different strings: `~/Sites/foo` becomes `/home/you/Sites/foo`,
+/// and a subdirectory becomes its repo root. Only git knows which repository a path lands in.
+///
+/// Returning just the list forced the caller to guess by matching the typed path against every
+/// root, which failed silently for every tilde path — that is, for the exact form the Add
+/// dialog's own placeholder suggests — and could match the wrong project outright, since a
+/// prefix test without a separator boundary lets `/x/foo/src` match a project at `/x/f`.
+///
+/// Unregistering returns the same shape for the same reason: it also accepts any path inside
+/// the repository, so the argument is not necessarily the id of what was removed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredView {
+    /// The affected project's id — its resolved absolute root.
+    pub id: String,
+    pub projects: Vec<ProjectView>,
+}
+
 /// Everything the trust prompt needs to let a person make an informed decision.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
