@@ -30,6 +30,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # The only crate that knows Tauri exists. Everything below it is framework-free.
 tauri      = { version = "2", features = ["macos-private-api"] }
+# The native folder picker behind "Browse…" in Add a repository. The one capability this app
+# grants beyond its own commands: it returns a path the user chose by hand, and nothing else —
+# no directory listing, no read. That path is then validated by the same `git rev-parse` a
+# typed one goes through, so the picker is a convenience over the text field, not a way around it.
+tauri-plugin-dialog = "2"
 wtm-core   = { workspace = true }
 wtm-config = { workspace = true }
 wtm-exec   = { workspace = true }

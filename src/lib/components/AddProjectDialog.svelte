@@ -7,12 +7,22 @@
    * all. `window.alert` and `window.confirm` are the same story. Nothing in this app may rely
    * on them.
    *
-   * The path is typed rather than picked from a native dialog: the file-dialog plugin is
-   * another dependency and another capability to grant, and a developer already knows the path
-   * they want. Registration resolves whatever is typed to the repository root, so pasting a
-   * subdirectory works.
+   * Both a text field and a Browse… button, deliberately.
+   *
+   * This used to be typed-only, on the grounds that the dialog plugin is another dependency and
+   * another capability and a developer already knows their own paths. That was wrong about who
+   * uses it: knowing the path and having it *on the clipboard* are different things, and typing
+   * one out is the slowest way to do this. So the picker is here now, and `dialog:allow-open` is
+   * the one capability this app grants beyond its own commands — it returns a single
+   * user-chosen path and nothing else. The reasoning that survives is the other half: the field
+   * stays, because pasting a path you already have beats hunting for it in a file browser.
+   *
+   * Picking does not submit. Registration resolves whatever it is given to the repository root,
+   * so choosing a subdirectory registers somewhere other than what you clicked — showing the
+   * path first is the difference between that being a feature and being a surprise.
    */
-  import { commands } from '../ipc/commands';
+  import { open } from '@tauri-apps/plugin-dialog';
+
   import { errorMessage } from '../ipc/types';
   import { workspace } from '../state/workspace.svelte';
 
@@ -26,6 +36,25 @@
   $effect(() => {
     input?.focus();
   });
+
+  async function browse() {
+    error = null;
+    try {
+      const picked = await open({
+        directory: true,
+        multiple: false,
+        title: 'Choose a git repository',
+      });
+      // `null` is a cancelled dialog, which is not a failure and must not say anything.
+      if (typeof picked === 'string') path = picked;
+    } catch (e) {
+      // Surfaced rather than swallowed: the only realistic cause is a missing capability, and
+      // a Browse button that silently does nothing is the bug this file's header opens with.
+      error = errorMessage(e);
+    } finally {
+      input?.focus();
+    }
+  }
 
   async function submit(event?: Event) {
     event?.preventDefault();
@@ -68,16 +97,21 @@
 
     <div class="body">
       <label for="repo-path">Path to a git repository</label>
-      <input
-        id="repo-path"
-        bind:this={input}
-        bind:value={path}
-        type="text"
-        placeholder="~/Sites/your-repo"
-        autocapitalize="off"
-        autocorrect="off"
-        spellcheck="false"
-      />
+      <div class="pathrow">
+        <input
+          id="repo-path"
+          bind:this={input}
+          bind:value={path}
+          type="text"
+          placeholder="~/Sites/your-repo"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+        />
+        <button type="button" class="browse" onclick={browse} disabled={busy}
+          >Browse…</button
+        >
+      </div>
       <p class="help">
         Any path inside the repository works — wtm resolves it to the root. Nothing is
         written to the repository itself.
@@ -153,6 +187,13 @@
     font-weight: 500;
   }
 
+  /* The field takes the space; the button stays exactly as wide as its label. */
+  .pathrow {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--sp-2);
+  }
+
   input {
     width: 100%;
     padding: 7px 9px;
@@ -165,6 +206,25 @@
 
   input:focus {
     border-color: var(--border-focus);
+  }
+
+  .browse {
+    padding: 7px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    color: var(--fg);
+    font-size: var(--step--1);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .browse:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+
+  .browse:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .help {
