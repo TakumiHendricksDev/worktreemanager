@@ -390,6 +390,36 @@ can't express this, which is why `etcetera` is the dependency.
 a fan. v1 refreshes on demand and on window focus. A narrow `notify` watcher on `.git/worktrees` is a v2
 option; a naive watcher over a Docker-backed worktree tree would generate thousands of events.
 
+## 8a. CSS: SCSS, ITCSS layers, BEMIT names
+
+**All styles are global, in `src/styles/`. No component has a `<style>` block.** `src/main.ts` imports
+one file, `styles/main.scss`, whose `@use` order is the architecture rather than a list: ITCSS layers
+arranged so specificity and reach climb monotonically — settings, generic, elements, objects,
+components, utilities. What that buys is the absence of specificity fights. A later layer always beats
+an earlier one with a plain single-class selector, so nothing needs `!important` or a three-deep
+selector to win, and reaching for either is the signal that a rule is in the wrong layer.
+
+**Tokens stay CSS custom properties and are never Sass variables.** A Sass variable resolves at build
+time, which would turn theming from "swap an attribute on `<html>`" into "recompile" — and `index.html`
+sets `data-theme` before first paint precisely so there is no flash. Sass is here for structure:
+nesting, partials, mixins. Not for values.
+
+**`t-` and `s-` are rejected**, and the reason generalises. BEMIT's theme prefix would be a second,
+competing mechanism for a fact that already has one in `:root[data-theme]`; the same for platform and
+`data-platform`. `s-` exists for markup you did not author, and this app renders none — xterm's
+stylesheet is self-scoped under `.xterm`. `js-` is rejected too, with a rule attached: **if you must
+select from script, target an ARIA or `data-*` attribute, never a class**, so a CSS rename cannot break
+behaviour. The one place the app does this targets `[aria-selected="true"]`.
+
+**Counterweight, acknowledged.** Going global gives up Svelte's `css_unused_selector` warning, which
+was the only automated CSS feedback this repository had — there is no stylelint and no JS test runner.
+Two things partly offset it: Sass is a real compiler, so a bad `@use`, mixin or nesting is now a *build*
+failure where a typo'd selector inside a `<style>` block used to be silently valid CSS; and the UI
+components express their class contracts as **typed props** (`variant: 'accent' | …`, `name: IconName`),
+which is now the only mechanism that catches a wrong class name before a human does. What is not
+offset: dead CSS will accumulate and nothing will notice. That is an accepted, unbudgeted cost of the
+decision, and it belongs written down rather than discovered in eighteen months.
+
 ---
 
 ## 9. Deliberately not doing

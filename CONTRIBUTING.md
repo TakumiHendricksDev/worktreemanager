@@ -78,6 +78,32 @@ reason written next to it*.
 meant to work for any repository, and its source should not know about any particular one.
 Use a neutral placeholder in fixtures and docs.
 
+## The CSS rules, which are reviewed rather than enforced
+
+Every rule above names the test that enforces it. These have no test, and saying so is more
+useful than implying a gate that does not exist — there is no stylelint here, and since the
+stylesheet went global there are no unused-selector warnings either. They are review items.
+
+- **No `<style>` block in a component.** All styles are global, in `src/styles/`.
+- **Class names are BEMIT**: `.o-` object, `.c-` component, `.u-` utility, `.is-`/`.has-` for
+  runtime state — and a state class is always chained (`.c-tab.is-selected`), never styled
+  alone.
+- **No naked element selector outside `elements/`.** Inside `components/` and `objects/` an
+  element may only appear as a descendant of a block class. `h2` meant two different things in
+  five files before this rule; scoping hid it, and going global would not have.
+- **No selector over two compound parts, and no `&`-nesting deeper than one level.**
+- **No `@extend`** — it hoists selectors to the extended rule's position and silently destroys
+  the layer order. Use a mixin.
+- **No `!important` outside `utilities/`**, with two documented exceptions carrying their
+  reasons: the reduced-motion block and the progress bar's indeterminate width.
+- **No literal colour and no layer-1 primitive in a component.** `--danger`, not `--red-500`,
+  and not `#c8393a`. If you need a tinted surface, there is a `-soft`/`-line` role for it —
+  reaching for a raw `color-mix()` percentage is how eight different percentages accumulated
+  across five files before.
+
+`src/styles/main.scss` states the layer order and what breaks if you reorder it. Read that
+header before adding a file to it.
+
 ## Architecture, in one paragraph
 
 `wtm-core` is the domain: models, ports, use-cases, and no I/O. Everything that touches the
