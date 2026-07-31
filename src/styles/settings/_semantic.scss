@@ -16,6 +16,25 @@
  * So they are roles now. A component that wants a tinted danger surface asks for
  * `--danger-soft`, and the alternative — reaching for a raw percentage in a shared partial —
  * is the thing the layer-1 rule above exists to prevent.
+ *
+ * # `--accent` and `--ok` are both green, and that is fine
+ *
+ * Same argument as `--star` against `--warn` below: two roles may share a hue family and
+ * still have to be able to move independently. `--accent` means brand and interactive;
+ * `--ok` means a clean tree, or N files staged. Layer 1 holds them about 45° apart so they
+ * do not read as one colour.
+ *
+ * The only place they land side by side is the setup step list, where a done step is `--ok`
+ * and the running one is `--accent`. That list does not rely on colour: the marks are
+ * different glyphs — `check` against `chevron-right` — and the active row also carries
+ * `--fg` and a heavier weight on its label. Shape is doing the work, which matters more
+ * than the hue gap does, because the two greens are nearly identical in luminance and a
+ * red-green deficiency collapses them into one. The sidebar never puts them together at
+ * all: its flag row is warn, info, danger and subtle, and `--ok` only appears in the
+ * detail facts.
+ *
+ * So the rule this pairing depends on: `--ok` and `--accent` may sit near each other, but
+ * neither may ever be the only thing distinguishing two states.
  */
 
 :root[data-theme='light'] {
@@ -40,11 +59,11 @@
 
   --border: var(--gray-200);
   --border-strong: var(--gray-300);
-  --border-focus: var(--clay-500);
+  --border-focus: var(--pine-500);
 
-  --accent: var(--clay-500);
-  --accent-hover: var(--clay-600);
-  --accent-soft: color-mix(in oklab, var(--clay-500) 12%, transparent);
+  --accent: var(--pine-500);
+  --accent-hover: var(--pine-600);
+  --accent-soft: color-mix(in oklab, var(--pine-500) 12%, transparent);
 
   --ok: var(--green-500);
   --warn: var(--amber-500);
@@ -85,15 +104,25 @@
   --fg: var(--gray-100);
   --fg-muted: var(--gray-400);
   --fg-subtle: var(--gray-500);
-  --fg-on-accent: var(--gray-0);
+  /*
+   * Near-black, where light mode uses white — because in dark mode every fill this sits on
+   * is a light one. All three users are button faces: the accent button, the solid danger
+   * button, and danger-outline on hover.
+   *
+   * White on the dark accent measured 2.67:1 and on solid danger 3.21:1; both fail, and the
+   * first was already failing at 3.12:1 before the brand changed. Inverting the label takes
+   * them to 7.33:1 and 6.10:1. A pale button with dark text is a deliberate look, not an
+   * oversight — if a dark fill ever needs this role, it needs a role of its own instead.
+   */
+  --fg-on-accent: var(--gray-950);
 
   --border: var(--gray-800);
   --border-strong: var(--gray-700);
-  --border-focus: var(--clay-400);
+  --border-focus: var(--pine-400);
 
-  --accent: var(--clay-400);
-  --accent-hover: var(--clay-300);
-  --accent-soft: color-mix(in oklab, var(--clay-400) 18%, transparent);
+  --accent: var(--pine-400);
+  --accent-hover: var(--pine-300);
+  --accent-soft: color-mix(in oklab, var(--pine-400) 18%, transparent);
 
   --ok: var(--green-400);
   --warn: var(--amber-400);

@@ -7,9 +7,12 @@
  *   Never a layer-1 primitive. Never a literal colour.
  *
  * That single rule is what makes light/dark a data change rather than a code change:
- * adding a theme means adding one block in `_tokens.semantic.scss`, not touching any
- * component. It is also what keeps the two modes from drifting — there is no component
- * holding a hard-coded grey that only looks right in one of them.
+ * adding a theme means adding one block in `_semantic.scss`, not touching any component.
+ * It is also what keeps the two modes from drifting — there is no component holding a
+ * hard-coded grey that only looks right in one of them.
+ *
+ * It is also what made the rebrand off Claude's orange a two-file edit. The ramps below
+ * were swapped wholesale and not one component partial had to change.
  *
  * These are CSS custom properties and must stay that way. A Sass variable is resolved at
  * build time, which would move theming from "swap an attribute on <html>" to "recompile",
@@ -20,28 +23,57 @@
  */
 
 :root {
+  /*
+   * Still called grey because that is the job it does — the neutral ramp every surface,
+   * border and text colour is drawn from — but every step is tinted toward the brand hue
+   * rather than being achromatic.
+   *
+   * That tint is the identity, not a garnish. The accent lands on about five elements in
+   * any given view, so an app that is green only where the accent falls is an app that
+   * reads grey. Tinting the ramp is what makes it read green with nothing highlighted at
+   * all, and the amount is deliberately small: enough to see beside true grey, not enough
+   * to notice on its own.
+   *
+   * Lightness per step is carried over from the warm-stone ramp this replaced, so the
+   * light/dark contrast ratios the semantic layer depends on did not move when the hue did.
+   */
   --gray-0: #ffffff;
-  --gray-50: #fafaf9;
-  --gray-100: #f5f4f2;
-  --gray-150: #eeece8;
-  --gray-200: #e5e2dd;
-  --gray-300: #d3cfc8;
-  --gray-400: #a8a29a;
-  --gray-500: #78716a;
-  --gray-600: #57534e;
-  --gray-700: #3d3a37;
-  --gray-800: #282624;
-  --gray-850: #1f1e1c;
-  --gray-900: #171614;
-  --gray-950: #0f0e0d;
+  --gray-50: #f7faf8;
+  --gray-100: #f0f5f2;
+  --gray-150: #e8eeea;
+  --gray-200: #dde6e0;
+  --gray-300: #c6d3cb;
+  --gray-400: #93a79b;
+  --gray-500: #5f7268;
+  --gray-700: #2a3831;
+  --gray-800: #1c2621;
+  --gray-850: #141c18;
+  --gray-900: #0e1512;
+  --gray-950: #080d0b;
 
-  --clay-300: #e8a288;
-  --clay-400: #d97757;
-  --clay-500: #c96442;
-  --clay-600: #a94f31;
+  /* The brand. A deep sea-green, low-chroma on purpose: the near-black-plus-acid-green
+     palette is the default every developer tool arrives at, and this is not that. */
+  --pine-300: #6fcf9a;
+  --pine-400: #3fb27a;
+  --pine-500: #1e7f55;
+  --pine-600: #155f3f;
 
-  --green-400: #5cb860;
-  --green-500: #3f9142;
+  /*
+   * `--green-*` backs `--ok`, and a green brand means two greens on screen. They are held
+   * about 45° of hue apart — grass here, sea green in `--pine-*` — so a done step and a
+   * running one in the same list do not read as the same colour at a glance.
+   *
+   * Hue is all the separation there is: measured against each other the two greens are
+   * 1.11:1 in light and 1.32:1 in dark, so anyone with a green deficiency sees one colour.
+   * That is survivable only because nothing encodes state in these two alone — see the
+   * note in `_semantic.scss` — and it is the reason to keep it that way.
+   *
+   * Pulling this ramp yellower is what created the gap; it also happened to raise `--ok`
+   * against the light background from 3.84:1 to 4.27:1, which is the direction that number
+   * needed to move anyway.
+   */
+  --green-400: #6fcb63;
+  --green-500: #41862f;
   --amber-400: #dfa53a;
   --amber-500: #c07f00;
   --red-400: #e06c6d;

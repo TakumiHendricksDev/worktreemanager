@@ -1,3 +1,5 @@
+<img src="assets/brand/wtm-icon.svg" alt="" width="72">
+
 # wtm — Worktree Manager
 
 A desktop app for managing git worktrees across projects — macOS and Linux. Worktrees are tabs down the left, details and a
@@ -355,6 +357,7 @@ just fmt        # format Rust + web
 just check      # everything CI runs — do this before pushing
 just audit      # licenses + RUSTSEC advisories
 just doctor     # what's installed, and the PATH the app will actually use
+just icon       # redraw src-tauri/icons from assets/brand/wtm-icon.svg
 ```
 
 Commits are signed through the 1Password SSH agent (`commit.gpgsign=true` globally), so 1Password must

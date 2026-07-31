@@ -58,15 +58,23 @@
   let term: Terminal | null = null;
   let ready = $state(false);
 
-  /** Read the app's own tokens so the terminal matches the window rather than fighting it. */
+  /**
+   * Read the app's own tokens so the terminal matches the window rather than fighting it.
+   *
+   * The fallbacks are the only colour literals outside `src/styles/settings`, and they are
+   * dark-theme values — a light-mode window whose computed read came back empty would get a
+   * dark terminal. That is the right trade: the read has never failed, and a terminal is the
+   * one surface where dark is a defensible default. They do have to be updated by hand when
+   * the primitives move, which is the cost of having them at all.
+   */
   function paletteFrom(root: HTMLElement) {
     const read = (name: string, fallback: string) =>
       getComputedStyle(root).getPropertyValue(name).trim() || fallback;
     return {
-      background: read('--bg-code', '#171614'),
-      foreground: read('--fg', '#f5f4f2'),
-      cursor: read('--accent', '#d97757'),
-      selectionBackground: read('--bg-active', '#3d3a37'),
+      background: read('--bg-code', '#080d0b'),
+      foreground: read('--fg', '#f0f5f2'),
+      cursor: read('--accent', '#3fb27a'),
+      selectionBackground: read('--bg-active', '#2a3831'),
     };
   }
 

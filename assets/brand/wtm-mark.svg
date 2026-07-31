@@ -1,0 +1,44 @@
+<!--
+  The wtm mark: a fir built from the box-drawing elbows `tree` prints.
+
+  The spine is the trunk, which is also `main`; the boughs are the worktrees hanging off it.
+  Square caps and mitred joins, one uniform stroke — the geometry of a monospace box glyph
+  rather than of a drawn tree. Closing each bough into a `┌──┐` is what resolves a stack of
+  bars into a silhouette.
+
+  Monochrome and `currentColor` on purpose: this is the file to reach for when the mark has
+  to sit on an arbitrary surface. `wtm-icon.svg` is the app-icon lockup and owns its colours.
+
+  Geometry is on a 64 grid and every coordinate is a whole number, so the mark lands on
+  pixel boundaries at 16, 32 and 64. Redraw rather than nudge — the whole point of the
+  square caps is that nothing here is optically corrected.
+
+  Three numbers were tuned against a rendered 1024 icon rather than guessed, and all three
+  went the same way:
+
+    - Bough tips drop 3 units, not 5. At 5 the legs stopped reading as the terminal serif
+      on a box character and started reading as the crossarms of a transmission pylon.
+    - The trunk is 8 wide, not 10. At 10 it was the heaviest mass in a mark whose subject
+      is branches.
+    - The trunk starts at y 45, inside the lowest bough. A square cap extends by half the
+      stroke, so the step from the 5-wide spine to the 8-wide trunk happens under the bar
+      and the shoulder never shows. Move either and the notch comes back.
+
+  Boughs widen 16 → 28 → 40 on an even 12, spaced an even 12 apart. The regularity is the
+  reason it reads as one object rather than three bars and a stick.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 64 64"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="5"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
+>
+  <path d="M32 9 V44" />
+  <path d="M24 21 V18 H40 V21" />
+  <path d="M18 33 V30 H46 V33" />
+  <path d="M12 45 V42 H52 V45" />
+  <path d="M32 45 V53" stroke-width="8" />
+</svg>

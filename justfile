@@ -189,6 +189,28 @@ install-app: build
 
 # ───────────────────────────── utilities ─────────────────────────────
 
+# Regenerate the app icons from the vector master. Run after editing
+# `assets/brand/wtm-icon.svg` and commit what it produces.
+#
+# This recipe exists because for a long time there was no master: the mark lived only in
+# the committed PNGs, its colour was pixels, and changing the brand meant editing bitmaps.
+# The CLI rasterises SVG directly, so nothing here needs a rasterizer installed.
+#
+# It also emits an .ico, Windows tiles, and Android and iOS trees. This app bundles app/dmg
+# on macOS and an AppImage on Linux and has no mobile target, so those are deleted rather
+# than committed. What survives is the four files `bundle.icon` names in tauri.conf.json,
+# plus `icon.png` and `icon-1024.png` as the rasters other tools ask for.
+#
+# The 1024 pass is separate, and second, because `--png` suppresses the default set.
+icon:
+    {{ pmx }} tauri icon assets/brand/wtm-icon.svg -o src-tauri/icons
+    {{ pmx }} tauri icon assets/brand/wtm-icon.svg -o src-tauri/icons --png 1024
+    mv src-tauri/icons/1024x1024.png src-tauri/icons/icon-1024.png
+    rm -rf src-tauri/icons/android src-tauri/icons/ios
+    rm -f src-tauri/icons/64x64.png src-tauri/icons/icon.ico \
+        src-tauri/icons/Square*Logo.png src-tauri/icons/StoreLogo.png
+    @just _ok "icons regenerated — check 'git status' actually sees them"
+
 # Tail the app's log. A bundled .app has no stderr, so this is where failures land.
 logs:
     tail -f "${XDG_CONFIG_HOME:-$HOME/.config}/wtm/wtm.log"

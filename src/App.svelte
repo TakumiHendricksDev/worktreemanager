@@ -19,6 +19,7 @@
   import Banner from './lib/components/ui/Banner.svelte';
   import Button from './lib/components/ui/Button.svelte';
   import Icon from './lib/components/ui/Icon.svelte';
+  import Logo from './lib/components/ui/Logo.svelte';
   import { commands } from './lib/ipc/commands';
   import { errorMessage } from './lib/ipc/types';
   import { theme } from './lib/state/theme.svelte';
@@ -197,6 +198,10 @@
         />
       {:else if workspace.projects.length === 0}
         <div class="c-placeholder">
+          <!-- The only screen with room to say what the app is, and the only one a first-run
+               user is guaranteed to see. Labelled rather than hidden: the heading beside it
+               says "No projects yet", which names the state, not the product. -->
+          <Logo size={44} label="Worktree Manager" />
           <h2 class="c-placeholder__title">No projects yet</h2>
           <p class="c-placeholder__prose">
             Add a git repository and its worktrees appear as tabs on the left. Any repo

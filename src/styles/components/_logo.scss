@@ -1,0 +1,18 @@
+/*
+ * The product mark.
+ *
+ * Same two declarations as `.c-icon`, for the same two reasons — an inline SVG sits on the
+ * text baseline and reserves descender space, and anything beside a label in a flex row is a
+ * shrink candidate. Not shared with `.c-icon` because the two are unrelated things that
+ * happen to agree today: the icon set is a documented grammar for UI affordances, this is one
+ * brand mark, and a rule that served both would be a rule neither could change.
+ *
+ * No colour, so the mark takes `currentColor` from its surroundings. On the first-run screen
+ * that is `--fg-muted` from `.c-placeholder`, which is the intent: the mark introduces the
+ * app, it does not compete with the one button on the screen.
+ */
+
+.c-logo {
+  display: block;
+  flex: 0 0 auto;
+}

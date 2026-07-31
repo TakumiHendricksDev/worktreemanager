@@ -1,0 +1,45 @@
+<!--
+  The app-icon lockup, and the source `just icon` rasterises. Everything under
+  `src-tauri/icons` is generated from this file; before it existed the PNGs were the only
+  copy of the mark and `#c96442` lived in them as pixels with nothing to regenerate from.
+
+  Colours are literals rather than tokens because this file is not part of the stylesheet —
+  it is handed to the Tauri CLI, which knows nothing about custom properties. `#1a7350` is
+  a shade deeper than the `pine-500` primitive: at Dock size a field carries more weight
+  than the same colour does behind text, and the lighter value looked washed out.
+
+  Keep double hyphens out of these comments. The CLI rasterises through resvg, whose XML
+  parser is strict where browsers are forgiving, and a token written the way the stylesheet
+  writes it takes `just icon` down with an unhelpful `InvalidComment` panic.
+
+  Still full-bleed, as the icon it replaces was. macOS since Big Sur wants the mark inset on
+  an 824/1024 grid with transparent margin so the Dock's own spacing reads correctly, and
+  this does not do that — deliberately, because adopting it would shrink the icon on screen
+  and that is an argument about icon geometry, not about the brand. Worth revisiting on its
+  own; changing it here would have buried it.
+
+  The mark is `wtm-mark.svg` at 69% height, optically centred. Its ink runs y 6.5 to 57 on
+  the 64 grid once square caps are counted, so its centre is 31.75 and not 32; centring on
+  the grid instead would sit the tree low in the field by a visible amount at Dock size.
+  The transform is `translate(64 67.5) scale(14)`, which is that offset and nothing more.
+
+  Keep the paths in step with `wtm-mark.svg` by hand. An SVG cannot import a path, and the
+  two files having drifted is the failure mode to watch for.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="229" fill="#1a7350" />
+  <g
+    transform="translate(64 67.5) scale(14)"
+    fill="none"
+    stroke="#f2f7f4"
+    stroke-width="5"
+    stroke-linecap="square"
+    stroke-linejoin="miter"
+  >
+    <path d="M32 9 V44" />
+    <path d="M24 21 V18 H40 V21" />
+    <path d="M18 33 V30 H46 V33" />
+    <path d="M12 45 V42 H52 V45" />
+    <path d="M32 45 V53" stroke-width="8" />
+  </g>
+</svg>
