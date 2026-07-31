@@ -1,0 +1,112 @@
+/*
+ * The window's own title bar: traffic-light gutter, project switcher, repository path, theme
+ * toggle.
+ *
+ * `select {}` used to be a bare element selector in this component, which Svelte scoping made
+ * safe and a global stylesheet would not have: it sets `opacity: 0`, so going global without
+ * renaming it would have made **every dropdown in the app invisible**. It is
+ * `o-overlay-select__native` now — the object shared with the split button's menu half.
+ */
+
+.c-titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--titlebar-h);
+  padding-right: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  /* The drag region must not select text as the user moves the window. */
+  user-select: none;
+  -webkit-user-select: none;
+  flex: 0 0 auto;
+}
+
+/*
+ * On macOS, space for the traffic lights — the arithmetic behind the 76px lives with the token
+ * in `settings/_platform.scss`. On Linux the window manager draws the controls on the right,
+ * outside the webview entirely, so this collapses to an ordinary leading inset that stays
+ * draggable.
+ */
+.c-titlebar__gutter {
+  width: var(--titlebar-lead);
+  height: 100%;
+  flex: 0 0 auto;
+}
+
+.c-titlebar__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.c-titlebar__picker {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+
+  &:hover .c-titlebar__project {
+    background: var(--bg-hover);
+    border-color: var(--border);
+  }
+
+  /* The select carries focus but cannot show a ring while it is invisible, so the label
+     wears it instead. */
+  &:focus-within .c-titlebar__project {
+    border-color: var(--border-focus);
+  }
+
+  &:has(select:disabled) .c-titlebar__project {
+    color: var(--fg-muted);
+  }
+
+  &:has(select:disabled):hover .c-titlebar__project {
+    background: transparent;
+    border-color: transparent;
+  }
+}
+
+/* Reads as a title-bar button: no field chrome until you interact with it. */
+.c-titlebar__project {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  max-width: 220px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  font-size: var(--step-0);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--fg-subtle);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+/* The name takes the colour; the chevron beside it keeps the container's subtler one. */
+.c-titlebar__name {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.c-titlebar__root {
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.c-titlebar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+}

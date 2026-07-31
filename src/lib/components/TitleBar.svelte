@@ -21,13 +21,16 @@
    */
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import Button from './ui/Button.svelte';
+  import Icon from './ui/Icon.svelte';
+  import type { IconName } from './ui/icons';
 
   const { onaddproject }: { onaddproject: () => void } = $props();
 
-  const icons: Record<ThemeChoice, string> = {
-    system: '◐',
-    light: '☀',
-    dark: '☾',
+  const themeIcons: Record<ThemeChoice, IconName> = {
+    system: 'theme-system',
+    light: 'theme-light',
+    dark: 'theme-dark',
   };
 
   const labels: Record<ThemeChoice, string> = {
@@ -48,18 +51,18 @@
   }
 </script>
 
-<header class="titlebar" data-tauri-drag-region>
+<header class="c-titlebar" data-tauri-drag-region>
   <!-- Reserves space for the macOS traffic lights; a plain inset on Linux, where the
        window manager draws the controls outside the webview. -->
-  <div class="gutter" data-tauri-drag-region></div>
+  <div class="c-titlebar__gutter" data-tauri-drag-region></div>
 
   <!--
     Drag region on the container, not just the text: the path may be short, and the empty
     space beside it still has to move the window. Tauri only starts a drag when the event's
     own target carries the attribute, so the select and its caret are unaffected.
   -->
-  <div class="identity" data-tauri-drag-region>
-    <div class="picker">
+  <div class="c-titlebar__identity" data-tauri-drag-region>
+    <div class="c-titlebar__picker o-overlay-select">
       <label class="u-visually-hidden" for="project-picker">Project</label>
       <!--
         The visible label is a span, and the real `<select>` is stretched invisibly over it.
@@ -70,12 +73,15 @@
         The span is `aria-hidden` because the select underneath is the real control and
         already carries this text; without it a screen reader reads the name twice.
       -->
-      <span class="label" aria-hidden="true">
-        <span class="name">{workspace.activeProject?.name ?? 'No projects yet'}</span>
-        <span class="caret">⌄</span>
+      <span class="c-titlebar__project" aria-hidden="true">
+        <span class="c-titlebar__name">
+          {workspace.activeProject?.name ?? 'No projects yet'}
+        </span>
+        <Icon name="chevron-down" size={12} />
       </span>
       <select
         id="project-picker"
+        class="o-overlay-select__native"
         value={workspace.activeProjectId ?? ''}
         onchange={onProjectChange}
         disabled={workspace.projects.length === 0}
@@ -97,161 +103,21 @@
         The repository root, for orientation. Not `title`d: it is already the full string,
         and a tooltip repeating what is on screen is noise.
       -->
-      <span class="root" data-tauri-drag-region>{workspace.activeProject.root}</span>
+      <span class="c-titlebar__root" data-tauri-drag-region>
+        {workspace.activeProject.root}
+      </span>
     {/if}
   </div>
 
-  <div class="actions">
-    <button
-      class="icon"
+  <div class="c-titlebar__actions">
+    <Button
+      variant="quiet"
+      icon="md"
       onclick={() => theme.cycle()}
       title={labels[theme.choice]}
-      aria-label={labels[theme.choice]}
+      ariaLabel={labels[theme.choice]}
     >
-      <span aria-hidden="true">{icons[theme.choice]}</span>
-    </button>
+      <Icon name={themeIcons[theme.choice]} />
+    </Button>
   </div>
 </header>
-
-<style>
-  .titlebar {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    height: var(--titlebar-h);
-    padding-right: var(--sp-2);
-    border-bottom: 1px solid var(--border);
-    /* The drag region must not select text as the user moves the window. */
-    user-select: none;
-    -webkit-user-select: none;
-    flex: 0 0 auto;
-  }
-
-  /*
-    On macOS, space for the traffic lights — the arithmetic behind the 76px lives with
-    the token in app.css. On Linux the window manager draws the controls on the right,
-    outside the webview entirely, so this collapses to an ordinary leading inset that
-    stays draggable.
-  */
-  .gutter {
-    width: var(--titlebar-lead);
-    height: 100%;
-    flex: 0 0 auto;
-  }
-
-  .identity {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    min-width: 0;
-    flex: 1 1 auto;
-  }
-
-  .picker {
-    position: relative;
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    min-width: 0;
-  }
-
-  /* Reads as a title-bar button: no field chrome until you interact with it. */
-  .label {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 24px;
-    max-width: 220px;
-    padding: 0 7px;
-    border: 1px solid transparent;
-    border-radius: var(--r-md);
-    font-size: var(--step-0);
-    font-weight: 600;
-    white-space: nowrap;
-    transition:
-      background var(--dur-fast) var(--ease),
-      border-color var(--dur-fast) var(--ease);
-  }
-
-  .name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .caret {
-    flex: 0 0 auto;
-    color: var(--fg-subtle);
-    font-size: var(--step--1);
-    line-height: 1;
-  }
-
-  /*
-    The real control, stretched over the label and invisible. `opacity: 0` rather than
-    `visibility: hidden`: it has to stay hit-testable and focusable, and the native pop-up
-    menu still anchors to its box.
-  */
-  select {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    appearance: none;
-    opacity: 0;
-    /* Safari renders a caret on a disabled select without this, which would show through. */
-    background: transparent;
-  }
-
-  .picker:hover .label {
-    background: var(--bg-hover);
-    border-color: var(--border);
-  }
-
-  /* The select carries focus but cannot show a ring while it is invisible, so the label
-     wears it instead. */
-  .picker:focus-within .label {
-    border-color: var(--border-focus);
-  }
-
-  .picker:has(select:disabled) .label {
-    color: var(--fg-muted);
-  }
-
-  .picker:has(select:disabled):hover .label {
-    background: transparent;
-    border-color: transparent;
-  }
-
-  .root {
-    color: var(--fg-subtle);
-    font-size: var(--step--2);
-    font-family: var(--font-mono);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-1);
-    flex: 0 0 auto;
-  }
-
-  .icon {
-    width: 24px;
-    height: 24px;
-    display: grid;
-    place-items: center;
-    border-radius: var(--r-md);
-    color: var(--fg-muted);
-    font-size: var(--step-0);
-    transition:
-      background var(--dur-fast) var(--ease),
-      color var(--dur-fast) var(--ease);
-  }
-
-  .icon:hover {
-    background: var(--bg-hover);
-    color: var(--fg);
-  }
-</style>

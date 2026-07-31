@@ -19,3 +19,9 @@
 .o-stack--loose {
   gap: var(--sp-4);
 }
+
+/* Children hug the trailing edge rather than stretching. For a stack whose items are
+   different widths and should line up on the right — a control with a message under it. */
+.o-stack--end {
+  align-items: flex-end;
+}
