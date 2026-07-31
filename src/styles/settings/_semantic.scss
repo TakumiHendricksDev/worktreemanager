@@ -1,0 +1,115 @@
+/*
+ * Theme tokens, layer 2: semantic roles. The ONLY thing components touch.
+ *
+ * A role answers "what is this for", never "what colour is it". `--danger` rather than
+ * `--red-500`, so the day red is retuned every warning moves with it and nothing else does.
+ *
+ * # The `-soft` and `-line` pairs
+ *
+ * A tinted surface with a matching border — an error banner, a destructive button, a
+ * highlighted secret — was written twelve times across five components as
+ * `color-mix(in oklab, <role> N%, transparent)`, at eight different percentages. Nobody
+ * chose eight; they drifted, because each site picked a number that looked right on its own.
+ * `--accent-soft` already existed for exactly this idiom and the status roles never got the
+ * same treatment.
+ *
+ * So they are roles now. A component that wants a tinted danger surface asks for
+ * `--danger-soft`, and the alternative — reaching for a raw percentage in a shared partial —
+ * is the thing the layer-1 rule above exists to prevent.
+ */
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: var(--gray-50);
+  --bg-elevated: var(--gray-0);
+  /* Semi-transparent so the window's native sidebar vibrancy shows through on
+     macOS. On Linux `--under-window` is opaque, so this composites to a solid
+     colour instead of depending on what happens to be behind the window. */
+  --bg-sidebar: color-mix(in oklab, var(--gray-100) 62%, var(--under-window));
+  --bg-hover: var(--gray-150);
+  --bg-active: var(--gray-200);
+  --bg-input: var(--gray-0);
+  --bg-code: var(--gray-100);
+  --bg-scrim: rgb(0 0 0 / 0.28);
+
+  --fg: var(--gray-900);
+  --fg-muted: var(--gray-500);
+  --fg-subtle: var(--gray-400);
+  --fg-on-accent: var(--gray-0);
+
+  --border: var(--gray-200);
+  --border-strong: var(--gray-300);
+  --border-focus: var(--clay-500);
+
+  --accent: var(--clay-500);
+  --accent-hover: var(--clay-600);
+  --accent-soft: color-mix(in oklab, var(--clay-500) 12%, transparent);
+
+  --ok: var(--green-500);
+  --warn: var(--amber-500);
+  --danger: var(--red-500);
+  --info: var(--blue-400);
+  /* A filled favorite star. Its own role rather than a reuse of `--warn`: a star is not a
+     warning, and the day one of them is retuned the other must not move with it. */
+  --star: var(--amber-500);
+
+  /* Tinted surfaces and their borders. See the header. */
+  --danger-soft: color-mix(in oklab, var(--red-500) 8%, transparent);
+  --danger-line: color-mix(in oklab, var(--red-500) 40%, transparent);
+  --warn-soft: color-mix(in oklab, var(--amber-500) 10%, transparent);
+  --warn-line: color-mix(in oklab, var(--amber-500) 34%, transparent);
+  --info-soft: color-mix(in oklab, var(--blue-400) 8%, transparent);
+  --info-line: color-mix(in oklab, var(--blue-400) 35%, transparent);
+  /* Its own role rather than `--warn-soft`: this one sits behind text rather than filling a
+     panel, and needs more presence to read as a highlight at all. Same argument as `--star`. */
+  --warn-mark: color-mix(in oklab, var(--amber-500) 16%, transparent);
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.18);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: var(--gray-900);
+  --bg-elevated: var(--gray-850);
+  --bg-sidebar: color-mix(in oklab, var(--gray-950) 52%, var(--under-window));
+  --bg-hover: var(--gray-800);
+  --bg-active: var(--gray-700);
+  --bg-input: var(--gray-850);
+  --bg-code: var(--gray-950);
+  --bg-scrim: rgb(0 0 0 / 0.5);
+
+  --fg: var(--gray-100);
+  --fg-muted: var(--gray-400);
+  --fg-subtle: var(--gray-500);
+  --fg-on-accent: var(--gray-0);
+
+  --border: var(--gray-800);
+  --border-strong: var(--gray-700);
+  --border-focus: var(--clay-400);
+
+  --accent: var(--clay-400);
+  --accent-hover: var(--clay-300);
+  --accent-soft: color-mix(in oklab, var(--clay-400) 18%, transparent);
+
+  --ok: var(--green-400);
+  --warn: var(--amber-400);
+  --danger: var(--red-400);
+  --info: var(--blue-400);
+  --star: var(--amber-400);
+
+  --danger-soft: color-mix(in oklab, var(--red-400) 8%, transparent);
+  --danger-line: color-mix(in oklab, var(--red-400) 40%, transparent);
+  --warn-soft: color-mix(in oklab, var(--amber-400) 10%, transparent);
+  --warn-line: color-mix(in oklab, var(--amber-400) 34%, transparent);
+  --info-soft: color-mix(in oklab, var(--blue-400) 8%, transparent);
+  --info-line: color-mix(in oklab, var(--blue-400) 35%, transparent);
+  --warn-mark: color-mix(in oklab, var(--amber-400) 16%, transparent);
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.6);
+}

@@ -1,0 +1,17 @@
+/*
+ * Media query mixins. Emits nothing until included.
+ */
+
+@use '../settings/config' as *;
+
+/// The one breakpoint this app has.
+///
+/// Named for what happens rather than for a device, because it is not about devices: this is
+/// a desktop window that a person can drag narrower, and at some width a two-column pane has
+/// to become one. Wrapping it means the number lives in `settings/_config.scss` instead of
+/// being retyped at each of the three call sites, where two of them would eventually disagree.
+@mixin narrow {
+  @media (max-width: $bp-narrow) {
+    @content;
+  }
+}

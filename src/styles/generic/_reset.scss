@@ -1,0 +1,23 @@
+/*
+ * The reset. Far-reaching, low-specificity, opinion-free.
+ *
+ * Generic is for rules that apply to everything and decide nothing about how the app looks.
+ * A rule that expresses taste — the body font, the link colour — is an Element rule and
+ * belongs in the next layer, even though it also uses a bare selector.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}

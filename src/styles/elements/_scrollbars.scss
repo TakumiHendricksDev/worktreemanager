@@ -1,0 +1,44 @@
+/*
+ * Scrollbars, both mechanisms.
+ *
+ * The two blocks are in one file because each explains the other: WebKit gets the
+ * pseudo-elements, WebKitGTK gets the two properties GTK exposes, and reading either alone
+ * makes the other look like an oversight.
+ */
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  /* An inset border keeps the thumb from touching the content edge. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-subtle);
+  background-clip: content-box;
+}
+
+/*
+ * WebKitGTK does not implement the pseudo-elements above — it hands scrollbars to
+ * GTK, which exposes exactly two knobs to CSS. Gated to Linux rather than applied
+ * globally because Safari 18.2 understands both mechanisms, and which one would win
+ * on a recent macOS is not something to find out in a release build.
+ *
+ * `scrollbar-width` does not inherit, hence the universal selector. The block above
+ * is deliberately left ungated: gating it would change its specificity for no gain,
+ * and if some WebKitGTK build does honour it, gating would make Linux strictly worse.
+ */
+:root[data-platform='linux'] * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}

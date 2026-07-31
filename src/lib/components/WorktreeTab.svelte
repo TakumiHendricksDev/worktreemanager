@@ -92,7 +92,7 @@
     onclick={onfavorite}
   >
     <span aria-hidden="true">{worktree.favorite ? '★' : '☆'}</span>
-    <span class="visually-hidden">Favorite</span>
+    <span class="u-visually-hidden">Favorite</span>
   </button>
 </div>
 

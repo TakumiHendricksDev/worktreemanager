@@ -60,7 +60,7 @@
   -->
   <div class="identity" data-tauri-drag-region>
     <div class="picker">
-      <label class="visually-hidden" for="project-picker">Project</label>
+      <label class="u-visually-hidden" for="project-picker">Project</label>
       <!--
         The visible label is a span, and the real `<select>` is stretched invisibly over it.
         A bare select sizes itself to its *widest option* — here `Add a repository…` — which

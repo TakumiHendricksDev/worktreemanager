@@ -96,7 +96,7 @@
 <nav class="sidebar" aria-label="Worktrees">
   <div class="search" role="search">
     <span class="glyph" aria-hidden="true">⌕</span>
-    <label class="visually-hidden" for="worktree-search">Filter worktrees</label>
+    <label class="u-visually-hidden" for="worktree-search">Filter worktrees</label>
     <input
       id="worktree-search"
       type="search"
@@ -111,7 +111,7 @@
     {#if workspace.query !== ''}
       <button class="clear" onclick={() => (workspace.query = '')} title="Clear the filter">
         <span aria-hidden="true">✕</span>
-        <span class="visually-hidden">Clear the filter</span>
+        <span class="u-visually-hidden">Clear the filter</span>
       </button>
     {/if}
   </div>

@@ -146,7 +146,7 @@
 
       <div class="more">
         <span class="caret" aria-hidden="true">⌄</span>
-        <label class="visually-hidden" for="open-in-picker">Open this worktree in…</label>
+        <label class="u-visually-hidden" for="open-in-picker">Open this worktree in…</label>
         <!--
           `value` is always the sentinel, never the preference — see the header. The
           sentinel option is selectable and simply does nothing, rather than `disabled`,

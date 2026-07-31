@@ -25,7 +25,6 @@
    */
   import { FitAddon } from '@xterm/addon-fit';
   import { Terminal } from '@xterm/xterm';
-  import xtermCss from '@xterm/xterm/css/xterm.css?inline';
   import { listen } from '@tauri-apps/api/event';
 
   import { commands } from '../ipc/commands';
@@ -73,16 +72,6 @@
 
   $effect(() => {
     if (!host) return;
-
-    // xterm ships its own stylesheet. Inlined and injected once, because the CSP forbids
-    // loading anything from a remote origin and a bundled <link> would be a second request.
-    const styleId = 'xterm-css';
-    if (!document.getElementById(styleId)) {
-      const style = document.createElement('style');
-      style.id = styleId;
-      style.textContent = xtermCss;
-      document.head.append(style);
-    }
 
     const created = new Terminal({
       // Collapsed to one line before handing it over: `--font-mono` is declared across

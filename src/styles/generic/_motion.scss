@@ -1,0 +1,21 @@
+/*
+ * Honour the OS-level reduced-motion preference, everywhere, once.
+ *
+ * `!important` is load-bearing and this is the one place outside `utilities/` that gets it:
+ * the declaration has to beat every transition and animation in the app, including ones
+ * written after this file, and a preference the user set in System Settings outranks anything
+ * a component wants.
+ *
+ * Not zero: `0.01ms` still fires `transitionend`, so a component waiting on that event does
+ * not hang. A component with its own reduced-motion opinion — the progress bar, which must
+ * stop sweeping rather than merely sweep instantly — carries it in its own partial.
+ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

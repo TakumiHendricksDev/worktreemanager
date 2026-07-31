@@ -1,0 +1,16 @@
+/*
+ * Anchors.
+ *
+ * Every genuinely clickable thing in this app is a `<button>` — an anchor would need an href
+ * the webview cannot navigate to. So this covers anchors inside rendered prose, and it is
+ * kept because the day one appears it should already look right.
+ */
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}

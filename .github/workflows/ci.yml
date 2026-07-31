@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun x prettier --check "src/**/*.{ts,svelte,css}" "*.json"
+      - run: bun x prettier --check "src/**/*.{ts,svelte,css,scss}" "*.json"
       - run: bun run check
 
   # ───────────────────────────────────────────────────────────────────────────

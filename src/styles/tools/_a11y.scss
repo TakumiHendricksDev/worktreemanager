@@ -1,0 +1,31 @@
+/*
+ * Accessibility mixins. Emits nothing until included.
+ */
+
+@use '../settings/config' as *;
+
+/// Hide from sight, keep for a screen reader.
+///
+/// The mixin exists as well as the `u-visually-hidden` utility because some elements need
+/// this as part of their own rule rather than as a second class in the markup — a `<label>`
+/// generated inside a component, for instance, where the consumer never sees the element.
+@mixin visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/// A focus ring drawn inside the element's own box.
+///
+/// For controls that sit flush inside a bordered container, where the global 2px outline with
+/// its 2px offset would be clipped by the parent's `overflow: hidden` or would overlap a
+/// neighbour. The split button's menu half is the case this was written for.
+@mixin focus-ring-inset {
+  outline: 1px solid var(--border-focus);
+  outline-offset: -1px;
+}
