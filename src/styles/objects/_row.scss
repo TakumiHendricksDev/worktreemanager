@@ -1,0 +1,33 @@
+/*
+ * A horizontal row of things, vertically centred.
+ *
+ * The most repeated shape in the app — `display: flex; align-items: center; gap: …` appears in
+ * a dozen components under a dozen names. An object rather than a component because it passes
+ * the test: strip every declaration that mentions a colour, border, radius or font and it
+ * still does its whole job. There is nothing left to strip.
+ */
+
+.o-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Pushes its contents to the trailing edge. Action rows, dialog footers. */
+.o-row--end {
+  justify-content: flex-end;
+}
+
+/* Label on the left, value or control on the right. */
+.o-row--between {
+  justify-content: space-between;
+}
+
+/*
+ * Top-aligned rather than centred, for a row whose items have very different heights — a
+ * two-line title beside a single-line button, where centring makes the button look like it has
+ * drifted downward.
+ */
+.o-row--top {
+  align-items: flex-start;
+}

@@ -1,0 +1,17 @@
+/*
+ * A paragraph of secondary explanation.
+ *
+ * Seven copies of this rule existed across five components, under four names — `.help`,
+ * `.hint`, `.note`, `.envnote` — at three different line heights (1.5, 1.55, 1.6). The line
+ * height is the tell: nobody chose three, they were typed independently.
+ *
+ * `max-width` in `ch` rather than `rem`: the constraint on a line of prose is how many
+ * characters the eye can track back from, which is a property of the text, not of the layout.
+ */
+
+.c-note {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.55;
+  max-width: 76ch;
+}

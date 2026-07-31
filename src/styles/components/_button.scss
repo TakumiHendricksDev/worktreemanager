@@ -1,0 +1,203 @@
+/*
+ * Buttons.
+ *
+ * This block replaces markup in nine of the app's thirteen feature components, and it is the
+ * single largest reason the component library exists. Before it there were:
+ *
+ *   - six accent call-to-action buttons under three different names (`.primary` three times,
+ *     `.approve`, `.new`, `.cta`);
+ *   - four outlined ones under two (`.secondary` three times, `.reject`);
+ *   - seven distinct paddings across buttons nobody could tell apart;
+ *   - five different `:disabled` opacities and two different cursors.
+ *
+ * None of that was designed. Each site was written on its own and looked right on its own.
+ *
+ * # The two names that are gone
+ *
+ * `.primary` meant "the accent call to action" in four files and "the neutral left half of the
+ * Open-in split button" in a fifth. `.more` meant "show all N commands" in the trust banner and
+ * "the 22px dropdown cell" in the split button. Both were invisible while every component's
+ * CSS was scoped; both would have collided the moment it went global. Neither is a variant
+ * here — the split-button halves are elements of that block (`.c-split-button__action`,
+ * `.c-split-button__menu`), because that is exactly what BEM's `__` is for: a thing that has
+ * no meaning outside its parent.
+ */
+
+@use '../tools' as t;
+
+.c-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  border-radius: var(--r-md);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+
+  /*
+   * One disabled treatment, replacing five opacities between 0.4 and 0.6.
+   *
+   * `cursor: default`, not `not-allowed`. The crossed-circle is a web idiom; macOS shows the
+   * ordinary arrow over a disabled control, and this is a desktop app. 0.45 is the median of
+   * what was there and was already in use in the sidebar.
+   */
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  /* ── sizes ────────────────────────────────────────────────────────────────── */
+
+  &--sm {
+    @include t.control(sm);
+  }
+
+  &--md {
+    @include t.control(md);
+  }
+
+  &--lg {
+    @include t.control(lg);
+  }
+
+  /* ── variants ─────────────────────────────────────────────────────────────── */
+
+  /* The one thing you are meant to press. At most one per view. */
+  &--accent {
+    background: var(--accent);
+    color: var(--fg-on-accent);
+
+    &:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+  }
+
+  /*
+   * Cancel, dismiss, the second option. Takes `--bg-elevated` unconditionally: the trust
+   * banner's version already did, because it sits on a tinted surface and a transparent
+   * button disappears into it. Invisible in a dialog footer, a slight consistent lift
+   * elsewhere.
+   */
+  &--neutral {
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elevated);
+    color: var(--fg);
+
+    &:hover:not(:disabled) {
+      background: var(--bg-hover);
+    }
+  }
+
+  /*
+   * Destructive, but reversible or guarded — it opens a confirmation rather than doing the
+   * thing. Inverts to solid on hover so the commitment is legible before the click.
+   */
+  &--danger-outline {
+    border: 1px solid var(--danger-line);
+    background: var(--danger-soft);
+    color: var(--danger);
+
+    &:hover:not(:disabled) {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: var(--fg-on-accent);
+    }
+
+    /*
+     * Neutral when unavailable, rather than a faded red. Red should mean "this will destroy
+     * something you can actually destroy"; on the main worktree the button never fires, and a
+     * dimmed red still reads as a threat.
+     */
+    &:disabled {
+      border-color: var(--border);
+      background: transparent;
+      color: var(--fg-subtle);
+    }
+  }
+
+  /*
+   * The point of no return: solid red, for the button that performs the destruction rather
+   * than proposing it. There is exactly one legitimate user — the Remove button in the remove
+   * dialog, after its preflight has been read and its overrides ticked. If a second appears,
+   * the question to ask is whether that flow is missing a confirmation step.
+   */
+  &--danger-solid {
+    background: var(--danger);
+    color: var(--fg-on-accent);
+
+    &:hover:not(:disabled) {
+      filter: brightness(1.08);
+    }
+  }
+
+  /* No chrome until you approach it. Close buttons, icon buttons, back links. */
+  &--quiet {
+    color: var(--fg-muted);
+
+    &:hover:not(:disabled) {
+      background: var(--bg-hover);
+      color: var(--fg);
+    }
+  }
+
+  /*
+   * Reads as a link because it behaves like one — it opens or navigates to something. Accent
+   * coloured and underlined on hover. Padding is dropped: a link inside a sentence that
+   * carries button padding pushes the line apart.
+   */
+  &--link {
+    padding: 0;
+    color: var(--accent);
+
+    &:hover:not(:disabled) {
+      text-decoration: underline;
+    }
+  }
+
+  /*
+   * A quieter link, permanently underlined, at whatever size surrounds it. Distinct from
+   * `--link` because it must not shout: its one use is "show all N commands" inside a security
+   * prompt, where an accent-coloured control competing with Approve and Reject would be
+   * actively bad. Distinct from `--quiet` because a hover-only affordance inside prose is
+   * undiscoverable.
+   */
+  &--inline {
+    padding: 0;
+    color: var(--fg-muted);
+    font-size: inherit;
+    font-weight: inherit;
+    text-decoration: underline;
+
+    &:hover:not(:disabled) {
+      color: var(--fg);
+    }
+  }
+
+  /* ── modifiers ────────────────────────────────────────────────────────────── */
+
+  /* Fills its container. The sidebar's New Worktree button, which spans the rail. */
+  &--full {
+    width: 100%;
+  }
+
+  /*
+   * Square, icon-only. Overrides the size modifier's padding on purpose: a square target is
+   * defined by its box, not by padding around a glyph, and the three sizes exist for buttons
+   * with text in them. Any icon-only button needs `ariaLabel` — there is no text to name it.
+   */
+  &--icon {
+    padding: 0;
+    width: 26px;
+    height: 26px;
+  }
+
+  &--icon-sm {
+    padding: 0;
+    width: 20px;
+    height: 20px;
+  }
+}

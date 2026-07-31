@@ -1,0 +1,21 @@
+/*
+ * Icons.
+ *
+ * Two declarations, and both are load-bearing.
+ *
+ * `display: block` is the second half of the centring fix. An inline SVG sits on the text
+ * baseline and reserves descender space below itself, so even a perfectly centred glyph lands
+ * high inside a `place-items: center` box — reproducing the exact bug the switch away from
+ * text glyphs was meant to end. Making it a block removes it from the line box entirely.
+ *
+ * `flex: 0 0 auto` because an icon beside a label in a flex row is otherwise a candidate for
+ * shrinking, and a squashed chevron is worse than a truncated word.
+ *
+ * There is no colour here. An icon inherits `currentColor` from whatever it sits in, which is
+ * what lets one file serve a muted caret, an accent star and a danger close button.
+ */
+
+.c-icon {
+  display: block;
+  flex: 0 0 auto;
+}

@@ -1,0 +1,38 @@
+/*
+ * The list of reasons an operation might not be a good idea.
+ *
+ * Rendered identically by the create review and the remove dialog — same `Preflight[]`, same
+ * message/hint/override shape, and two of the rules were already byte-identical between them.
+ * The only genuine difference is the override's wording ("Do it anyway" vs "Remove anyway"),
+ * which is now a prop.
+ *
+ * `c-preflight__item` is a **column**, and that matters. The class it replaces in the review
+ * panel was called `.check` — the same name two other components used for a horizontal
+ * checkbox row. Both were `display: flex`. Going global without renaming would have turned
+ * these stacked items into horizontal rows: no error, no warning, just wrong.
+ */
+
+.c-preflight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-preflight__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-preflight__message {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+}
+
+.c-preflight__hint {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
