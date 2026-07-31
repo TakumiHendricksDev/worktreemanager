@@ -13,7 +13,8 @@
    * so the form paints immediately rather than waiting on the slowest command.
    */
   import { commands } from '../ipc/commands';
-  import { errorMessage, type Field } from '../ipc/types';
+  import { errorMessage, type Field as FieldSpec } from '../ipc/types';
+  import Field from './ui/Field.svelte';
 
   const {
     projectId,
@@ -25,7 +26,7 @@
     inertReason = '',
   }: {
     projectId: string;
-    fields: Field[];
+    fields: FieldSpec[];
     values: Record<string, string>;
     /** Per-field validation messages from the backend, shown inline. */
     problems?: Record<string, string>;
@@ -80,23 +81,34 @@
     }
   });
 
-  function optionsFor(field: Field): string[] {
+  function optionsFor(field: FieldSpec): string[] {
     return field.hasDynamicOptions ? (options[field.key]?.values ?? []) : field.options;
   }
 
   const inertKeys = $derived(new Set(inert));
 </script>
 
-<div class="form">
+<div class="o-stack o-stack--loose">
   {#each fields as field (field.key)}
-    <div class="field" class:inert={inertKeys.has(field.key)}>
-      <label for={`f-${field.key}`}>
-        {field.label}
-        {#if field.required}<span class="req" aria-label="required">*</span>{/if}
-      </label>
-
+    <Field
+      id={`f-${field.key}`}
+      label={field.label}
+      required={field.required}
+      inert={inertKeys.has(field.key)}
+      {inertReason}
+      note={!inertKeys.has(field.key) &&
+      normalized[field.key] &&
+      normalized[field.key] !== values[field.key]
+        ? normalized[field.key]
+        : null}
+      errors={[
+        problems[field.key],
+        options[field.key]?.error && `Could not load options: ${options[field.key]?.error}`,
+      ]}
+      help={field.kind === 'bool' ? null : field.help}
+    >
       {#if field.kind === 'bool'}
-        <label class="check">
+        <label class="c-choice">
           <input
             id={`f-${field.key}`}
             type="checkbox"
@@ -106,11 +118,11 @@
                 ? 'true'
                 : 'false')}
           />
-          <span class="checklabel">{field.help ?? ''}</span>
+          <span class="c-choice__hint">{field.help ?? ''}</span>
         </label>
       {:else if field.kind === 'select' || field.kind === 'multiselect'}
-        <div class="selectrow">
-          <select id={`f-${field.key}`} bind:value={values[field.key]}>
+        <div class="c-schema-form__select-row">
+          <select id={`f-${field.key}`} class="c-select" bind:value={values[field.key]}>
             {#if options[field.key]?.loading}
               <option value={values[field.key]}>Loading…</option>
             {:else}
@@ -126,7 +138,7 @@
           </select>
           {#if field.allowCustom}
             <input
-              class="custom"
+              class="c-input c-schema-form__custom"
               type="text"
               placeholder="or type a ref"
               value={values[field.key] ?? ''}
@@ -136,136 +148,27 @@
           {/if}
         </div>
       {:else if field.kind === 'multiline'}
-        <textarea id={`f-${field.key}`} rows="3" bind:value={values[field.key]}></textarea>
+        <textarea
+          id={`f-${field.key}`}
+          class="c-textarea"
+          rows="3"
+          bind:value={values[field.key]}></textarea>
       {:else if field.kind === 'number'}
-        <input id={`f-${field.key}`} type="number" bind:value={values[field.key]} />
+        <input
+          id={`f-${field.key}`}
+          class="c-input"
+          type="number"
+          bind:value={values[field.key]}
+        />
       {:else}
         <input
           id={`f-${field.key}`}
+          class="c-input"
           type="text"
           placeholder={field.placeholder ?? ''}
           bind:value={values[field.key]}
         />
       {/if}
-
-      {#if inertKeys.has(field.key)}
-        <p class="help inertnote">{inertReason}</p>
-      {:else if normalized[field.key] && normalized[field.key] !== values[field.key]}
-        <!-- Suppressed while inert: showing `1234 → ACME-1234` beside a field that no longer
-             names anything is the exact false impression this is meant to dispel. -->
-        <p class="normalized">
-          → <code>{normalized[field.key]}</code>
-        </p>
-      {/if}
-      {#if problems[field.key]}
-        <p class="help error">{problems[field.key]}</p>
-      {/if}
-      {#if field.help && field.kind !== 'bool'}
-        <p class="help">{field.help}</p>
-      {/if}
-      {#if options[field.key]?.error}
-        <p class="help error">
-          Could not load options: {options[field.key]?.error}
-        </p>
-      {/if}
-    </div>
+    </Field>
   {/each}
 </div>
-
-<style>
-  .form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-4);
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-1);
-  }
-
-  /*
-    Faded, but still legible and still editable. Not `disabled`: the value has not become
-    invalid, it has become irrelevant, and clearing the condition must restore the field
-    exactly as it was — which is free if it was never disabled in the first place. Not
-    hidden either, or the form would appear to have thrown your input away.
-  */
-  .field.inert {
-    opacity: 0.55;
-  }
-
-  .inertnote {
-    font-style: italic;
-  }
-
-  label {
-    font-size: var(--step--1);
-    font-weight: 500;
-  }
-
-  .req {
-    color: var(--accent);
-    margin-left: 2px;
-  }
-
-  input[type='text'],
-  input[type='number'],
-  select,
-  textarea {
-    width: 100%;
-    padding: 6px 9px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--bg-input);
-    font-size: var(--step-0);
-  }
-
-  input[type='text']:focus,
-  select:focus,
-  textarea:focus {
-    border-color: var(--border-focus);
-  }
-
-  textarea {
-    font-family: var(--font-ui);
-    resize: vertical;
-  }
-
-  .selectrow {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: var(--sp-2);
-  }
-
-  .custom {
-    max-width: 180px;
-  }
-
-  .check {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    font-weight: 400;
-  }
-
-  .checklabel {
-    color: var(--fg-muted);
-    font-size: var(--step--1);
-  }
-
-  .help {
-    color: var(--fg-muted);
-    font-size: var(--step--2);
-    line-height: 1.5;
-  }
-
-  .help.error {
-    color: var(--danger);
-  }
-
-  .normalized {
-    font-size: var(--step--2);
-    color: var(--accent);
-  }
-</style>

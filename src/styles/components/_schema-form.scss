@@ -1,0 +1,22 @@
+/*
+ * The config-driven form.
+ *
+ * Almost all of this component's styling is now `c-field`, `c-input`, `c-select` and
+ * `c-textarea`. What is left is the one layout it has that nothing else does: a select with an
+ * optional free-text escape hatch beside it, for a field whose options come from a command but
+ * where you may still want to name something the command did not list.
+ *
+ * One bug fixed on the way past: the old `:focus` rule listed `input[type='text']`, `select`
+ * and `textarea` but not `input[type='number']`, so a focused number field was the only
+ * control in the app that did not light up. `c-input` covers all of them by class.
+ */
+
+.c-schema-form__select-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-2);
+}
+
+.c-schema-form__custom {
+  max-width: 180px;
+}

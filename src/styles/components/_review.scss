@@ -1,0 +1,31 @@
+/*
+ * The create-preview panel: exactly what will happen, before anything has.
+ *
+ * This file is where `.check` died. It meant a **column** here — a preflight item stacking its
+ * message, hint and override — and a horizontal checkbox row in two other components. Both
+ * were `display: flex`. Going global without resolving it would have laid these items out
+ * sideways with no error and no warning, which is why this component was migrated early.
+ */
+
+/* An argv must scroll, never wrap: a wrapped command is easy to misread, and misreading a
+   command you are about to approve is the failure this whole screen exists to prevent. */
+.c-review__argv {
+  background: var(--bg-code);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--step--2);
+  overflow-x: auto;
+  white-space: pre;
+  margin-bottom: var(--sp-2);
+}
+
+/* Marks a value that came from the adopted branch rather than from a naming template. */
+.c-review__from {
+  margin-left: var(--sp-2);
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--info-line);
+  color: var(--info);
+  font-size: var(--step--2);
+  white-space: nowrap;
+}
