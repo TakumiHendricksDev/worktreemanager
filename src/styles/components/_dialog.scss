@@ -1,0 +1,78 @@
+/*
+ * The modal.
+ *
+ * Both dialogs had this markup and these rules — scrim, panel, header, title, close, body,
+ * footer — near byte-identical, differing only in width and in one of them being a flex column
+ * and the other not.
+ *
+ * That difference was a latent bug rather than a choice: the Add a repository dialog's panel
+ * was not a flex column, so its body had no `flex`/`overflow` and could never scroll. It is
+ * short enough that nobody hit it, but "short enough today" is not a layout. `c-dialog` is
+ * always a column with a scrollable body and a capped height, which costs a short dialog
+ * nothing and means neither can overflow the window.
+ */
+
+@use '../settings/config' as *;
+
+.c-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: $z-dialog;
+
+  display: flex;
+  flex-direction: column;
+  width: min(520px, calc(100vw - 4rem));
+  max-height: min(80vh, 780px);
+
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+/* For a dialog that shows a live transcript rather than a question. */
+.c-dialog--wide {
+  width: min(600px, calc(100vw - 4rem));
+}
+
+.c-dialog__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-4) var(--sp-5) var(--sp-2);
+}
+
+.c-dialog__title {
+  font-size: var(--step-1);
+  font-weight: 600;
+}
+
+.c-dialog__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--sp-2) var(--sp-5) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-dialog__foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: var(--sp-3) var(--sp-5) var(--sp-4);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* A live terminal inside a dialog, where the height has to be fixed or the panel grows as
+   output arrives. */
+.c-dialog__terminal {
+  height: 200px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}

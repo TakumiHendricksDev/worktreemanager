@@ -1,0 +1,16 @@
+/*
+ * The dimmed backdrop behind a modal.
+ *
+ * Both dialogs had this rule, byte for byte. It is an object rather than part of `c-dialog`
+ * because it is a sibling of the dialog rather than a part of it — it has to cover the whole
+ * window and receive the click that dismisses, neither of which a descendant could do.
+ */
+
+@use '../settings/config' as *;
+
+.o-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-scrim);
+  z-index: $z-scrim;
+}

@@ -1,0 +1,31 @@
+/*
+ * A two-column definition list: label on the left, value on the right.
+ *
+ * The worktree overview and the create-preview both render one. `dt`/`dd` are addressed as
+ * descendants rather than given classes, which is the general rule for `components/` and
+ * `objects/` — an element selector is allowed here only because it is scoped by the block
+ * class, and it keeps the markup free of a class on every row.
+ */
+
+.o-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-2) var(--sp-4);
+  align-items: baseline;
+}
+
+.o-facts > dt {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.o-facts > dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* For values long enough that a `max-content` label column starves them — resolved tokens,
+   full paths. */
+.o-facts--wide {
+  grid-template-columns: minmax(0, 12rem) 1fr;
+}

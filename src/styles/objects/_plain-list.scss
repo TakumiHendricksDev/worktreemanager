@@ -1,0 +1,17 @@
+/*
+ * A `<ul>` or `<ol>` with the browser's bullets and indent removed.
+ *
+ * Semantically a list, visually not one. Every list in this app is like that — steps, commands,
+ * preflight items — because the marker adds nothing when each row already carries its own icon
+ * or status colour, and the indent fights the container's padding.
+ *
+ * An object rather than an element rule on `ul`: a list inside rendered prose should still look
+ * like a list, and there is no way to opt back in once a bare `ul {}` has taken the markers
+ * away app-wide.
+ */
+
+.o-plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

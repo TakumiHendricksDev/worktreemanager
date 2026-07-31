@@ -1,0 +1,51 @@
+/*
+ * A labelled form field: label, control, and up to four kinds of message beneath it.
+ *
+ * Written three ways before this — in the schema form, in the Add a repository dialog, and
+ * approximately in the sidebar filter — with the help text at three different line heights.
+ */
+
+.c-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-field__label {
+  font-size: var(--step--1);
+  font-weight: 500;
+}
+
+.c-field__required {
+  color: var(--accent);
+  margin-left: 2px;
+}
+
+.c-field__help {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+/* The effective value after a field's `normalize` template ran, shown when it differs — so
+   someone typing `1234` sees it became `ACME-1234` before pressing Create rather than after. */
+.c-field__note {
+  font-size: var(--step--2);
+  color: var(--accent);
+}
+
+/*
+ * A field whose value no longer affects the outcome.
+ *
+ * Faded, but still legible and still editable. Not `disabled`: the value has not become
+ * invalid, it has become irrelevant, and clearing the condition must restore the field exactly
+ * as it was — which is free if it was never disabled. Not hidden either, or the form would
+ * appear to have thrown the input away.
+ */
+.c-field.is-inert {
+  opacity: 0.55;
+
+  .c-field__help {
+    font-style: italic;
+  }
+}

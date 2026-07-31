@@ -1,0 +1,48 @@
+/*
+ * Text inputs, selects and textareas.
+ *
+ * One border, one radius, one background, one focus treatment — previously written three
+ * times with three different paddings and, in one of them, a `:focus` rule that listed
+ * `input[type='text']`, `select` and `textarea` but not `input[type='number']`, so a focused
+ * number field was the only control in the app that did not light up.
+ *
+ * # `c-select` keeps the native appearance, and that is not an oversight
+ *
+ * It is a real form control in a real form, and the platform pop-up is the right affordance
+ * for one — it opens where the user expects, it is keyboard-navigable and type-ahead works.
+ * The two *other* selects in this app are not form controls at all: they are menu triggers
+ * wearing a custom face, they set `appearance: none; opacity: 0`, and they use
+ * `o-overlay-select`. Do not unify them; they are different things that happen to share a tag.
+ */
+
+.c-input,
+.c-select,
+.c-textarea {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+  font-size: var(--step-0);
+
+  &:focus {
+    border-color: var(--border-focus);
+  }
+}
+
+/*
+ * For a value the eye has to compare character by character — a filesystem path, a hash. Not
+ * the default: prose typed into a form field reads better in the UI font, and a monospace form
+ * makes an app look like a terminal emulator.
+ */
+.c-input--mono {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+}
+
+.c-textarea {
+  /* Explicit, because `textarea` inherits `monospace` from the browser rather than from
+     `elements/_forms.scss`'s `font: inherit` in some engines. */
+  font-family: var(--font-ui);
+  resize: vertical;
+}

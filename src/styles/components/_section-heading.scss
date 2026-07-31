@@ -1,0 +1,34 @@
+/*
+ * A small uppercase label introducing a group.
+ *
+ * Three components rendered this, as an `h2` twice and an `h3` once. That difference is the
+ * reason this is a class rather than an element rule or a component: the heading *level* is
+ * determined by how deeply the section is nested and has to stay under the author's control,
+ * while the *look* is the same everywhere.
+ *
+ * It is also the clearest single argument for the no-naked-element-selectors rule. `h2` meant
+ * "uppercase muted section label" in three files and "dialog title" in two. Scoped styles hid
+ * that; in a global sheet whichever loaded last would have won for both.
+ */
+
+.c-section-heading {
+  margin: var(--sp-5) 0 var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+
+  /* Spacing between sections belongs above the heading, not below the previous block — but the
+     first one in a pane must not push the pane's own padding open. */
+  &:first-child {
+    margin-top: 0;
+  }
+}
+
+/* The title of a pane, not of a section within one. */
+.c-pane-title {
+  font-size: var(--step-2);
+  font-weight: 600;
+  line-height: 1.25;
+}

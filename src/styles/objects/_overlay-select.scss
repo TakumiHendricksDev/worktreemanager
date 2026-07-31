@@ -1,0 +1,43 @@
+/*
+ * A native `<select>` stretched invisibly over a label you drew yourself.
+ *
+ * Two components do this — the project switcher in the title bar and the menu half of the
+ * Open-in split button — and both had these six declarations written out with their own
+ * comment explaining the same trick.
+ *
+ * # Why not just style the select
+ *
+ * A `<select>` sizes itself to its **widest option**. The project switcher's widest option is
+ * "Add a repository…", the split button's is a "— not found" row; either strands the control's
+ * visible edge a couple of hundred pixels from the thing it belongs to. Rendering the label
+ * separately sizes the control to what is actually *selected*.
+ *
+ * # Why `opacity: 0` and not `visibility: hidden`
+ *
+ * The real element has to stay hit-testable and focusable, and — the part that is easy to
+ * forget — the native pop-up menu anchors to its box. Hide it any other way and the menu opens
+ * in the wrong place, which is the symptom to look for if this ever regresses.
+ *
+ * # What is deliberately not here
+ *
+ * The focus treatment. The title bar moves a border onto its label; the split button draws an
+ * inset outline. Those are different designs, correctly, and each lives with its own component.
+ * This object is only the mechanism.
+ */
+
+.o-overlay-select {
+  position: relative;
+}
+
+.o-overlay-select__native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  appearance: none;
+  opacity: 0;
+  cursor: pointer;
+  /* Safari draws a caret on a *disabled* select regardless of `appearance`, and it would show
+     through the transparent element on top of the label. */
+  background: transparent;
+}

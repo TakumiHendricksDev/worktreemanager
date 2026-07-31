@@ -1,0 +1,35 @@
+/*
+ * A checkbox or radio with its label.
+ *
+ * Five sites, one shape: the schema form's boolean field, two in the remove dialog, two in the
+ * review panel. All five were `display: flex; align-items: center; gap: var(--sp-2)` differing
+ * only in text size and muted-ness.
+ *
+ * Named `c-choice` rather than `c-check` on purpose. `.check` was one of the two class names
+ * that meant two unrelated things — a checkbox row in two files and a *preflight list item*
+ * in a third, where it was a column rather than a row. Reusing a near-miss during a rename is
+ * how a silent mis-merge happens; the preflight one is `c-preflight__item`.
+ *
+ * The input itself is left native. A custom checkbox has to reimplement the indeterminate
+ * state, the focus ring, the platform's own animation and the way it inverts in dark mode, and
+ * the payoff is that it looks slightly more like the rest of the app than it does like the
+ * operating system — which for a developer tool is the wrong trade.
+ */
+
+.c-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 400;
+}
+
+.c-choice--sm {
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+}
+
+/* Secondary text beside the control, where the label itself is the field's name. */
+.c-choice__hint {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}

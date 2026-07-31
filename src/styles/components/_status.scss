@@ -1,0 +1,33 @@
+/*
+ * Status colouring.
+ *
+ * These were re-declared as one-liners in four components. They are components and not
+ * utilities (`.u-ok`, `.u-danger`) for a reason worth writing down: `<span class="u-danger">`
+ * styles a *status* with a *colour*, so the day a status has to become a chip — and the
+ * sidebar already renders one as a pill — every call site has to change. `.c-status--danger`
+ * names what the thing is and can be restyled in one place.
+ *
+ * Colour only, deliberately. Two of the four originals also set `font-size: var(--step--1)`
+ * and two did not; folding the size in here would silently resize text in the two that did
+ * not. Size belongs to whatever the status sits inside.
+ */
+
+.c-status--ok {
+  color: var(--ok);
+}
+
+.c-status--warn {
+  color: var(--warn);
+}
+
+.c-status--danger {
+  color: var(--danger);
+}
+
+.c-status--info {
+  color: var(--info);
+}
+
+.c-status--muted {
+  color: var(--fg-muted);
+}

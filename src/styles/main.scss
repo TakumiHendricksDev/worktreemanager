@@ -48,13 +48,26 @@
 @use 'elements/focus';
 @use 'elements/scrollbars';
 
-/*
- * Objects — geometry, no cosmetics. Reusable across unrelated components.
- * Components — one partial per block, alphabetical within the layer.
- *
- * Both layers arrive with the component library; their `@use` lines go here, between Elements
- * above and Utilities below.
- */
+/* Objects — geometry, no cosmetics. Reusable across unrelated components. */
+@use 'objects/row';
+@use 'objects/stack';
+@use 'objects/facts';
+@use 'objects/scrim';
+@use 'objects/overlay-select';
+@use 'objects/plain-list';
+
+/* Components — one partial per block, alphabetical within the layer. */
+@use 'components/banner';
+@use 'components/button';
+@use 'components/choice';
+@use 'components/dialog';
+@use 'components/field';
+@use 'components/icon';
+@use 'components/input';
+@use 'components/note';
+@use 'components/preflight';
+@use 'components/section-heading';
+@use 'components/status';
 
 /* Utilities — one property each. The only layer allowed `!important`. */
 @use 'utilities/a11y';

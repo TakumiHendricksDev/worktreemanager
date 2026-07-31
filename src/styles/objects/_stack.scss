@@ -1,0 +1,21 @@
+/*
+ * A vertical stack with one gap between every child.
+ *
+ * The counterpart to `o-row`, and the reason neither needs a margin. Spacing owned by the
+ * container rather than by the items is what removes the whole category of "the last one has
+ * a stray margin-bottom" and `:last-child` rules to undo it.
+ */
+
+.o-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.o-stack--tight {
+  gap: var(--sp-1);
+}
+
+.o-stack--loose {
+  gap: var(--sp-4);
+}

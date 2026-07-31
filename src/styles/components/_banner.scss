@@ -1,0 +1,37 @@
+/*
+ * A strip across the top of a view saying something went wrong.
+ *
+ * The tinted-surface-plus-matching-border idiom, now expressed with the `-soft`/`-line` role
+ * tokens rather than a `color-mix()` percentage chosen here. That is the whole point of those
+ * tokens: this is exactly the file where someone would otherwise have typed `14%` because it
+ * looked right, and then a second file would have typed `10%`.
+ */
+
+.c-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid transparent;
+  font-size: var(--step--1);
+}
+
+.c-banner--error {
+  background: var(--danger-soft);
+  border-bottom-color: var(--danger-line);
+  color: var(--danger);
+}
+
+.c-banner--warn {
+  background: var(--warn-soft);
+  border-bottom-color: var(--warn-line);
+  color: var(--warn);
+}
+
+/* Retry, dismiss — pushed to the trailing edge, inheriting the banner's colour rather than
+   introducing a second one. */
+.c-banner__action {
+  margin-left: auto;
+  color: inherit;
+  text-decoration: underline;
+}
