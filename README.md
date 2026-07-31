@@ -286,7 +286,9 @@ handled:
 
 - **Nothing leaves the machine.** No network capability at all — the CSP permits only `self`
   and `ipc:`, no HTTP plugin permission is granted, there is no `fetch`/XHR/WebSocket in the
-  frontend and no HTTP client crate in the dependency tree. No telemetry.
+  frontend and no HTTP client crate reachable on either platform wtm builds for. No telemetry.
+  (See [ARCHITECTURE.md](ARCHITECTURE.md) §6a for how to check that last one — grepping
+  `Cargo.lock` gives the wrong answer.)
 - **Nothing is logged.** No log line carries an environment value.
 - **No value is sent to the window.** Not "no secret" — *no value*. The listing carries key
   names only; the Environment tab shows `••••••••` for every row with a per-key **reveal**,

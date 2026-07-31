@@ -56,7 +56,10 @@ Worth stating because it narrows the surface considerably:
 
 - **No network access at all.** The CSP permits only `self` and `ipc:`, no HTTP plugin
   capability is granted, there is no `fetch`/XHR/WebSocket in the frontend, and no HTTP client
-  crate in the dependency tree. No telemetry, no update check.
+  crate is reachable in the dependency graph of either platform wtm builds for. No telemetry,
+  no update check. (`Cargo.lock` lists `reqwest` because a lockfile is the union of every
+  platform; `cargo tree -i reqwest --target aarch64-apple-darwin` — or the Linux target —
+  reports nothing. See ARCHITECTURE.md §6a.)
 - **No `unsafe`.** `unsafe_code = "forbid"` workspace-wide.
 - **No shell.** Every command is an argv array handed to `execve`; there is no string that
   gets parsed by `sh`.
