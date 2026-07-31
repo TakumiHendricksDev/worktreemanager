@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability set. The frontend reaches the outside world only through this app's own #[tauri::command] functions, so no filesystem, shell or HTTP plugin permissions are granted — every side effect goes through Rust code that enforces timeouts, PATH resolution and config trust.",
+  "description": "Minimal capability set. With one exception the frontend reaches the outside world only through this app's own #[tauri::command] functions, so no filesystem, shell or HTTP plugin permissions are granted — every side effect goes through Rust code that enforces timeouts, PATH resolution and config trust. The exception is `dialog:allow-open`, which backs the Browse… button in Add a repository: it shows the OS folder picker and returns the one path the user chose. It grants no directory listing and no file read, and the path it returns is validated by the same `git rev-parse --show-toplevel` a typed path goes through — so it is a convenience over the text field rather than a way around it. `dialog:default` is deliberately not used, because it would also grant save dialogs and the native message/ask/confirm prompts, none of which this app has any use for.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-set-theme",
     "core:window:allow-start-dragging",
-    "core:event:default"
+    "core:event:default",
+    "dialog:allow-open"
   ]
 }

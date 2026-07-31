@@ -61,6 +61,9 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app)
         .plugin(platform_plugin())
+        // Unlike `platform_plugin` above, this one declares commands, so it *does* need an
+        // entry in `capabilities/default.json` — `dialog:allow-open`, and nothing else.
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::list_projects,
             commands::register_project,
