@@ -32,6 +32,18 @@ export interface Project {
   trust: TrustPrompt | null;
 }
 
+/**
+ * The new project list, plus which entry was registered.
+ *
+ * `id` is here because this side cannot work it out: registration accepts any path inside a
+ * repository and resolves it to the toplevel, so `~/Sites/foo` and `…/foo/src` both come back
+ * as `/absolute/Sites/foo`. Matching the typed string against the roots is what used to fail.
+ */
+export interface Registered {
+  id: string;
+  projects: Project[];
+}
+
 export interface Badge {
   label: string;
   value: string;

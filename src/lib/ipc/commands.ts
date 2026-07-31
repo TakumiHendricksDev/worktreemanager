@@ -17,6 +17,7 @@ import type {
   Preflight,
   Preview,
   Project,
+  Registered,
   RemoveOutcome,
   SetupResult,
   Worktree,
@@ -25,7 +26,9 @@ import type {
 export const commands = {
   // ── projects ──
   listProjects: () => invoke<Project[]>('list_projects'),
-  registerProject: (path: string) => invoke<Project[]>('register_project', { path }),
+  /** Accepts any path inside a repository. Returns the resolved id, not just the list. */
+  registerProject: (path: string) => invoke<Registered>('register_project', { path }),
+  /** Takes the project's root — the store removes an exact key, not a prefix. */
   unregisterProject: (path: string) => invoke<Project[]>('unregister_project', { path }),
 
   // ── worktrees ──

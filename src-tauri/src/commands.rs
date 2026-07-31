@@ -20,6 +20,7 @@ use std::sync::Arc;
 use regex::Regex;
 
 use tauri::State;
+use wtm_core::model::ProjectId;
 use wtm_core::ports::config::ConfigStore;
 use wtm_core::ports::pty::PtyHost;
 
@@ -27,7 +28,8 @@ use crate::app::App;
 use crate::display;
 use crate::openers;
 use crate::view::{
-    ActionView, DoctorView, ErrorView, FieldView, FormView, OpenersView, ProjectView, WorktreeView,
+    ActionView, DoctorView, ErrorView, FieldView, FormView, OpenersView, ProjectView,
+    RegisteredView, WorktreeView,
 };
 
 /// Shared application state.
@@ -75,16 +77,28 @@ pub async fn list_projects(app: AppState<'_>) -> Reply<Vec<ProjectView>> {
 }
 
 /// Register a repository. Accepts any path inside it; resolves to the root.
+///
+/// Returns the resolved id as well as the list, because the caller wants to select what it
+/// just added and cannot work out which entry that is — see [`RegisteredView`].
 #[tauri::command]
-pub async fn register_project(app: AppState<'_>, path: String) -> Reply<Vec<ProjectView>> {
+pub async fn register_project(app: AppState<'_>, path: String) -> Reply<RegisteredView> {
     let app = Arc::clone(&app);
     blocking(move || {
-        app.register(&PathBuf::from(path))?;
-        app.projects().map_err(Into::into)
+        let root = app.register(&PathBuf::from(path))?;
+        Ok(RegisteredView {
+            // Built with the same function `project_view` uses, so the id can never drift
+            // from the one in `projects` and silently stop matching.
+            id: ProjectId::from_root(&root).to_string(),
+            projects: app.projects()?,
+        })
     })
     .await
 }
 
+/// Unregister a repository.
+///
+/// Takes the project's **root**, not any path inside it: the store removes an exact key
+/// (`UserConfig::unregister`), so a subdirectory would quietly remove nothing.
 #[tauri::command]
 pub async fn unregister_project(app: AppState<'_>, path: String) -> Reply<Vec<ProjectView>> {
     let app = Arc::clone(&app);
