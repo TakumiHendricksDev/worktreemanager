@@ -224,6 +224,24 @@ export interface SetupResult {
   summary: string;
 }
 
+/**
+ * A live shell in the terminal dock.
+ *
+ * Named `TerminalSession`, not `Terminal`, unlike every other view type here:
+ * `Terminal.svelte` imports `Terminal` from `@xterm/xterm`, and a contract type that shadows
+ * the terminal emulator is a fifteen-minute mystery waiting to happen.
+ *
+ * `worktree` is the worktree id — an absolute path — so panes key off the same string the
+ * sidebar uses. This is the only reliable answer to "does this worktree already have a
+ * terminal": a reload wipes this side's map while the shells keep running, and Rust is the
+ * only place that still knows.
+ */
+export interface TerminalSession {
+  session: string;
+  worktree: string;
+  project: string;
+}
+
 /** Emitted as `pty:output`. Bytes are base64 because JSON cannot carry them. */
 export interface PtyOutput {
   session: string;

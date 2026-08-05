@@ -52,6 +52,7 @@ export type IconName =
   | 'plus'
   | 'search'
   | 'settings'
+  | 'terminal'
   | 'theme-system'
   | 'theme-light'
   | 'theme-dark';
@@ -103,6 +104,19 @@ export const icons: Record<IconName, IconSpec> = {
       'M10 3.9 A1.6 1.6 0 1 0 10 7.1 A1.6 1.6 0 1 0 10 3.9 ' +
       'M6 8.9 A1.6 1.6 0 1 0 6 12.1 A1.6 1.6 0 1 0 6 8.9',
   },
+  /*
+   * A prompt and a command line. No window frame, and that is the grammar again.
+   *
+   * The expected glyph is a rounded box with a `>_` inside it, and it was drawn first: a box
+   * inset to 2.5–13.5 leaves the chevron about three units of arm against a 1.5 stroke, which
+   * renders as a smudge with a border round it — the same failure the cog had. Two marks
+   * survive the size, and a chevron over a rule is what Lucide and Feather both ship for a
+   * console.
+   *
+   * The rule sits on the chevron's lower arm rather than on the baseline, so the pair reads as
+   * one prompt rather than as two unrelated strokes.
+   */
+  terminal: { stroke: 'M3.5 3.75 L7.75 8 L3.5 12.25 M9.25 12.25 L13 12.25' },
   // A circle with its leading half filled — the same "follows the system" idiom as `◐`, which
   // is the character it replaces.
   'theme-system': {

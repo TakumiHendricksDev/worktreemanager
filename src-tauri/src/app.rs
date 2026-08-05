@@ -34,6 +34,23 @@ use crate::view::{DoctorView, PaletteView, ProjectView, ToolView, TrustPromptVie
 /// calls one and it is missing, this is the fastest route to understanding why.
 const KNOWN_TOOLS: &[&str] = &["git", "just", "acli", "docker", "gh", "bun", "npm"];
 
+/// How many finished sessions the pty registry keeps.
+///
+/// Not about transcripts, despite what `reap_finished`'s own doc suggests — a `Session`
+/// holds no output buffer at all; the transcript lives in the pane's xterm instance. What a
+/// finished entry actually holds is a `Box<dyn MasterPty>` and its writer, which measures as
+/// two file descriptors apiece, forever. Nothing in the app called `reap_finished` before the
+/// terminal dock existed, and a dock that opens and closes shells all day is what turns that
+/// into a leak with a name.
+///
+/// Four rather than zero for one reason: a pane that has not yet processed `pty:exit` may
+/// still have a `pty_write` or `pty_resize` in flight, and a `NoSuchSession` error for a
+/// session that ended a moment ago reads like a bug in the log. Four is eight descriptors.
+const KEEP_FINISHED_SESSIONS: usize = 4;
+
+/// A worktree's terminal-dock shell: which project it belongs to, and its session.
+type Shell = (String, wtm_core::model::SessionId);
+
 /// Everything the app needs, wired once at startup.
 pub struct App {
     pub git: Arc<dyn Git>,
@@ -49,6 +66,25 @@ pub struct App {
     resolved_path: ResolvedPath,
     /// `os.*` template tokens, resolved once — they cannot change while running.
     os_tokens: BTreeMap<String, String>,
+    /// Which session is a worktree's **terminal-dock shell**, keyed by its `WorktreeId`.
+    ///
+    /// # Why an index here rather than a query on the pty host
+    ///
+    /// `PtySession::worktree` is already recorded and `PtyHost::has_session_for` already
+    /// answers "is anything running for this worktree" — but *anything* is the problem.
+    /// `run_action` and the setup stage tag their sessions with the same worktree id, so a
+    /// lookup by worktree alone would hand the dock the session of a running `just test` and
+    /// let the user type into it. The worktree was never a unique key.
+    ///
+    /// The alternative was a session *kind* threaded through `PtyHost::spawn`. Rejected for
+    /// the same reason [`Self::palettes`] is assembled here rather than in the domain: "which
+    /// session is the UI's terminal" is a frontend concept `wtm-core` has no stake in, and
+    /// keeping it in the composition root means `wtm-core` still compiles for `wasm32`.
+    ///
+    /// Liveness is never read from here. Every lookup intersects with `PtyHostImpl::sessions`,
+    /// which reports running sessions only, so an entry for a shell the user exited answers
+    /// "no shell" without anybody having to remember to clean up.
+    shells: parking_lot::Mutex<BTreeMap<String, Shell>>,
 }
 
 impl std::fmt::Debug for App {
@@ -127,6 +163,7 @@ impl App {
             config,
             resolved_path,
             os_tokens: wtm_exec::os_tokens(),
+            shells: parking_lot::Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -472,6 +509,142 @@ impl App {
     }
 }
 
+// ═══════════════════════════ the terminal dock's shells ═══════════════════════════
+
+impl App {
+    /// Open — or re-attach to — the interactive shell for one worktree.
+    ///
+    /// Idempotent by worktree: a second call while the shell is still running returns the
+    /// same session rather than leaving two login shells in one directory fighting over the
+    /// same history file.
+    ///
+    /// # Lock order
+    ///
+    /// [`Self::shells`] is held across the spawn, deliberately. Two open requests genuinely
+    /// race on a double click — commands run on a blocking thread pool, so this is not
+    /// theoretical — and checking, spawning and recording under one lock is what makes "one
+    /// shell per worktree" true rather than merely likely. The order is always `shells` then
+    /// the pty registry; nothing in `wtm-exec` knows this map exists, so there is no other
+    /// direction it can be taken in.
+    ///
+    /// # Errors
+    ///
+    /// If the program cannot be found on the resolved `PATH`, or the pty cannot be opened.
+    pub fn open_shell(
+        &self,
+        worktree: &Worktree,
+        project_id: &str,
+        argv: Vec<String>,
+        rows: u16,
+        cols: u16,
+        sink: Arc<dyn wtm_core::ports::pty::PtySink>,
+    ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
+        use wtm_core::ports::pty::PtyHost;
+
+        let mut shells = self.shells.lock();
+
+        if let Some((_, session)) = shells
+            .get(worktree.id.as_str())
+            .filter(|(_, session)| self.is_running(session))
+        {
+            let session = session.clone();
+            // The re-attaching pane has just measured itself, and that is not the size this
+            // session was spawned at. Resizing here rather than waiting for the frontend's
+            // first `ResizeObserver` fire is what stops a reattached shell wrapping at the
+            // old width.
+            if let Err(error) = self.pty.resize(&session, rows, cols) {
+                tracing::debug!(%session, %error, "could not resize a shell on reattach");
+            }
+            return Ok(session);
+        }
+
+        // Before the spawn, so descriptors a finished session is still holding are released
+        // before a new pair is allocated. This is the app's only caller.
+        self.pty.reap_finished(KEEP_FINISHED_SESSIONS);
+
+        // Entries whose shell has since exited are dead weight. Pruned on each open, which is
+        // the only moment the map grows, so it stays the size of what is actually running.
+        let running = self.running_sessions();
+        shells.retain(|_, (_, session)| running.contains(session.as_str()));
+
+        let inv = wtm_core::ports::exec::Invocation::new(
+            argv,
+            worktree.path.clone(),
+            crate::commands::SHELL_TIMEOUT_MS,
+        );
+        // `inv.env` stays empty on purpose: `PtyHostImpl::spawn` already lays down
+        // `child_env()` — so `PATH` and `LOGIN_PATH` are the resolved ones — and a `TERM`, and
+        // a login shell is about to re-source the user's profile over the top of both anyway.
+        let spawned = self
+            .pty
+            .spawn(&inv, rows, cols, Some(worktree.id.as_str()), sink)?;
+
+        shells.insert(
+            worktree.id.as_str().to_owned(),
+            (project_id.to_owned(), spawned.session.clone()),
+        );
+        Ok(spawned.session)
+    }
+
+    /// Every worktree with a live dock shell, for a webview that has just reloaded.
+    #[must_use]
+    pub fn live_shells(&self) -> Vec<(String, Shell)> {
+        let running = self.running_sessions();
+        self.shells
+            .lock()
+            .iter()
+            .filter(|(_, (_, session))| running.contains(session.as_str()))
+            .map(|(worktree, shell)| (worktree.clone(), shell.clone()))
+            .collect()
+    }
+
+    /// Kill a worktree's shell and forget it. `false` if it had none running.
+    ///
+    /// Forgetting is the load-bearing half. `PtyHost::kill` returns as soon as the group has
+    /// been signalled, not once the child has been reaped, so an [`Self::open_shell`] issued
+    /// immediately afterwards would still see the dying session as running and hand back the
+    /// id of a shell that is about to close. Dropping the entry makes restart two ordinary
+    /// calls with no ordering requirement on the frontend and no polling — which
+    /// `ARCHITECTURE.md` §8 bans outright.
+    pub fn close_shell(&self, worktree_id: &str) -> bool {
+        use wtm_core::ports::pty::PtyHost;
+
+        let Some((_, session)) = self.shells.lock().remove(worktree_id) else {
+            return false;
+        };
+        match self.pty.kill(&session) {
+            Ok(()) => true,
+            Err(error) => {
+                // Already finished: the user typed `exit` before reaching for the control.
+                tracing::debug!(%session, %error, "no live shell to close");
+                false
+            }
+        }
+    }
+
+    /// The ids of every session the pty host still reports as running.
+    fn running_sessions(&self) -> BTreeSet<String> {
+        use wtm_core::ports::pty::PtyHost;
+
+        self.pty
+            .sessions()
+            .into_iter()
+            .map(|s| s.session.as_str().to_owned())
+            .collect()
+    }
+
+    /// Whether `session` is still running, according to the pty host.
+    ///
+    /// The single source of truth for liveness. [`Self::shells`] records only *which* session
+    /// is a worktree's shell; asking it whether that shell is alive would be believing a cache
+    /// over the process table.
+    fn is_running(&self, session: &wtm_core::model::SessionId) -> bool {
+        use wtm_core::ports::pty::PtyHost;
+
+        self.pty.sessions().iter().any(|s| &s.session == session)
+    }
+}
+
 /// Why a declared palette cannot be used, or `None` if it can.
 ///
 /// Every message names the key and what was wrong with it, because the audience is someone
@@ -657,6 +830,214 @@ mod tests {
             "a detached worktree must not invent a branch"
         );
         assert_eq!(detached.subtitle, "(detached)");
+    }
+
+    // ─────────────────── the terminal dock's shells ───────────────────
+    //
+    // These run against the real `PtyHostImpl`, because `App.pty` is the concrete type
+    // rather than `Arc<dyn PtyHost>` — which is also why `FakePty::sessions()` returning
+    // an empty list needs no fixing for them.
+
+    /// A registered project with one extra worktree, plus the app that owns it.
+    fn app_with_worktree() -> (wtm_testkit::GitFixture, tempfile::TempDir, App, Project) {
+        let fixture = wtm_testkit::GitFixture::new();
+        fixture.add_worktree("shell-a", "task/shell-a");
+        fixture.add_worktree("shell-b", "task/shell-b");
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let app = App::with_paths(AppPaths::rooted(dir.path())).expect("app should build");
+        let root = app.register(fixture.root()).expect("register");
+        let project = app
+            .project(&root.to_string_lossy())
+            .expect("project should load");
+        (fixture, dir, app, project)
+    }
+
+    /// Address a worktree by the id the listing reports, never by a path built here.
+    ///
+    /// On macOS a temp directory is reached through a symlink (`/var` → `/private/var`), so a
+    /// locally-constructed id is a spelling the app never uses and every lookup misses.
+    fn worktree_named(app: &App, project: &Project, dirname: &str) -> Worktree {
+        let id = app
+            .worktrees(project)
+            .expect("worktrees")
+            .into_iter()
+            .find(|v| v.dirname == dirname)
+            .expect("worktree should be listed")
+            .id;
+        app.worktree(project, &id).expect("worktree by id")
+    }
+
+    fn sleeper() -> Vec<String> {
+        vec!["sleep".to_owned(), "30".to_owned()]
+    }
+
+    fn sink() -> Arc<dyn wtm_core::ports::pty::PtySink> {
+        Arc::new(wtm_testkit::NullPtySink)
+    }
+
+    #[test]
+    fn a_second_request_for_a_worktrees_shell_reuses_the_running_one_instead_of_spawning_another() {
+        let (_fixture, _dir, app, project) = app_with_worktree();
+        let worktree = worktree_named(&app, &project, "shell-a");
+        let project_id = project.root.to_string_lossy().into_owned();
+
+        let first = app
+            .open_shell(&worktree, &project_id, sleeper(), 24, 80, sink())
+            .expect("first shell");
+        let second = app
+            .open_shell(&worktree, &project_id, sleeper(), 30, 100, sink())
+            .expect("second shell");
+
+        assert_eq!(
+            first, second,
+            "a double click must not leave two login shells in one directory"
+        );
+        assert_eq!(app.pty.kill_all(), 1, "only one session should exist");
+    }
+
+    #[test]
+    fn a_shell_that_has_exited_is_not_offered_for_reuse() {
+        use wtm_core::ports::pty::PtyHost;
+
+        let (_fixture, _dir, app, project) = app_with_worktree();
+        let worktree = worktree_named(&app, &project, "shell-a");
+        let project_id = project.root.to_string_lossy().into_owned();
+
+        let dead = app
+            .open_shell(
+                &worktree,
+                &project_id,
+                vec!["true".to_owned()],
+                24,
+                80,
+                sink(),
+            )
+            .expect("short-lived shell");
+        app.pty
+            .wait(&dead, &wtm_core::ports::exec::CancelToken::new())
+            .expect("wait");
+
+        let fresh = app
+            .open_shell(&worktree, &project_id, sleeper(), 24, 80, sink())
+            .expect("replacement shell");
+
+        assert_ne!(
+            dead, fresh,
+            "trusting the index without checking liveness hands the dock a dead shell forever"
+        );
+        app.pty.kill_all();
+    }
+
+    /// **The test that protects why `App::shells` exists.**
+    ///
+    /// Sessions are tagged with a worktree id, and `run_action` and the setup stage tag theirs
+    /// with the *same* one — so a lookup by worktree alone would adopt a running build as the
+    /// dock's shell and let the user type into it.
+    ///
+    /// Specifically, this goes red when [`App::open_shell`]'s reuse check is replaced by a
+    /// worktree-keyed query on the pty host — `sessions().find(|s| s.worktree == …)`, which is
+    /// the obvious way to delete the index and looks like it cannot be wrong. Verified by
+    /// making that edit and watching this fail with the two ids equal. Note that swapping
+    /// `is_running` for `has_session_for` while *keeping* the index does **not** trip it: the
+    /// map lookup still gates the reuse, so the bug needs the index gone.
+    #[test]
+    fn an_action_running_in_a_worktree_is_never_mistaken_for_its_shell() {
+        use wtm_core::ports::pty::PtyHost;
+
+        let (_fixture, _dir, app, project) = app_with_worktree();
+        let worktree = worktree_named(&app, &project, "shell-a");
+        let project_id = project.root.to_string_lossy().into_owned();
+
+        // Stands in for `run_action`: same worktree tag, not the dock's shell.
+        let action = app
+            .pty
+            .spawn(
+                &wtm_core::ports::exec::Invocation::new(sleeper(), &worktree.path, 60_000),
+                24,
+                80,
+                Some(worktree.id.as_str()),
+                sink(),
+            )
+            .expect("action session")
+            .session;
+        assert!(
+            app.pty.has_session_for(worktree.id.as_str()),
+            "the trap this test exists for: the worktree now has a session that is not a shell"
+        );
+
+        let shell = app
+            .open_shell(&worktree, &project_id, sleeper(), 24, 80, sink())
+            .expect("shell");
+
+        assert_ne!(
+            action, shell,
+            "the action's session must not become the dock's"
+        );
+        let listed = app.live_shells();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].1.1, shell);
+        app.pty.kill_all();
+    }
+
+    #[test]
+    fn closing_a_shell_forgets_it_so_a_restart_gets_a_new_session() {
+        let (_fixture, _dir, app, project) = app_with_worktree();
+        let worktree = worktree_named(&app, &project, "shell-a");
+        let project_id = project.root.to_string_lossy().into_owned();
+
+        let first = app
+            .open_shell(&worktree, &project_id, sleeper(), 24, 80, sink())
+            .expect("first shell");
+        assert!(app.close_shell(worktree.id.as_str()));
+
+        // Deliberately without waiting for the kill to be reaped: that is the race, and
+        // forgetting the entry is what removes it.
+        let second = app
+            .open_shell(&worktree, &project_id, sleeper(), 24, 80, sink())
+            .expect("restarted shell");
+
+        assert_ne!(
+            first, second,
+            "restart handed back the id of a shell that was already dying"
+        );
+        assert!(
+            !app.close_shell("/not/a/worktree"),
+            "closing something with no shell is not an error"
+        );
+        app.pty.kill_all();
+    }
+
+    #[test]
+    fn only_worktrees_with_a_running_shell_are_listed() {
+        use wtm_core::ports::pty::PtyHost;
+
+        let (_fixture, _dir, app, project) = app_with_worktree();
+        let alive = worktree_named(&app, &project, "shell-a");
+        let doomed = worktree_named(&app, &project, "shell-b");
+        let project_id = project.root.to_string_lossy().into_owned();
+
+        app.open_shell(&alive, &project_id, sleeper(), 24, 80, sink())
+            .expect("long-lived shell");
+        let short = app
+            .open_shell(
+                &doomed,
+                &project_id,
+                vec!["true".to_owned()],
+                24,
+                80,
+                sink(),
+            )
+            .expect("short-lived shell");
+        app.pty
+            .wait(&short, &wtm_core::ports::exec::CancelToken::new())
+            .expect("wait");
+
+        let listed = app.live_shells();
+        assert_eq!(listed.len(), 1, "got {listed:?}");
+        assert_eq!(listed[0].0, alive.id.as_str());
+        assert_eq!(listed[0].1.0, project_id);
+        app.pty.kill_all();
     }
 
     #[test]

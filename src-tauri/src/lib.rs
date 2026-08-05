@@ -187,12 +187,45 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
+            commands::open_terminal,
+            commands::list_terminals,
+            commands::close_terminal,
             commands::open_url,
             commands::list_openers,
             commands::open_in,
         ])
-        .run(tauri::generate_context!())
-        .expect("run the application");
+        // `build` then `run`, rather than `Builder::run`. The shorthand is exactly
+        // `build(context)?.run(|_, _| {})` — an empty event callback — and this app now needs
+        // one.
+        .build(tauri::generate_context!())
+        .expect("build the application")
+        .run(|handle, event| {
+            // Kill every pty session before the process goes.
+            //
+            // `RunEvent::Exit`, and neither of the two alternatives. `ExitRequested` can be
+            // cancelled with `api.prevent_exit()`, so killing there risks an app that is still
+            // running with every terminal dead — worse than leaking one.
+            // `WindowEvent::Destroyed` is per window, and the macOS Quit item is not a window
+            // event at all. `Exit` is the one choke point every route passes through: the last
+            // window closing, ⌘Q, and `AppHandle::exit`.
+            //
+            // Without this, quitting leaks a login shell per worktree. `portable-pty` calls
+            // `setsid()`, so each session is its own session leader and outlives its parent —
+            // see `PtyHostImpl::kill_all`, which also records what that call cannot reach.
+            //
+            // `try_state` rather than `state`: `state` panics on an unmanaged type, and a
+            // panic in the exit callback would turn a tidy quit into a crash report.
+            if matches!(event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+
+                if let Some(app) = handle.try_state::<Arc<App>>() {
+                    let killed = app.pty.kill_all();
+                    if killed > 0 {
+                        tracing::info!(sessions = killed, "terminated pty sessions on quit");
+                    }
+                }
+            }
+        });
 }
 
 /// Configure logging.

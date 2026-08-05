@@ -29,7 +29,7 @@ use crate::display;
 use crate::openers;
 use crate::view::{
     ActionView, DoctorView, ErrorView, FieldView, FormView, OpenersView, PaletteView, ProjectView,
-    RegisteredView, WorktreeView,
+    RegisteredView, TerminalSessionView, WorktreeView,
 };
 
 /// Shared application state.
@@ -565,6 +565,71 @@ pub async fn list_actions(app: AppState<'_>, project_id: String) -> Reply<Vec<Ac
 mod tests {
     use super::*;
 
+    /// A stale `$SHELL` must not be the reason a terminal refuses to open.
+    ///
+    /// The candidate and the predicate are injected because a test cannot set `$SHELL`:
+    /// `std::env::set_var` is `unsafe` in Rust 2024 and this workspace forbids `unsafe_code`.
+    #[test]
+    fn the_login_shell_falls_back_to_a_posix_shell_when_the_environment_names_one_that_is_not_there()
+     {
+        let installed = |path: &str| path == "/bin/zsh";
+
+        assert_eq!(
+            login_shell(Some("/bin/zsh".to_owned()), installed),
+            ["/bin/zsh", "-l"]
+        );
+        // The `brew uninstall fish` case: still in the environment, gone from disk.
+        assert_eq!(
+            login_shell(Some("/opt/homebrew/bin/fish".to_owned()), installed),
+            ["/bin/sh", "-l"]
+        );
+        assert_eq!(login_shell(None, installed), ["/bin/sh", "-l"]);
+        // An empty or whitespace `SHELL` is set-but-useless, which `filter` on emptiness alone
+        // would let through as a program named " ".
+        assert_eq!(
+            login_shell(Some(String::new()), installed),
+            ["/bin/sh", "-l"]
+        );
+        assert_eq!(
+            login_shell(Some("   ".to_owned()), installed),
+            ["/bin/sh", "-l"]
+        );
+    }
+
+    /// A pane measured before it has a box must not spawn a zero-sized pty.
+    ///
+    /// The dock is closed by default, so this is the ordinary path rather than an edge case.
+    /// `openpty` accepts 0×0 without complaint and then every full-screen program in the
+    /// session draws into nothing, which reads as a broken terminal rather than a bad
+    /// measurement.
+    #[test]
+    fn a_zero_sized_terminal_is_given_a_usable_default_geometry() {
+        assert_eq!(usable_geometry(0, 0), (24, 80));
+        assert_eq!(usable_geometry(30, 0), (30, 80));
+        assert_eq!(usable_geometry(0, 120), (24, 120));
+        // A real measurement passes through untouched.
+        assert_eq!(usable_geometry(41, 173), (41, 173));
+    }
+
+    /// The shell deadline must stay inside what an `Instant` can represent.
+    ///
+    /// `PtyHost::wait` computes `started + Duration::from_millis(timeout_ms)`, and
+    /// `Instant + Duration` panics on overflow — so `u64::MAX`, the obvious spelling of "no
+    /// deadline", is a trap armed for whoever first calls `wait` on a dock shell. Asserted
+    /// against the nanosecond range rather than by constructing a real `Instant`, which
+    /// `clippy.toml` disallows.
+    #[test]
+    fn the_shell_deadline_stays_inside_what_an_instant_can_represent() {
+        let nanos = std::time::Duration::from_millis(SHELL_TIMEOUT_MS).as_nanos();
+        assert!(
+            nanos < u128::from(u64::MAX),
+            "{SHELL_TIMEOUT_MS} ms is {nanos} ns, which would overflow an Instant"
+        );
+        // A week, so it also cannot be mistaken for a deadline anyone meant to enforce. Not
+        // asserted — clippy rejects an assertion whose value is a compile-time constant, and it
+        // is right that `7 * 24 * 60 * 60 * 1_000` says this at the definition already.
+    }
+
     #[test]
     fn an_invalid_exclude_pattern_degrades_to_excluding_nothing() {
         // Emptying a dropdown because of a config typo would be far worse than ignoring
@@ -818,6 +883,16 @@ pub async fn remove_worktree(
             force,
             acknowledged,
         )?;
+        // End the worktree's dock shell before teardown runs.
+        //
+        // Two reasons, and the second is the one that bites. A shell sitting in a directory
+        // that is about to be deleted keeps running with an unlinked cwd, which is confusing
+        // but survivable. What is not survivable is what the shell *started*: a dev server
+        // writing into `node_modules` is exactly the untracked churn that makes
+        // `git worktree remove` refuse, so a removal that ought to work fails for a reason
+        // nothing in the dialog mentions.
+        app.close_shell(&worktree_id);
+
         let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
         let sink = crate::pty_bridge::EventSink::new(handle);
 
@@ -986,6 +1061,199 @@ pub async fn run_action(
         // Return as soon as it is running: the terminal pane streams the rest, and an
         // interactive shell would otherwise block this command forever.
         Ok(spawned.session.as_str().to_owned())
+    })
+    .await
+}
+
+// ═══════════════════════════ the terminal dock ═══════════════════════════
+
+/// The deadline recorded on an interactive shell session.
+///
+/// Nothing enforces it, and saying that out loud is better than papering over it.
+/// `Invocation::timeout_ms` is mandatory because `CommandRunner::run` and `PtyHost::wait` are
+/// the callers that enforce it, and the reason it is mandatory is a project script that
+/// prompts in a loop and never sees EOF. A dock shell is the mirror image: prompting forever
+/// *is* the feature, the user is sitting in front of it, and no code path waits on it —
+/// [`run_action`] already spawns without waiting for the same reason. So this is data nobody
+/// reads, recorded honestly rather than pretended into meaning.
+///
+/// A week rather than `u64::MAX`, for one concrete reason. `PtyHost::wait` computes
+/// `started + Duration::from_millis(timeout_ms)`, and `Instant + Duration` **panics** on
+/// overflow — `u64::MAX` milliseconds is far past what a 64-bit nanosecond clock can hold.
+/// That would be a trap armed for whoever first calls `wait` on one of these.
+pub(crate) const SHELL_TIMEOUT_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
+
+/// The shell to run in the terminal dock, as an argv.
+///
+/// `$SHELL` is what the user chose; `/bin/sh` is what POSIX guarantees exists. The fallback
+/// is not paranoia — `$SHELL` routinely names a binary that has been uninstalled since login
+/// (a `brew uninstall fish`, a Homebrew prefix that moved), and `PtyHostImpl::spawn` reports
+/// that as `ProgramNotFound`. A terminal that refuses to open because of a stale environment
+/// variable is worse than one that opens in `sh`.
+///
+/// `-l` so the shell reads the user's profile, matching the "Open shell" action in
+/// `examples/webapp.wtm.toml`. Without it the prompt, the aliases, `nvm`, `direnv` and the
+/// `PATH` the rest of this app worked hard to resolve are all missing, and the pane is a
+/// shell nobody recognises as theirs.
+///
+/// No platform `#[cfg]` is needed: `$SHELL` is set by the login machinery on both platforms
+/// and `/bin/sh` exists on both. (Spelled without the attribute's argument on purpose —
+/// `tests/platform_seams.rs` scans for the literal token, so writing it out in prose counts as
+/// an undeclared seam. `platform_plugin` in `lib.rs` phrases its own version the same way.)
+///
+/// The candidate and the executability test are parameters rather than read in here, because
+/// otherwise this is untestable: `std::env::set_var` is `unsafe` in Rust 2024 and this
+/// workspace *forbids* `unsafe_code`, so no test can set `$SHELL` at all.
+fn login_shell(candidate: Option<String>, executable: impl Fn(&str) -> bool) -> Vec<String> {
+    const POSIX_SHELL: &str = "/bin/sh";
+
+    let shell = candidate
+        .filter(|value| !value.trim().is_empty())
+        .filter(|value| executable(value))
+        .unwrap_or_else(|| POSIX_SHELL.to_owned());
+
+    vec![shell, "-l".to_owned()]
+}
+
+/// Terminal geometry, with an empty measurement replaced by something usable.
+///
+/// The dock is closed by default, so a pane can be measured before it has a box and report
+/// 0×0. `openpty` accepts that, and then every full-screen program in the session draws into
+/// a zero-width window — which looks like a broken terminal rather than a bad measurement.
+/// 24×80 is the classic default, and any real measurement replaces it a frame later over
+/// [`pty_resize`].
+fn usable_geometry(rows: u16, cols: u16) -> (u16, u16) {
+    (
+        if rows == 0 { 24 } else { rows },
+        if cols == 0 { 80 } else { cols },
+    )
+}
+
+/// Open — or re-attach to — the long-lived interactive shell for one worktree.
+///
+/// # Why this is not `run_action`
+///
+/// [`run_action`] resolves a project-declared `[[action]]` by id, and this has to work in any
+/// repository, including one with no `wtm.toml` at all. Generalising would mean either
+/// synthesising a fake action or making `action_id` optional — a no-config special case
+/// inside the path whose entire contract is "run what the project declared". The deadline and
+/// the reuse semantics differ too. Three divergences is two functions.
+///
+/// # Idempotent by worktree
+///
+/// A second call while the shell is running returns the same session rather than a second
+/// login shell in the same directory. That covers the double click, and it covers re-attaching
+/// after a webview reload — see [`list_terminals`].
+///
+/// # Why guards are *not* checked here
+///
+/// Every other spawn site calls `wtm_config::check_forbidden`, and this one deliberately does
+/// not. Those three sites all spawn an argv rendered from the project's config, which is what
+/// guards constrain; [`open_in`] — the only other user-initiated spawn of a program the config
+/// did not name — does not check them either. Decisively, `GuardSpec`'s own doc says guards
+/// exist for scripts that "genuinely cannot be run from a GUI: they `exec` a login shell and
+/// never return, or they prompt with a read loop that spins forever on EOF stdin", and the
+/// reference config's first guard blocks a script *because* it ends in `exec "$SHELL" -l`.
+/// Those are the failure modes an interactive terminal fixes. Checking guards here would
+/// invert their purpose and produce "your project forbids `bash`, so you cannot open a
+/// terminal".
+///
+/// # An untrusted project is still refused
+///
+/// [`App::project`] fails for a config awaiting trust, and this command inherits that. A bare
+/// shell needs nothing from the config, so exempting it is tempting — but a project is
+/// untrusted precisely because nobody has read what it would run, and the trust prompt is one
+/// click away.
+#[tauri::command]
+pub async fn open_terminal(
+    handle: tauri::AppHandle,
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    rows: u16,
+    cols: u16,
+) -> Reply<String> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let project = app.project(&project_id)?;
+        let worktree = app.worktree(&project, &worktree_id)?;
+
+        // A worktree whose directory was deleted by hand is *prunable*, not absent, and
+        // `App::worktree` does not prune — so it is still found here. A shell whose cwd is an
+        // unlinked inode is one where `getcwd` fails and every command misbehaves for no
+        // visible reason, which is much harder to diagnose than this sentence.
+        if !app.files.exists(&worktree.path) {
+            return Err(ErrorView::new(
+                "exec",
+                format!(
+                    "`{}` no longer exists on disk — the worktree may need pruning",
+                    worktree.path.display()
+                ),
+            ));
+        }
+
+        let argv = login_shell(std::env::var("SHELL").ok(), |path| {
+            app.runner.which(path).is_some()
+        });
+
+        let (rows, cols) = usable_geometry(rows, cols);
+        let sink = crate::pty_bridge::EventSink::new(handle);
+        let session = app
+            .open_shell(&worktree, &project_id, argv, rows, cols, sink)
+            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+
+        // Return as soon as it is running, exactly as `run_action` does: the dock streams the
+        // rest over `pty:output`, and waiting on an interactive shell would block this command
+        // until the user typed `exit`.
+        Ok(session.as_str().to_owned())
+    })
+    .await
+}
+
+/// Which worktrees already have a live dock shell.
+///
+/// The re-attach path, and the reason it has to exist in Rust: a webview reload throws away
+/// the frontend's pane-to-session map while the shells keep running in process sessions of
+/// their own, so without this they are unreachable until the app quits. It does **not**
+/// restore a transcript — no output is buffered anywhere but in the pane that received it.
+///
+/// Deliberately *not* derived from `PtyHost::sessions` directly. That also reports the sessions
+/// of running actions and of setup, which carry the same worktree id and must never be adopted
+/// as the dock's shell — see `App::shells`.
+///
+/// Every project's shells, not one project's: the map is global, the dock filters by what is in
+/// the current listing, and a project switch then needs no second round-trip.
+#[tauri::command]
+pub async fn list_terminals(app: AppState<'_>) -> Reply<Vec<TerminalSessionView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(app
+            .live_shells()
+            .into_iter()
+            .map(|(worktree, (project, session))| TerminalSessionView {
+                session: session.as_str().to_owned(),
+                worktree,
+                project,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// Kill a worktree's dock shell and forget it.
+///
+/// The dock's Kill control, and the first half of its Restart control — restart is this
+/// followed by [`open_terminal`], with no wait in between. See `App::close_shell` for why
+/// forgetting the entry is what removes the race.
+///
+/// Takes only the worktree id: there is no config or git to consult, so requiring a project id
+/// would be ceremony, and the id is a key this app itself put in the map.
+#[tauri::command]
+pub async fn close_terminal(app: AppState<'_>, worktree_id: String) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.close_shell(&worktree_id);
+        Ok(())
     })
     .await
 }

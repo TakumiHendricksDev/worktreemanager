@@ -21,6 +21,7 @@ import type {
   Registered,
   RemoveOutcome,
   SetupResult,
+  TerminalSession,
   Worktree,
 } from './types';
 
@@ -91,6 +92,35 @@ export const commands = {
     rows: number;
     cols: number;
   }) => invoke<string>('run_action', args),
+
+  // ── the terminal dock ──
+  /**
+   * Open, or re-attach to, the worktree's own interactive shell. Returns the session id.
+   *
+   * Idempotent per worktree: a second call while the shell is running hands back the same
+   * session rather than a second login shell in the same directory. Unlike setup and the
+   * declared actions, nothing decides when this ends but the user — the session lives until it
+   * is killed or the app quits. The size is a guess the caller corrects as soon as the pane has
+   * measured itself; see `Terminal.svelte`.
+   */
+  openTerminal: (args: {
+    projectId: string;
+    worktreeId: string;
+    rows: number;
+    cols: number;
+  }) => invoke<string>('open_terminal', args),
+
+  /**
+   * Which worktrees already have a live shell. Every project's, not just the active one.
+   *
+   * Call on start: a reload loses this side's pane-to-session map while the shells keep
+   * running, and without this they are unreachable until the app quits. It does not restore a
+   * transcript — nothing is buffered outside the pane that received it.
+   */
+  listTerminals: () => invoke<TerminalSession[]>('list_terminals'),
+
+  /** Kills a worktree's shell and forgets it. Restart is this, then `openTerminal`. */
+  closeTerminal: (worktreeId: string) => invoke<void>('close_terminal', { worktreeId }),
 
   // ── pty session control ──
   ptyWrite: (session: string, dataBase64: string) =>

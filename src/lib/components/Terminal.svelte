@@ -33,10 +33,21 @@
 
   const {
     session,
+    active = true,
     onexit,
   }: {
     /** Null until the caller learns the id — see the note above. */
     session: string | null;
+    /**
+     * False while the pane is mounted but hidden.
+     *
+     * That is how the terminal dock keeps a shell's scrollback across a worktree switch: the
+     * transcript lives in this component, so unmounting throws it away, and every pane but the
+     * active one is `display: none` instead. Defaults to true — a terminal that is on screen
+     * for its whole life, like the create pane's or the remove dialog's, has nothing to
+     * declare.
+     */
+    active?: boolean;
     onexit?: (exit: PtyExit) => void;
   } = $props();
 
@@ -56,6 +67,10 @@
   /** Deliberately not `$state`: the flush effect writes it, and reading it must not re-trigger. */
   let attachedTo: string | null = null;
   let term: Terminal | null = null;
+  /** Hoisted out of the creation effect so `refit` can reach it. Nothing renders it. */
+  let fit: FitAddon | null = null;
+  /** The last size the child was told, so an observer fire that changed nothing sends nothing. */
+  let sent = { rows: 0, cols: 0 };
   let ready = $state(false);
 
   /**
@@ -76,6 +91,58 @@
       cursor: read('--accent', '#3fb27a'),
       selectionBackground: read('--bg-active', '#2a3831'),
     };
+  }
+
+  /**
+   * Re-measure, and tell the child, unless the pane has no box or the grid did not move.
+   *
+   * The zero guard is the whole point of this existing. A hidden pane's `ResizeObserver` fires
+   * at 0×0, and the fit addon's `proposeDimensions` floors its answer at two columns by one row
+   * rather than declining — so an unguarded fit informs a live shell that its window is 2×1, and
+   * the shell reflows its prompt to match. The one case that saves itself is `display: none`,
+   * where the parent's computed height reads `auto`, `parseInt` gives `NaN`, and the addon's own
+   * `isNaN` check catches it. That is luck rather than design, and a height dragged toward zero
+   * is not covered by it. The two panes that predate the dock are never hidden, which is the
+   * only reason this has not bitten yet.
+   *
+   * Skipping the resize when the grid is unchanged matters because the dock's height is
+   * *dragged*: unconditional would be one SIGWINCH per pointermove for a row count that only
+   * changes every fourteen pixels, and a shell redraws on each one.
+   *
+   * # Never call this synchronously from the creation effect
+   *
+   * It reads `session`, which is a `$props()` getter — so a synchronous call would make that
+   * effect depend on `session` and tear the terminal down the instant the id arrived, losing the
+   * transcript on every single open. Deferred callbacks (the observer, the effects below) are
+   * outside Svelte's tracking window and are fine.
+   */
+  function refit(): void {
+    if (!host || !term || !fit) return;
+    if (host.clientWidth === 0 || host.clientHeight === 0) return;
+
+    try {
+      fit.fit();
+    } catch {
+      /* The pane was hidden mid-measure. */
+      return;
+    }
+
+    if (!session) return;
+    if (term.rows === sent.rows && term.cols === sent.cols) return;
+    sent = { rows: term.rows, cols: term.cols };
+    void commands.ptyResize(session, term.rows, term.cols).catch(() => {});
+  }
+
+  /**
+   * Put the caret in the terminal.
+   *
+   * The only export this component has, and the only imperative thing a parent needs from it:
+   * the dock has to focus the pane it just revealed, and there is no way to express that as a
+   * prop which is not a counter in disguise. Safe to call before the terminal exists — a focus
+   * request and a pane's mount are not ordered against each other.
+   */
+  export function focus(): void {
+    term?.focus();
   }
 
   $effect(() => {
@@ -99,11 +166,13 @@
       scrollback: 5000,
     });
 
-    const fit = new FitAddon();
-    created.loadAddon(fit);
+    const addon = new FitAddon();
+    created.loadAddon(addon);
     created.open(host);
-    fit.fit();
+    // `addon.fit()` rather than `refit()`, because `refit` reads `session` — see its note.
+    addon.fit();
     term = created;
+    fit = addon;
     ready = true;
 
     // Keystrokes back to the child.
@@ -115,15 +184,7 @@
       });
     });
 
-    const resize = new ResizeObserver(() => {
-      try {
-        fit.fit();
-        if (session)
-          void commands.ptyResize(session, created.rows, created.cols).catch(() => {});
-      } catch {
-        /* The pane was hidden mid-measure. */
-      }
-    });
+    const resize = new ResizeObserver(() => refit());
     resize.observe(host);
 
     const unlistenOutput = listen<PtyOutput>('pty:output', (event) => {
@@ -154,6 +215,8 @@
       void unlistenExit.then((off) => off());
       created.dispose();
       term = null;
+      fit = null;
+      sent = { rows: 0, cols: 0 };
       ready = false;
       attachedTo = null;
       pending.clear();
@@ -176,6 +239,13 @@
     for (const chunk of pending.get(id) ?? []) term.write(chunk);
     pending.clear();
     attachedTo = id;
+    // Now that there is somewhere to send it, tell the child how big the pane really is.
+    //
+    // Every caller spawns with a guessed 24×100, and the observer's first fire happened before
+    // there was an id to send it to — so without this the child kept the guess for its whole
+    // life and wrapped its output at the wrong column. That was true of the create pane and the
+    // remove dialog too, long before the dock existed.
+    refit();
   });
 
   function bytesToBase64(bytes: Uint8Array): string {
@@ -190,6 +260,23 @@
     for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
     return out;
   }
+
+  /*
+   * Re-fit when a hidden pane comes back.
+   *
+   * Every fit that fired while it was hidden did nothing, and the dock's height may have moved
+   * since — so a revealed pane has to measure itself again. Reading `host.clientWidth` inside
+   * `refit` forces a synchronous layout, which is what makes it see the just-un-hidden box
+   * rather than the stale one.
+   *
+   * Tracks `active`, and through `refit` also `session` — harmless precisely because `refit` is
+   * idempotent and sends nothing when the grid has not changed. What this must never become is
+   * part of the creation effect above; see `refit`.
+   */
+  $effect(() => {
+    if (!active || !ready) return;
+    refit();
+  });
 
   // Re-theme in place when the window theme changes, rather than tearing the terminal down
   // and losing the transcript.

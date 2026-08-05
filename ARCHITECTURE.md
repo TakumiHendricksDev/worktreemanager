@@ -390,6 +390,40 @@ can't express this, which is why `etcetera` is the dependency.
 a fan. v1 refreshes on demand and on window focus. A narrow `notify` watcher on `.git/worktrees` is a v2
 option; a naive watcher over a Docker-backed worktree tree would generate thousands of events.
 
+**The terminal dock is mounted by the shell, not by the detail pane, and every pane stays mounted.** A
+terminal's transcript lives in its xterm instance, so unmounting one throws it away — and `Detail` is
+destroyed whenever the main pane switches views, or momentarily when a project switch lands on an empty
+cached list. So `TerminalDock` is an unconditional sibling of that `{#if}` chain, holds one pane per
+worktree you have opened a shell in, and hides all but the active one.
+
+Hiding is `display: none`, and the two rejected alternatives are worth recording. `visibility: hidden`
+with the panes stacked keeps a box — which would keep the fit correct while hidden — but it also keeps N
+terminals in layout, and xterm's DOM renderer writes real DOM rows on every chunk; six chatty shells
+would pay full layout for five invisible ones, and it invents a stacking context in an app where nothing
+outside `settings/_config.scss` sets a `z-index`. `content-visibility: hidden` is worse in a specific
+way: it keeps the box but skips the subtree, so a fit would measure something the browser is not laying
+out, and WebKitGTK is a first-class target here and gained it very late. `display: none` costs nothing to
+lay out and its 0×0 `ResizeObserver` fire doubles as the signal that a pane came back.
+
+That last point is why `Terminal.svelte` guards its fit on a non-zero box. `FitAddon.proposeDimensions`
+floors its answer at two columns by one row rather than declining, so an unguarded fit on a displayed
+zero-height pane tells a live shell its window is 2×1. `display: none` survives only because the parent's
+computed height reads `auto` and the addon's own `isNaN` check catches it — luck, not design, and not
+something a dragged height is covered by.
+
+**Which session is the dock's shell is tracked in `src-tauri`, not in the domain.** `PtyHost::spawn`
+already records a worktree per session, but actions and the setup stage tag theirs with the same worktree
+id — so a lookup by worktree alone would hand the dock a running build to type into. The index lives in
+`App` rather than as a session *kind* on the port, for the same reason the palette list is assembled
+there: "which session is the UI's terminal" is a frontend concept `wtm-core` has no stake in, and keeping
+it out means the domain still compiles for `wasm32`. Liveness is never read from that index — every
+lookup intersects with what the pty host reports as running.
+
+**Shells are capped at six and the cap refuses rather than evicting.** §3 sizes the pty design for "a
+handful of terminals": one OS thread each in Rust, and one `pty:output` subscription each on this side, so
+Tauri serialises every chunk once per mounted pane. Evicting the least-recently-viewed shell would be the
+usual answer and is the wrong one here — that shell may be running a dev server.
+
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 
 **All styles are global, in `src/styles/`. No component has a `<style>` block.** `src/main.ts` imports

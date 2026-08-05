@@ -10,7 +10,9 @@
    */
   import { commands } from '../ipc/commands';
   import { errorMessage, type Worktree } from '../ipc/types';
+  import { SHORTCUT_LABEL, terminals } from '../state/terminals.svelte';
   import OpenInButton from './OpenInButton.svelte';
+  import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
 
   const {
@@ -131,10 +133,28 @@
     <!-- Actions, pinned right. The path moved into Overview, where it reads as one of the
          facts rather than as something to click.
 
-         Open-in first, then a divider, then Remove. The gap is not cosmetic: a destructive
-         control sitting flush against a neutral one is how it gets clicked by accident, and
-         these two are the only things in the header. -->
+         Neutral things first — the terminal toggle, then Open-in — then a divider, then Remove.
+         The gap is not cosmetic: a destructive control sitting flush against a neutral one is how
+         it gets clicked by accident, and Remove is now the only thing on the far side of the
+         line. -->
     <div class="c-detail__actions">
+      <!--
+        A disclosure, not a link to somewhere: `aria-expanded` says the region it names is on
+        screen and `aria-controls` says which region. The dock is mounted by the shell rather than
+        by this component precisely so it can outlive it, so this button and the thing it toggles
+        only ever meet through the store and that id.
+      -->
+      <Button
+        variant="quiet"
+        size="sm"
+        onclick={() => void terminals.toggle(projectId, worktree.id)}
+        title="Terminal ({SHORTCUT_LABEL})"
+        ariaExpanded={terminals.open}
+        ariaControls="terminal-dock"
+      >
+        <Icon name="terminal" size={13} /> Terminal
+      </Button>
+
       <OpenInButton {projectId} worktreeId={worktree.id} />
 
       <span class="c-detail__divider" aria-hidden="true"></span>

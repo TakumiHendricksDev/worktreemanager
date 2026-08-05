@@ -16,6 +16,7 @@
   import RemoveWorktreeDialog from './lib/components/RemoveWorktreeDialog.svelte';
   import SettingsDialog from './lib/components/SettingsDialog.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
+  import TerminalDock from './lib/components/TerminalDock.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
   import TrustBanner from './lib/components/TrustBanner.svelte';
   import Banner from './lib/components/ui/Banner.svelte';
@@ -24,6 +25,7 @@
   import Logo from './lib/components/ui/Logo.svelte';
   import { commands } from './lib/ipc/commands';
   import { errorMessage } from './lib/ipc/types';
+  import { terminals } from './lib/state/terminals.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { workspace } from './lib/state/workspace.svelte';
 
@@ -56,6 +58,11 @@
       if (Number.isFinite(parsed)) {
         sidebarWidth = Math.min(Math.max(parsed, MIN_SIDEBAR), MAX_SIDEBAR);
       }
+
+      // Not awaited: the dock starts closed, so neither its remembered height nor the shells it
+      // is adopting are needed for the first paint, and a slow config read must not hold up the
+      // worktree list.
+      void terminals.init();
 
       await workspace.init();
       booted = true;
@@ -276,6 +283,15 @@
           <p>Select a worktree on the left.</p>
         </div>
       {/if}
+
+      <!--
+        A sibling of the chain above, and unconditional, both deliberately. `Detail` unmounts
+        whenever the chain picks another branch — the create view, or a project switch that lands
+        on an empty cached list and leaves `selected` null for a moment — and a terminal that
+        unmounts is a transcript that is gone. Mounted here it survives all of them, and is
+        merely hidden while the create pane owns the screen.
+      -->
+      <TerminalDock visible={booted && mainView === 'worktree'} />
     </main>
   </div>
 

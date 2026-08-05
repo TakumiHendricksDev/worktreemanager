@@ -21,6 +21,8 @@
     icon = false,
     title,
     ariaLabel,
+    ariaExpanded,
+    ariaControls,
     onclick,
     children,
   }: {
@@ -48,6 +50,16 @@
     title?: string;
     /** For an icon-only button, where there is no text to name it. */
     ariaLabel?: string;
+    /**
+     * For a disclosure: whether the region named by `ariaControls` is currently on screen.
+     *
+     * Here rather than at the call site because the alternative is hand-writing
+     * `class="c-button c-button--quiet c-button--sm"` alongside the aria attributes, which
+     * gives up the one mechanism that catches a mistyped class name — see the note above.
+     */
+    ariaExpanded?: boolean;
+    /** The id of the region a disclosure toggles. */
+    ariaControls?: string;
     onclick?: (event: MouseEvent) => void;
     children: Snippet;
   } = $props();
@@ -59,6 +71,8 @@
   {title}
   {onclick}
   aria-label={ariaLabel}
+  aria-expanded={ariaExpanded}
+  aria-controls={ariaControls}
   class="c-button c-button--{variant} c-button--{size}"
   class:c-button--full={full}
   class:c-button--icon={icon === 'md'}

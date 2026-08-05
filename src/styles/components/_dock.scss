@@ -1,0 +1,154 @@
+/*
+ * The terminal dock: a drawer along the bottom of the detail pane.
+ *
+ * Components layer. Everything here paints — a header strip, a hairline, a resize handle — so it
+ * cannot be an Object, which is geometry with no cosmetics; and it is one block, so there is no
+ * earlier layer it could live in without reaching for bare element selectors.
+ *
+ * Named `c-dock` rather than `c-terminal-dock` because the app has exactly one dock, and because
+ * the longer name reads as a modifier of `c-terminal` when the relationship is the other way
+ * round: this *contains* terminals, it is not a kind of one.
+ *
+ * # Four declarations that look removable and are not
+ *
+ * `min-height: 0` on the pane. A flex item defaults to `min-height: auto`, which refuses to
+ * shrink below its content, and xterm's screen is content — without it the dock grows past the
+ * height the splitter set and pushes the detail pane off the top of the window. Same
+ * declaration, same reason, as the one `_terminal.scss` documents.
+ *
+ * `min-height: 0` on the block itself, so `max-height` can win against a tall `height`.
+ *
+ * `max-height`. The height is a stored pixel value, and on a window shorter than the dock there
+ * would be nothing left for the pane above it. The clamp in the script exists so
+ * `aria-valuemax` has a number to report; this is the one that actually holds.
+ *
+ * `display: none` on an inactive pane, rather than `visibility: hidden` with the panes stacked.
+ * Every worktree you have opened a shell in still has a pane mounted — that is what keeps its
+ * scrollback — and xterm's DOM renderer writes real DOM rows on every chunk, so a hidden pane
+ * has to cost nothing to lay out. It is also what makes becoming active a resize the terminal's
+ * own `ResizeObserver` already sees. `content-visibility: hidden` was the third candidate and is
+ * out on two counts: it keeps a box, so a fit would measure a subtree the browser is not laying
+ * out, and WebKitGTK is a first-class target here.
+ */
+
+.c-dock {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  height: var(--dock-h);
+  max-height: 66%;
+  min-height: 0;
+  background: var(--bg);
+
+  /* Collapsed — and also what the create pane's turn on screen looks like. One class for both:
+     in either case the dock must occupy no height and cost no layout. */
+  &.is-hidden {
+    display: none;
+  }
+
+  /* While dragging, suppress selection inside the dock. The pointerdown's `preventDefault`
+     covers everything outside it. */
+  &.is-dragging {
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: row-resize;
+  }
+}
+
+/*
+ * The horizontal twin of `.c-shell__splitter`, deliberately not shared with it.
+ *
+ * Same idiom in the other axis — a one-pixel line with the hit area widened around it, not the
+ * line — so a `splitter($axis)` mixin in `tools/` is the sanctioned way to share it, `@extend`
+ * being banned. Not worth it for two call sites, and it would mean editing `_shell.scss`, whose
+ * own header calls its classes the only ones in the app that can break layout for everything
+ * else, inside a feature change. The day a third splitter appears, write the mixin and convert
+ * all three at once.
+ */
+.c-dock__splitter {
+  flex: 0 0 auto;
+  height: 1px;
+  background: var(--border);
+  cursor: row-resize;
+  position: relative;
+
+  /* A 1px target is unhittable, so widen the hit area without widening the line. */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: -3px 0;
+  }
+
+  &:hover {
+    background: var(--border-strong);
+  }
+}
+
+.c-dock__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Weighted like the tab strip's labels rather than like a heading: this names a region of the
+   detail pane, and heading weight here would compete with the worktree's name above it. */
+.c-dock__title {
+  flex: 0 0 auto;
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+/* Takes the slack, so the actions stay pinned right however long an exit summary is. Monospace
+   for the same reason `.c-terminal__status` is: it reports process facts — exit codes, signal
+   names — which sit directly above monospace output. */
+.c-dock__note {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--step--2);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-dock__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  /* Pins right even when there is no note to take up the slack. */
+  margin-left: auto;
+}
+
+.c-dock__pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-2) var(--sp-4) var(--sp-4);
+
+  &.is-inactive {
+    display: none;
+  }
+}
+
+.c-dock__empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+  text-align: center;
+
+  p {
+    max-width: 48ch;
+    line-height: 1.6;
+  }
+}

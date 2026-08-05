@@ -598,6 +598,35 @@ mod tests {
         assert!(!object.contains_key("is_main"), "must not emit snake_case");
     }
 
+    /// The whole key set, not a sample, and that is the point.
+    ///
+    /// No field on [`TerminalSessionView`] is multi-word, so `rename_all` is invisible today
+    /// and the usual "does it emit camelCase" check would prove nothing. Asserting the exact
+    /// set is what makes the hand-written mirror in `src/lib/ipc/types.ts` checkable: adding
+    /// an `is_shell` here would break the frontend silently, and this fails instead.
+    #[test]
+    fn the_terminal_session_contract_has_exactly_three_keys() {
+        let view = TerminalSessionView {
+            session: "f0e1".to_owned(),
+            worktree: "/x/a".to_owned(),
+            project: "/x".to_owned(),
+        };
+        let json = serde_json::to_value(&view).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+
+        assert_eq!(
+            keys,
+            ["project", "session", "worktree"],
+            "the TypeScript mirror in `src/lib/ipc/types.ts` must be updated to match"
+        );
+    }
+
     #[test]
     fn an_untrusted_config_error_keeps_its_structured_detail() {
         // The UI needs the command list to render the trust prompt, not just a sentence.
@@ -648,6 +677,24 @@ pub struct SetupResultView {
     pub session: String,
     pub success: bool,
     pub summary: String,
+}
+
+/// One live shell in the terminal dock.
+///
+/// Called `TerminalSession` on the TypeScript side rather than `Terminal`, unlike every other
+/// `XView` → `X` pair in this file: `Terminal.svelte` imports `Terminal` from `@xterm/xterm`,
+/// and a contract type that shadows the terminal emulator is a fifteen-minute mystery waiting
+/// to happen.
+///
+/// `worktree` is the worktree id, which is an absolute path, so the dock keys its panes by the
+/// same string the sidebar does. No `argv`: a dock shell is always the login shell, so the
+/// field would be a constant the frontend never reads.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSessionView {
+    pub session: String,
+    pub worktree: String,
+    pub project: String,
 }
 
 /// Render a preflight item for the checklist.
