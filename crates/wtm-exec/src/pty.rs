@@ -137,6 +137,51 @@ impl PtyHostImpl {
             sessions.remove(&id);
         }
     }
+
+    /// Terminate every running session's group, with one grace period for all.
+    ///
+    /// For app shutdown, and it is not optional housekeeping. `portable-pty` calls
+    /// `setsid()` in the child, so every session is its own session *and* group
+    /// leader and does not die with its parent. Letting the process exit closes the
+    /// master, which hangs the tty up and sends `SIGHUP` to the session's
+    /// *foreground* group only — a job that job control has already moved into a
+    /// group of its own never sees it. Without this, quitting leaves a login shell
+    /// per worktree running with nothing attached to it.
+    ///
+    /// # The ceiling, stated rather than implied
+    ///
+    /// `killpg` reaches the group led by the session leader. An interactive shell
+    /// with a controlling tty enables job control, so a backgrounded `npm run dev`
+    /// gets its *own* group and survives — zsh HUPs its jobs on exit by default and
+    /// bash does not — and a profile that `exec`s tmux escapes entirely, because the
+    /// server daemonises. POSIX has no kill-a-session call, so this is the strongest
+    /// primitive available, and saying so is better than implying it is total.
+    ///
+    /// Returns how many groups were signalled, for the shutdown log.
+    pub fn kill_all(&self) -> usize {
+        let mut pids = Vec::new();
+        {
+            // Collected under the lock and signalled outside it. `terminate_groups`
+            // sleeps for the grace period, and holding the registry across that sleep
+            // would block every other pty call for as long as it lasts.
+            let sessions = self.sessions.lock();
+            for session in sessions.values() {
+                if session.outcome.lock().is_some() {
+                    continue;
+                }
+                // So the recorded outcome names the cause rather than the resulting
+                // signal, exactly as `intervene` does. Nothing reads it at exit; it
+                // matters the first time this is called from anywhere else.
+                session.intervention.lock().replace(Intervention::Killed);
+                if let Some(pid) = session.pid {
+                    pids.push(pid);
+                }
+            }
+        }
+
+        signal::terminate_groups(&pids);
+        pids.len()
+    }
 }
 
 impl PtyHost for PtyHostImpl {
@@ -741,5 +786,150 @@ mod tests {
         }
         h.reap_finished(2);
         assert_eq!(h.sessions.lock().len(), 2);
+    }
+
+    /// Reaping must not be able to touch a session that is still running.
+    ///
+    /// [`PtyHostImpl::reap_finished`] filters on `outcome.is_some()`, and the
+    /// terminal dock now calls it on every open — so a filter inverted by a later
+    /// edit would silently forget live shells, and the symptom would be a terminal
+    /// whose keystrokes stop working rather than anything that looks like reaping.
+    #[test]
+    fn a_reaped_session_is_forgotten_but_the_running_ones_are_not() {
+        let h = host();
+        let mut running = Vec::new();
+        for _ in 0..2 {
+            let rec = Arc::new(Recorder::default());
+            running.push(
+                h.spawn(
+                    &inv(&["sleep", "30"], 60_000),
+                    24,
+                    80,
+                    None,
+                    rec as Arc<dyn PtySink>,
+                )
+                .unwrap()
+                .session,
+            );
+        }
+        for _ in 0..4 {
+            let rec = Arc::new(Recorder::default());
+            let s = h
+                .spawn(
+                    &inv(&["true"], 10_000),
+                    24,
+                    80,
+                    None,
+                    rec as Arc<dyn PtySink>,
+                )
+                .unwrap();
+            h.wait(&s.session, &CancelToken::new()).unwrap();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        h.reap_finished(2);
+
+        assert_eq!(
+            h.sessions.lock().len(),
+            4,
+            "two running plus the two newest finished"
+        );
+        let live = h.sessions();
+        assert_eq!(live.len(), 2, "both running sessions must survive a reap");
+        for session in &running {
+            assert!(live.iter().any(|s| &s.session == session));
+        }
+
+        h.kill_all();
+    }
+
+    /// **The test that protects the shutdown hook.**
+    ///
+    /// `portable-pty` calls `setsid()`, so a session outlives its parent and quitting
+    /// leaks a login shell per worktree. The leak is silent and cumulative — you find
+    /// it weeks later in `ps` — so it needs a test rather than a code review.
+    #[test]
+    fn killing_every_session_at_once_leaves_none_running() {
+        let h = host();
+        let mut sessions = Vec::new();
+        for _ in 0..3 {
+            let rec = Arc::new(Recorder::default());
+            sessions.push(
+                h.spawn(
+                    &inv(&["sleep", "30"], 60_000),
+                    24,
+                    80,
+                    None,
+                    rec as Arc<dyn PtySink>,
+                )
+                .unwrap()
+                .session,
+            );
+        }
+        assert_eq!(h.sessions().len(), 3);
+
+        assert_eq!(h.kill_all(), 3, "every running session should be signalled");
+
+        for session in &sessions {
+            let outcome = h.wait(session, &CancelToken::new()).unwrap();
+            assert!(
+                matches!(outcome, ExitOutcome::Signalled { .. }),
+                "expected a signalled outcome, got {outcome:?}"
+            );
+        }
+        assert!(
+            h.sessions().is_empty(),
+            "nothing may still be reported as running after kill_all"
+        );
+
+        // Idempotent, which is what lets the quit hook run on more than one route
+        // without anyone having to reason about which fired first.
+        assert_eq!(h.kill_all(), 0);
+    }
+
+    /// The leak this feature had to fix before it could open shells all day.
+    ///
+    /// A finished `Session` holds a `Box<dyn MasterPty>` and its writer — roughly two
+    /// descriptors — for the lifetime of the process, and until the terminal dock
+    /// existed nothing ever called [`PtyHostImpl::reap_finished`]. This counts real
+    /// descriptors rather than registry entries, because the registry shrinking is
+    /// the change and the descriptors being released is the *property*: a future
+    /// `Session` that stashed a clone somewhere else would keep the entry count
+    /// honest and the leak intact.
+    ///
+    /// `/dev/fd` exists on macOS and Linux. The slack covers the reaped-but-kept
+    /// sessions plus whatever the test harness opens while this runs; the leak it
+    /// catches is twenty sessions' worth, which is an order of magnitude larger.
+    #[test]
+    fn opening_and_closing_many_sessions_does_not_accumulate_file_descriptors() {
+        fn open_descriptors() -> usize {
+            std::fs::read_dir("/dev/fd").map_or(0, Iterator::count)
+        }
+
+        let h = host();
+        let before = open_descriptors();
+        assert!(before > 0, "/dev/fd is unreadable, so this proves nothing");
+
+        for _ in 0..20 {
+            let rec = Arc::new(Recorder::default());
+            let s = h
+                .spawn(
+                    &inv(&["true"], 10_000),
+                    24,
+                    80,
+                    None,
+                    rec as Arc<dyn PtySink>,
+                )
+                .unwrap();
+            h.wait(&s.session, &CancelToken::new()).unwrap();
+            h.reap_finished(4);
+        }
+
+        let after = open_descriptors();
+        assert!(
+            after <= before + 16,
+            "twenty sessions took the descriptor count from {before} to {after}; \
+             finished sessions are holding their pty master open"
+        );
     }
 }

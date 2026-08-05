@@ -36,23 +36,51 @@ const GRACE: Duration = Duration::from_millis(400);
 /// Best-effort and never panics: by the time this runs the process may already be
 /// gone, which is success, not failure.
 pub fn terminate_group(pid: u32) {
-    let Some(group) = group_of(pid) else {
-        tracing::warn!(pid, "pid does not fit in a pid_t; cannot signal group");
-        return;
-    };
+    terminate_groups(&[pid]);
+}
 
-    match killpg(group, Signal::SIGTERM) {
-        Ok(()) => {}
-        // Already gone — nothing to do.
-        Err(Errno::ESRCH) => return,
-        Err(e) => tracing::debug!(pid, error = %e, "SIGTERM to group failed"),
+/// The same escalation applied to several groups, with **one** grace period for all.
+///
+/// Deliberately not a loop over [`terminate_group`], and that is the whole point.
+/// [`GRACE`] is how long a `docker` client needs to tear down cleanly — a property of
+/// the signal, not of the group — so N groups do not need N × 400 ms. The caller that
+/// terminates many at once is app shutdown, where the window has already gone and a
+/// serialized wait is indistinguishable from a hang.
+///
+/// An empty slice sleeps not at all, and so does a slice whose groups have all
+/// already exited: quitting with no terminals open must not pay the grace period for
+/// nothing. That is also what makes the single-pid case above behave exactly as it
+/// did before this function existed.
+pub fn terminate_groups(pids: &[u32]) {
+    let mut groups = Vec::with_capacity(pids.len());
+
+    for &pid in pids {
+        let Some(group) = group_of(pid) else {
+            tracing::warn!(pid, "pid does not fit in a pid_t; cannot signal group");
+            continue;
+        };
+
+        match killpg(group, Signal::SIGTERM) {
+            Ok(()) => {}
+            // Already gone — there is nothing left to escalate to.
+            Err(Errno::ESRCH) => continue,
+            Err(e) => tracing::debug!(pid, error = %e, "SIGTERM to group failed"),
+        }
+
+        groups.push((pid, group));
+    }
+
+    if groups.is_empty() {
+        return;
     }
 
     std::thread::sleep(GRACE);
 
-    match killpg(group, Signal::SIGKILL) {
-        Ok(()) | Err(Errno::ESRCH) => {}
-        Err(e) => tracing::warn!(pid, error = %e, "SIGKILL to group failed"),
+    for (pid, group) in groups {
+        match killpg(group, Signal::SIGKILL) {
+            Ok(()) | Err(Errno::ESRCH) => {}
+            Err(e) => tracing::warn!(pid, error = %e, "SIGKILL to group failed"),
+        }
     }
 }
 
@@ -246,6 +274,79 @@ mod tests {
         terminate_group(child.id());
         let status = child.wait().unwrap();
         assert_eq!(signal_of(status), Some(Signal::SIGTERM as i32));
+    }
+
+    /// Spawn `sh -c <script>` as its own group leader, the way every test here does.
+    fn spawn_leader(script: &str) -> std::process::Child {
+        #[allow(clippy::disallowed_methods)]
+        {
+            use std::os::unix::process::CommandExt;
+            let mut cmd = std::process::Command::new("/bin/sh");
+            cmd.args(["-c", script])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            cmd.process_group(0);
+            cmd.spawn().unwrap()
+        }
+    }
+
+    /// Quitting with no terminals open must not pay the grace period for nothing.
+    ///
+    /// The obvious implementation of the batch form sleeps first and signals after,
+    /// which turns every quit — including the overwhelmingly common one with nothing
+    /// running — into a 400 ms stall that reads as a hang.
+    #[test]
+    fn terminating_no_groups_at_all_returns_without_sleeping() {
+        let started = Instant::now();
+        terminate_groups(&[]);
+        assert!(
+            started.elapsed() < GRACE,
+            "an empty batch slept for {:?}; nothing was signalled, so nothing needed \
+             a grace period",
+            started.elapsed()
+        );
+
+        // Same requirement when every pid is already gone: there is nothing to
+        // escalate to, so there is nothing to wait for either.
+        let started = Instant::now();
+        terminate_groups(&[u32::MAX, u32::MAX - 1]);
+        assert!(started.elapsed() < GRACE);
+    }
+
+    /// **The load-bearing test for the batch design.**
+    ///
+    /// This goes red the moment someone "simplifies" [`terminate_groups`] into a loop
+    /// over [`terminate_group`] — which is the obvious refactor, reads better, and
+    /// makes quitting with six terminals open take two and a half seconds during
+    /// which the window is already gone. Both children ignore `SIGTERM`, so both
+    /// force the full escalation and the elapsed time is the grace period times
+    /// however many times it was paid.
+    #[test]
+    fn one_grace_period_covers_every_group_signalled_together() {
+        let mut first = spawn_leader("trap '' TERM; sleep 60");
+        let mut second = spawn_leader("trap '' TERM; sleep 60");
+        // Long enough for both shells to have installed their traps; without this the
+        // SIGTERM can land first and the test proves nothing about the escalation.
+        std::thread::sleep(Duration::from_millis(150));
+
+        let started = Instant::now();
+        terminate_groups(&[first.id(), second.id()]);
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            signal_of(first.wait().unwrap()),
+            Some(Signal::SIGKILL as i32)
+        );
+        assert_eq!(
+            signal_of(second.wait().unwrap()),
+            Some(Signal::SIGKILL as i32)
+        );
+        assert!(
+            elapsed < GRACE * 2,
+            "two groups took {elapsed:?}, which is more than one grace period — the \
+             sleep is being paid per group rather than once for the batch"
+        );
     }
 
     #[test]
