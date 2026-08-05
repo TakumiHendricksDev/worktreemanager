@@ -41,8 +41,6 @@
   let tab = $state<Tab>('chat');
 
   const panes = $derived(agents.panesIn(worktree.id));
-  /** Agents this machine actually has, so an uninstalled CLI is not offered. */
-  const startable = $derived(agents.options.filter((o) => o.available));
   let copied = $state(false);
 
   async function copyPath() {
@@ -222,25 +220,31 @@
             Start an agent session in this worktree. It runs in
             <code>{worktree.dirname}</code> and can read and change the files there.
           </p>
-          {#if startable.length === 0}
-            <!-- Named rather than hidden: an empty launcher with no explanation is this app's
-                 most likely production failure wearing a disguise — see Troubleshooting. -->
+          <!--
+            Unavailable agents are listed and disabled, with the reason, rather than omitted.
+            The same call `OpenInButton` makes and for the same reason: a greyed row saying "no
+            `claude` on wtm's PATH" doubles as the diagnosis of this app's most likely production
+            failure, where a silently shorter list is a mystery. Filtering them out was the first
+            version of this, and it hid exactly the case worth explaining.
+          -->
+          <div class="o-row">
+            {#each agents.options as option (option.id)}
+              <Button
+                variant={option.available ? 'accent' : 'neutral'}
+                size="sm"
+                disabled={!option.available}
+                title={option.detail ?? option.blurb}
+                onclick={() => void agents.open(projectId, worktree.id, option.id)}
+              >
+                {option.label}
+              </Button>
+            {/each}
+          </div>
+          {#if agents.options.every((o) => !o.available)}
             <p class="c-status--warn">
-              No agent CLI is on wtm's PATH. Check Settings → Advanced.
+              No agent CLI is on wtm's PATH. Settings → Advanced shows the PATH wtm
+              resolved.
             </p>
-          {:else}
-            <div class="o-row">
-              {#each startable as option (option.id)}
-                <Button
-                  variant="accent"
-                  size="sm"
-                  title={option.blurb}
-                  onclick={() => void agents.open(projectId, worktree.id, option.id)}
-                >
-                  {option.label}
-                </Button>
-              {/each}
-            </div>
           {/if}
         </div>
       {:else}

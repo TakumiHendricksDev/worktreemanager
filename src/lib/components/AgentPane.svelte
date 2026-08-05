@@ -17,6 +17,19 @@
 
   let draft = $state('');
   let scroller = $state<HTMLElement | null>(null);
+  /**
+   * Whether the view is following the tail.
+   *
+   * Tracked from a scroll listener rather than measured inside the anchoring effect, and the
+   * difference is a real bug rather than a style choice. By the time that effect runs the DOM has
+   * already grown, so measuring then answers "is it pinned *after* the append" — which on the
+   * first content is `scrollTop === 0` against a tall scroller, reads as "scrolled away", and the
+   * transcript never anchors at all. This records the answer from *before*.
+   *
+   * Not `$state`: only the effect reads it, and making it reactive would put the effect in its own
+   * dependency set.
+   */
+  let pinned = true;
 
   const label = $derived(
     agents.options.find((o) => o.id === pane.provider)?.label ?? pane.provider,
@@ -36,18 +49,25 @@
    * Follow the tail as output arrives, unless the user has scrolled up.
    *
    * The guard is what makes reading a long transcript possible at all: an unconditional
-   * scroll-to-bottom on every delta would yank the view back down mid-sentence. 32px of slack
-   * rather than an exact comparison because sub-pixel layout means `scrollTop + clientHeight`
-   * rarely equals `scrollHeight` exactly even when pinned.
+   * scroll-to-bottom on every delta would yank the view back down mid-sentence.
    */
   $effect(() => {
     // Depend on the event count, not on `rows`: this must fire on append, and reading the folded
     // rows here would make the effect re-run on every text mutation inside a row as well.
     void pane.events.length;
-    if (!scroller) return;
-    const slack = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    if (slack < 32) scroller.scrollTop = scroller.scrollHeight;
+    if (scroller && pinned) scroller.scrollTop = scroller.scrollHeight;
   });
+
+  /**
+   * Record whether the view is at the tail, so the effect above knows what to do next time.
+   *
+   * 32px of slack rather than an exact comparison, because sub-pixel layout means
+   * `scrollTop + clientHeight` rarely equals `scrollHeight` exactly even when pinned.
+   */
+  function onScroll() {
+    if (!scroller) return;
+    pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+  }
 
   function submit(event: Event) {
     event.preventDefault();
@@ -101,7 +121,7 @@
     </div>
   </header>
 
-  <div class="c-agent__body" bind:this={scroller}>
+  <div class="c-agent__body" bind:this={scroller} onscroll={onScroll}>
     {#if pane.events.length === 0 && pane.ready}
       <p class="c-agent__empty">
         This session works in the worktree's directory. Ask it something.
