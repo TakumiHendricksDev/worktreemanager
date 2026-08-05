@@ -13,6 +13,7 @@ import type {
   AgentOption,
   AgentSession,
   ApprovalAnswer,
+  Capability,
   CreateOutcome,
   Doctor,
   Form,
@@ -156,6 +157,14 @@ export const commands = {
     effort?: string | null;
     mode?: string | null;
   }) => invoke<string>('open_agent_session', args),
+
+  /**
+   * What an agent can do on this machine: its models and each one's effort ladder.
+   *
+   * Not cached in Rust. For Codex this spawns a throwaway app server and asks, which takes a second
+   * or two, so callers should fetch it once when a picker is first opened rather than per render.
+   */
+  agentCapability: (agentId: string) => invoke<Capability>('agent_capability', { agentId }),
 
   /** Send one turn. Queued by the provider if the handshake has not finished yet. */
   sendTurn: (session: string, text: string) => invoke<void>('send_turn', { session, text }),

@@ -15,6 +15,7 @@
   import { sessions, type Pane } from '../state/sessions.svelte';
   import AgentTranscript from './AgentTranscript.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
+  import ModelPicker from './ModelPicker.svelte';
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -76,6 +77,10 @@
    * is keyed off the provider here — it belongs on the capability query.
    */
   const canEdit = $derived(provider === 'claude');
+
+  const capability = $derived(
+    provider === null ? null : (sessions.capabilities[provider] ?? null),
+  );
 
   $effect(() => {
     void pane.events.length;
@@ -216,6 +221,17 @@
         onanswer={(answer) => void sessions.answer(pane.id, blocking.id, answer)}
       />
     {/if}
+
+    <div class="c-pane__settings">
+      <ModelPicker
+        {capability}
+        model={pane.model}
+        effort={pane.effort}
+        flags={pane.flags}
+        disabled={pane.ended !== null || pane.error !== null}
+        onchange={(next) => sessions.configure(pane.id, next)}
+      />
+    </div>
 
     <form class="c-pane__composer" onsubmit={submit}>
       <textarea

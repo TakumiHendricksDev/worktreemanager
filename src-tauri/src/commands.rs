@@ -28,8 +28,9 @@ use crate::app::App;
 use crate::display;
 use crate::openers;
 use crate::view::{
-    ActionView, AgentOptionView, AgentSessionView, DoctorView, ErrorView, FieldView, FormView,
-    OpenersView, PaletteView, ProjectView, RegisteredView, TerminalSessionView, WorktreeView,
+    ActionView, AgentOptionView, AgentSessionView, CapabilityView, DoctorView, ErrorView,
+    FieldView, FormView, OpenersView, PaletteView, ProjectView, RegisteredView,
+    TerminalSessionView, WorktreeView,
 };
 
 /// Shared application state.
@@ -1446,4 +1447,141 @@ pub async fn close_agent_session(app: AppState<'_>, session: String) -> Reply<()
         Ok(())
     })
     .await
+}
+
+/// How long to wait for a provider to answer a capability query, in milliseconds.
+///
+/// The app server starts its configured MCP servers before it will answer, so this is not
+/// instantaneous — six were observed starting on one machine. Six seconds is generous against that
+/// and still short enough that a picker which cannot be filled says so rather than hanging.
+///
+/// Measured with `Clock::monotonic_ms` rather than `Instant`: `Instant::now` is banned outside the
+/// clock adapter so time enters through the port, and the wall clock is the wrong one here because
+/// it can jump backwards.
+const CAPABILITY_TIMEOUT_MS: u64 = 6_000;
+
+/// What an agent can do on this machine: its models, and the effort ladder each one supports.
+///
+/// Two providers, two honest answers. Claude Code advertises nothing — no `model/list`, and its
+/// efforts are a fixed five — so its answer is a table compiled into this build, and
+/// `modelsAreLive` is false so the UI can say "as of this wtm build" rather than presenting it as
+/// the CLI's word. Codex advertises everything, so this spawns a throwaway app server, asks, and
+/// kills it.
+///
+/// A short-lived process for a picker is worth it: the ladders genuinely differ between models of
+/// the same provider — `gpt-5.6-sol` reaches `ultra` where `gpt-5.5` stops at `xhigh` — so a
+/// hardcoded list would offer rungs the selected model rejects.
+#[tauri::command]
+pub async fn agent_capability(app: AppState<'_>, agent_id: String) -> Reply<CapabilityView> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let entry = wtm_agent::entry(&agent_id).ok_or_else(|| {
+            ErrorView::new(
+                "exec",
+                format!("`{agent_id}` is not an agent this build of wtm knows how to drive"),
+            )
+        })?;
+
+        if agent_id == wtm_agent::claude::ID {
+            return Ok(CapabilityView::from(wtm_agent::claude_capability()));
+        }
+
+        let mut capability = probe_codex(&app).map_err(|e| ErrorView::new("exec", e))?;
+        // The modes are the app server's own spelling, which it does not enumerate — the schema
+        // does. Compiled in rather than queried, and the query is only for the part that moves.
+        capability.modes = ["untrusted", "on-request", "never"]
+            .iter()
+            .map(|m| (*m).to_owned())
+            .collect();
+        let _ = entry;
+        Ok(CapabilityView::from(capability))
+    })
+    .await
+}
+
+/// Drive a throwaway app server for its model catalogue.
+///
+/// Synchronous and blocking, which is why it is only reachable from inside `blocking()`. The
+/// collected lines are scanned rather than assumed to arrive in order: the server interleaves
+/// notifications — MCP startup statuses, remote-control status — with its replies.
+/// [`probe_codex`], reachable from an integration test.
+///
+/// The probe itself stays private: it is an implementation detail of one command, and the only reason
+/// to expose it is that the property worth testing — *does a real app server answer* — cannot be
+/// reached through `#[tauri::command]` without a running Tauri runtime.
+///
+/// # Errors
+///
+/// If the CLI cannot be spawned, or does not answer within the deadline.
+pub fn probe_codex_for_test(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, String> {
+    probe_codex(app)
+}
+
+fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, String> {
+    use wtm_core::ports::pipe::{PipeHost, PipeSink};
+
+    #[derive(Default)]
+    struct Collect {
+        lines: parking_lot::Mutex<Vec<String>>,
+    }
+    impl PipeSink for Collect {
+        fn on_line(&self, _s: &wtm_core::model::SessionId, line: &str) {
+            self.lines.lock().push(line.to_owned());
+        }
+        fn on_stderr(&self, _s: &wtm_core::model::SessionId, line: &str) {
+            tracing::debug!(line, "codex capability probe stderr");
+        }
+        fn on_exit(&self, _s: &wtm_core::model::SessionId, _o: &wtm_core::model::ExitOutcome) {}
+    }
+
+    let entry = wtm_agent::entry(wtm_agent::codex::ID).ok_or("codex is not in the catalogue")?;
+    let argv = entry.provider.argv(&wtm_agent::SessionRequest::default());
+    let inv = wtm_core::ports::exec::Invocation::new(argv, std::env::temp_dir(), SHELL_TIMEOUT_MS);
+
+    let sink = Arc::new(Collect::default());
+    let spawned = app
+        .pipe
+        .spawn(&inv, None, Arc::clone(&sink) as Arc<dyn PipeSink>)
+        .map_err(|e| e.to_string())?;
+
+    for frame in wtm_agent::codex::model_list_frames() {
+        app.pipe
+            .write_line(&spawned.session, &frame)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let deadline = app.clock.monotonic_ms() + CAPABILITY_TIMEOUT_MS;
+    let mut models = Vec::new();
+    loop {
+        let found = sink.lines.lock().iter().find_map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line).ok()?;
+            (value.get("id").and_then(serde_json::Value::as_i64)
+                == Some(wtm_agent::codex::MODEL_LIST_ID))
+            .then(|| wtm_agent::codex::parse_models(&value))
+        });
+        if let Some(parsed) = found {
+            models = parsed;
+            break;
+        }
+        if app.clock.monotonic_ms() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Killed either way. A probe that leaked an app server per picker open would be worse than a
+    // picker that comes back empty.
+    let _ = app.pipe.kill(&spawned.session);
+
+    if models.is_empty() {
+        return Err(
+            "codex did not answer `model/list` — check that `codex` is logged in".to_owned(),
+        );
+    }
+    Ok(wtm_core::model::AgentCapability {
+        models,
+        modes: Vec::new(),
+        models_are_live: true,
+        flags: std::collections::BTreeMap::new(),
+    })
 }

@@ -192,6 +192,7 @@ pub fn run() {
             commands::list_terminals,
             commands::close_terminal,
             commands::list_agents,
+            commands::agent_capability,
             commands::open_agent_session,
             commands::send_turn,
             commands::answer_approval,

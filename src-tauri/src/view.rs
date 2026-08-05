@@ -803,6 +803,35 @@ pub struct AgentSessionView {
     pub provider: String,
 }
 
+/// What an agent can do on this machine.
+///
+/// A view rather than the domain type crossing directly, for the same reason every other type here
+/// is one: `serde(rename_all = "camelCase")` is a property of the boundary, and the domain should not
+/// have to carry an opinion about JavaScript's naming conventions to be serialized.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityView {
+    pub models: Vec<wtm_core::model::AgentModel>,
+    pub modes: Vec<String>,
+    /// True when the models came from asking the CLI rather than from a compiled table.
+    ///
+    /// Surfaced so the UI can say "as reported by codex" against "as of this wtm build" — which is
+    /// the difference between a stale list being the CLI's fault and being ours.
+    pub models_are_live: bool,
+    pub flags: std::collections::BTreeMap<String, String>,
+}
+
+impl From<wtm_core::model::AgentCapability> for CapabilityView {
+    fn from(value: wtm_core::model::AgentCapability) -> Self {
+        Self {
+            models: value.models,
+            modes: value.modes,
+            models_are_live: value.models_are_live,
+            flags: value.flags,
+        }
+    }
+}
+
 /// Render a preflight item for the checklist.
 #[must_use]
 pub fn preflight_view(item: &PreflightItem) -> PreflightView {

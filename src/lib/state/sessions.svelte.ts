@@ -30,6 +30,7 @@ import {
   type AgentReady,
   type ApprovalAnswer,
   type ApprovalRequest,
+  type Capability,
   type PtyExit,
 } from '../ipc/types';
 import {
@@ -101,6 +102,16 @@ export interface Pane {
   error: string | null;
   /** Bumped by a restart, and part of the render key, so a restart remounts. */
   generation: number;
+  /**
+   * What this session was started with, and what a later turn overrides to.
+   *
+   * Held per pane rather than globally because two panes in one worktree are routinely a big model
+   * and a cheap one — which is much of why several sessions at once is the feature.
+   */
+  model: string | null;
+  effort: string | null;
+  /** Provider flags that are on, by name. Claude's `ultracode` is the only one today. */
+  flags: string[];
 }
 
 let nextPaneId = 0;
@@ -113,6 +124,14 @@ class Sessions {
   focused = $state<Record<string, string | null>>({});
   /** The agent catalogue, with availability. */
   options = $state<AgentOption[]>([]);
+  /**
+   * What each provider can do, by id, once asked.
+   *
+   * Fetched lazily and cached for the window's life: for Codex the answer costs a throwaway app
+   * server, so asking per render would spawn a process per keystroke. Stale only if a CLI is
+   * upgraded while wtm runs, which is worth a restart rather than a poll — and polling is banned.
+   */
+  capabilities = $state<Record<string, Capability | null>>({});
   error = $state<string | null>(null);
   /** True when a pane was asked for and a cap said no. Cleared by the next successful open. */
   atCapacity = $state(false);
@@ -177,12 +196,18 @@ class Sessions {
       this.noteExit(e.payload.session, e.payload.summary);
     });
 
-    void this.refreshOptions();
+    await this.refreshOptions();
 
     const [shells, agents] = await Promise.all([
       commands.listTerminals().catch(() => []),
       commands.listAgentSessions().catch(() => []),
     ]);
+
+    // Asked for up front so a picker is filled before anyone opens one. Not awaited: for Codex this
+    // spawns a process, and a slow probe must not hold up the session list.
+    for (const option of this.options.filter((o) => o.available)) {
+      void this.loadCapability(option.id);
+    }
 
     for (const shell of shells) {
       this.adopt({ kind: 'shell' }, shell.project, shell.worktree, shell.session);
@@ -202,6 +227,37 @@ class Sessions {
       offReady();
       offPtyExit();
     };
+  }
+
+  /**
+   * Ask a provider what it can do, once.
+   *
+   * `null` in the map means "asked and it failed", which the picker renders as a warning — distinct
+   * from an absent key, which means "not asked yet" and renders as a spinner. Collapsing those two
+   * would make a logged-out CLI look like a slow one.
+   */
+  async loadCapability(provider: string): Promise<void> {
+    if (provider in this.capabilities) return;
+    // Claimed before the await, so two panes opening at once do not both spawn a probe.
+    this.capabilities = { ...this.capabilities, [provider]: null };
+    try {
+      const capability = await commands.agentCapability(provider);
+      this.capabilities = { ...this.capabilities, [provider]: capability };
+    } catch (e) {
+      this.error = errorMessage(e);
+    }
+  }
+
+  /** Change what a pane's next turn uses. Takes effect without restarting the session. */
+  configure(
+    paneId: string,
+    next: { model: string; effort: string; flags: string[] },
+  ): void {
+    const pane = this.paneById(paneId);
+    if (!pane) return;
+    pane.model = next.model;
+    pane.effort = next.effort;
+    pane.flags = next.flags;
   }
 
   /** Re-probe which agents this machine has. Silent on failure — an auxiliary convenience. */
@@ -241,6 +297,9 @@ class Sessions {
       ended: null,
       error: null,
       generation: 0,
+      model: null,
+      effort: null,
+      flags: [],
     };
   }
 
@@ -311,14 +370,25 @@ class Sessions {
     if (!this.hasRoom(worktreeId)) return;
 
     const pane = this.blank({ kind: 'agent', provider }, projectId, worktreeId);
+    // The provider's own defaults, so a session starts on the model it would have chosen and the
+    // picker shows that rather than an empty control. `null` until the capability lands, which the
+    // picker resolves to the default itself.
+    const capability = this.capabilities[provider];
+    const preferred = capability?.models.find((m) => m.isDefault) ?? capability?.models[0];
+    pane.model = preferred?.id ?? null;
+    pane.effort = preferred?.defaultEffort ?? null;
+
     this.panes = [...this.panes, pane];
     this.place(worktreeId, pane.id, placement);
+    void this.loadCapability(provider);
 
     try {
       const session = await commands.openAgentSession({
         projectId,
         worktreeId,
         agentId: provider,
+        model: pane.model,
+        effort: pane.effort,
       });
       const live = this.paneById(pane.id);
       if (live) live.session = session;
@@ -449,6 +519,8 @@ class Sessions {
           projectId: pane.projectId,
           worktreeId: pane.worktreeId,
           agentId: pane.kind.provider,
+          model: pane.model,
+          effort: pane.effort,
         });
       }
     } catch (e) {

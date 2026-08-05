@@ -16,6 +16,12 @@
 //!     `request`, which is where every other id on this transport lives;
 //!   * `result` reports `total_cost_usd` — real currency, which the other provider has none of.
 
+// `unwrap_used` is banned in the app so a failure carries a message. In an assertion it adds noise
+// without adding information — a panic is the failure report either way — which is the allowance
+// `wtm-exec` grants its own tests via `lib.rs`. An integration test is its own crate, so it has to
+// say so here.
+#![allow(clippy::unwrap_used)]
+
 use pretty_assertions::assert_eq;
 use wtm_agent::claude::Claude;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
@@ -495,4 +501,45 @@ fn a_real_turns_events_are_the_conversation_and_nothing_else() {
         other => panic!("expected TurnFinished, got {other:?}"),
     }
     assert_eq!(produced.len(), 3, "the conversation and nothing else");
+}
+
+#[test]
+fn the_compiled_capability_is_honest_about_being_compiled() {
+    // There is no `model/list` here — `--model` takes an alias or an id and the CLI validates it at
+    // startup, so the only way to enumerate is to know. `models_are_live: false` is what lets the UI
+    // say "as of this build" rather than presenting a stale table as the CLI's answer.
+    let capability = wtm_agent::claude_capability();
+    assert!(
+        !capability.models_are_live,
+        "a compiled table must not claim to be live"
+    );
+
+    // Aliases rather than dated ids: each resolves to the current model of its tier, so this list
+    // ages far better than `claude-opus-4-5-20251101` would.
+    let ids: Vec<&str> = capability.models.iter().map(|m| m.id.as_str()).collect();
+    assert!(ids.contains(&"opus") && ids.contains(&"sonnet") && ids.contains(&"haiku"));
+
+    // Five rungs, the same for every model — the opposite of the other provider, where the ladder is
+    // per model. Straight from `--help`: `--effort <low|medium|high|xhigh|max>`.
+    for model in &capability.models {
+        let ladder: Vec<&str> = model.efforts.iter().map(|e| e.effort.as_str()).collect();
+        assert_eq!(
+            ladder,
+            ["low", "medium", "high", "xhigh", "max"],
+            "{} should carry the five documented tiers",
+            model.id
+        );
+        assert!(
+            !ladder.contains(&"ultra"),
+            "`ultra` is Codex's rung, not Claude's — see `ultracode`"
+        );
+    }
+
+    // `ultracode` is a flag, not a rung, and its description has to say the precondition because the
+    // CLI refuses it below xhigh with an error the user cannot otherwise act on.
+    let ultracode = capability
+        .flags
+        .get("ultracode")
+        .expect("ultracode is a flag");
+    assert!(ultracode.contains("xhigh"));
 }

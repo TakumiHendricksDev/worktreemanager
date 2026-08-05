@@ -283,6 +283,42 @@ export interface AgentSession {
   provider: string;
 }
 
+export interface EffortOption {
+  effort: string;
+  description: string | null;
+}
+
+/**
+ * One model a provider offers, and the effort ladder **that model** supports.
+ *
+ * Per model, not per provider, because that is what the providers report: `gpt-5.6-sol` offers six
+ * efforts including `ultra` and `gpt-5.5` offers four. A picker built on a per-provider ladder would
+ * offer rungs the selected model rejects.
+ */
+export interface AgentModel {
+  id: string;
+  label: string;
+  description: string | null;
+  isDefault: boolean;
+  defaultEffort: string | null;
+  efforts: EffortOption[];
+}
+
+/** What an agent can do on this machine. */
+export interface Capability {
+  models: AgentModel[];
+  modes: string[];
+  /**
+   * True when the models came from asking the CLI rather than from a table compiled into wtm.
+   *
+   * Codex answers `model/list`; Claude Code has no such call, so its list is as of this build. The UI
+   * says which, because a stale list being the CLI's fault and being ours are different problems.
+   */
+  modelsAreLive: boolean;
+  /** Provider switches that are neither model nor effort — Claude's `ultracode`. */
+  flags: Record<string, string>;
+}
+
 export interface AgentUsage {
   tokensIn: number;
   tokensOut: number;

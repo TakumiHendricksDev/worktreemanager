@@ -33,6 +33,12 @@
 //! assertions with nothing spawned. That is the property the design exists for, and it is why
 //! there is no `FakePipe` here.
 
+// `unwrap_used` is banned in the app so a failure carries a message. In an assertion it adds noise
+// without adding information — a panic is the failure report either way — which is the allowance
+// `wtm-exec` grants its own tests via `lib.rs`. An integration test is its own crate, so it has to
+// say so here.
+#![allow(clippy::unwrap_used)]
+
 use pretty_assertions::assert_eq;
 use wtm_agent::codex::Codex;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
@@ -732,4 +738,74 @@ fn lifecycle_chatter_draws_nothing_while_an_unknown_method_still_does() {
         events(&driver.on_line(r#"{"method":"some/brand/newThing","params":{}}"#)).first(),
         Some(AgentEvent::Raw { .. })
     ));
+}
+
+#[test]
+fn the_model_list_reply_yields_per_model_effort_ladders() {
+    // The fact the whole capability query exists for: the ladders differ *within* one provider.
+    // Captured from a real `model/list` — `gpt-5.6-sol` reaches `ultra`, `gpt-5.5` stops at `xhigh`.
+    // A picker built on a single provider-wide list would offer rungs the selected model rejects.
+    let reply: serde_json::Value = serde_json::from_str(
+        r#"{"id":3,"result":{"data":[
+          {"id":"gpt-5.6-sol","model":"gpt-5.6-sol","displayName":"GPT-5.6-Sol","description":"","hidden":false,"isDefault":true,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low","description":"Fast"},{"reasoningEffort":"medium","description":"Balanced"},{"reasoningEffort":"high","description":"Deeper"},{"reasoningEffort":"xhigh","description":"Extra"},{"reasoningEffort":"max","description":"Maximum"},{"reasoningEffort":"ultra","description":"Maximum reasoning with automatic task delegation"}]},
+          {"id":"gpt-5.5","model":"gpt-5.5","displayName":"GPT-5.5","description":"","hidden":false,"isDefault":false,"defaultReasoningEffort":"xhigh","supportedReasoningEfforts":[{"reasoningEffort":"low","description":""},{"reasoningEffort":"medium","description":""},{"reasoningEffort":"high","description":""},{"reasoningEffort":"xhigh","description":""}]},
+          {"id":"gpt-5.6-sol-wm","model":"gpt-5.6-sol-wm","displayName":"GPT-5.6-Sol-WM","description":"","hidden":true,"isDefault":false,"defaultReasoningEffort":"low","supportedReasoningEfforts":[]}
+        ],"nextCursor":null}}"#,
+    )
+    .unwrap();
+
+    let models = wtm_agent::codex::parse_models(&reply);
+
+    // The hidden one is dropped: the server marks what it does not want in a picker, and offering it
+    // anyway would present something the user has no way to understand.
+    assert_eq!(models.len(), 2, "the hidden model must not be offered");
+
+    let sol = &models[0];
+    assert_eq!(sol.id, "gpt-5.6-sol");
+    assert_eq!(sol.label, "GPT-5.6-Sol");
+    assert!(sol.is_default);
+    assert_eq!(sol.default_effort.as_deref(), Some("medium"));
+    let ladder: Vec<&str> = sol.efforts.iter().map(|e| e.effort.as_str()).collect();
+    assert_eq!(ladder, ["low", "medium", "high", "xhigh", "max", "ultra"]);
+    assert_eq!(
+        sol.efforts[5].description.as_deref(),
+        Some("Maximum reasoning with automatic task delegation"),
+        "the description is what tells a user what `ultra` costs"
+    );
+
+    // Four rungs, not six. This is the assertion a hardcoded ladder would fail.
+    assert_eq!(models[1].efforts.len(), 4);
+    assert!(!models[1].efforts.iter().any(|e| e.effort == "ultra"));
+}
+
+#[test]
+fn a_model_list_that_did_not_answer_yields_nothing_rather_than_a_guess() {
+    // An error reply, or a reply to something else. Returning an empty list lets the caller say "this
+    // agent reported no models — it may not be logged in", which is actionable; inventing a default
+    // would offer a model the CLI may reject.
+    for line in [
+        r#"{"id":3,"error":{"code":-32000,"message":"not logged in"}}"#,
+        r#"{"id":3,"result":{}}"#,
+        r#"{"method":"thread/started","params":{}}"#,
+    ] {
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(wtm_agent::codex::parse_models(&value).is_empty(), "{line}");
+    }
+}
+
+#[test]
+fn the_capability_frames_ask_without_the_experimental_capability() {
+    // Verified against the real server: `model/list` needs no `experimentalApi`, and asking for one
+    // defensively would be a claim this build cannot support.
+    let frames: Vec<serde_json::Value> = wtm_agent::codex::model_list_frames()
+        .iter()
+        .map(|f| serde_json::from_str(f).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[0]["method"], "initialize");
+    assert!(frames[0]["params"]["capabilities"].is_null());
+    // `initialized` before anything else, or the server refuses the request that follows.
+    assert_eq!(frames[1]["method"], "initialized");
+    assert_eq!(frames[2]["method"], "model/list");
+    assert_eq!(frames[2]["id"], wtm_agent::codex::MODEL_LIST_ID);
 }

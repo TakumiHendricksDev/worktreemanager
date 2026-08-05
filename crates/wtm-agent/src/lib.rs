@@ -38,12 +38,14 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod capability;
 pub mod catalogue;
 pub mod claude;
 pub mod codex;
 pub mod provider;
 pub mod session;
 
+pub use capability::claude_capability;
 pub use catalogue::{CATALOGUE, ProviderEntry, entry};
 pub use provider::{Provider, ProviderId, SessionRequest, Step};
 pub use session::AgentSession;

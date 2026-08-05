@@ -776,3 +776,78 @@ fn turn_id(params: &Value) -> String {
         .unwrap_or_default()
         .to_owned()
 }
+
+/// The frames that ask the app server for its model catalogue.
+///
+/// Returned as data rather than sent, because this crate cannot spawn — see the crate docs. The
+/// composition root writes these, collects lines until it sees the reply to id 3, and hands it to
+/// [`parse_models`].
+///
+/// Ids 1–3 rather than a counter: this is a throwaway connection with no other traffic on it.
+#[must_use]
+pub fn model_list_frames() -> Vec<String> {
+    vec![
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "clientInfo": { "name": CLIENT_NAME, "title": "Worktree Manager", "version": env!("CARGO_PKG_VERSION") } },
+        })
+        .to_string(),
+        json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string(),
+        // No `experimentalApi` capability: `model/list` does not need one, verified by asking.
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "model/list", "params": {} }).to_string(),
+    ]
+}
+
+/// The JSON-RPC id [`model_list_frames`] expects its answer on.
+pub const MODEL_LIST_ID: i64 = 3;
+
+/// Turn a `model/list` reply into the domain's model list.
+///
+/// Hidden models are dropped: the server marks the ones it does not want in a picker, and a hidden
+/// entry in ours would offer something the user has no way to understand. Everything else is passed
+/// through, including effort ladders that differ between models of the same provider — which is the
+/// fact the whole capability query exists for.
+#[must_use]
+pub fn parse_models(reply: &Value) -> Vec<wtm_core::model::AgentModel> {
+    let Some(data) = reply
+        .get("result")
+        .and_then(|r| r.get("data"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    data.iter()
+        .filter(|m| m.get("hidden").and_then(Value::as_bool) != Some(true))
+        .map(|m| {
+            let text = |key: &str| m.get(key).and_then(Value::as_str).map(str::to_owned);
+            // `model` is what `turn/start` wants; `id` is the catalogue's own key and has been seen
+            // to match. Preferring `model` means the value handed back is the one that works.
+            let id = text("model").or_else(|| text("id")).unwrap_or_default();
+            wtm_core::model::AgentModel {
+                label: text("displayName").unwrap_or_else(|| id.clone()),
+                id,
+                description: text("description"),
+                is_default: m.get("isDefault").and_then(Value::as_bool) == Some(true),
+                default_effort: text("defaultReasoningEffort"),
+                efforts: m
+                    .get("supportedReasoningEfforts")
+                    .and_then(Value::as_array)
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(|e| {
+                                Some(wtm_core::model::EffortOption {
+                                    effort: e.get("reasoningEffort")?.as_str()?.to_owned(),
+                                    description: e
+                                        .get("description")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_owned),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }
+        })
+        .collect()
+}

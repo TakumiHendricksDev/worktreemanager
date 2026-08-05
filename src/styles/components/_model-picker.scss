@@ -1,0 +1,28 @@
+/*
+ * The model, effort and flag row in a composer.
+ *
+ * Components layer. Two native `<select>`s and any provider flags, laid out on one line and allowed
+ * to wrap on a narrow pane — a picker that clipped would hide the effort, which is the half people
+ * change most.
+ *
+ * Native selects, deliberately: the popup renders outside the stacking context, so neither menu
+ * needs a `z-index`. `settings/_config.scss` says the app has two stacking levels and nothing else
+ * should add one, and a hand-built listbox would have needed a third.
+ */
+
+.c-model-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  font-size: var(--step--2);
+}
+
+.c-model-picker__field {
+  display: flex;
+  align-items: center;
+}
+
+.c-model-picker__note {
+  font-size: var(--step--2);
+}

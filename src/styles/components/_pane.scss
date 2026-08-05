@@ -92,6 +92,18 @@
   font-size: var(--step--1);
 }
 
+/*
+ * The model and effort row, between the transcript and the composer.
+ *
+ * Above the input rather than beside it: it is what the *next* turn will use, so it reads as a
+ * setting on the message you are about to write. Beside the Send button it would read as part of the
+ * send action, which it is not — changing it mid-session takes effect without restarting anything.
+ */
+.c-pane__settings {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3) 0;
+}
+
 .c-pane__composer {
   flex: 0 0 auto;
   display: flex;
