@@ -1,0 +1,31 @@
+[package]
+name        = "wtm-agent"
+description = "Agent CLI protocol adapters: argv, handshake, and wire-event mapping onto the domain."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# Note what is absent: `wtm-exec`. This crate is *handed* a `PipeHost` rather than
+# constructing one, exactly as `wtm-git` is handed a `CommandRunner`, so its dependency list
+# is the proof that it never spawns anything itself and the mapping is unit-testable against
+# `FakePipe` with no child process in sight.
+[dependencies]
+wtm-core   = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+uuid       = { workspace = true }
+# `parking_lot`, not `std::sync::Mutex`: banned workspace-wide by `clippy.toml`'s
+# `disallowed-types`, because poisoning would turn one panic into a permanent failure.
+parking_lot = { workspace = true }
+tracing    = { workspace = true }
+
+[dev-dependencies]
+wtm-testkit      = { workspace = true }
+pretty_assertions = { workspace = true }

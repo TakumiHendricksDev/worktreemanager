@@ -1,0 +1,125 @@
+//! The seam a provider implements.
+//!
+//! # The protocol is a pure state machine
+//!
+//! [`Protocol`] never performs I/O. It is handed a line and returns [`Step`]s — events to show
+//! and frames to write — and the caller is the only thing that touches a pipe. That is what
+//! makes a provider testable by feeding it recorded lines and asserting on what comes back,
+//! with no child process, no timing and no `FakePipe` needed for the mapping tests at all.
+//!
+//! It is also what keeps the two halves of a protocol honest. Codex answers an approval with a
+//! JSON-RPC *response* correlated by id; Claude Code answers with a `control_response`
+//! correlated by `request_id`. Both are "a frame to write", so both are a `Step::Write`, and
+//! neither leaks its correlation scheme into the layer above.
+//!
+//! # Why `&mut self` rather than a state parameter
+//!
+//! A protocol driver is genuinely stateful — a thread id, a request counter, a map of
+//! outstanding approvals — and threading that through as an explicit bag was tried first. It
+//! made every method signature carry a type only one implementation could use. Owning the state
+//! is what a per-session object is for; the caller holds it behind the session mutex, which it
+//! needs anyway.
+
+use wtm_core::model::{AgentEvent, ApprovalAnswer, Effort};
+
+/// Which provider. A newtype over a string rather than an enum, because the set is a compiled
+/// catalogue that grows, and an enum would put every provider's name in `wtm-core`'s vocabulary
+/// for no benefit — nothing in the domain branches on it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProviderId(String);
+
+impl ProviderId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ProviderId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Everything a provider needs to start a session.
+///
+/// Resolved before it gets here: templates rendered, defaults applied, the worktree path
+/// absolute. A provider reads this and never consults config itself, which is what keeps
+/// `wtm-config` out of this crate's dependency list.
+#[derive(Debug, Clone, Default)]
+pub struct SessionRequest {
+    /// The worktree the session works in. Becomes `cwd`, and both CLIs honour it.
+    pub cwd: String,
+    pub model: Option<String>,
+    pub effort: Option<Effort>,
+    /// The provider's own spelling of a permission or approval mode.
+    pub mode: Option<String>,
+    /// Appended to the argv the catalogue builds. From `[agent.<id>].extra_args`.
+    pub extra_args: Vec<String>,
+    /// A session to resume rather than start. The provider's own id.
+    pub resume: Option<String>,
+    /// MCP servers to hand the CLI, already serialized as that CLI expects.
+    pub mcp_config: Option<String>,
+}
+
+/// One thing the caller should do as a result of feeding a line in.
+///
+/// Deliberately not a single `(Vec<AgentEvent>, Vec<String>)` return: order matters between the
+/// two. A provider that emits `SessionReady` and *then* writes the first turn is different from
+/// one that writes first, and a pair of vectors cannot express which came first.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Step {
+    /// Show this in the transcript.
+    Emit(AgentEvent),
+    /// Write this frame to the child's stdin. The newline is the host's business.
+    Write(String),
+    /// The handshake finished; the session may now be sent turns.
+    ///
+    /// Its own step rather than being inferred from a `SessionReady` event, because the two are
+    /// not the same fact: Codex reports `initialize` and `thread/start` as separate round trips
+    /// and is only ready after the second.
+    Ready,
+}
+
+/// A per-session protocol driver.
+pub trait Protocol: Send {
+    /// Frames to write immediately after the child is spawned.
+    ///
+    /// Returns `Step`s rather than bare strings so a provider that needs no handshake can emit
+    /// `Ready` here and be done.
+    fn open(&mut self) -> Vec<Step>;
+
+    /// Interpret one line of the child's stdout.
+    ///
+    /// Must never return an error. A line this provider does not understand becomes
+    /// [`AgentEvent::Raw`], because the alternative — failing the session on an unrecognised
+    /// event — turns a CLI upgrade into a blank pane. See the `agent` model's docs.
+    fn on_line(&mut self, line: &str) -> Vec<Step>;
+
+    /// The user submitted a turn.
+    fn send_turn(&mut self, text: &str) -> Vec<Step>;
+
+    /// The user answered an outstanding approval.
+    fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step>;
+
+    /// The user asked to stop the current turn.
+    fn interrupt(&mut self) -> Vec<Step>;
+}
+
+/// A provider: its identity, its argv, and a factory for per-session drivers.
+pub trait Provider: Send + Sync {
+    fn id(&self) -> ProviderId;
+
+    /// The program this provider runs. Compiled in, never config — see the crate docs.
+    fn program(&self) -> &'static str;
+
+    /// The full argv for a session, including the program at index 0.
+    fn argv(&self, req: &SessionRequest) -> Vec<String>;
+
+    /// Build the driver for one session.
+    fn protocol(&self, req: &SessionRequest) -> Box<dyn Protocol>;
+}

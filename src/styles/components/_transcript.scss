@@ -1,0 +1,171 @@
+/*
+ * The rows of an agent session's transcript.
+ *
+ * Components layer, one block, and separate from `c-agent` on purpose: the pane is chrome that
+ * holds a scroller, and this is the content inside it. Splitting them means the row vocabulary can
+ * grow — an approval card, a diff viewer — without touching the file that owns the layout.
+ *
+ * # Speaker is never colour alone
+ *
+ * A user's turn and the agent's reply are told apart by an indented rule and a weight, not by hue.
+ * `settings/_semantic.scss` states the rule and gives the reason: a palette's accent may sit next
+ * to a status role, and two colours 45° apart can be near-identical in luminance. The same applies
+ * to the agenda's step states, which carry the status as a word beside the class.
+ */
+
+.c-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  /* A measure, because this is prose. Long lines are the single biggest thing that makes a
+     transcript unreadable, and the pane can be as wide as the window. */
+  max-width: 82ch;
+}
+
+/* The user's own turn. Indented behind a rule so a scan down the transcript finds the questions
+   without reading them — the one navigation aid a flat log has. */
+.c-transcript__user {
+  border-left: 2px solid var(--border-strong);
+  padding-left: var(--sp-3);
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-transcript__said {
+  color: var(--fg);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-transcript__thinking,
+.c-transcript__raw {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+
+  summary {
+    cursor: pointer;
+    /* The marker is the affordance; a hover colour is what says it is one. */
+    &:hover {
+      color: var(--fg-muted);
+    }
+  }
+}
+
+.c-transcript__thinking p {
+  margin-top: var(--sp-2);
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--border);
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.c-transcript__raw pre {
+  margin-top: var(--sp-2);
+  font-family: var(--font-mono);
+  overflow-x: auto;
+}
+
+/* A bordered surface for the things that are not prose: a command, a plan, a tool run. */
+.c-transcript__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  font-size: var(--step--1);
+}
+
+.c-transcript__cmd {
+  font-family: var(--font-mono);
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.c-transcript__out,
+.c-transcript__diff {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  background: var(--bg-code);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  /* Its own scroller. A wide diff must not make the whole pane scroll sideways. */
+  overflow-x: auto;
+  /* Bounded: a build's output can be thousands of lines, and an unbounded block would bury every
+     row after it. The card is a summary; the terminal is where you go to read it all. */
+  max-height: 18lh;
+  overflow-y: auto;
+}
+
+.c-transcript__diff {
+  border: 1px solid var(--border);
+}
+
+.c-transcript__tool {
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.c-transcript__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  /* The list is already numbered by the markup; a marker as well would be two numbers. */
+  list-style: none;
+  counter-reset: step;
+}
+
+.c-transcript__step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  counter-increment: step;
+
+  &::before {
+    content: counter(step) '.';
+    flex: 0 0 auto;
+    color: var(--fg-subtle);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* `is-done` rather than `is-completed`, and `is-in-progress` rather than the domain's
+     `in_progress`: state classes here are kebab, and `AgentTranscript` maps the status through a
+     typed function so the spelling cannot drift — see its `stepClass`. */
+  &.is-done {
+    color: var(--fg-subtle);
+    text-decoration: line-through;
+  }
+
+  &.is-in-progress {
+    color: var(--fg);
+    font-weight: 500;
+  }
+}
+
+/* The status as a word. Never the only signal, and never the only difference from its siblings. */
+.c-transcript__step-state {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.c-transcript__note {
+  font-size: var(--step--1);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.c-transcript__usage {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}

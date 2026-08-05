@@ -255,6 +255,119 @@ export interface PtyExit {
   summary: string;
 }
 
+/**
+ * One agent wtm can start, and whether this machine can.
+ *
+ * Unavailable entries are returned too, with the reason — the same contract `Opener` keeps, and
+ * for the same reason: a greyed row naming the program it looked for is a diagnosis, where an
+ * omitted row is a mystery.
+ */
+export interface AgentOption {
+  id: string;
+  label: string;
+  blurb: string;
+  available: boolean;
+  detail: string | null;
+}
+
+/**
+ * A live agent session.
+ *
+ * Keyed by `session`, unlike {@link TerminalSession} which is keyed by worktree: a worktree may
+ * have several agent sessions at once, which is the point of the feature.
+ */
+export interface AgentSession {
+  session: string;
+  worktree: string;
+  project: string;
+  provider: string;
+}
+
+export interface AgentUsage {
+  tokensIn: number;
+  tokensOut: number;
+  cached: number;
+  contextWindow: number | null;
+}
+
+export type AgendaStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface AgendaStep {
+  text: string;
+  status: AgendaStatus;
+}
+
+/** Something a session needs a human to decide before it can continue. */
+export type ApprovalRequest =
+  | { kind: 'command'; command: string; cwd: string | null; reason: string | null }
+  | { kind: 'file_change'; unified_diff: string; reason: string | null }
+  | { kind: 'permissions'; summary: string; items: string[] }
+  | { kind: 'plan_review'; markdown: string; path: string | null }
+  | { kind: 'tool_input'; tool: string; prompt: string };
+
+/**
+ * One thing that happened in an agent session.
+ *
+ * Mirrors `AgentEvent` in `crates/wtm-core/src/model/agent.rs`, which is `#[serde(tag = "kind")]`
+ * with camelCase payload fields. `view::tests::an_agent_event_is_tagged_by_kind_with_camel_case_payloads`
+ * pins the tag and the casing so this union cannot silently drift.
+ *
+ * **`raw` is not a fallback, it is the design.** Both CLIs' protocols are experimental and will
+ * grow event kinds inside a patch release, so an unrecognised one arrives here rather than
+ * breaking the transcript. Render it as a collapsed row; never drop it.
+ */
+export type AgentEvent =
+  | {
+      kind: 'session_ready';
+      providerSessionId: string;
+      model: string | null;
+      effort: string | null;
+      tools: string[];
+    }
+  | { kind: 'turn_started'; turn: string }
+  | { kind: 'turn_finished'; turn: string; usage: AgentUsage; costUsd: number | null }
+  | { kind: 'user_echo'; text: string }
+  | { kind: 'message_delta'; text: string }
+  | { kind: 'message'; text: string }
+  | { kind: 'reasoning_delta'; text: string }
+  | { kind: 'tool_started'; id: string; name: string; title: string | null }
+  | { kind: 'tool_finished'; id: string; ok: boolean; output: string | null }
+  | { kind: 'command_started'; id: string; command: string; cwd: string | null }
+  | { kind: 'command_output'; id: string; chunk: string }
+  | { kind: 'command_finished'; id: string; exitCode: number | null }
+  | { kind: 'patch'; id: string; unifiedDiff: string }
+  | { kind: 'agenda_updated'; explanation: string | null; steps: AgendaStep[] }
+  | { kind: 'approval_requested'; id: string; blocking: boolean; request: ApprovalRequest }
+  | { kind: 'approval_resolved'; id: string }
+  | {
+      kind: 'usage';
+      tokensIn: number;
+      tokensOut: number;
+      cached: number;
+      contextWindow: number | null;
+    }
+  | { kind: 'notice'; level: 'info' | 'warn'; message: string }
+  | { kind: 'failed'; message: string }
+  | { kind: 'raw'; provider: string; event: string; payload: unknown };
+
+/** Emitted as `agent:event`. */
+export interface AgentEventEnvelope {
+  session: string;
+  event: AgentEvent;
+}
+
+/** Emitted as `agent:exit`. */
+export interface AgentExit {
+  session: string;
+  outcome: ExitOutcome;
+  summary: string;
+}
+
+/** Emitted as `agent:ready` — the handshake finished and turns may be sent. */
+export interface AgentReady {
+  session: string;
+}
+
 /** Emitted as `wtm:progress` while a pipeline runs. */
 export type ProgressEvent =
   | { kind: 'stage'; id: string; label: string; index: number; total: number }

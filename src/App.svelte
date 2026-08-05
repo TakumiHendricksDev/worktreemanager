@@ -25,6 +25,7 @@
   import Logo from './lib/components/ui/Logo.svelte';
   import { commands } from './lib/ipc/commands';
   import { errorMessage } from './lib/ipc/types';
+  import { agents } from './lib/state/agents.svelte';
   import { terminals } from './lib/state/terminals.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { workspace } from './lib/state/workspace.svelte';
@@ -48,6 +49,13 @@
   let showAddProject = $state(false);
   let showRemove = $state(false);
   let showSettings = $state(false);
+  /**
+   * Teardown for the agent event listeners.
+   *
+   * Not `$state`: nothing renders it, and making it reactive would put a mount-time write inside
+   * whatever effect happened to read it.
+   */
+  let offAgents: (() => void) | null = null;
 
   onMount(() => {
     void (async () => {
@@ -63,6 +71,14 @@
       // is adopting are needed for the first paint, and a slow config read must not hold up the
       // worktree list.
       void terminals.init();
+
+      // Same reasoning, plus one of its own: this subscribes to the three `agent:*` event streams,
+      // and a session started before the listeners attach would stream into nothing. `init` is
+      // called before `workspace.init` for exactly that ordering — nothing can start a session
+      // until there is a worktree list to start one from.
+      void agents.init().then((off) => {
+        offAgents = off;
+      });
 
       await workspace.init();
       booted = true;
@@ -129,6 +145,7 @@
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
       void unlistenSettings.then((off) => off());
+      offAgents?.();
     };
   });
 

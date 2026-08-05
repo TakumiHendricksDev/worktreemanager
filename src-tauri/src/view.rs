@@ -627,6 +627,83 @@ mod tests {
         );
     }
 
+    /// The exact key sets for the two agent views, for the same reason as the one above.
+    ///
+    /// Both are hand-mirrored in `src/lib/ipc/types.ts`, and both have a field the other does
+    /// not — `provider` here, `blurb` there — so a copy-paste between them is a real hazard that
+    /// nothing else would notice.
+    #[test]
+    fn the_agent_contracts_have_exactly_the_keys_the_typescript_mirror_declares() {
+        let keys_of = |value: &serde_json::Value| {
+            let mut keys: Vec<String> = value
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::clone)
+                .collect();
+            keys.sort_unstable();
+            keys
+        };
+
+        let option = AgentOptionView {
+            id: "codex".to_owned(),
+            label: "Codex".to_owned(),
+            blurb: "OpenAI Codex".to_owned(),
+            available: false,
+            detail: Some("not on wtm's PATH".to_owned()),
+        };
+        assert_eq!(
+            keys_of(&serde_json::to_value(&option).unwrap()),
+            ["available", "blurb", "detail", "id", "label"]
+        );
+
+        let session = AgentSessionView {
+            session: "f0e1".to_owned(),
+            worktree: "/x/a".to_owned(),
+            project: "/x".to_owned(),
+            provider: "codex".to_owned(),
+        };
+        assert_eq!(
+            keys_of(&serde_json::to_value(&session).unwrap()),
+            ["project", "provider", "session", "worktree"]
+        );
+    }
+
+    /// The normalized event stream is a discriminated union tagged `kind`.
+    ///
+    /// The frontend switches on that tag exhaustively, so the tag's spelling *is* the contract.
+    /// Serializing one variant of each shape catches the two ways it could silently change:
+    /// a `rename_all` slipping to `snake_case` on a payload field, and the `Raw` variant's `event`
+    /// field colliding with the tag again if someone renames it back to `kind`.
+    #[test]
+    fn an_agent_event_is_tagged_by_kind_with_camel_case_payloads() {
+        use wtm_core::model::AgentEvent;
+
+        let ready = serde_json::to_value(AgentEvent::SessionReady {
+            provider_session_id: "t1".to_owned(),
+            model: None,
+            effort: None,
+            tools: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(ready["kind"], "session_ready");
+        assert!(
+            ready.get("providerSessionId").is_some(),
+            "payload fields must be camelCase, got {ready:?}"
+        );
+
+        let raw = serde_json::to_value(AgentEvent::Raw {
+            provider: "codex".to_owned(),
+            event: "item/mcpToolCall/progress".to_owned(),
+            payload: serde_json::json!({ "progress": 0.5 }),
+        })
+        .unwrap();
+        assert_eq!(raw["kind"], "raw");
+        // `event`, not `kind` — the tag already owns that name, and a variant field of it is a
+        // compile error rather than a subtle bug. Asserted so the rename is not undone.
+        assert_eq!(raw["event"], "item/mcpToolCall/progress");
+    }
+
     #[test]
     fn an_untrusted_config_error_keeps_its_structured_detail() {
         // The UI needs the command list to render the trust prompt, not just a sentence.
@@ -695,6 +772,35 @@ pub struct TerminalSessionView {
     pub session: String,
     pub worktree: String,
     pub project: String,
+}
+
+/// One agent wtm can start, and whether this machine can.
+///
+/// Reports the unavailable ones too, with the reason — the same choice `OpenersView` makes, and
+/// for the same reason: a greyed row saying *"no `codex` on wtm's PATH"* doubles as the diagnosis
+/// of this app's most likely production failure, where omitting the row silently is a mystery.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentOptionView {
+    pub id: String,
+    pub label: String,
+    pub blurb: String,
+    pub available: bool,
+    /// Why it cannot be used, for a tooltip. `None` when it can.
+    pub detail: Option<String>,
+}
+
+/// A live agent session, for adopting after a webview reload.
+///
+/// Keyed by `session` rather than by worktree, unlike [`TerminalSessionView`], because a worktree
+/// may have several — which is the feature.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionView {
+    pub session: String,
+    pub worktree: String,
+    pub project: String,
+    pub provider: String,
 }
 
 /// Render a preflight item for the checklist.

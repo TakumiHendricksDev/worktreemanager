@@ -10,7 +10,9 @@
    */
   import { commands } from '../ipc/commands';
   import { errorMessage, type Worktree } from '../ipc/types';
+  import { agents } from '../state/agents.svelte';
   import { SHORTCUT_LABEL, terminals } from '../state/terminals.svelte';
+  import AgentPane from './AgentPane.svelte';
   import OpenInButton from './OpenInButton.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -27,8 +29,20 @@
     onfavorite: () => void;
   } = $props();
 
-  type Tab = 'overview' | 'env';
-  let tab = $state<Tab>('overview');
+  /**
+   * `chat` is deliberately first in the union and the default.
+   *
+   * The walking skeleton lives in a tab because that is the smallest place to put it while the
+   * protocol is being settled; the reorganization that makes chat the pane itself is its own
+   * change. Defaulting to it anyway means the round trip is what you see on selecting a worktree,
+   * which is the point of the increment.
+   */
+  type Tab = 'chat' | 'overview' | 'env';
+  let tab = $state<Tab>('chat');
+
+  const panes = $derived(agents.panesIn(worktree.id));
+  /** Agents this machine actually has, so an uninstalled CLI is not offered. */
+  const startable = $derived(agents.options.filter((o) => o.available));
   let copied = $state(false);
 
   async function copyPath() {
@@ -176,6 +190,14 @@
   <nav class="c-tabs c-tabs--inset" aria-label="Worktree details">
     <button
       class="c-tabs__tab"
+      class:is-active={tab === 'chat'}
+      onclick={() => (tab = 'chat')}
+    >
+      Chat
+      {#if panes.length > 0}<span class="c-tabs__count">{panes.length}</span>{/if}
+    </button>
+    <button
+      class="c-tabs__tab"
       class:is-active={tab === 'overview'}
       onclick={() => (tab = 'overview')}
     >
@@ -192,8 +214,47 @@
     {/if}
   </nav>
 
-  <div class="c-detail__body">
-    {#if tab === 'overview'}
+  <div class="c-detail__body" class:c-detail__body--flush={tab === 'chat'}>
+    {#if tab === 'chat'}
+      {#if panes.length === 0}
+        <div class="c-agent__start">
+          <p>
+            Start an agent session in this worktree. It runs in
+            <code>{worktree.dirname}</code> and can read and change the files there.
+          </p>
+          {#if startable.length === 0}
+            <!-- Named rather than hidden: an empty launcher with no explanation is this app's
+                 most likely production failure wearing a disguise — see Troubleshooting. -->
+            <p class="c-status--warn">
+              No agent CLI is on wtm's PATH. Check Settings → Advanced.
+            </p>
+          {:else}
+            <div class="o-row">
+              {#each startable as option (option.id)}
+                <Button
+                  variant="accent"
+                  size="sm"
+                  title={option.blurb}
+                  onclick={() => void agents.open(projectId, worktree.id, option.id)}
+                >
+                  {option.label}
+                </Button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <!--
+          Keyed by session *and* generation so a restart remounts rather than continuing a dead
+          session's transcript under a live one — the same key the terminal dock uses, for the same
+          reason. A pane with no session id yet is keyed by its index, which is stable for the one
+          tick before the id arrives.
+        -->
+        {#each panes as pane, index (`${pane.session ?? `pending-${index}`}:${pane.generation}`)}
+          <AgentPane {pane} />
+        {/each}
+      {/if}
+    {:else if tab === 'overview'}
       <dl class="o-facts">
         <!--
           First, because "where is this on disk" is the question the app exists to answer

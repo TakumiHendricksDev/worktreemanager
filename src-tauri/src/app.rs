@@ -52,6 +52,30 @@ const KEEP_FINISHED_SESSIONS: usize = 4;
 /// A worktree's terminal-dock shell: which project it belongs to, and its session.
 type Shell = (String, wtm_core::model::SessionId);
 
+/// One live agent session and what it belongs to.
+///
+/// A struct where [`Shell`] is a tuple, because this has four fields rather than two and
+/// `(String, String, String, AgentSession)` at the call site is unreadable.
+struct AgentEntry {
+    project: String,
+    worktree: String,
+    provider: String,
+    session: wtm_agent::AgentSession,
+}
+
+/// What the frontend needs to know about a live agent session.
+///
+/// Kept out of `view.rs` because it is not itself an IPC type — [`crate::view::AgentSessionView`]
+/// is, and it is built from this. The split exists so `App` does not have to import the view
+/// module to answer a question about its own state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionFacts {
+    pub session: String,
+    pub project: String,
+    pub worktree: String,
+    pub provider: String,
+}
+
 /// Everything the app needs, wired once at startup.
 pub struct App {
     pub git: Arc<dyn Git>,
@@ -91,6 +115,17 @@ pub struct App {
     /// which reports running sessions only, so an entry for a shell the user exited answers
     /// "no shell" without anybody having to remember to clean up.
     shells: parking_lot::Mutex<BTreeMap<String, Shell>>,
+    /// Live agent sessions, keyed by **session id**.
+    ///
+    /// Keyed differently from [`Self::shells`] on purpose. That map is keyed by worktree because
+    /// a worktree has one dock shell; several agent sessions in one worktree is the whole point
+    /// of this feature, so the unique thing is the session and the worktree is a field on it.
+    ///
+    /// Here rather than on the port for the same reason `shells` is: "which sessions does this
+    /// pane show" is a frontend concept `wtm-core` has no stake in, and keeping it in the
+    /// composition root is what preserves the `wasm32` check. Liveness is never read from it —
+    /// see `open_agent`.
+    agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
 }
 
 impl std::fmt::Debug for App {
@@ -172,6 +207,7 @@ impl App {
             resolved_path,
             os_tokens: wtm_exec::os_tokens(),
             shells: parking_lot::Mutex::new(BTreeMap::new()),
+            agents: parking_lot::Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -650,6 +686,155 @@ impl App {
         use wtm_core::ports::pty::PtyHost;
 
         self.pty.sessions().iter().any(|s| &s.session == session)
+    }
+
+    // ─────────────────────────── agent sessions ───────────────────────────
+
+    /// Start an agent session in `worktree`.
+    ///
+    /// # Why this index is keyed by session and not by worktree
+    ///
+    /// [`Self::shells`] is keyed by worktree because a worktree has exactly one dock shell, and
+    /// the whole difficulty there was that the worktree *was not* a unique key against the pty
+    /// host's other sessions. Here the shape is different by design: several agent sessions in
+    /// one worktree is the feature, so the session id is the key and the worktree is a field.
+    ///
+    /// Liveness is still never read from this map — [`Self::live_agents`] intersects it with what
+    /// the pipe host reports as running, so an entry for a session whose CLI exited answers
+    /// "not running" with nobody having to remember to clean up. Same rule as the shells map, for
+    /// the same reason.
+    ///
+    /// # Errors
+    ///
+    /// If the provider is unknown to this build, or the CLI cannot be spawned.
+    pub fn open_agent(
+        &self,
+        entry: &'static wtm_agent::ProviderEntry,
+        req: &wtm_agent::SessionRequest,
+        worktree: &Worktree,
+        project_id: &str,
+        events: &Arc<dyn wtm_agent::session::AgentSink>,
+    ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
+        // Before the spawn, so descriptors a finished session still holds are released before a
+        // new set is allocated. The pty host's only caller does the same, for the same reason.
+        self.pipe.reap_finished(KEEP_FINISHED_SESSIONS);
+
+        let session = wtm_agent::AgentSession::open(
+            entry.provider,
+            req,
+            Arc::clone(&self.pipe) as Arc<dyn wtm_core::ports::pipe::PipeHost>,
+            events,
+            // The same inert one-week deadline the dock's shell uses. `PipeHost` has no `wait`,
+            // so nothing enforces it — see the port's docs.
+            crate::commands::SHELL_TIMEOUT_MS,
+            Some(worktree.id.as_str()),
+        )?;
+
+        let id = session.id().clone();
+        let mut agents = self.agents.lock();
+
+        // Entries whose CLI has since exited are dead weight. Pruned on each open, which is the
+        // only moment the map grows, so it stays the size of what is actually running.
+        let running = self.running_agents();
+        agents.retain(|session, _| running.contains(session.as_str()));
+
+        agents.insert(
+            id.clone(),
+            AgentEntry {
+                project: project_id.to_owned(),
+                worktree: worktree.id.as_str().to_owned(),
+                provider: entry.id.to_owned(),
+                session,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Every agent session still running, with what it belongs to.
+    ///
+    /// All projects, not one — the same choice [`Self::live_shells`] makes, so a project switch
+    /// needs no second round trip and the frontend filters by what is in its listing.
+    #[must_use]
+    pub fn live_agents(&self) -> Vec<AgentSessionFacts> {
+        let running = self.running_agents();
+        self.agents
+            .lock()
+            .iter()
+            .filter(|(session, _)| running.contains(session.as_str()))
+            .map(|(session, entry)| AgentSessionFacts {
+                session: session.as_str().to_owned(),
+                project: entry.project.clone(),
+                worktree: entry.worktree.clone(),
+                provider: entry.provider.clone(),
+            })
+            .collect()
+    }
+
+    /// Run `f` against a live agent session.
+    ///
+    /// Takes a closure rather than handing out the session, because the map's lock has to be
+    /// released before the caller does anything slow with it — and because a caller holding an
+    /// `&AgentSession` past the lock could use one this map has already replaced.
+    ///
+    /// # Errors
+    ///
+    /// If no session with that id is in the map.
+    pub fn with_agent<T>(
+        &self,
+        session: &str,
+        f: impl FnOnce(&wtm_agent::AgentSession) -> Result<T, wtm_core::error::ExecError>,
+    ) -> Result<T, wtm_core::error::ExecError> {
+        let agents = self.agents.lock();
+        let id = wtm_core::model::SessionId::new(session);
+        let entry = agents
+            .get(&id)
+            .ok_or_else(|| wtm_core::error::ExecError::NoSuchSession(session.to_owned()))?;
+        f(&entry.session)
+    }
+
+    /// End an agent session and forget it.
+    ///
+    /// Forgetting is the load-bearing half, exactly as it is in [`Self::close_shell`]: `close`
+    /// returns once the group has been signalled rather than once the child is reaped, so a
+    /// re-open would otherwise be handed the id of a dying session.
+    pub fn close_agent(&self, session: &str) -> bool {
+        let id = wtm_core::model::SessionId::new(session);
+        let Some(entry) = self.agents.lock().remove(&id) else {
+            return false;
+        };
+        match entry.session.close() {
+            Ok(()) => true,
+            Err(error) => {
+                // Already finished: the CLI exited before the user reached for the control.
+                tracing::debug!(%session, %error, "no live agent session to close");
+                false
+            }
+        }
+    }
+
+    /// Every agent session the *worktree* has, live or not, for teardown.
+    ///
+    /// Used when a worktree is removed: its sessions have to end before `git worktree remove`
+    /// runs, for the same reason the dock shell does — an agent mid-turn is writing into the
+    /// directory git is about to refuse to delete.
+    #[must_use]
+    pub fn agents_in(&self, worktree_id: &str) -> Vec<String> {
+        self.agents
+            .lock()
+            .iter()
+            .filter(|(_, entry)| entry.worktree == worktree_id)
+            .map(|(session, _)| session.as_str().to_owned())
+            .collect()
+    }
+
+    fn running_agents(&self) -> BTreeSet<String> {
+        use wtm_core::ports::pipe::PipeHost;
+
+        self.pipe
+            .sessions()
+            .into_iter()
+            .map(|s| s.session.as_str().to_owned())
+            .collect()
     }
 }
 

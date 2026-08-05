@@ -5,6 +5,7 @@ members = [
   "crates/wtm-config",
   "crates/wtm-git",
   "crates/wtm-exec",
+  "crates/wtm-agent",
   "crates/wtm-render",
   "crates/wtm-testkit",
   "src-tauri",
@@ -36,6 +37,7 @@ wtm-core    = { path = "crates/wtm-core" }
 wtm-config  = { path = "crates/wtm-config" }
 wtm-git     = { path = "crates/wtm-git" }
 wtm-exec    = { path = "crates/wtm-exec" }
+wtm-agent   = { path = "crates/wtm-agent" }
 wtm-render  = { path = "crates/wtm-render" }
 wtm-testkit = { path = "crates/wtm-testkit" }
 wtm-app     = { path = "src-tauri" }

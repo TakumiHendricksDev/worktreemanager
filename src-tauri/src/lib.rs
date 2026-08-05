@@ -6,6 +6,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod agent_bridge;
 pub mod app;
 pub mod commands;
 pub mod display;
@@ -190,6 +191,12 @@ pub fn run() {
             commands::open_terminal,
             commands::list_terminals,
             commands::close_terminal,
+            commands::list_agents,
+            commands::open_agent_session,
+            commands::send_turn,
+            commands::interrupt_turn,
+            commands::list_agent_sessions,
+            commands::close_agent_session,
             commands::open_url,
             commands::list_openers,
             commands::open_in,

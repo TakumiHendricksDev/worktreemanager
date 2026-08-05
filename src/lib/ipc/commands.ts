@@ -10,6 +10,8 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type {
   Action,
+  AgentOption,
+  AgentSession,
   CreateOutcome,
   Doctor,
   Form,
@@ -128,6 +130,48 @@ export const commands = {
   ptyResize: (session: string, rows: number, cols: number) =>
     invoke<void>('pty_resize', { session, rows, cols }),
   ptyKill: (session: string) => invoke<void>('pty_kill', { session }),
+
+  // ── agent sessions ──
+  /**
+   * Every agent this build can drive, and whether this machine can.
+   *
+   * Includes what is not installed, with the reason, so the launcher can show a greyed row
+   * explaining why. Nothing is cached in Rust, so a CLI installed since launch shows up.
+   */
+  listAgents: () => invoke<AgentOption[]>('list_agents'),
+
+  /**
+   * Start a session in a worktree. Returns the session id to attach to.
+   *
+   * Returns as soon as the CLI is running, not when it is ready — the handshake is a network
+   * round trip and announces itself with `agent:ready`. Deliberately **not** idempotent per
+   * worktree, unlike `openTerminal`: asking twice starts two sessions, which is the feature.
+   */
+  openAgentSession: (args: {
+    projectId: string;
+    worktreeId: string;
+    agentId: string;
+    model?: string | null;
+    effort?: string | null;
+    mode?: string | null;
+  }) => invoke<string>('open_agent_session', args),
+
+  /** Send one turn. Queued by the provider if the handshake has not finished yet. */
+  sendTurn: (session: string, text: string) => invoke<void>('send_turn', { session, text }),
+
+  /** Ask the session to stop the turn it is running. */
+  interruptTurn: (session: string) => invoke<void>('interrupt_turn', { session }),
+
+  /**
+   * Which agent sessions are live, across every project.
+   *
+   * Call on start: a reload loses this side's pane-to-session map while the CLIs keep running,
+   * and without this they are unreachable until the app quits. It does not restore a transcript.
+   */
+  listAgentSessions: () => invoke<AgentSession[]>('list_agent_sessions'),
+
+  /** End a session and forget it. */
+  closeAgentSession: (session: string) => invoke<void>('close_agent_session', { session }),
 
   // ── trust ──
   /** Binds approval to the file's current contents; a later edit re-arms the prompt. */

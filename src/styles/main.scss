@@ -59,6 +59,7 @@
 
 /* Components — one partial per block, alphabetical within the layer. */
 @use 'components/add-project';
+@use 'components/agent';
 @use 'components/banner';
 @use 'components/button';
 @use 'components/choice';
@@ -85,6 +86,7 @@
 @use 'components/tabs';
 @use 'components/terminal';
 @use 'components/titlebar';
+@use 'components/transcript';
 @use 'components/trust';
 @use 'components/worktree-tab';
 

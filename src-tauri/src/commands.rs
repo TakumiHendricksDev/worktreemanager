@@ -28,8 +28,8 @@ use crate::app::App;
 use crate::display;
 use crate::openers;
 use crate::view::{
-    ActionView, DoctorView, ErrorView, FieldView, FormView, OpenersView, PaletteView, ProjectView,
-    RegisteredView, TerminalSessionView, WorktreeView,
+    ActionView, AgentOptionView, AgentSessionView, DoctorView, ErrorView, FieldView, FormView,
+    OpenersView, PaletteView, ProjectView, RegisteredView, TerminalSessionView, WorktreeView,
 };
 
 /// Shared application state.
@@ -1253,6 +1253,181 @@ pub async fn close_terminal(app: AppState<'_>, worktree_id: String) -> Reply<()>
     let app = Arc::clone(&app);
     blocking(move || {
         app.close_shell(&worktree_id);
+        Ok(())
+    })
+    .await
+}
+
+// ═══════════════════════════ agent sessions ═══════════════════════════
+
+/// Every agent this build can drive, and whether this machine can.
+///
+/// The whole catalogue, including what is not installed, with the reason — the same contract
+/// [`list_openers`] keeps, and for the same reason: a greyed row saying which program was looked
+/// for doubles as the diagnosis of a GUI-launched app that cannot see the user's `PATH`.
+///
+/// Nothing is cached, so a CLI installed since the app started shows up without a restart.
+#[tauri::command]
+pub async fn list_agents(app: AppState<'_>) -> Reply<Vec<AgentOptionView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(wtm_agent::CATALOGUE
+            .iter()
+            .map(|entry| {
+                let program = entry.provider.program();
+                let found = app.runner.which(program).is_some();
+                AgentOptionView {
+                    id: entry.id.to_owned(),
+                    label: entry.label.to_owned(),
+                    blurb: entry.blurb.to_owned(),
+                    available: found,
+                    detail: if found {
+                        None
+                    } else {
+                        Some(format!("no `{program}` on wtm's PATH"))
+                    },
+                }
+            })
+            .collect())
+    })
+    .await
+}
+
+/// Start an agent session in a worktree. Returns the session id to attach to.
+///
+/// Returns as soon as the CLI is running, exactly as [`open_terminal`] and `run_action` do. The
+/// handshake completes asynchronously and announces itself with `agent:ready`; waiting for it here
+/// would block this command on a network round trip and present as a frozen window.
+///
+/// Not idempotent per worktree, which is the deliberate difference from [`open_terminal`]: several
+/// sessions in one worktree is the feature, so asking twice starts two.
+#[tauri::command]
+pub async fn open_agent_session(
+    handle: tauri::AppHandle,
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    agent_id: String,
+    model: Option<String>,
+    effort: Option<String>,
+    mode: Option<String>,
+) -> Reply<String> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let project = app.project(&project_id)?;
+        let worktree = app.worktree(&project, &worktree_id)?;
+
+        // Same check `open_terminal` makes, and the same reasoning: a worktree whose directory was
+        // deleted by hand is *prunable*, not absent, so it is still found here — and a CLI whose
+        // cwd is an unlinked inode misbehaves in ways much harder to diagnose than this sentence.
+        if !app.files.exists(&worktree.path) {
+            return Err(ErrorView::new(
+                "exec",
+                format!(
+                    "`{}` no longer exists on disk — the worktree may need pruning",
+                    worktree.path.display()
+                ),
+            ));
+        }
+
+        let entry = wtm_agent::entry(&agent_id).ok_or_else(|| {
+            ErrorView::new(
+                "exec",
+                format!("`{agent_id}` is not an agent this build of wtm knows how to drive"),
+            )
+        })?;
+
+        let req = wtm_agent::SessionRequest {
+            cwd: worktree.path.to_string_lossy().into_owned(),
+            model,
+            effort,
+            mode,
+            ..wtm_agent::SessionRequest::default()
+        };
+
+        let sink: Arc<dyn wtm_agent::session::AgentSink> =
+            crate::agent_bridge::AgentEventSink::new(handle);
+        let session = app
+            .open_agent(entry, &req, &worktree, &project_id, &sink)
+            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+
+        Ok(session.as_str().to_owned())
+    })
+    .await
+}
+
+/// Send one turn to a session.
+///
+/// A turn submitted before the handshake finishes is queued by the provider rather than refused —
+/// the composer is live the moment a pane opens, so that is the ordinary case on a slow start, not
+/// an edge case, and dropping it would lose the user's first prompt.
+#[tauri::command]
+pub async fn send_turn(
+    handle: tauri::AppHandle,
+    app: AppState<'_>,
+    session: String,
+    text: String,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let sink: Arc<dyn wtm_agent::session::AgentSink> =
+            crate::agent_bridge::AgentEventSink::new(handle);
+        app.with_agent(&session, |agent| agent.send_turn(&sink, &text))
+            .map_err(|e| ErrorView::new("exec", e.to_string()))
+    })
+    .await
+}
+
+/// Ask a session to stop the turn it is running.
+#[tauri::command]
+pub async fn interrupt_turn(
+    handle: tauri::AppHandle,
+    app: AppState<'_>,
+    session: String,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let sink: Arc<dyn wtm_agent::session::AgentSink> =
+            crate::agent_bridge::AgentEventSink::new(handle);
+        app.with_agent(&session, |agent| agent.interrupt(&sink))
+            .map_err(|e| ErrorView::new("exec", e.to_string()))
+    })
+    .await
+}
+
+/// Which agent sessions are live. Every project's, not one's.
+///
+/// The re-attach path after a webview reload, and it exists for the same reason
+/// [`list_terminals`] does: a reload throws away the frontend's pane-to-session map while the CLIs
+/// keep running, so without this they are unreachable until the app quits. It does **not** restore
+/// a transcript — nothing is buffered outside the pane that received it.
+#[tauri::command]
+pub async fn list_agent_sessions(app: AppState<'_>) -> Reply<Vec<AgentSessionView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(app
+            .live_agents()
+            .into_iter()
+            .map(|facts| AgentSessionView {
+                session: facts.session,
+                worktree: facts.worktree,
+                project: facts.project,
+                provider: facts.provider,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// End a session and forget it.
+///
+/// Takes only the session id, like [`close_terminal`]: there is no config or git to consult, and
+/// the id is a key this app itself minted.
+#[tauri::command]
+pub async fn close_agent_session(app: AppState<'_>, session: String) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.close_agent(&session);
         Ok(())
     })
     .await

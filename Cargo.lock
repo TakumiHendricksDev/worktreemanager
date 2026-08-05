@@ -4998,6 +4998,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wtm-agent"
+version = "0.5.0"
+dependencies = [
+ "parking_lot",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+ "wtm-core",
+ "wtm-testkit",
+]
+
+[[package]]
 name = "wtm-app"
 version = "0.5.0"
 dependencies = [
@@ -5012,6 +5026,7 @@ dependencies = [
  "toml 1.1.4+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "wtm-agent",
  "wtm-config",
  "wtm-core",
  "wtm-exec",

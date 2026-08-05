@@ -131,6 +131,21 @@
   padding: var(--sp-4) var(--sp-5) var(--sp-6);
 }
 
+/*
+ * No padding and no scroller, for a tab whose content owns both.
+ *
+ * An agent pane is a header, its own scroller and a composer pinned to the bottom. Inside the
+ * padded, scrolling body above, the composer would scroll away with the transcript and the pane
+ * would have two nested scrollbars. `overflow: hidden` rather than `visible` so the pane's own
+ * `min-height: 0` has something to resolve against.
+ */
+.c-detail__body--flush {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .c-detail__statuses {
   display: flex;
   gap: var(--sp-3);

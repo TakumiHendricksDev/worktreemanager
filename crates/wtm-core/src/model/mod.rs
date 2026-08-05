@@ -8,13 +8,24 @@
 //! - [`value`] — what the user typed into the form.
 //! - [`naming`] — which template tokens are legal at each stage.
 //! - [`plan`] — what we intend to do, and what happened.
+//! - [`agent`] — what an agent session reports, normalized across providers.
+//!
+//! Note that [`plan`] owns the name `Plan` and has since v0.1, for the create pipeline's
+//! preview. An agent's plan is an `Agenda` while it is still moving and a `Brief` once it is a
+//! document — two English words rather than an `AgentPlan` prefix, which is the same
+//! disambiguation smell `ProjectMeta` exists to avoid.
 
+pub mod agent;
 pub mod naming;
 pub mod plan;
 pub mod project;
 pub mod value;
 pub mod worktree;
 
+pub use agent::{
+    AgendaStatus, AgendaStep, AgentCapability, AgentEvent, AgentModel, ApprovalAnswer,
+    ApprovalRequest, Effort, EffortOption, NoticeLevel, Usage,
+};
 pub use naming::{RESERVED_PREFIXES, TokenScope, TokenSet, namespace_of, shadows_reserved_prefix};
 pub use plan::{
     BranchChoice, BranchPlan, CreateOutcome, CreatePlan, ExitOutcome, PlanPreview, PlanWarning,
