@@ -12,6 +12,8 @@ import type {
   Action,
   AgentOption,
   AgentSession,
+  BackgroundTask,
+  Brief,
   ApprovalAnswer,
   Capability,
   CreateOutcome,
@@ -204,6 +206,37 @@ export const commands = {
    */
   answerApproval: (session: string, requestId: string, answer: ApprovalAnswer) =>
     invoke<void>('answer_approval', { session, requestId, answer }),
+
+  /**
+   * Store a plan, so it outlives the session that wrote it.
+   *
+   * Called when a plan approval is allowed — the moment a plan stops moving. Nothing is written into
+   * the worktree; this goes to `~/.config/wtm/plans/`.
+   */
+  saveBrief: (args: {
+    projectId: string;
+    worktreeId: string;
+    provider: string;
+    markdown: string;
+    model?: string | null;
+    providerSession?: string | null;
+    providerPath?: string | null;
+  }) => invoke<string>('save_brief', args),
+
+  listBriefs: (projectId: string, worktreeId: string) =>
+    invoke<Brief[]>('list_briefs', { projectId, worktreeId }),
+
+  removeBrief: (projectId: string, id: string) =>
+    invoke<void>('remove_brief', { projectId, id }),
+
+  /**
+   * Background agents running in a worktree. Claude Code only — Codex has no equivalent roster.
+   *
+   * There is no event when one finishes, so this is read on demand and on window focus, the same
+   * triggers `listWorktrees` uses. Polling is banned.
+   */
+  listBackgroundTasks: (worktreeId: string) =>
+    invoke<BackgroundTask[]>('list_background_tasks', { worktreeId }),
 
   /** Ask the session to stop the turn it is running. */
   interruptTurn: (session: string) => invoke<void>('interrupt_turn', { session }),

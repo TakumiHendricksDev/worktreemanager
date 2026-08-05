@@ -20,6 +20,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod briefs;
 pub mod fs;
 pub mod layers;
 pub mod paths;
@@ -29,6 +30,7 @@ pub mod trust;
 pub mod user;
 pub mod validate;
 
+pub use briefs::{Brief, BriefMeta};
 pub use fs::{RealFileStore, absolutize, parse_dotenv};
 pub use layers::{BUILT_IN_DEFAULTS, LOCAL_FILENAME, LayerPaths, REPO_FILENAME};
 pub use paths::AppPaths;

@@ -218,7 +218,8 @@
       <ApprovalCard
         request={blocking.request}
         {canEdit}
-        onanswer={(answer) => void sessions.answer(pane.id, blocking.id, answer)}
+        onanswer={(answer) =>
+          void sessions.answerAndKeep(pane.id, blocking.id, answer, blocking.request)}
       />
     {/if}
 

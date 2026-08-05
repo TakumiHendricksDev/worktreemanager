@@ -38,6 +38,12 @@
   const occupied = $derived([...new Set(sessions.panes.map((p) => p.worktreeId))]);
   const activeLayout = $derived(sessions.layoutFor(activeId));
   const resumable = $derived(activeId ? (sessions.resumable[activeId] ?? []) : []);
+  const briefs = $derived(activeId ? (sessions.briefs[activeId] ?? []) : []);
+  const background = $derived(activeId ? (sessions.background[activeId] ?? []) : []);
+  const stillRunning = $derived(
+    background.filter((t) => t.state !== 'done' && t.state !== 'failed'),
+  );
+  const startable = $derived(sessions.options.filter((o) => o.available));
 
   /*
    * Read what can be resumed when the selection lands somewhere new.
@@ -47,8 +53,27 @@
    */
   $effect(() => {
     const worktree = workspace.selectedWorktreeId;
-    if (!worktree) return;
+    const project = workspace.activeProjectId;
+    if (!worktree || !project) return;
     void sessions.refreshResumable(worktree);
+    void sessions.refreshBriefs(project, worktree);
+    void sessions.refreshBackground(worktree);
+  });
+
+  /*
+   * Re-read the background roster on window focus.
+   *
+   * There is no event when a background agent finishes, so this is the same trigger `workspace` uses
+   * for the worktree list, and for the same reason: polling a state directory is how these tools end
+   * up spinning a fan. The cost is a count that can be a few seconds stale, which the copy says.
+   */
+  $effect(() => {
+    const onFocus = () => {
+      const worktree = workspace.selectedWorktreeId;
+      if (worktree) void sessions.refreshBackground(worktree);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
   });
 
   /*
@@ -187,6 +212,81 @@
                 >
                   forget
                 </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        {#if briefs.length > 0}
+          <!--
+            Plans kept from a session that has ended. Handing one to another agent is the whole reason
+            they are stored: the alternative is scrolling back through a transcript that may be gone.
+          -->
+          <h2 class="c-section-heading">Plans</h2>
+          <ul class="o-plain-list c-surface__resume">
+            {#each briefs as brief (brief.id)}
+              <li class="o-row">
+                <span class="c-surface__brief" title={brief.markdown.slice(0, 400)}>
+                  {brief.title}
+                </span>
+                <span class="c-status--subtle">{brief.provider}</span>
+                {#each startable as option (option.id)}
+                  <button
+                    class="c-row-action"
+                    title="Open a {option.label} session and hand it this plan"
+                    onclick={() =>
+                      void sessions.handOff(
+                        workspace.activeProjectId ?? '',
+                        workspace.selected?.id ?? '',
+                        option.id,
+                        brief,
+                      )}
+                  >
+                    → {option.label}
+                  </button>
+                {/each}
+                <button
+                  class="c-row-action"
+                  onclick={() =>
+                    void sessions.forgetBrief(
+                      workspace.activeProjectId ?? '',
+                      workspace.selected?.id ?? '',
+                      brief.id,
+                    )}
+                >
+                  forget
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        {#if background.length > 0}
+          <!--
+            Claude Code only: Codex has no equivalent roster, and its long-running work is another live
+            thread that already shows as a pane. The "as of the last check" is not hedging — there is no
+            event when one of these finishes, so the count genuinely can be a few seconds stale, and
+            saying so is better than a timer.
+          -->
+          <h2 class="c-section-heading">
+            Background agents
+            <span class="c-status--subtle">
+              {stillRunning.length} running, as of the last check
+            </span>
+          </h2>
+          <ul class="o-plain-list c-surface__resume">
+            {#each background as task (task.id)}
+              <li class="o-row">
+                <span class="c-surface__brief">{task.name}</span>
+                <span
+                  class={task.state === 'failed'
+                    ? 'c-status--danger'
+                    : task.state === 'done'
+                      ? 'c-status--ok'
+                      : 'c-status--info'}
+                >
+                  {task.state}
+                </span>
               </li>
             {/each}
           </ul>

@@ -804,6 +804,31 @@ pub struct AgentSessionView {
     pub provider: String,
 }
 
+/// A stored plan.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BriefView {
+    pub id: String,
+    pub title: String,
+    pub provider: String,
+    pub created: String,
+    /// The whole document. Small enough to send with the listing — a plan is prose, not a transcript,
+    /// and a second round trip per plan to render a list would be the wrong trade.
+    pub markdown: String,
+}
+
+/// One background agent, as its CLI reports it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTaskView {
+    pub id: String,
+    pub name: String,
+    /// The CLI's own word — `done`, `failed`, `blocked`, `running`. Not normalized into a wtm enum:
+    /// this is another program's vocabulary and it may add to it.
+    pub state: String,
+    pub session: Option<String>,
+}
+
 /// A conversation that can be picked up again.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

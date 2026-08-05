@@ -32,6 +32,8 @@ import {
   type ApprovalRequest,
   type Capability,
   type PtyExit,
+  type BackgroundTask,
+  type Brief,
   type Resumable,
 } from '../ipc/types';
 import {
@@ -140,6 +142,16 @@ class Sessions {
    * for the same reason: polling is how these tools end up spinning a fan.
    */
   resumable = $state<Record<string, Resumable[]>>({});
+  /** Stored plans, by worktree. */
+  briefs = $state<Record<string, Brief[]>>({});
+  /**
+   * Background agents, by worktree.
+   *
+   * Read on demand and on window focus, because **there is no event when one finishes**. That means a
+   * count can be a few seconds stale, which the UI says rather than hiding behind a timer — polling is
+   * banned, and this is the honest alternative.
+   */
+  background = $state<Record<string, BackgroundTask[]>>({});
   error = $state<string | null>(null);
   /** True when a pane was asked for and a cap said no. Cleared by the next successful open. */
   atCapacity = $state(false);
@@ -331,6 +343,113 @@ class Sessions {
       this.error = errorMessage(e);
     }
     await this.refreshResumable(worktreeId);
+  }
+
+  /** Stored plans for a worktree. Silent on failure, like every auxiliary read here. */
+  async refreshBriefs(projectId: string, worktreeId: string): Promise<void> {
+    try {
+      this.briefs = {
+        ...this.briefs,
+        [worktreeId]: await commands.listBriefs(projectId, worktreeId),
+      };
+    } catch {
+      /* Deliberately silent. */
+    }
+  }
+
+  /** Background agents for a worktree. Empty when there is no `claude` on the PATH. */
+  async refreshBackground(worktreeId: string): Promise<void> {
+    try {
+      this.background = {
+        ...this.background,
+        [worktreeId]: await commands.listBackgroundTasks(worktreeId),
+      };
+    } catch {
+      /* Deliberately silent. */
+    }
+  }
+
+  /**
+   * Answer an approval, keeping the plan if one was approved.
+   *
+   * The plan is stored *before* the answer goes out, and the order is deliberate: allowing an
+   * `ExitPlanMode` lets the session move on and start editing, and a plan captured after that has
+   * already been superseded by the work it describes.
+   */
+  async answerAndKeep(
+    paneId: string,
+    requestId: string,
+    answer: ApprovalAnswer,
+    request: ApprovalRequest,
+  ): Promise<void> {
+    const pane = this.paneById(paneId);
+    if (
+      pane &&
+      request.kind === 'plan_review' &&
+      answer.kind !== 'deny' &&
+      request.markdown.trim().length > 0
+    ) {
+      try {
+        await commands.saveBrief({
+          projectId: pane.projectId,
+          worktreeId: pane.worktreeId,
+          provider: pane.kind.kind === 'agent' ? pane.kind.provider : 'unknown',
+          markdown: request.markdown,
+          model: pane.model,
+          providerPath: request.path,
+        });
+        void this.refreshBriefs(pane.projectId, pane.worktreeId);
+      } catch (e) {
+        // Surfaced but not fatal: failing to keep a copy must not block the approval the user just
+        // gave, and the provider has written its own copy either way.
+        this.error = errorMessage(e);
+      }
+    }
+    await this.answer(paneId, requestId, answer);
+  }
+
+  /** Forget a stored plan. */
+  async forgetBrief(projectId: string, worktreeId: string, id: string): Promise<void> {
+    try {
+      await commands.removeBrief(projectId, id);
+    } catch (e) {
+      this.error = errorMessage(e);
+    }
+    await this.refreshBriefs(projectId, worktreeId);
+  }
+
+  /**
+   * Hand a plan to a new session.
+   *
+   * The handoff the user asked for, in its simplest honest form: open a session on the provider they
+   * pick and send the plan as its first turn. The heavier mechanism — an agent doing this itself —
+   * needs wtm to expose tools to the CLIs, and one config entry already covers the Claude-to-Codex
+   * direction without it.
+   */
+  async handOff(
+    projectId: string,
+    worktreeId: string,
+    provider: string,
+    brief: Brief,
+  ): Promise<void> {
+    await this.openAgent(projectId, worktreeId, provider, 'right');
+    const pane = this.panesIn(worktreeId).at(-1);
+    if (!pane) return;
+
+    // The turn is sent before the handshake finishes; every provider queues it and echoes it, so the
+    // prompt is visibly in the transcript rather than appearing to vanish.
+    const prompt = `Review this plan and say what you would change.\n\n---\n\n${brief.markdown}`;
+    // A pane's session id arrives asynchronously, so wait for it rather than dropping the turn. Bounded
+    // because a spawn that failed will never produce one.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const live = this.paneById(pane.id);
+      if (!live || live.error) return;
+      if (live.session) {
+        await this.send(pane.id, prompt);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   /** Re-probe which agents this machine has. Silent on failure — an auxiliary convenience. */

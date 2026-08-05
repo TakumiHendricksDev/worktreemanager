@@ -335,6 +335,29 @@ export interface Resumable {
   updated: string | null;
 }
 
+/**
+ * A stored plan.
+ *
+ * Called a Brief because `wtm-core` has owned the word `Plan` since v0.1 for the create pipeline's
+ * preview, and because it is what these are: a document written to be handed to someone else.
+ */
+export interface Brief {
+  id: string;
+  title: string;
+  provider: string;
+  created: string;
+  markdown: string;
+}
+
+/** One background agent, as its CLI reports it. */
+export interface BackgroundTask {
+  id: string;
+  name: string;
+  /** The CLI's own word — `done`, `failed`, `blocked`, `running`. Not normalized. */
+  state: string;
+  session: string | null;
+}
+
 export interface AgentUsage {
   tokensIn: number;
   tokensOut: number;

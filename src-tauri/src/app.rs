@@ -912,6 +912,26 @@ impl App {
         }
     }
 
+    /// Where a project's briefs live.
+    #[must_use]
+    pub fn brief_dir(&self, project_id: &str) -> PathBuf {
+        wtm_config::briefs::project_dir(&self.config.paths().config_dir, project_id)
+    }
+
+    /// Store a plan, returning its id.
+    ///
+    /// # Errors
+    ///
+    /// If the directory cannot be created or either file cannot be written.
+    pub fn save_brief(
+        &self,
+        project_id: &str,
+        meta: &wtm_config::BriefMeta,
+        markdown: &str,
+    ) -> Result<String, ConfigError> {
+        wtm_config::briefs::save(&self.brief_dir(project_id), meta, markdown)
+    }
+
     /// What can be resumed in a worktree, newest first, excluding anything already running.
     ///
     /// The exclusion is the point: an entry for a live session would offer to resume a conversation

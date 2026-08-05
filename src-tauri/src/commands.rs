@@ -28,9 +28,9 @@ use crate::app::App;
 use crate::display;
 use crate::openers;
 use crate::view::{
-    ActionView, AgentOptionView, AgentSessionView, CapabilityView, DoctorView, ErrorView,
-    FieldView, FormView, OpenersView, PaletteView, ProjectView, RegisteredView, ResumableView,
-    TerminalSessionView, WorktreeView,
+    ActionView, AgentOptionView, AgentSessionView, BackgroundTaskView, BriefView, CapabilityView,
+    DoctorView, ErrorView, FieldView, FormView, OpenersView, PaletteView, ProjectView,
+    RegisteredView, ResumableView, TerminalSessionView, WorktreeView,
 };
 
 /// Shared application state.
@@ -1748,4 +1748,166 @@ fn mcp_config_of(
     Ok(Some(
         serde_json::json!({ "mcpServers": servers }).to_string(),
     ))
+}
+
+// ═══════════════════════════ plans and background work ═══════════════════════════
+
+/// Store a plan, so it outlives the session that wrote it.
+///
+/// Called when a plan approval is allowed, which is the moment a plan stops moving — before that it is
+/// a live step list and a progress widget, and storing every revision would fill the list with the
+/// same plan a dozen times with one line different.
+///
+/// **Nothing is written into the worktree.** `~/.config/wtm/plans/<project>/` instead, because wtm
+/// writes nothing into a repository and that property is worth more than the convenience of a plan
+/// sitting beside the code — a file in `git status` the user did not create is how a tool becomes
+/// untrustworthy.
+#[tauri::command]
+pub async fn save_brief(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    provider: String,
+    markdown: String,
+    model: Option<String>,
+    provider_session: Option<String>,
+    provider_path: Option<String>,
+) -> Reply<String> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let meta = wtm_config::BriefMeta {
+            title: wtm_config::briefs::title_of(&markdown),
+            provider,
+            worktree: worktree_id,
+            model,
+            provider_session,
+            provider_path,
+            created: app.clock.now_iso(),
+            extra: std::collections::BTreeMap::new(),
+        };
+        app.save_brief(&project_id, &meta, &markdown)
+            .map_err(|e| ErrorView::new("config", e.to_string()))
+    })
+    .await
+}
+
+/// Every stored plan for a worktree, newest first.
+#[tauri::command]
+pub async fn list_briefs(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+) -> Reply<Vec<BriefView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(wtm_config::briefs::list(&app.brief_dir(&project_id))
+            .into_iter()
+            .filter(|brief| brief.meta.worktree == worktree_id)
+            .map(|brief| BriefView {
+                id: brief.id,
+                title: brief.meta.title,
+                provider: brief.meta.provider,
+                created: brief.meta.created,
+                markdown: brief.markdown,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// Forget a plan.
+#[tauri::command]
+pub async fn remove_brief(app: AppState<'_>, project_id: String, id: String) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        wtm_config::briefs::remove(&app.brief_dir(&project_id), &id);
+        Ok(())
+    })
+    .await
+}
+
+/// How long to allow for the background-task roster.
+///
+/// A local read of a state directory, so this is generous rather than tuned. Short enough that a chip
+/// which cannot be filled says nothing instead of hanging the refresh it rides on.
+const AGENTS_TIMEOUT_MS: u64 = 4_000;
+
+/// Background agents running in a worktree.
+///
+/// `claude agents --json --all --cwd <path>` — verified to filter exactly by directory, and to need no
+/// TTY. Claude Code only: Codex has no equivalent roster, and its long-running work is another live
+/// thread that already shows as a pane.
+///
+/// # Why this is a command and not a subscription
+///
+/// **There is no event when a background task finishes.** So this is read on demand and on window
+/// focus, the same triggers `refreshWorktrees` uses — polling is banned, and a chip that reads "3
+/// running" for a few seconds after one finished is worth saying in the copy rather than hiding
+/// behind a timer.
+#[tauri::command]
+pub async fn list_background_tasks(
+    app: AppState<'_>,
+    worktree_id: String,
+) -> Reply<Vec<BackgroundTaskView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        // Absent CLI is an empty list, not an error: this is an auxiliary read, and a banner about a
+        // missing `claude` on a machine that never had one would be noise.
+        if app.runner.which("claude").is_none() {
+            return Ok(Vec::new());
+        }
+
+        let inv = wtm_core::ports::exec::Invocation::new(
+            vec![
+                "claude".to_owned(),
+                "agents".to_owned(),
+                "--json".to_owned(),
+                "--all".to_owned(),
+                "--cwd".to_owned(),
+                worktree_id,
+            ],
+            std::env::temp_dir(),
+            AGENTS_TIMEOUT_MS,
+        );
+
+        // `run_allow_failure`, because a non-zero exit here means "could not list" rather than
+        // "something is wrong with wtm" — an old CLI without the flag, or one not logged in.
+        let output = app
+            .runner
+            .run_allow_failure(&inv, &wtm_core::ports::exec::CancelToken::new())
+            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+        if !output.is_success() {
+            tracing::debug!(stderr = %output.stderr, "could not list background agents");
+            return Ok(Vec::new());
+        }
+
+        let parsed: Vec<serde_json::Value> =
+            serde_json::from_str(&output.stdout).unwrap_or_default();
+        Ok(parsed
+            .iter()
+            // `kind == "background"`, stated rather than implied. The roster also carries
+            // *interactive* sessions — including whichever one is driving wtm itself — and those have
+            // a `pid` where a background one has an `id`, so an earlier version filtered them out by
+            // accident when its `id` lookup failed. An accident is not a filter: the day the CLI gives
+            // interactive entries an `id`, this would have started listing the user's own terminal
+            // sessions as background work.
+            .filter(|task| {
+                task.get("kind").and_then(serde_json::Value::as_str) == Some("background")
+            })
+            .filter_map(|task| {
+                let text = |key: &str| task.get(key).and_then(serde_json::Value::as_str);
+                Some(BackgroundTaskView {
+                    id: text("id").or_else(|| text("sessionId"))?.to_owned(),
+                    // `(backgrounded)` is what the CLI calls an unnamed one, which is not a name.
+                    name: text("name")
+                        .filter(|n| !n.starts_with('('))
+                        .unwrap_or("Untitled")
+                        .to_owned(),
+                    state: text("state").unwrap_or("running").to_owned(),
+                    session: text("sessionId").map(str::to_owned),
+                })
+            })
+            .collect())
+    })
+    .await
 }
