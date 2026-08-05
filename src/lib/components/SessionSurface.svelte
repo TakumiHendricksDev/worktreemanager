@@ -37,6 +37,19 @@
   /** Worktrees that have any pane at all, so nothing renders an empty tree. */
   const occupied = $derived([...new Set(sessions.panes.map((p) => p.worktreeId))]);
   const activeLayout = $derived(sessions.layoutFor(activeId));
+  const resumable = $derived(activeId ? (sessions.resumable[activeId] ?? []) : []);
+
+  /*
+   * Read what can be resumed when the selection lands somewhere new.
+   *
+   * On selection rather than on a timer: polling is banned, and the list only changes when this
+   * window opens or closes a session — which is exactly when the store refreshes it itself.
+   */
+  $effect(() => {
+    const worktree = workspace.selectedWorktreeId;
+    if (!worktree) return;
+    void sessions.refreshResumable(worktree);
+  });
 
   /*
    * Drop panes whose worktree has gone.
@@ -143,6 +156,42 @@
             Shell
           </Button>
         </div>
+        {#if resumable.length > 0}
+          <!--
+            Offered rather than resumed automatically. Re-establishing every conversation on launch
+            would fork a CLI per pane for sessions the user may be finished with — the same judgement
+            the terminal dock made in deciding its open state must not persist.
+          -->
+          <h2 class="c-section-heading">Pick up where you left off</h2>
+          <ul class="o-plain-list c-surface__resume">
+            {#each resumable as record (record.provider + record.providerSession)}
+              <li class="o-row">
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  title="Resume this conversation on {record.model ?? 'its own model'}"
+                  onclick={() =>
+                    void sessions.resume(
+                      workspace.activeProjectId ?? '',
+                      workspace.selected?.id ?? '',
+                      record,
+                    )}
+                >
+                  {record.title ?? 'Untitled session'}
+                </Button>
+                <span class="c-status--subtle">{record.provider}</span>
+                <button
+                  class="c-row-action"
+                  title="Stop offering this conversation"
+                  onclick={() => void sessions.forget(workspace.selected?.id ?? '', record)}
+                >
+                  forget
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
         {#if sessions.options.every((o) => !o.available)}
           <p class="c-status--warn">
             No agent CLI is on wtm's PATH. Settings → Advanced shows the PATH wtm resolved.

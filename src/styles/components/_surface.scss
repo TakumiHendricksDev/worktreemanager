@@ -56,3 +56,12 @@
     line-height: 1.6;
   }
 }
+
+/* The resume list. A column of rows, each a button and its provider, sized like the launcher above
+   it so the two read as one region rather than two. */
+.c-surface__resume {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--step--2);
+}

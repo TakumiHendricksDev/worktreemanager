@@ -23,6 +23,7 @@
 pub mod fs;
 pub mod layers;
 pub mod paths;
+pub mod sessions;
 pub mod store;
 pub mod trust;
 pub mod user;
@@ -31,6 +32,7 @@ pub mod validate;
 pub use fs::{RealFileStore, absolutize, parse_dotenv};
 pub use layers::{BUILT_IN_DEFAULTS, LOCAL_FILENAME, LayerPaths, REPO_FILENAME};
 pub use paths::AppPaths;
+pub use sessions::{SessionRecord, SessionStore};
 pub use store::FileConfigStore;
 pub use trust::{TrustStore, content_hash};
 pub use user::{PaletteDef, Theme, UserConfig};

@@ -23,6 +23,7 @@ import type {
   Preview,
   Project,
   Registered,
+  Resumable,
   RemoveOutcome,
   SetupResult,
   TerminalSession,
@@ -153,10 +154,35 @@ export const commands = {
     projectId: string;
     worktreeId: string;
     agentId: string;
-    model?: string | null;
-    effort?: string | null;
-    mode?: string | null;
-  }) => invoke<string>('open_agent_session', args),
+    /**
+     * What the session asks for beyond which agent and where. Send `{}` for the provider's own
+     * choices; `resume` picks up a conversation by the id its provider knows it by.
+     */
+    options?: {
+      model?: string | null;
+      effort?: string | null;
+      mode?: string | null;
+      resume?: string | null;
+    };
+  }) => invoke<string>('open_agent_session', { options: {}, ...args }),
+
+  /**
+   * Conversations that can be picked up again in this worktree, newest first.
+   *
+   * Excludes anything already running: offering to resume a session that is on screen would hand the
+   * CLI two clients for one thread.
+   */
+  listResumable: (worktreeId: string) =>
+    invoke<Resumable[]>('list_resumable', { worktreeId }),
+
+  /**
+   * Stop offering a conversation.
+   *
+   * Distinct from closing a pane, which keeps the entry — closing is how you tidy the screen, and the
+   * commonest thing anyone wants next is it back. This is the explicit discard.
+   */
+  forgetSession: (provider: string, providerSession: string) =>
+    invoke<void>('forget_session', { provider, providerSession }),
 
   /**
    * What an agent can do on this machine: its models and each one's effort ladder.

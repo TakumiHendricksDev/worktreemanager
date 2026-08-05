@@ -60,6 +60,11 @@ struct AgentEntry {
     project: String,
     worktree: String,
     provider: String,
+    /// The id the *provider* knows this conversation by, once it has said.
+    ///
+    /// Empty until then. Kept so `resumable` can exclude a conversation that is already on screen —
+    /// offering to resume one would hand the CLI two clients for one thread.
+    provider_session: String,
     session: wtm_agent::AgentSession,
 }
 
@@ -126,6 +131,13 @@ pub struct App {
     /// composition root is what preserves the `wasm32` check. Liveness is never read from it —
     /// see `open_agent`.
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
+    /// Where the resume list lives, and the lock that serializes writes to it.
+    ///
+    /// Held rather than re-derived because it is written on every turn's first event, and a
+    /// read-modify-write of a shared file needs a lock even when only one thread is expected to be
+    /// doing it — two panes becoming ready at the same moment is the ordinary case.
+    sessions_file: PathBuf,
+    resume: parking_lot::Mutex<()>,
 }
 
 impl std::fmt::Debug for App {
@@ -158,6 +170,9 @@ impl App {
     /// fail; widening the signature later would churn every call site.
     #[allow(clippy::unnecessary_wraps)]
     pub fn with_paths(paths: AppPaths) -> Result<Self, ConfigError> {
+        // Captured before `paths` is moved into the config store below.
+        let sessions_file = paths.sessions_file.clone();
+
         // Read the PATH override *before* building the runner, since the override is the
         // documented escape hatch for a bundled app that cannot see Homebrew.
         let path_override = wtm_config::UserConfig::load(&paths.config_file)
@@ -208,6 +223,8 @@ impl App {
             os_tokens: wtm_exec::os_tokens(),
             shells: parking_lot::Mutex::new(BTreeMap::new()),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
+            sessions_file: sessions_file.clone(),
+            resume: parking_lot::Mutex::new(()),
         })
     }
 
@@ -744,6 +761,7 @@ impl App {
                 project: project_id.to_owned(),
                 worktree: worktree.id.as_str().to_owned(),
                 provider: entry.id.to_owned(),
+                provider_session: String::new(),
                 session,
             },
         );
@@ -825,6 +843,116 @@ impl App {
             .filter(|(_, entry)| entry.worktree == worktree_id)
             .map(|(session, _)| session.as_str().to_owned())
             .collect()
+    }
+
+    /// Record a session as resumable.
+    ///
+    /// Called when a session reports the id its provider knows it by — which is the first moment
+    /// resuming is possible, and before the first reply, so a session that fails mid-turn is still
+    /// in the list. Errors are logged rather than surfaced: failing to write a resume entry must not
+    /// fail the session it belongs to.
+    pub fn remember_session(&self, record: wtm_config::SessionRecord) {
+        let _guard = self.resume.lock();
+        let mut store = wtm_config::SessionStore::load(&self.sessions_file);
+        store.remember(record);
+        if let Err(error) = store.save(&self.sessions_file) {
+            tracing::warn!(%error, "could not write the resume list");
+        }
+    }
+
+    /// Forget a conversation, because the user closed it for good.
+    pub fn forget_session(&self, provider: &str, provider_session: &str) {
+        let _guard = self.resume.lock();
+        let mut store = wtm_config::SessionStore::load(&self.sessions_file);
+        store.forget(provider, provider_session);
+        if let Err(error) = store.save(&self.sessions_file) {
+            tracing::warn!(%error, "could not write the resume list");
+        }
+    }
+
+    /// Give a remembered session a label, if it does not have one.
+    ///
+    /// Its own method rather than a `remember` with a title, because the caller cannot use
+    /// [`Self::resumable`] to find the record: that deliberately excludes sessions that are running,
+    /// and the moment a title becomes available is the moment the session *is* running. Reading the
+    /// store directly is the only way to reach it.
+    ///
+    /// Only names an unnamed one. A later turn rewriting the label would move it out from under a
+    /// list the user has learned to read.
+    pub fn title_session(&self, provider: &str, provider_session: &str, title: &str) {
+        let _guard = self.resume.lock();
+        let mut store = wtm_config::SessionStore::load(&self.sessions_file);
+        let Some(record) = store
+            .sessions
+            .iter_mut()
+            .find(|r| r.provider == provider && r.provider_session == provider_session)
+        else {
+            return;
+        };
+        if record.title.is_some() {
+            return;
+        }
+        record.title = Some(title.to_owned());
+        record.updated = Some(self.clock.now_iso());
+        if let Err(error) = store.save(&self.sessions_file) {
+            tracing::warn!(%error, "could not write the resume list");
+        }
+    }
+
+    /// Forget everything belonging to a worktree that has been removed.
+    ///
+    /// Without this, a removed worktree leaves entries pointing at a path that no longer exists, and
+    /// each would fail on click with an error about a missing directory.
+    pub fn forget_worktree_sessions(&self, worktree_id: &str) {
+        let _guard = self.resume.lock();
+        let mut store = wtm_config::SessionStore::load(&self.sessions_file);
+        store.forget_worktree(worktree_id);
+        if let Err(error) = store.save(&self.sessions_file) {
+            tracing::warn!(%error, "could not write the resume list");
+        }
+    }
+
+    /// What can be resumed in a worktree, newest first, excluding anything already running.
+    ///
+    /// The exclusion is the point: an entry for a live session would offer to resume a conversation
+    /// that is on screen two inches away, and accepting would give the CLI two clients for one
+    /// thread.
+    #[must_use]
+    pub fn resumable(&self, worktree_id: &str) -> Vec<wtm_config::SessionRecord> {
+        let live: BTreeSet<String> = self
+            .agents
+            .lock()
+            .values()
+            .map(|entry| entry.provider_session.clone())
+            .filter(|id| !id.is_empty())
+            .collect();
+
+        let _guard = self.resume.lock();
+        wtm_config::SessionStore::load(&self.sessions_file)
+            .in_worktree(worktree_id)
+            .into_iter()
+            .filter(|record| !live.contains(&record.provider_session))
+            .cloned()
+            .collect()
+    }
+
+    /// The provider's own id for a running session, once it has said.
+    #[must_use]
+    pub fn provider_session_of(&self, session: &str) -> Option<String> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents
+            .lock()
+            .get(&id)
+            .map(|entry| entry.provider_session.clone())
+            .filter(|id| !id.is_empty())
+    }
+
+    /// Note the provider's own id for a running session, so `resumable` can exclude it.
+    pub fn note_provider_session(&self, session: &str, provider_session: &str) {
+        let id = wtm_core::model::SessionId::new(session);
+        if let Some(entry) = self.agents.lock().get_mut(&id) {
+            provider_session.clone_into(&mut entry.provider_session);
+        }
     }
 
     fn running_agents(&self) -> BTreeSet<String> {

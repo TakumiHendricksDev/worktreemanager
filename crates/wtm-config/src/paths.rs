@@ -22,6 +22,14 @@ pub const APP_DIR: &str = "wtm";
 /// The user's config file.
 pub const CONFIG_FILENAME: &str = "config.toml";
 
+/// The resume list, kept separate from `config.toml` for the same reason the trust store is.
+///
+/// `config.toml` is hand-edited and often kept in a dotfiles repo; this is machine-local state only
+/// ever written by the app, and every entry in it names an absolute path that means nothing on
+/// another machine. Mixing them would invite copying a stale session index between machines along
+/// with preferences.
+pub const SESSIONS_FILENAME: &str = "sessions.toml";
+
 /// The trust store, kept separate from `config.toml`.
 ///
 /// Separate on purpose: `config.toml` is meant to be hand-edited and shared between
@@ -36,6 +44,7 @@ pub struct AppPaths {
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
     pub trust_file: PathBuf,
+    pub sessions_file: PathBuf,
 }
 
 impl AppPaths {
@@ -59,6 +68,7 @@ impl AppPaths {
             config_dir: config_dir.to_path_buf(),
             config_file: config_dir.join(CONFIG_FILENAME),
             trust_file: config_dir.join(TRUST_FILENAME),
+            sessions_file: config_dir.join(SESSIONS_FILENAME),
         }
     }
 

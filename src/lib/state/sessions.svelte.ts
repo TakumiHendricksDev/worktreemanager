@@ -32,6 +32,7 @@ import {
   type ApprovalRequest,
   type Capability,
   type PtyExit,
+  type Resumable,
 } from '../ipc/types';
 import {
   insert,
@@ -132,6 +133,13 @@ class Sessions {
    * upgraded while wtm runs, which is worth a restart rather than a poll — and polling is banned.
    */
   capabilities = $state<Record<string, Capability | null>>({});
+  /**
+   * Conversations that can be picked up again, by worktree.
+   *
+   * Refreshed on demand and on selection rather than polled — the same policy `workspace` states, and
+   * for the same reason: polling is how these tools end up spinning a fan.
+   */
+  resumable = $state<Record<string, Resumable[]>>({});
   error = $state<string | null>(null);
   /** True when a pane was asked for and a cap said no. Cleared by the next successful open. */
   atCapacity = $state(false);
@@ -258,6 +266,71 @@ class Sessions {
     pane.model = next.model;
     pane.effort = next.effort;
     pane.flags = next.flags;
+  }
+
+  /** What can be resumed in a worktree. Silent on failure, like every auxiliary read here. */
+  async refreshResumable(worktreeId: string): Promise<void> {
+    try {
+      this.resumable = {
+        ...this.resumable,
+        [worktreeId]: await commands.listResumable(worktreeId),
+      };
+    } catch {
+      /* Deliberately silent. A resume list that cannot be read is not worth a banner. */
+    }
+  }
+
+  /**
+   * Pick up a conversation.
+   *
+   * The model and effort come from the record rather than from the provider's defaults: resuming on a
+   * different model than the conversation was held on is a surprise, and one the transcript above
+   * would not explain.
+   */
+  async resume(projectId: string, worktreeId: string, record: Resumable): Promise<void> {
+    if (!this.hasRoom(worktreeId)) return;
+
+    const pane = this.blank(
+      { kind: 'agent', provider: record.provider },
+      projectId,
+      worktreeId,
+    );
+    pane.model = record.model;
+    pane.effort = record.effort;
+    this.panes = [...this.panes, pane];
+    this.place(worktreeId, pane.id, 'right');
+    void this.loadCapability(record.provider);
+
+    try {
+      const session = await commands.openAgentSession({
+        projectId,
+        worktreeId,
+        agentId: record.provider,
+        options: {
+          model: record.model,
+          effort: record.effort,
+          resume: record.providerSession,
+        },
+      });
+      const live = this.paneById(pane.id);
+      if (live) live.session = session;
+      // It is running now, so it must stop being offered — `list_resumable` excludes live sessions,
+      // and refreshing is what makes the list agree with the screen.
+      void this.refreshResumable(worktreeId);
+    } catch (e) {
+      const live = this.paneById(pane.id);
+      if (live) live.error = errorMessage(e);
+    }
+  }
+
+  /** Stop offering a conversation. The explicit discard, unlike closing a pane. */
+  async forget(worktreeId: string, record: Resumable): Promise<void> {
+    try {
+      await commands.forgetSession(record.provider, record.providerSession);
+    } catch (e) {
+      this.error = errorMessage(e);
+    }
+    await this.refreshResumable(worktreeId);
   }
 
   /** Re-probe which agents this machine has. Silent on failure — an auxiliary convenience. */
@@ -387,8 +460,7 @@ class Sessions {
         projectId,
         worktreeId,
         agentId: provider,
-        model: pane.model,
-        effort: pane.effort,
+        options: { model: pane.model, effort: pane.effort },
       });
       const live = this.paneById(pane.id);
       if (live) live.session = session;
@@ -473,6 +545,8 @@ class Sessions {
       ...this.layouts,
       [pane.worktreeId]: remove(this.layoutFor(pane.worktreeId), paneId),
     };
+    // The conversation is no longer running, so it can be offered again.
+    if (pane.kind.kind === 'agent') void this.refreshResumable(pane.worktreeId);
     if (this.focused[pane.worktreeId] === paneId) {
       const survivors = panesOf(this.layoutFor(pane.worktreeId));
       this.focused = {
@@ -519,8 +593,7 @@ class Sessions {
           projectId: pane.projectId,
           worktreeId: pane.worktreeId,
           agentId: pane.kind.provider,
-          model: pane.model,
-          effort: pane.effort,
+          options: { model: pane.model, effort: pane.effort },
         });
       }
     } catch (e) {

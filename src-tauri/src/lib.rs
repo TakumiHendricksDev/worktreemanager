@@ -198,6 +198,8 @@ pub fn run() {
             commands::answer_approval,
             commands::interrupt_turn,
             commands::list_agent_sessions,
+            commands::list_resumable,
+            commands::forget_session,
             commands::close_agent_session,
             commands::open_url,
             commands::list_openers,

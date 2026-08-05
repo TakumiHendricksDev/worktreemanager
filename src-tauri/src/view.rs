@@ -803,6 +803,19 @@ pub struct AgentSessionView {
     pub provider: String,
 }
 
+/// A conversation that can be picked up again.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumableView {
+    pub provider: String,
+    /// The id that provider knows the conversation by. Handed straight back to resume it.
+    pub provider_session: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub updated: Option<String>,
+}
+
 /// What an agent can do on this machine.
 ///
 /// A view rather than the domain type crossing directly, for the same reason every other type here

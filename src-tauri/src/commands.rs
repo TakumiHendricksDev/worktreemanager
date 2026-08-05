@@ -29,7 +29,7 @@ use crate::display;
 use crate::openers;
 use crate::view::{
     ActionView, AgentOptionView, AgentSessionView, CapabilityView, DoctorView, ErrorView,
-    FieldView, FormView, OpenersView, PaletteView, ProjectView, RegisteredView,
+    FieldView, FormView, OpenersView, PaletteView, ProjectView, RegisteredView, ResumableView,
     TerminalSessionView, WorktreeView,
 };
 
@@ -894,6 +894,13 @@ pub async fn remove_worktree(
         // nothing in the dialog mentions.
         app.close_shell(&worktree_id);
 
+        // And every agent session, for the same reason with more force. An agent mid-turn is
+        // *writing* into the directory git is about to refuse to delete, and unlike a shell it may
+        // also be holding a model connection open with nothing left to talk to.
+        for session in app.agents_in(&worktree_id) {
+            app.close_agent(&session);
+        }
+
         let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
         let sink = crate::pty_bridge::EventSink::new(handle);
 
@@ -912,6 +919,13 @@ pub async fn remove_worktree(
         {
             // The worktree is already gone; a leftover entry is untidy, not broken.
             tracing::warn!(error = %err, "could not clear the favorite for a removed worktree");
+        }
+
+        // And the resume entries, for a sharper reason than tidiness: every one names this
+        // worktree's absolute path, so each would fail on click with an error about a missing
+        // directory — offering to resume something that cannot be resumed.
+        if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. }) {
+            app.forget_worktree_sessions(&worktree_id);
         }
 
         Ok(outcome)
@@ -1261,6 +1275,22 @@ pub async fn close_terminal(app: AppState<'_>, worktree_id: String) -> Reply<()>
 
 // ═══════════════════════════ agent sessions ═══════════════════════════
 
+/// What a new session asks for beyond which agent and where.
+///
+/// A struct rather than four more parameters, and not only because clippy caps a command at eight:
+/// every one of these is optional and provider-specific, so they belong together and the set will
+/// grow. `Default` matters — a caller that wants the provider's own choices sends `{}`.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SessionOptions {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// The provider's own spelling of an approval or permission mode.
+    pub mode: Option<String>,
+    /// A conversation to pick up, by the id its provider knows it by.
+    pub resume: Option<String>,
+}
+
 /// Every agent this build can drive, and whether this machine can.
 ///
 /// The whole catalogue, including what is not installed, with the reason — the same contract
@@ -1302,6 +1332,10 @@ pub async fn list_agents(app: AppState<'_>) -> Reply<Vec<AgentOptionView>> {
 ///
 /// Not idempotent per worktree, which is the deliberate difference from [`open_terminal`]: several
 /// sessions in one worktree is the feature, so asking twice starts two.
+///
+/// `resume` picks up a conversation by the id its provider knows it by — the value
+/// [`list_resumable`] returns. Passing it means the CLI reloads its own transcript rather than
+/// starting fresh; passing `None` starts a new one.
 #[tauri::command]
 pub async fn open_agent_session(
     handle: tauri::AppHandle,
@@ -1309,10 +1343,14 @@ pub async fn open_agent_session(
     project_id: String,
     worktree_id: String,
     agent_id: String,
-    model: Option<String>,
-    effort: Option<String>,
-    mode: Option<String>,
+    options: SessionOptions,
 ) -> Reply<String> {
+    let SessionOptions {
+        model,
+        effort,
+        mode,
+        resume,
+    } = options;
     let app = Arc::clone(&app);
     blocking(move || {
         let project = app.project(&project_id)?;
@@ -1349,6 +1387,7 @@ pub async fn open_agent_session(
             // `git status` you cannot explain. The spelling is the provider's own; see
             // `ProviderEntry::default_mode`.
             mode: mode.or_else(|| entry.default_mode.map(str::to_owned)),
+            resume,
             ..wtm_agent::SessionRequest::default()
         };
 
@@ -1411,6 +1450,46 @@ pub async fn interrupt_turn(app: AppState<'_>, session: String) -> Reply<()> {
     .await
 }
 
+/// Conversations that can be picked up again in a worktree, newest first.
+///
+/// Excludes anything already running: an entry for a live session would offer to resume a
+/// conversation that is on screen two inches away, and accepting would hand the CLI two clients for
+/// one thread.
+#[tauri::command]
+pub async fn list_resumable(app: AppState<'_>, worktree_id: String) -> Reply<Vec<ResumableView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(app
+            .resumable(&worktree_id)
+            .into_iter()
+            .map(|record| ResumableView {
+                provider: record.provider,
+                provider_session: record.provider_session,
+                title: record.title,
+                model: record.model,
+                effort: record.effort,
+                updated: record.updated,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// Forget a conversation, so it stops being offered.
+#[tauri::command]
+pub async fn forget_session(
+    app: AppState<'_>,
+    provider: String,
+    provider_session: String,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.forget_session(&provider, &provider_session);
+        Ok(())
+    })
+    .await
+}
+
 /// Which agent sessions are live. Every project's, not one's.
 ///
 /// The re-attach path after a webview reload, and it exists for the same reason
@@ -1439,6 +1518,10 @@ pub async fn list_agent_sessions(app: AppState<'_>) -> Reply<Vec<AgentSessionVie
 ///
 /// Takes only the session id, like [`close_terminal`]: there is no config or git to consult, and
 /// the id is a key this app itself minted.
+///
+/// Closing a pane is **not** the same as forgetting the conversation, and this deliberately keeps
+/// the resume entry. Closing a pane is how you tidy the screen; the CLI still has the transcript,
+/// and the commonest thing anyone wants next is it back. `forget_session` is the explicit discard.
 #[tauri::command]
 pub async fn close_agent_session(app: AppState<'_>, session: String) -> Reply<()> {
     let app = Arc::clone(&app);

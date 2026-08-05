@@ -319,6 +319,22 @@ export interface Capability {
   flags: Record<string, string>;
 }
 
+/**
+ * A conversation that can be picked up again.
+ *
+ * What persists across a quit is this handle, not a session: the child process is gone, but both CLIs
+ * keep the transcript and will hand it back given the id they know it by. So wtm offers what *can* be
+ * resumed and re-establishes on demand, rather than respawning a fleet of CLIs on launch.
+ */
+export interface Resumable {
+  provider: string;
+  providerSession: string;
+  title: string | null;
+  model: string | null;
+  effort: string | null;
+  updated: string | null;
+}
+
 export interface AgentUsage {
   tokensIn: number;
   tokensOut: number;

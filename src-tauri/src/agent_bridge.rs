@@ -31,6 +31,8 @@ use tauri::{AppHandle, Emitter};
 use wtm_agent::session::AgentSink;
 use wtm_core::model::{AgentEvent, ExitOutcome, SessionId};
 
+use crate::app::App;
+
 /// Event name for one normalized agent event.
 pub const AGENT_EVENT: &str = "agent:event";
 
@@ -65,7 +67,9 @@ struct AgentReadyPayload {
 
 /// Forwards a session's events to the window as Tauri events.
 pub struct AgentEventSink {
-    app: AppHandle,
+    handle: AppHandle,
+    /// For the resume list. `None` in the one place a sink exists without app state — a test.
+    app: Option<Arc<App>>,
 }
 
 impl std::fmt::Debug for AgentEventSink {
@@ -76,20 +80,100 @@ impl std::fmt::Debug for AgentEventSink {
 
 impl AgentEventSink {
     #[must_use]
-    pub fn new(app: AppHandle) -> Arc<Self> {
-        Arc::new(Self { app })
+    pub fn new(handle: AppHandle) -> Arc<Self> {
+        use tauri::Manager;
+
+        // `try_state` rather than `state`: `state` panics on an unmanaged type, and a sink that
+        // panicked would take a reader thread with it. Without app state the events still flow and
+        // only the resume list goes unwritten, which is the right way for this to degrade.
+        let app = handle.try_state::<Arc<App>>().map(|s| Arc::clone(&s));
+        Arc::new(Self { handle, app })
+    }
+}
+
+impl AgentEventSink {
+    /// Record a session as resumable, and note the provider's id on it.
+    ///
+    /// Driven from `SessionReady` rather than from the first reply, because that is the first moment
+    /// resuming is possible — so a session that fails mid-turn is still in the list, which is exactly
+    /// when someone wants it back.
+    fn remember(&self, session: &SessionId, event: &AgentEvent) {
+        let AgentEvent::SessionReady {
+            provider_session_id,
+            model,
+            effort,
+            ..
+        } = event
+        else {
+            return;
+        };
+        let Some(app) = &self.app else { return };
+        let Some(facts) = app
+            .live_agents()
+            .into_iter()
+            .find(|f| f.session == session.as_str())
+        else {
+            return;
+        };
+
+        app.note_provider_session(session.as_str(), provider_session_id);
+        app.remember_session(wtm_config::SessionRecord {
+            provider: facts.provider,
+            worktree: facts.worktree,
+            provider_session: provider_session_id.clone(),
+            // Filled in by the first turn, which is where a useful label comes from — a session's
+            // own id is not something anyone recognises in a list.
+            title: None,
+            model: model.clone(),
+            effort: effort.clone(),
+            updated: Some(app.clock.now_iso()),
+            extra: std::collections::BTreeMap::new(),
+        });
+    }
+
+    /// Give a remembered session a label, from the first thing the user said to it.
+    ///
+    /// A session's own id is not something anyone recognises in a list, so the first prompt is the
+    /// label. Truncated, because a prompt can be a whole stack trace.
+    fn title(&self, session: &SessionId, event: &AgentEvent) {
+        let AgentEvent::UserEcho { text } = event else {
+            return;
+        };
+        let Some(app) = &self.app else { return };
+        let Some(facts) = app
+            .live_agents()
+            .into_iter()
+            .find(|f| f.session == session.as_str())
+        else {
+            return;
+        };
+        let Some(provider_session) = app.provider_session_of(session.as_str()) else {
+            // The turn was queued before the handshake finished, so there is nothing to label yet.
+            // The next turn will carry one, and a session with no title still resumes.
+            return;
+        };
+
+        let mut label: String = text.chars().take(72).collect();
+        if text.chars().count() > 72 {
+            label.push('…');
+        }
+        app.title_session(&facts.provider, &provider_session, &label);
     }
 }
 
 impl AgentSink for AgentEventSink {
     fn on_event(&self, session: &SessionId, event: &AgentEvent) {
+        // Before the emit, so a slow write cannot delay what the user sees.
+        self.remember(session, event);
+        self.title(session, event);
+
         let payload = AgentEventPayload {
             session: session.as_str().to_owned(),
             event,
         };
         // A failed emit means the window is gone. Nothing useful to do, and it must not interrupt
         // the reader thread — the same judgement `pty_bridge` makes.
-        if let Err(err) = self.app.emit(AGENT_EVENT, payload) {
+        if let Err(err) = self.handle.emit(AGENT_EVENT, payload) {
             tracing::debug!(error = %err, "could not emit an agent event");
         }
     }
@@ -100,7 +184,7 @@ impl AgentSink for AgentEventSink {
             outcome: outcome.clone(),
             summary: outcome.describe(),
         };
-        if let Err(err) = self.app.emit(AGENT_EXIT_EVENT, payload) {
+        if let Err(err) = self.handle.emit(AGENT_EXIT_EVENT, payload) {
             tracing::debug!(error = %err, "could not emit an agent exit");
         }
     }
@@ -109,7 +193,7 @@ impl AgentSink for AgentEventSink {
         let payload = AgentReadyPayload {
             session: session.as_str().to_owned(),
         };
-        if let Err(err) = self.app.emit(AGENT_READY_EVENT, payload) {
+        if let Err(err) = self.handle.emit(AGENT_READY_EVENT, payload) {
             tracing::debug!(error = %err, "could not emit agent readiness");
         }
     }
