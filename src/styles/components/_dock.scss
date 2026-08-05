@@ -31,6 +31,8 @@
  * out, and WebKitGTK is a first-class target here.
  */
 
+@use '../tools' as t;
+
 .c-dock {
   flex: 0 0 auto;
   display: flex;
@@ -56,32 +58,21 @@
 }
 
 /*
- * The horizontal twin of `.c-shell__splitter`, deliberately not shared with it.
+ * The horizontal twin of `.c-shell__splitter`, now genuinely shared with it.
  *
- * Same idiom in the other axis — a one-pixel line with the hit area widened around it, not the
- * line — so a `splitter($axis)` mixin in `tools/` is the sanctioned way to share it, `@extend`
- * being banned. Not worth it for two call sites, and it would mean editing `_shell.scss`, whose
- * own header calls its classes the only ones in the app that can break layout for everything
- * else, inside a feature change. The day a third splitter appears, write the mixin and convert
- * all three at once.
+ * This comment used to explain why it was not: a `splitter($axis)` mixin was the sanctioned way,
+ * `@extend` being banned, but two call sites did not justify one and writing it would have meant
+ * editing `_shell.scss` — whose header calls its classes the only ones that can break layout for
+ * everything else — inside a feature change. It ended "the day a third splitter appears, write the
+ * mixin and convert all three at once." The tiling session surface is the third.
+ *
+ * The `height` stays here because the shell's twin takes its 1px from a grid track instead, so a
+ * mixin that set thickness would be wrong at one of the two.
  */
 .c-dock__splitter {
   flex: 0 0 auto;
   height: 1px;
-  background: var(--border);
-  cursor: row-resize;
-  position: relative;
-
-  /* A 1px target is unhittable, so widen the hit area without widening the line. */
-  &::after {
-    content: '';
-    position: absolute;
-    inset: -3px 0;
-  }
-
-  &:hover {
-    background: var(--border-strong);
-  }
+  @include t.splitter(horizontal);
 }
 
 .c-dock__head {

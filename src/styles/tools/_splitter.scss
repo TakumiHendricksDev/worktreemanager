@@ -1,0 +1,73 @@
+/*
+ * A draggable pane divider. Emits nothing until included.
+ *
+ * `_dock.scss` left the instruction this file answers: its `.c-dock__splitter` header notes that
+ * the class is the horizontal twin of `.c-shell__splitter`, that `@extend` is banned so a mixin is
+ * the sanctioned way to share it, and that two call sites did not justify writing one — ending
+ * "the day a third splitter appears, write the mixin and convert all three at once." The tiling
+ * session surface is the third, so this is that day, and converting the existing two here rather
+ * than inside the feature change is why this is its own commit.
+ *
+ * # Why this sets colour, where `control()` deliberately does not
+ *
+ * `control()`'s doc says it stays out of colour and radius because those belong to the block
+ * rather than to its size, and a mixin that sets them makes every variant fight it. A splitter
+ * has no variants. The hairline in `--border` brightening to `--border-strong` is not a skin over
+ * some other thing — it *is* the affordance, and both existing call sites were byte-identical on
+ * it. Leaving it out would leave behind the exact duplication the mixin exists to remove.
+ *
+ * What is left at the call site is sizing, because that is layout context and not splitter-ness:
+ * the shell's takes its 1px from a `grid-template-columns` track, the dock's from `height` on a
+ * flex child. A mixin guessing between those would be wrong at one of them.
+ */
+
+/// A one-pixel divider with a hit area wider than the line.
+///
+/// @param {String} $axis - `vertical` or `horizontal`, naming the orientation of the *line*.
+///
+/// The axis names the line and not the direction of travel, so that this argument and the
+/// `aria-orientation` attribute the markup already carries always read the same. A vertical
+/// separator is dragged horizontally, which is the confusion this naming exists to prevent.
+///
+/// Resolved into variables up front rather than written as `control()`'s `@if / @else if / @else
+/// @error` chain, and the difference is output rather than taste: this mixin has *nested*
+/// selectors, so a chain closes and reopens `&::after` and emits that block twice. `control()` sets
+/// plain declarations only, where the chain form costs nothing.
+///
+/// The two are declared `null` before the branch, and not resolved with the `if()` function, for
+/// two separate reasons. A variable first assigned *inside* an `@if` is scoped to it and invisible
+/// below, so one of the two branches would have to be the implicit default — which reads as though
+/// horizontal were a fallback rather than the other half of a pair. And `if()` is deprecated in
+/// Dart Sass in favour of a CSS-flavoured spelling; this build currently compiles with no warnings
+/// at all, which is worth more than the two saved lines.
+@mixin splitter($axis) {
+  $cursor: null;
+  $hit: null;
+
+  @if $axis == vertical {
+    $cursor: col-resize;
+    $hit: 0 -3px;
+  } @else if $axis == horizontal {
+    $cursor: row-resize;
+    $hit: -3px 0;
+  } @else {
+    @error "splitter(): unknown axis `#{$axis}`. Expected vertical or horizontal.";
+  }
+
+  background: var(--border);
+  cursor: $cursor;
+  position: relative;
+
+  /* A 1px target is unhittable, so widen the hit area without widening the line. Three pixels each
+     side rather than more: the handle sits between two panes whose own contents are clickable, and
+     a fat invisible box over either of them is worse than a thin line. */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: $hit;
+  }
+
+  &:hover {
+    background: var(--border-strong);
+  }
+}

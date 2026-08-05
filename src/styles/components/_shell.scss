@@ -5,6 +5,8 @@
  * break layout for everything else, so every regression before this one was local to a pane.
  */
 
+@use '../tools' as t;
+
 .c-shell {
   display: flex;
   flex-direction: column;
@@ -39,21 +41,10 @@
   flex-direction: column;
 }
 
+/* Its 1px comes from the `grid-template-columns` track above, not from the mixin — see the note in
+   `tools/_splitter.scss` about why sizing stays at the call site. */
 .c-shell__splitter {
-  background: var(--border);
-  cursor: col-resize;
-  position: relative;
-
-  /* A 1px target is unhittable, so widen the hit area without widening the line. */
-  &::after {
-    content: '';
-    position: absolute;
-    inset: 0 -3px;
-  }
-
-  &:hover {
-    background: var(--border-strong);
-  }
+  @include t.splitter(vertical);
 }
 
 .c-placeholder {
