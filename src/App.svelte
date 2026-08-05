@@ -84,9 +84,31 @@
 
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
+
+      /*
+       * ⌘R / Ctrl-R to refresh — except inside the terminal dock.
+       *
+       * Ctrl-R in a shell is reverse-search, and this handler used to swallow it. That was noted
+       * here and deferred while the only terminals in the app were transcripts nobody types
+       * into; the dock made it a keystroke people actually press, so it is now fixed.
+       *
+       * The guard is the dock's id rather than `inTextEntry`, and the distinction matters:
+       * `inTextEntry` is true for the sidebar's filter field as well, where ⌘R should still
+       * refresh, and it is true for xterm's textarea *by design* — see its own comment. Only the
+       * terminal is a text entry where this chord already means something else. An id rather than
+       * a class because the rule is to select on ARIA or `data-*`, and xterm's own markup is not
+       * ours to name.
+       *
+       * ⌘F is left alone deliberately, even though it is `forward-char` in readline: the sidebar
+       * owns it, and taking it away from the filter to give it to the shell is a different
+       * trade-off that nobody has asked for.
+       */
       if (meta && event.key === 'r') {
-        event.preventDefault();
-        void workspace.refreshWorktrees();
+        const target = event.target as HTMLElement | null;
+        if (!target?.closest('#terminal-dock')) {
+          event.preventDefault();
+          void workspace.refreshWorktrees();
+        }
       }
 
       /*
@@ -95,11 +117,6 @@
        * Gated on the platform rather than accepting either modifier the way ⌘R above does,
        * because on macOS the menu accelerator already fires — handling it here as well would
        * open Settings and then immediately have the menu open it again.
-       *
-       * The target guard is not shared by the other two shortcuts, and should be: a comma is
-       * a character people type, and xterm sees every keystroke that reaches the window.
-       * Ctrl-R inside a terminal is reverse-search, which this already swallows. Fixing that
-       * is a change to how refresh behaves and belongs on its own.
        */
       if (isLinux && event.ctrlKey && event.key === ',' && !inTextEntry(event.target)) {
         event.preventDefault();
