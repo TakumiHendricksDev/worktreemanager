@@ -412,6 +412,60 @@ timeout_ms = 1800000
 [action.env]
 PATH = "{{ env.LOGIN_PATH }}"
 
+# ═══════════════════════════════════ AGENTS ═══════════════════════════════════
+#
+# Which coding agents this repository offers, and how a session starts. Every key is optional: a
+# repo that says nothing here still gets both agents with their own defaults.
+#
+# Keyed tables — `[agent.claude]` — not `[[agent]]`, and that is deliberately unlike `[[field]]`
+# above. Arrays REPLACE across config layers and tables MERGE per key, so with an array a repo that
+# wanted to change one agent's effort would have to restate the other's whole block to avoid
+# deleting it. Form fields are a single form, so replacing is right there; agents are independent.
+#
+# Note what you cannot set: the program. `claude` and `codex` come from a catalogue compiled into
+# wtm, so the word "Claude" in the UI cannot be whatever a file in someone's branch says it is. If
+# your CLI lives somewhere unusual, override it in `~/.config/wtm/config.toml` — the same layer
+# `exec.path` uses, and one no repository can write to.
+
+[agent.claude]
+model  = "opus"
+effort = "xhigh"
+# `plan` so a session opens read-only on a repo where an unattended edit is expensive. It is the
+# provider's own spelling, not a wtm word: translating it would be a second name for the same thing,
+# needing to be kept in step with a CLI this project does not control.
+mode   = "plan"
+# `ultracode` is NOT a sixth effort tier, however much the name suggests one — it is a switch meaning
+# "xhigh plus standing workflow orchestration", and the CLI refuses it if effort resolves below xhigh.
+# Codex's `ultra` *is* a tier and appears in its effort list. Two similar names, two different things.
+flags  = ["ultracode"]
+
+[agent.claude.env]
+# The load-bearing line for an installed app, exactly as `[setup.env]` needs it: a GUI launch does
+# not inherit your shell's PATH, so a CLI in ~/.local/bin is invisible until this is set.
+PATH = "{{ env.LOGIN_PATH }}"
+
+# ─────────────────────── session-to-session handoff ───────────────────────
+#
+# This one table is the whole feature. `codex mcp-server` is an MCP server exposing two tools, so a
+# Claude session handed it can open a Codex thread itself — "have Codex review the plan you just
+# wrote" — with no code in wtm involved at all. wtm sees an ordinary tool call and can pick the
+# returned thread up as a live pane.
+#
+# It is an argv this file names, so it appears in the trust prompt with everything else, and it is
+# checked against `[[guards.forbid]]` after its templates are rendered. Both matter: an MCP server is
+# a child process with the same reach as any other.
+[agent.claude.mcp.codex]
+command = "codex"
+args    = ["mcp-server"]
+
+[agent.codex]
+model  = "gpt-5.6-sol"
+# `ultra` is Codex's top tier and only the sol and terra models offer it. The picker reads the real
+# ladder from `model/list`, so a value the installed CLI does not know surfaces as a warning on the
+# session rather than as a config load error — a config outlives the CLI it was written against.
+effort = "ultra"
+mode   = "on-request"
+
 # ═══════════════════════════════════ GUARDS ═══════════════════════════════════
 #
 # The one place project-specific hazard knowledge lives, and it lives here as *data*.
@@ -433,6 +487,17 @@ PATH = "{{ env.LOGIN_PATH }}"
 # Each carries its reason, because a guard with no reason is a guard the next person
 # deletes when it trips. Checked when this file loads AND again at spawn time, since an
 # argv is only fully known once its templates are rendered.
+
+# A guard is also how a repository refuses an *agent*, which is not a hazard but a policy. An agent
+# CLI sends the files it reads to a third party, and some repositories may not:
+#
+#     [[guards.forbid]]
+#     argv_matches = "\\bcodex\\b"
+#     reason = "this repository's source may not be sent to a third-party model under the vendor agreement"
+#
+# Written here it is recorded once, enforced for everyone who clones the repo, and the `reason` is
+# what the user sees rather than an agent silently missing from the launcher. ACME has no such
+# constraint, so this is a comment.
 
 [[guards.forbid]]
 argv_matches = "worktree\\.sh\\s+create"

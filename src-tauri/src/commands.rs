@@ -1376,19 +1376,38 @@ pub async fn open_agent_session(
             )
         })?;
 
+        // A repository may refuse an agent. Checked here rather than only by hiding it in the
+        // launcher, because the launcher is not the only route in — a resume entry or a handoff can
+        // ask for one too, and a refusal that only exists in the UI is not a refusal.
+        if !project.offers_agent(&agent_id) {
+            return Err(ErrorView::new(
+                "config",
+                format!("this repository's `wtm.toml` does not offer `{agent_id}`"),
+            ));
+        }
+
+        let spec = project.agent_spec(&agent_id);
+        let mcp_config = mcp_config_of(&app, &project, &spec)?;
+
         let req = wtm_agent::SessionRequest {
             cwd: worktree.path.to_string_lossy().into_owned(),
-            model,
-            effort,
+            // The caller's choice wins, then the repository's, then the provider's own. Three
+            // layers rather than two because a picker change must not be overridden by config, and
+            // a repo's default must not be overridden by a compiled one.
+            model: model.or(spec.model.clone()),
+            effort: effort.or(spec.effort.clone()),
             // Ask before running anything, unless something asked for otherwise. A worktree is
             // disposable and git is the undo, so a permissive default is defensible — but it is a
             // decision the user should make deliberately rather than discover, and the safe
             // direction is the one where the first surprising command is a card rather than a
             // `git status` you cannot explain. The spelling is the provider's own; see
             // `ProviderEntry::default_mode`.
-            mode: mode.or_else(|| entry.default_mode.map(str::to_owned)),
+            mode: mode
+                .or(spec.mode.clone())
+                .or_else(|| entry.default_mode.map(str::to_owned)),
             resume,
-            ..wtm_agent::SessionRequest::default()
+            extra_args: spec.extra_args.clone(),
+            mcp_config,
         };
 
         let sink: Arc<dyn wtm_agent::session::AgentSink> =
@@ -1667,4 +1686,66 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
         models_are_live: true,
         flags: std::collections::BTreeMap::new(),
     })
+}
+
+/// The `--mcp-config` JSON for a session, or `None` when the repository declares no servers.
+///
+/// # Why this is rendered rather than passed through
+///
+/// Each server's argv is a template, like every other argv in `wtm.toml`, so `{{ repo.root }}` works
+/// in one. And each is checked against `[[guards.forbid]]` **after** rendering, for exactly the reason
+/// the setup command is: an argv is only fully known once its templates have run, so a guard checked
+/// any earlier can be evaded by a template.
+///
+/// The shape is the one both CLIs accept — `{"mcpServers": {name: {command, args, env}}}` — which is
+/// why it is built here rather than in `wtm-agent`: it is a fact about two external programs, and
+/// this is the crate that already knows how to render a template.
+fn mcp_config_of(
+    app: &Arc<App>,
+    project: &wtm_core::model::Project,
+    spec: &wtm_core::model::AgentSpec,
+) -> Result<Option<String>, ErrorView> {
+    if spec.mcp.is_empty() {
+        return Ok(None);
+    }
+
+    let mut servers = serde_json::Map::new();
+    for (name, server) in &spec.mcp {
+        // Rendered through the same engine and the same base context every other argv in this file
+        // goes through, so `{{ repo.root }}` works in an MCP server's arguments too.
+        let ctx = display::base_context(project, app.os_tokens());
+        let key = format!("agent.mcp.{name}.command");
+        let argv = server
+            .argv()
+            .iter()
+            .map(|part| app.engine.render(&key, part, &ctx))
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(|e| ErrorView::new("render", e.to_string()))?;
+
+        // Defence in depth, on the *rendered* argv — the same reason `field_options` and `open_in`
+        // do it: guards were checked when the config loaded, but an argv is only fully known once
+        // its templates have run, so a guard checked any earlier can be evaded by a template. This
+        // is also what lets a repository that may not send its source to a model forbid the server
+        // that would, with the guard's own `reason` as the message.
+        wtm_config::check_forbidden(project, &argv)?;
+
+        let (program, arguments) = argv.split_first().ok_or_else(|| {
+            ErrorView::new(
+                "config",
+                format!("`[agent.*.mcp.{name}]` has an empty `command`"),
+            )
+        })?;
+        servers.insert(
+            name.clone(),
+            serde_json::json!({
+                "command": program,
+                "args": arguments,
+                "env": server.env,
+            }),
+        );
+    }
+
+    Ok(Some(
+        serde_json::json!({ "mcpServers": servers }).to_string(),
+    ))
 }

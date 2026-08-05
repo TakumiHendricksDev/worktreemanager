@@ -107,6 +107,14 @@ pub struct Project {
     #[serde(default, rename = "action")]
     pub actions: Vec<ActionSpec>,
 
+    /// Agent sessions this repository offers, keyed by catalogue id. See [`AgentSpec`].
+    ///
+    /// A map rather than an array of tables, deliberately unlike every other list in this struct —
+    /// `AgentSpec`'s docs give the reason: arrays replace across config layers and tables merge, and
+    /// agents are independent of each other in a way form fields are not.
+    #[serde(default)]
+    pub agent: BTreeMap<String, AgentSpec>,
+
     #[serde(default)]
     pub guards: GuardSpec,
 }
@@ -796,6 +804,101 @@ pub struct ActionSpec {
     pub command: CommandSpec,
 }
 
+/// How a repository configures one agent.
+///
+/// # Why keyed tables and not `[[agent]]`
+///
+/// Deliberately unlike `[[field]]`, and the reason is the merge semantics this config system already
+/// has: **arrays replace across layers, tables merge per key**. With an array, a repo that wanted to
+/// change Codex's default effort would have to restate Claude's whole block to avoid deleting it.
+/// `[[field]]` accepts that on purpose — "a project defining `[[field]]` defines the whole form" — but
+/// it is wrong here, because agents are independent of each other in a way form fields are not.
+///
+/// # What a repository cannot say
+///
+/// The program name. It is not a key here, and the omission is the point: the binary comes from the
+/// compiled catalogue, so the word "Claude" in wtm's UI cannot be whatever a file in someone's branch
+/// says it is. A trust prompt showing an approved-looking argv is a weak defence against a user who
+/// has learned to approve them. The escape hatch for a wrapper script or an unusual install lives in
+/// `~/.config/wtm/config.toml`, which is the same layer `exec.path` uses and one no repository can
+/// write to.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSpec {
+    /// Offer this agent in this repository. Absent means yes.
+    ///
+    /// Present so a repo can turn one *off* without a guard, which is the softer statement:
+    /// `[[guards.forbid]]` refuses with a reason and is for "this must not happen", where this is
+    /// for "we do not use that here".
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// The model a new session starts on, in the provider's own spelling.
+    ///
+    /// A free string, validated against the capability query at session start rather than at config
+    /// load: a config outlives the CLI version it was written against, so a model this build has
+    /// never heard of must surface as a warning on the session, not as a refusal to load the file.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The effort a new session starts on.
+    ///
+    /// Also a free string, and for a sharper reason: the ladder is **per model**, so no enum could be
+    /// right for every one of them — `gpt-5.6-sol` offers `ultra` and `gpt-5.5` stops at `xhigh`.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// The approval or permission mode, in the provider's own spelling.
+    ///
+    /// Not translated into a wtm-side enum: that would be a second name for the same thing, needing
+    /// to be kept in step with two CLIs this app does not control.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Provider switches that are neither model nor effort — Claude's `ultracode`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<String>,
+    /// Appended to the argv the catalogue builds.
+    ///
+    /// Templated, like every other argv in this file, and subject to `[[guards.forbid]]` at spawn
+    /// time for the same reason the setup command is: this is the one place a repository can add
+    /// arbitrary arguments to a process wtm starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_args: Vec<String>,
+    /// Environment overlaid on the session's process.
+    ///
+    /// `PATH = "{{ env.LOGIN_PATH }}"` is the load-bearing case, the same one `[setup.env]` documents:
+    /// a GUI launch does not inherit a shell's PATH, so a CLI in `~/.local/bin` is invisible without
+    /// it once the app is installed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// MCP servers to hand the CLI, keyed by name.
+    ///
+    /// This is what makes session-to-session handoff work with no code: one entry pointing at
+    /// `codex mcp-server` lets a Claude session open a Codex thread itself. Each server is an argv
+    /// this repository names, so it goes through the trust prompt with everything else.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp: BTreeMap<String, McpServerSpec>,
+}
+
+/// One MCP server handed to an agent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerSpec {
+    /// The program. Templated, and part of what the trust prompt shows.
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+impl McpServerSpec {
+    /// The argv this server would run, for the trust prompt and the guard check.
+    #[must_use]
+    pub fn argv(&self) -> Vec<String> {
+        let mut argv = vec![self.command.clone()];
+        argv.extend(self.args.iter().cloned());
+        argv
+    }
+}
+
 /// A command that must never run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -884,7 +987,38 @@ impl Project {
         for a in &self.actions {
             push(&a.command);
         }
+
+        // Every MCP server an agent is handed. These are argv this repository names, and an MCP
+        // server is a child process with the same reach as any other — one pointed at a script in the
+        // repo would run on the first session. So they belong in the trust prompt, and the fact that
+        // an agent's *own* binary does not appear here is deliberate: that comes from the compiled
+        // catalogue, not from this file, which is what makes it not a thing a branch can choose.
+        for spec in self.agent.values() {
+            for server in spec.mcp.values() {
+                let argv = server.argv();
+                if !argv.is_empty() && !out.contains(&argv) {
+                    out.push(argv);
+                }
+            }
+        }
         out
+    }
+
+    /// The agent settings for `id`, merged with nothing — the file's own word, or defaults.
+    #[must_use]
+    pub fn agent_spec(&self, id: &str) -> AgentSpec {
+        self.agent.get(id).cloned().unwrap_or_default()
+    }
+
+    /// Whether this repository offers an agent.
+    ///
+    /// Absent means yes. A repo that declares one agent's settings has not thereby refused the
+    /// others — which is the whole reason these are keyed tables rather than an array.
+    #[must_use]
+    pub fn offers_agent(&self, id: &str) -> bool {
+        self.agent
+            .get(id)
+            .is_none_or(|spec| spec.enabled != Some(false))
     }
 }
 
@@ -920,8 +1054,86 @@ mod tests {
             remove: RemoveSpec::default(),
             display: DisplaySpec::default(),
             actions: Vec::new(),
+            agent: BTreeMap::new(),
             guards: GuardSpec::default(),
         }
+    }
+
+    #[test]
+    fn an_mcp_server_an_agent_is_handed_reaches_the_trust_prompt() {
+        // An MCP server is a child process with the same reach as any other, and one pointed at a
+        // script in the repo would run on the first session. So it belongs in the list the trust
+        // prompt shows — the same list `[setup]` and `[[action]]` are in.
+        let mut p = empty_project();
+        let mut spec = AgentSpec::default();
+        spec.mcp.insert(
+            "codex".to_owned(),
+            McpServerSpec {
+                command: "codex".to_owned(),
+                args: vec!["mcp-server".to_owned()],
+                env: BTreeMap::new(),
+            },
+        );
+        p.agent.insert("claude".to_owned(), spec);
+
+        assert!(
+            p.declared_commands()
+                .contains(&vec!["codex".to_owned(), "mcp-server".to_owned()]),
+            "an MCP server's argv must be shown before it is approved"
+        );
+    }
+
+    #[test]
+    fn an_agents_own_binary_is_not_a_declared_command() {
+        // Deliberately absent, and the omission is the security property: a provider's program comes
+        // from the compiled catalogue, not from this file, so a repository cannot name it — which is
+        // what stops the word "Claude" in wtm's UI being whatever a branch says it is.
+        let mut p = empty_project();
+        p.agent.insert(
+            "claude".to_owned(),
+            AgentSpec {
+                model: Some("opus".to_owned()),
+                ..AgentSpec::default()
+            },
+        );
+        assert!(p.declared_commands().is_empty());
+    }
+
+    #[test]
+    fn declaring_one_agent_does_not_refuse_the_others() {
+        // The whole reason these are keyed tables rather than an array. With `[[agent]]` a repo that
+        // configured Codex would have replaced the list and silently lost Claude.
+        let mut p = empty_project();
+        p.agent.insert(
+            "codex".to_owned(),
+            AgentSpec {
+                effort: Some("ultra".to_owned()),
+                ..AgentSpec::default()
+            },
+        );
+
+        assert!(p.offers_agent("codex"));
+        assert!(
+            p.offers_agent("claude"),
+            "configuring one must not refuse another"
+        );
+        assert!(p.offers_agent("some-future-agent"));
+    }
+
+    #[test]
+    fn a_repository_can_turn_an_agent_off_without_a_guard() {
+        // The softer statement of the two. A guard refuses with a reason and is for "this must not
+        // happen"; this is for "we do not use that here".
+        let mut p = empty_project();
+        p.agent.insert(
+            "codex".to_owned(),
+            AgentSpec {
+                enabled: Some(false),
+                ..AgentSpec::default()
+            },
+        );
+        assert!(!p.offers_agent("codex"));
+        assert!(p.offers_agent("claude"));
     }
 
     #[test]

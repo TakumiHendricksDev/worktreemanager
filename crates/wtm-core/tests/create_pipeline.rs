@@ -68,6 +68,7 @@ fn project() -> Project {
         remove: wtm_core::model::RemoveSpec::default(),
         display: wtm_core::model::DisplaySpec::default(),
         actions: vec![],
+        agent: std::collections::BTreeMap::new(),
         guards: wtm_core::model::GuardSpec::default(),
     }
 }
