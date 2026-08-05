@@ -48,10 +48,10 @@
   /**
    * Whether this provider's allow can carry a rewritten payload.
    *
-   * Claude Code's can; Codex refuses the answer rather than running the original unedited. Keyed off
-   * the provider id here rather than reported by the backend, because it is a property of the
-   * protocol rather than of the machine — and it will move onto the capability query when there is a
-   * second provider to compare.
+   * Claude Code's can — its `control_response` takes an `updatedInput` — and Codex refuses the
+   * answer rather than running the original unedited. Keyed off the provider id here rather than
+   * reported by the backend because it is a property of the protocol, not of the machine; it belongs
+   * on the capability query, which is the next increment.
    */
   const canEdit = $derived(pane.provider === 'claude');
 

@@ -39,6 +39,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod catalogue;
+pub mod claude;
 pub mod codex;
 pub mod provider;
 pub mod session;
