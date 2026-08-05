@@ -1,0 +1,58 @@
+/*
+ * The region that holds every worktree's session tree.
+ *
+ * Components layer, one block. It exists to be the thing that is *hidden* rather than unmounted —
+ * see `SessionSurface`'s header — so most of what it does is `display: none` in two places.
+ *
+ * # Why `display: none` and not the alternatives
+ *
+ * The terminal dock recorded this at length before it became one kind of session, and it applies
+ * unchanged. `visibility: hidden` keeps a box, so
+ * every mounted terminal stays in layout and xterm's DOM renderer pays full layout for panes nobody
+ * is looking at. `content-visibility: hidden` keeps a box but skips the subtree, so a fit would
+ * measure something the browser is not laying out — and WebKitGTK is a first-class target here.
+ * `display: none` costs nothing, and its 0×0 `ResizeObserver` fire doubles as the signal that a pane
+ * came back.
+ */
+
+.c-surface {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg);
+
+  /* Collapsed, and also what the create pane's turn on screen looks like. One class for both: in
+     either case this must occupy no height and cost no layout. */
+  &.is-hidden {
+    display: none;
+  }
+}
+
+.c-surface__tree {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+
+  /* See the header. Every worktree's tree stays mounted; all but one is this. */
+  &.is-inactive {
+    display: none;
+  }
+}
+
+.c-surface__empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-5);
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+
+  p {
+    max-width: 60ch;
+    line-height: 1.6;
+  }
+}

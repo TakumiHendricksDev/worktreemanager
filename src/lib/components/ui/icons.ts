@@ -52,6 +52,7 @@ export type IconName =
   | 'plus'
   | 'search'
   | 'settings'
+  | 'split-right'
   | 'terminal'
   | 'theme-system'
   | 'theme-light'
@@ -86,6 +87,17 @@ export const icons: Record<IconName, IconSpec> = {
   search: {
     stroke:
       'M7.25 2.5 A4.75 4.75 0 1 0 7.25 12 A4.75 4.75 0 1 0 7.25 2.5 M10.9 10.9 L13.5 13.5',
+  },
+  /*
+   * Two panes side by side, the right one filled.
+   *
+   * A large simple shape, which is what survives 1.5 stroke on a 16 grid — the same test the cog and
+   * the terminal box failed. The fill is what makes it read as a *direction* rather than as a generic
+   * two-column glyph: without it the icon means "columns", with it it means "the new one goes there".
+   */
+  'split-right': {
+    stroke: 'M2.5 3 H13.5 V13 H2.5 Z M8 3 V13',
+    fill: 'M8 3 H13.5 V13 H8 Z',
   },
   /*
    * Sliders, not a cog, and the grammar above is the reason.

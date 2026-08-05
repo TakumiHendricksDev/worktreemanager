@@ -1,0 +1,112 @@
+/*
+ * One session pane: header, body, and for an agent a composer.
+ *
+ * Components layer — it paints a header strip, a hairline and a focus ring. Named `c-pane` rather
+ * than `c-session-pane` for the reason the terminal dock was `c-dock` rather than `c-terminal-dock`:
+ * the longer name reads as a modifier of some `c-session`, when this *is* the session's pane.
+ *
+ * # One declaration that looks removable
+ *
+ * `min-height: 0` on the body. A flex item defaults to `min-height: auto` and refuses to shrink
+ * below its content; a transcript is content, so without it a long session grows the pane past its
+ * container and pushes the composer off the bottom.
+ */
+
+.c-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/*
+ * Which pane a new split lands beside.
+ *
+ * An inset border rather than an outline, so it does not overlap a neighbouring pane's edge and
+ * make two adjacent panes look like one. Deliberately quiet: this is orientation, not a selection,
+ * and the pane's own content is what the eye should be on. It is also never the only signal — the
+ * caret is in the focused pane's input.
+ */
+.c-pane.is-focused .c-pane__head {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.c-pane__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Weighted like the dock's title, not like a heading: this names a region, and heading weight would
+   compete with the worktree's name in the bar above. */
+.c-pane__title {
+  flex: 0 0 auto;
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+/* Takes the slack so the actions stay pinned right however long a status is. Monospace because it
+   reports process facts — exit codes, signal names — which sit directly above monospace output. */
+.c-pane__note {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--step--2);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-pane__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+.c-pane__body {
+  flex: 1 1 auto;
+  /* See the header. */
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3);
+}
+
+/* A terminal owns its own padding and must not scroll in a parent as well — xterm scrolls itself,
+   and a second scroller makes the viewport measure wrong. */
+.c-pane__body--terminal {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-2);
+}
+
+.c-pane__empty {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-pane__composer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.c-pane__input {
+  flex: 1 1 auto;
+  /* Grows rather than scrolling a two-line box, up to a third of the pane: a prompt is routinely
+     several lines — a stack trace, a diff, a file list. */
+  max-height: 33%;
+  resize: vertical;
+  font-family: var(--font-ui);
+  line-height: 1.5;
+}

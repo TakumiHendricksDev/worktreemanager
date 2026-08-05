@@ -1,0 +1,73 @@
+/*
+ * One row: what the worktree is, and what you can do to it.
+ *
+ * Components layer. Replaces `.c-detail__head` and its two-tab strip, and keeps that block's two
+ * deliberate decisions: the actions are pinned right so the left edge — where every scan starts — is
+ * the worktree's name rather than the button that destroys it, and Remove sits alone past a hairline
+ * because a destructive control flush against a neutral one is how it gets clicked by accident.
+ *
+ * # Why one row and not two
+ *
+ * The bar is the only thing between the title strip and the sessions, and a session pane is what the
+ * user is here for. Every 34 pixels this takes is 34 fewer for a transcript, which is why the facts
+ * that moved into the Details dialog moved: they are things you look up, not things you watch.
+ */
+
+.c-worktree-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-worktree-bar__title {
+  flex: 0 0 auto;
+  font-size: var(--step-0);
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 32ch;
+}
+
+/*
+ * The two facts you glance at, plus the badges.
+ *
+ * Takes the slack so the actions stay pinned right however many badges there are, and hides the
+ * overflow rather than wrapping: a bar that becomes two rows on a narrow window would move every
+ * control below it, and this is a strip whose height other things measure against.
+ */
+.c-worktree-bar__facts {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  overflow: hidden;
+  font-size: var(--step--1);
+}
+
+.c-worktree-bar__branch {
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Monospace, because arrows and digits in a monospace face are metrically correct by construction —
+   the one case where a text glyph beats an icon, as `icons.ts` records for the sidebar's flag row. */
+.c-worktree-bar__diverge {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  white-space: nowrap;
+}
+
+.c-worktree-bar__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}

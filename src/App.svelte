@@ -14,9 +14,10 @@
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
   import RemoveWorktreeDialog from './lib/components/RemoveWorktreeDialog.svelte';
+  import Inspector from './lib/components/Inspector.svelte';
+  import SessionSurface from './lib/components/SessionSurface.svelte';
   import SettingsDialog from './lib/components/SettingsDialog.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
-  import TerminalDock from './lib/components/TerminalDock.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
   import TrustBanner from './lib/components/TrustBanner.svelte';
   import Banner from './lib/components/ui/Banner.svelte';
@@ -25,8 +26,7 @@
   import Logo from './lib/components/ui/Logo.svelte';
   import { commands } from './lib/ipc/commands';
   import { errorMessage } from './lib/ipc/types';
-  import { agents } from './lib/state/agents.svelte';
-  import { terminals } from './lib/state/terminals.svelte';
+  import { sessions } from './lib/state/sessions.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { workspace } from './lib/state/workspace.svelte';
 
@@ -49,13 +49,14 @@
   let showAddProject = $state(false);
   let showRemove = $state(false);
   let showSettings = $state(false);
+  let showInspector = $state(false);
   /**
-   * Teardown for the agent event listeners.
+   * Teardown for the session event listeners.
    *
    * Not `$state`: nothing renders it, and making it reactive would put a mount-time write inside
    * whatever effect happened to read it.
    */
-  let offAgents: (() => void) | null = null;
+  let offSessions: (() => void) | null = null;
 
   onMount(() => {
     void (async () => {
@@ -67,18 +68,11 @@
         sidebarWidth = Math.min(Math.max(parsed, MIN_SIDEBAR), MAX_SIDEBAR);
       }
 
-      // Not awaited: the dock starts closed, so neither its remembered height nor the shells it
-      // is adopting are needed for the first paint, and a slow config read must not hold up the
-      // worktree list.
-      void terminals.init();
-
-      // Same reasoning, plus one of its own: this subscribes to the three `agent:*` event streams,
-      // and a session started before the listeners attach would stream into nothing. `init` is
-      // called before `workspace.init` for exactly that ordering — nothing can start a session
-      // until there is a worktree list to start one from.
-      void agents.init().then((off) => {
-        offAgents = off;
-      });
+      // Awaited, unlike the worktree list it precedes: this subscribes to every `pty:*` and
+      // `agent:*` stream, and a session whose events arrive before the listeners attach streams
+      // into nothing. Nothing can start a session until there is a worktree list to start one
+      // from, so paying for this first costs nothing visible.
+      offSessions = await sessions.init();
 
       await workspace.init();
       booted = true;
@@ -128,6 +122,23 @@
       }
 
       /*
+       * ⌘I / Ctrl-I for the Details dialog — except inside a session pane.
+       *
+       * The guard is not optional on Linux: **Ctrl-I is literally TAB (0x09)**, so an unguarded
+       * binding would eat tab-completion in every shell. That is the same bug commit e2d008d fixed
+       * for Ctrl-R, and the same fix — target the region's id rather than `inTextEntry`, because
+       * `inTextEntry` is true for xterm's textarea *by design* and also true for the sidebar's
+       * filter field, where ⌘I should still work.
+       */
+      if (meta && event.key === 'i') {
+        const target = event.target as HTMLElement | null;
+        if (!target?.closest('.c-surface')) {
+          event.preventDefault();
+          if (workspace.selected) showInspector = true;
+        }
+      }
+
+      /*
        * Ctrl-, on Linux only.
        *
        * Gated on the platform rather than accepting either modifier the way ⌘R above does,
@@ -145,7 +156,7 @@
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
       void unlistenSettings.then((off) => off());
-      offAgents?.();
+      offSessions?.();
     };
   });
 
@@ -307,6 +318,7 @@
           worktree={workspace.selected}
           projectId={workspace.activeProjectId ?? ''}
           onremove={() => (showRemove = true)}
+          oninspect={() => (showInspector = true)}
           onfavorite={() => {
             const id = workspace.selected?.id;
             if (id) void workspace.toggleFavorite(id);
@@ -321,11 +333,11 @@
       <!--
         A sibling of the chain above, and unconditional, both deliberately. `Detail` unmounts
         whenever the chain picks another branch — the create view, or a project switch that lands
-        on an empty cached list and leaves `selected` null for a moment — and a terminal that
-        unmounts is a transcript that is gone. Mounted here it survives all of them, and is
-        merely hidden while the create pane owns the screen.
+        on an empty cached list and leaves `selected` null for a moment — and a session that
+        unmounts is a transcript that is gone. Mounted here it survives all of them, and is merely
+        hidden while the create pane owns the screen.
       -->
-      <TerminalDock visible={booted && mainView === 'worktree'} />
+      <SessionSurface visible={booted && mainView === 'worktree'} />
     </main>
   </div>
 
@@ -343,5 +355,13 @@
 
   {#if showSettings}
     <SettingsDialog onclose={() => (showSettings = false)} />
+  {/if}
+
+  {#if showInspector && workspace.selected && workspace.activeProjectId}
+    <Inspector
+      worktree={workspace.selected}
+      projectId={workspace.activeProjectId}
+      onclose={() => (showInspector = false)}
+    />
   {/if}
 </div>

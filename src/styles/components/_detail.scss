@@ -8,11 +8,16 @@
  * every heading in the app.
  */
 
+/*
+ * Now just the worktree bar, so it takes only the height that needs.
+ *
+ * It used to be the whole right-hand pane — `height: 100%` and a flex column holding a header, a tab
+ * strip and a scrolling body. Left that way after the sessions moved out, it still claimed the entire
+ * column and squeezed `.c-surface` into a strip along the bottom. Verified by looking: the panes
+ * rendered in the last 30% of the window with a field of empty above them.
+ */
 .c-detail {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  flex: 0 0 auto;
   background: var(--bg);
 }
 
