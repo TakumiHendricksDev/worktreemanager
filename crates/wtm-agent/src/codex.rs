@@ -106,6 +106,11 @@ struct CodexProtocol {
     queued: Vec<String>,
     /// Server-initiated requests awaiting a user answer, keyed by the id the frontend hands back.
     pending: BTreeMap<String, Pending>,
+    /// The most recent token counts.
+    ///
+    /// Cached because `turn/completed` reports none — verified on the wire — so without this a
+    /// finished turn shows a row of zeros. `thread/tokenUsage/updated` is the only source.
+    usage: Usage,
 }
 
 /// One server-initiated request the user has not answered yet.
@@ -191,6 +196,7 @@ impl CodexProtocol {
             thread_id: None,
             queued: Vec::new(),
             pending: BTreeMap::new(),
+            usage: Usage::default(),
         }
     }
 
@@ -319,7 +325,7 @@ impl CodexProtocol {
 
     /// A server-initiated notification.
     #[allow(clippy::too_many_lines)]
-    fn on_notification(method: &str, params: &Value) -> Vec<Step> {
+    fn on_notification(&mut self, method: &str, params: &Value) -> Vec<Step> {
         let text = |key: &str| {
             params
                 .get(key)
@@ -329,12 +335,18 @@ impl CodexProtocol {
         };
 
         let event = match method {
+            // `params.turn.id`, not `params.turnId`. Verified on the wire: both turn
+            // notifications carry a whole turn object, and reading the flat key gave an empty
+            // string — which is a turn id that matches nothing.
             "turn/started" => AgentEvent::TurnStarted {
-                turn: text("turnId"),
+                turn: turn_id(params),
             },
             "turn/completed" => AgentEvent::TurnFinished {
-                turn: text("turnId"),
-                usage: usage_from(params.get("usage")),
+                turn: turn_id(params),
+                // `turn/completed` carries **no usage at all** — also verified on the wire, where
+                // reading one produced a row of zeros. Token counts arrive separately on
+                // `thread/tokenUsage/updated`, so the last one seen is what this reports.
+                usage: self.usage,
                 // Codex reports tokens and no currency. See the `agent` model's docs for why
                 // this is left empty rather than priced here.
                 cost_usd: None,
@@ -347,7 +359,11 @@ impl CodexProtocol {
                     text: text("delta"),
                 }
             }
-            "thread/tokenUsage/updated" => AgentEvent::Usage(usage_from(params.get("usage"))),
+            "thread/tokenUsage/updated" => {
+                // Cached, because `turn/completed` has none of its own to report.
+                self.usage = usage_from(Some(params));
+                AgentEvent::Usage(self.usage)
+            }
             "turn/plan/updated" => AgentEvent::AgendaUpdated {
                 explanation: params
                     .get("explanation")
@@ -386,9 +402,24 @@ impl CodexProtocol {
                     .unwrap_or("the app server reported an error")
                     .to_owned(),
             },
-            // Everything else — and there are around seventy notification methods, most of
-            // them irrelevant to a transcript — becomes a collapsed row. Deliberate: see the
-            // `agent` model's docs on why this is the design rather than a fallback.
+            // Recognised, and deliberately not shown. These are lifecycle chatter with nothing in
+            // them for a reader, and a real turn emitted eleven of them — six
+            // `mcpServer/startupStatus/updated` alone — so `Raw`-ing them buries the reply in
+            // rows nobody wants. Listed explicitly rather than pattern-matched, because the
+            // difference between this arm and the one below is "we know and there is nothing to
+            // say" versus "we do not know", and collapsing the two would make an unrecognised
+            // event silently disappear.
+            "thread/started"
+            | "thread/status/changed"
+            | "thread/settings/updated"
+            | "mcpServer/startupStatus/updated"
+            | "remoteControl/status/changed"
+            | "account/updated"
+            | "account/rateLimits/updated"
+            | "serverRequest/resolved" => return Vec::new(),
+            // Everything else — and there are around seventy notification methods — becomes a
+            // collapsed row. Deliberate: see the `agent` model's docs on why this is the design
+            // rather than a fallback.
             _ => AgentEvent::Raw {
                 provider: ID.to_owned(),
                 event: method.to_owned(),
@@ -418,8 +449,16 @@ impl CodexProtocol {
             .to_owned();
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
 
+        // camelCase, and this is where the mapping was wrong. The `ThreadItem` schema spells
+        // every type this way — `agentMessage`, `commandExecution`, `fileChange` — while
+        // `codex exec --json` emits the *same items* in snake_case. The first fixtures here came
+        // from an `exec` capture, so every test passed against a spelling the app server never
+        // sends, and a real turn showed `item/started:agentMessage` falling through to `Raw`.
+        //
+        // Only camelCase is accepted: this adapter talks to the app server and nothing else, and
+        // accepting both would be pretending otherwise.
         let event = match (item_type, started) {
-            ("agent_message", false) => AgentEvent::Message {
+            ("agentMessage", false) => AgentEvent::Message {
                 text: item
                     .get("text")
                     .and_then(Value::as_str)
@@ -427,7 +466,7 @@ impl CodexProtocol {
                     .to_owned(),
             },
 
-            ("command_execution", true) => AgentEvent::CommandStarted {
+            ("commandExecution", true) => AgentEvent::CommandStarted {
                 id,
                 command: item
                     .get("command")
@@ -436,14 +475,20 @@ impl CodexProtocol {
                     .to_owned(),
                 cwd: item.get("cwd").and_then(Value::as_str).map(str::to_owned),
             },
-            ("command_execution", false) => AgentEvent::CommandFinished {
+            ("commandExecution", false) => AgentEvent::CommandFinished {
                 id,
+                // `exitCode` first. A command item has not been observed on this transport yet —
+                // it needs a writable sandbox — so the camelCase spelling is inferred from the
+                // `ThreadItem` convention the rest of this function was just corrected to, and
+                // the snake_case fallback is what an `exec --json` capture showed. When a real
+                // one is seen, delete the loser.
                 exit_code: item
-                    .get("exit_code")
+                    .get("exitCode")
+                    .or_else(|| item.get("exit_code"))
                     .and_then(Value::as_i64)
                     .and_then(|c| i32::try_from(c).ok()),
             },
-            ("file_change", false) => AgentEvent::Patch {
+            ("fileChange", false) => AgentEvent::Patch {
                 id,
                 unified_diff: item
                     .get("diff")
@@ -451,12 +496,12 @@ impl CodexProtocol {
                     .unwrap_or_default()
                     .to_owned(),
             },
-            ("mcp_tool_call" | "web_search" | "tool_search", true) => AgentEvent::ToolStarted {
+            ("mcpToolCall" | "webSearch" | "dynamicToolCall", true) => AgentEvent::ToolStarted {
                 title: item.get("title").and_then(Value::as_str).map(str::to_owned),
                 id,
                 name: item_type.to_owned(),
             },
-            ("mcp_tool_call" | "web_search" | "tool_search", false) => AgentEvent::ToolFinished {
+            ("mcpToolCall" | "webSearch" | "dynamicToolCall", false) => AgentEvent::ToolFinished {
                 id,
                 ok: item
                     .get("status")
@@ -467,9 +512,10 @@ impl CodexProtocol {
                     .and_then(Value::as_str)
                     .map(str::to_owned),
             },
-            // Both already arrived as deltas, so emitting the item as well would duplicate the
-            // text — an empty bubble ahead of a streaming message, or the whole thought twice.
-            ("agent_message", true) | ("reasoning", _) => return Vec::new(),
+            // All three already arrived another way, so emitting the item as well would
+            // duplicate it: a streaming message would get an empty bubble ahead of it, reasoning
+            // arrives as deltas, and a `userMessage` is the echo the composer already showed.
+            ("agentMessage", true) | ("reasoning" | "userMessage", _) => return Vec::new(),
             _ => AgentEvent::Raw {
                 provider: ID.to_owned(),
                 event: format!("{method}:{item_type}"),
@@ -528,7 +574,7 @@ impl Protocol for CodexProtocol {
         match message.get("method").and_then(Value::as_str) {
             Some(method) => {
                 let params = message.get("params").cloned().unwrap_or(Value::Null);
-                Self::on_notification(method, &params)
+                self.on_notification(method, &params)
             }
             None => vec![Step::Emit(AgentEvent::Raw {
                 provider: ID.to_owned(),
@@ -630,19 +676,35 @@ impl Protocol for CodexProtocol {
     }
 }
 
-fn usage_from(value: Option<&Value>) -> Usage {
-    let Some(value) = value else {
+/// Token counts from a `thread/tokenUsage/updated`.
+///
+/// The shape, captured from the wire rather than inferred:
+///
+/// ```text
+/// params.tokenUsage.total = { totalTokens, inputTokens, cachedInputTokens, outputTokens, … }
+/// params.tokenUsage.last  = { … the same keys, for the turn just finished … }
+/// params.tokenUsage.modelContextWindow
+/// ```
+///
+/// Two things this got wrong before a real turn was run: the key is `tokenUsage`, not `usage`, and
+/// the counts are nested under `total` rather than sitting on it. Both read as zero, which in the
+/// UI is a token row of zeros on every turn — wrong in a way that looks like a feature that has not
+/// been finished rather than a bug.
+///
+/// **`total`, not `last`.** The row is drawn once per turn, so either would fit, and the cumulative
+/// one is the more useful number: against `modelContextWindow` it answers "how full is my context",
+/// which is the question that actually changes what a user does next.
+fn usage_from(params: Option<&Value>) -> Usage {
+    let Some(usage) = params.and_then(|p| p.get("tokenUsage")) else {
         return Usage::default();
     };
-    let field = |key: &str| value.get(key).and_then(Value::as_u64).unwrap_or_default();
+    let total = usage.get("total").unwrap_or(usage);
+    let field = |key: &str| total.get(key).and_then(Value::as_u64).unwrap_or_default();
     Usage {
-        tokens_in: field("input_tokens") + field("inputTokens"),
-        tokens_out: field("output_tokens") + field("outputTokens"),
-        cached: field("cached_input_tokens") + field("cachedInputTokens"),
-        context_window: value
-            .get("model_context_window")
-            .or_else(|| value.get("contextWindow"))
-            .and_then(Value::as_u64),
+        tokens_in: field("inputTokens"),
+        tokens_out: field("outputTokens"),
+        cached: field("cachedInputTokens"),
+        context_window: usage.get("modelContextWindow").and_then(Value::as_u64),
     }
 }
 
@@ -699,4 +761,18 @@ fn permission_items(params: &Value) -> Vec<String> {
         items.push("network access".to_owned());
     }
     items
+}
+
+/// The turn id from a `turn/*` notification.
+///
+/// Nested at `params.turn.id`. The flat `params.turnId` that an `item/*` notification carries does
+/// not exist on these two, and reading it yielded an empty string — a turn id matching nothing.
+fn turn_id(params: &Value) -> String {
+    params
+        .get("turn")
+        .and_then(|t| t.get("id"))
+        .or_else(|| params.get("turnId"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
 }

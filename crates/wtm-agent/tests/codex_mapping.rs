@@ -7,18 +7,25 @@
 //! string key, so a renamed key, a `camelCase`/`snake_case` slip or a nesting change is a silently
 //! empty event rather than a build failure. This is the only mechanism that notices.
 //!
-//! # Where these lines came from
+//! # Where these lines came from, and why it matters more than it sounds
 //!
-//! Driven against `codex-cli 0.144.6` on a real machine — `initialize`, `initialized`,
-//! `thread/start`, `thread/list`, `model/list` piped into `codex app-server` — and pasted here
-//! verbatim, including the details that would otherwise be guessed wrong:
+//! Every fixture below is a line captured from `codex-cli 0.144.6` on a real machine, pasted
+//! verbatim. That is not fastidiousness: the first version of this file used fixtures taken from
+//! a `codex exec --json` capture, and **`exec` and the app server serialize the same items
+//! differently** — `agent_message` against `agentMessage`. So every test passed against a spelling
+//! the app server never sends, and the bug only surfaced when a real turn showed
+//! `item/started:agentMessage` falling through to `Raw`.
+//!
+//! Four details a fixture invented from the schema would have got wrong, each verified on the wire:
 //!
 //!   * a reply is `{"id":1,"result":{…}}` with **no `jsonrpc` field**;
 //!   * `thread/start`'s id is nested at `result.thread.id`, not `result.id`;
-//!   * `thread/started` arrives as a notification *after* the reply, carrying the same thread.
+//!   * `turn/started` and `turn/completed` nest the id at `params.turn.id`, and the flat
+//!     `params.turnId` that `item/*` notifications carry does not exist on them;
+//!   * `turn/completed` carries **no usage at all** — token counts come separately on
+//!     `thread/tokenUsage/updated`.
 //!
-//! A fixture invented from the schema would have had the first of those wrong, and the symptom
-//! would have been every reply rejected and a session that never became ready.
+//! If a fixture here is ever edited, capture the replacement rather than writing it.
 //!
 //! # No process, no host, no timing
 //!
@@ -29,7 +36,9 @@
 use pretty_assertions::assert_eq;
 use wtm_agent::codex::Codex;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
-use wtm_core::model::{AgendaStatus, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel};
+use wtm_core::model::{
+    AgendaStatus, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
+};
 
 /// The two frames a session sends before it can do anything, and the replies to them.
 ///
@@ -241,7 +250,7 @@ fn a_command_execution_item_becomes_a_started_and_a_finished_event() {
     let mut driver = ready_driver();
 
     let started = driver.on_line(
-        r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo hi'","status":"in_progress"}}}"#,
+        r#"{"method":"item/started","params":{"item":{"id":"item_1","type":"commandExecution","command":"/bin/zsh -lc 'echo hi'","status":"in_progress"},"threadId":"019fd3ce","turnId":"019fd3ce-c271"}}"#,
     );
     assert_eq!(
         events(&started),
@@ -252,11 +261,11 @@ fn a_command_execution_item_becomes_a_started_and_a_finished_event() {
         }]
     );
 
-    // `exit_code` is snake_case inside the item even though the envelope is camelCase. Reading
-    // it as `exitCode` yields a silently absent status, which is exactly the class of bug this
-    // file exists to catch.
+    // `exitCode`. A command item has not been observed on this transport — it needs a writable
+    // sandbox — so this is the `ThreadItem` convention every other type was just corrected to,
+    // with the snake_case spelling an `exec --json` capture showed kept as a fallback.
     let finished = driver.on_line(
-        r#"{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"item_1","type":"command_execution","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}}"#,
+        r#"{"method":"item/completed","params":{"item":{"id":"item_1","type":"commandExecution","exitCode":0,"status":"completed"},"threadId":"019fd3ce","turnId":"019fd3ce-c271"}}"#,
     );
     assert_eq!(
         events(&finished),
@@ -271,8 +280,10 @@ fn a_command_execution_item_becomes_a_started_and_a_finished_event() {
 fn a_started_agent_message_emits_nothing_because_the_deltas_already_carried_it() {
     // Otherwise an empty bubble appears ahead of the text that is already streaming into it.
     let mut driver = ready_driver();
+    // Captured verbatim. `agentMessage`, not `agent_message` — the spelling that made this file's
+    // first version pass while the code was wrong.
     let steps = driver.on_line(
-        r#"{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"item_0","type":"agent_message","text":""}}}"#,
+        r#"{"method":"item/started","params":{"item":{"id":"msg_08d2497a","memoryCitation":null,"phase":"final_answer","text":"","type":"agentMessage"},"startedAtMs":1785964972195,"threadId":"019fd3ce","turnId":"019fd3ce-c271"}}"#,
     );
     assert!(steps.is_empty());
 }
@@ -298,21 +309,30 @@ fn a_plan_update_becomes_an_agenda_with_its_step_statuses() {
 }
 
 #[test]
-fn token_usage_is_read_from_both_spellings_the_server_uses() {
-    // `turn/completed` reports snake_case token counts; `thread/tokenUsage/updated` has been seen
-    // with camelCase. Accepting both is why `usage_from` sums two keys per field.
+fn a_finished_turn_reports_its_nested_id_and_the_last_usage_seen() {
+    // Two corrections a real turn forced, in one test because they arrive together.
     let mut driver = ready_driver();
 
+    // Usage first, because `turn/completed` has none of its own — the driver reports the last one
+    // it saw, and without that cache a finished turn shows a row of zeros.
+    driver.on_line(
+        r#"{"method":"thread/tokenUsage/updated","params":{"threadId":"019fd3d8-481e","turnId":"019fd3d8-4df8","tokenUsage":{"total":{"totalTokens":12545,"inputTokens":12529,"cachedInputTokens":6016,"outputTokens":16,"reasoningOutputTokens":9},"last":{"totalTokens":12545,"inputTokens":12529,"cachedInputTokens":6016,"outputTokens":16,"reasoningOutputTokens":9},"modelContextWindow":258400}}}"#,
+    );
     let completed = driver.on_line(
-        r#"{"jsonrpc":"2.0","method":"turn/completed","params":{"turnId":"t1","usage":{"input_tokens":26845,"cached_input_tokens":19968,"output_tokens":75}}}"#,
+        r#"{"method":"turn/completed","params":{"threadId":"019fd3ce-bc97-7b33-90c2-31db4160c47d","turn":{"completedAt":1785964972,"durationMs":1715,"error":null,"id":"019fd3ce-c271-73c2-b986-156b4d998338","items":[],"itemsView":"notLoaded","startedAt":1785964970,"status":"completed"}}}"#,
     );
     match events(&completed).first().expect("a TurnFinished event") {
         AgentEvent::TurnFinished {
             usage, cost_usd, ..
         } => {
-            assert_eq!(usage.tokens_in, 26845);
-            assert_eq!(usage.cached, 19968);
-            assert_eq!(usage.tokens_out, 75);
+            // `params.tokenUsage.total.*` — the key is `tokenUsage`, not `usage`, and the counts
+            // are nested. Reading either level wrong gives a row of zeros, which looks like an
+            // unfinished feature rather than a bug.
+            assert_eq!(usage.tokens_in, 12529);
+            assert_eq!(usage.cached, 6016);
+            assert_eq!(usage.tokens_out, 16);
+            // The denominator for "how full is my context", which is why `total` is read.
+            assert_eq!(usage.context_window, Some(258_400));
             // Codex reports no currency. A number here would have to be invented.
             assert_eq!(*cost_usd, None);
         }
@@ -617,4 +637,99 @@ fn a_command_approval_with_no_command_reported_still_names_itself() {
         },
         other => panic!("expected ApprovalRequested, got {other:?}"),
     }
+}
+
+#[test]
+fn a_real_turns_lines_produce_a_transcript_and_not_a_wall_of_raw_rows() {
+    // The regression test for the whole class of bug a real turn exposed. These are the lines a
+    // genuine `turn/start` produced, in order, pasted verbatim — including the lifecycle chatter,
+    // because the point is that most of it draws *nothing*.
+    //
+    // Before the fix this sequence produced eleven `Raw` rows and no message: every item type was
+    // matched in snake_case, and every status notification became a collapsed row burying the
+    // reply. A reviewer who reintroduces either fails here.
+    const WIRE: &[&str] = &[
+        r#"{"method":"remoteControl/status/changed","params":{"status":"disabled"}}"#,
+        r#"{"method":"thread/started","params":{"thread":{"id":"019fd3ce-bc97"}}}"#,
+        r#"{"method":"mcpServer/startupStatus/updated","params":{"name":"node_repl","status":"starting"}}"#,
+        r#"{"method":"mcpServer/startupStatus/updated","params":{"name":"node_repl","status":"ready"}}"#,
+        r#"{"method":"thread/status/changed","params":{"threadId":"019fd3ce-bc97"}}"#,
+        r#"{"method":"turn/started","params":{"threadId":"019fd3ce-bc97","turn":{"id":"019fd3ce-c271","status":"inProgress"}}}"#,
+        r#"{"method":"item/started","params":{"item":{"content":[{"text":"hi","type":"text"}],"id":"019fd3ce-c322","type":"userMessage"},"threadId":"019fd3ce-bc97","turnId":"019fd3ce-c271"}}"#,
+        r#"{"method":"item/completed","params":{"item":{"content":[{"text":"hi","type":"text"}],"id":"019fd3ce-c322","type":"userMessage"},"threadId":"019fd3ce-bc97","turnId":"019fd3ce-c271"}}"#,
+        r#"{"method":"item/started","params":{"item":{"content":[],"id":"rs_08d2","summary":[],"type":"reasoning"},"threadId":"019fd3ce-bc97","turnId":"019fd3ce-c271"}}"#,
+        r#"{"method":"item/completed","params":{"item":{"content":[],"id":"rs_08d2","summary":[],"type":"reasoning"},"threadId":"019fd3ce-bc97","turnId":"019fd3ce-c271"}}"#,
+        r#"{"method":"item/started","params":{"item":{"id":"msg_08d2","phase":"final_answer","text":"","type":"agentMessage"},"threadId":"019fd3ce-bc97","turnId":"019fd3ce-c271"}}"#,
+        r#"{"method":"item/agentMessage/delta","params":{"delta":"OK","itemId":"msg_08d2","threadId":"019fd3ce-bc97","turnId":"019fd3ce-c271"}}"#,
+        r#"{"method":"item/completed","params":{"item":{"id":"msg_08d2","phase":"final_answer","text":"OK","type":"agentMessage"},"threadId":"019fd3ce-bc97","turnId":"019fd3ce-c271"}}"#,
+        r#"{"method":"account/rateLimits/updated","params":{}}"#,
+        r#"{"method":"thread/status/changed","params":{"threadId":"019fd3ce-bc97"}}"#,
+        r#"{"method":"turn/completed","params":{"threadId":"019fd3ce-bc97","turn":{"completedAt":1785964972,"id":"019fd3ce-c271","status":"completed"}}}"#,
+    ];
+
+    let mut driver = ready_driver();
+    let produced: Vec<AgentEvent> = WIRE
+        .iter()
+        .flat_map(|line| driver.on_line(line))
+        .filter_map(|step| match step {
+            Step::Emit(event) => Some(event),
+            _ => None,
+        })
+        .collect();
+
+    // Not one `Raw`. Every line here is either drawn or deliberately silent.
+    let raw: Vec<&AgentEvent> = produced
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::Raw { .. }))
+        .collect();
+    assert!(
+        raw.is_empty(),
+        "these lines are all recognised, got {raw:?}"
+    );
+
+    assert_eq!(
+        produced,
+        vec![
+            AgentEvent::TurnStarted {
+                turn: "019fd3ce-c271".to_owned()
+            },
+            AgentEvent::MessageDelta {
+                text: "OK".to_owned()
+            },
+            AgentEvent::Message {
+                text: "OK".to_owned()
+            },
+            AgentEvent::TurnFinished {
+                turn: "019fd3ce-c271".to_owned(),
+                usage: Usage::default(),
+                cost_usd: None,
+            },
+        ],
+        "the reply, its turn, and nothing else"
+    );
+}
+
+#[test]
+fn lifecycle_chatter_draws_nothing_while_an_unknown_method_still_does() {
+    // The distinction the two arms encode: "we recognise this and there is nothing to say" versus
+    // "we do not recognise this". Collapsing them would make a genuinely new event vanish, which
+    // is the one failure `Raw` exists to prevent.
+    let mut driver = ready_driver();
+
+    for quiet in [
+        r#"{"method":"mcpServer/startupStatus/updated","params":{}}"#,
+        r#"{"method":"thread/status/changed","params":{}}"#,
+        r#"{"method":"account/rateLimits/updated","params":{}}"#,
+        r#"{"method":"serverRequest/resolved","params":{}}"#,
+    ] {
+        assert!(
+            driver.on_line(quiet).is_empty(),
+            "{quiet} should draw nothing"
+        );
+    }
+
+    assert!(matches!(
+        events(&driver.on_line(r#"{"method":"some/brand/newThing","params":{}}"#)).first(),
+        Some(AgentEvent::Raw { .. })
+    ));
 }
