@@ -4,10 +4,11 @@
 //! layer beneath holds `Arc<dyn Port>`, which is what makes the domain testable and the
 //! adapters swappable — and what this file exists to pay for.
 //!
-//! Note that `Runner` and `PtyHostImpl` are built from **one** resolved `PATH` via
-//! `wtm_exec::adapters`. Constructing them separately would allow two different resolved
-//! paths, and the symptom would be a command that works in the terminal pane but not in a
-//! captured preflight check — a genuinely baffling bug.
+//! Note that `Runner`, `PtyHostImpl` and `PipeHostImpl` are built from **one** resolved
+//! `PATH` via `wtm_exec::adapters`. Constructing them separately would allow different
+//! resolved paths, and the symptom would be a command that works in the terminal pane but
+//! not in a captured preflight check, or an agent CLI the picker lists and the spawn cannot
+//! find — genuinely baffling bugs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -22,7 +23,7 @@ use wtm_core::ports::exec::CommandRunner;
 use wtm_core::ports::fs::FileStore;
 use wtm_core::ports::git::Git;
 use wtm_core::ports::template::TemplateEngine;
-use wtm_exec::{PtyHostImpl, ResolvedPath};
+use wtm_exec::{PipeHostImpl, PtyHostImpl, ResolvedPath};
 use wtm_git::GitCli;
 
 use crate::display;
@@ -59,6 +60,11 @@ pub struct App {
     /// [`wtm_exec::Runner::launch_detached`]. See [`Self::with_paths`].
     pub launcher: Arc<wtm_exec::Runner>,
     pub pty: Arc<PtyHostImpl>,
+    /// Agent sessions. A separate host from `pty` rather than a mode of it, because these
+    /// children speak a line protocol rather than talking to a person — see the port docs for
+    /// why a terminal would corrupt that. Held concretely, like `pty`, because `reap_finished`
+    /// and `kill_all` are adapter housekeeping rather than domain capabilities.
+    pub pipe: Arc<PipeHostImpl>,
     pub engine: Arc<dyn TemplateEngine>,
     pub files: Arc<dyn FileStore>,
     pub clock: Arc<dyn Clock>,
@@ -124,7 +130,8 @@ impl App {
             .unwrap_or_default();
 
         // One resolved PATH, shared. See the module docs.
-        let (resolved_path, runner, pty, clock) = wtm_exec::adapters(path_override.as_deref());
+        let (resolved_path, runner, pty, pipe, clock) =
+            wtm_exec::adapters(path_override.as_deref());
 
         tracing::info!(
             path = %resolved_path.value,
@@ -157,6 +164,7 @@ impl App {
             runner,
             launcher,
             pty: Arc::new(pty),
+            pipe: Arc::new(pipe),
             engine,
             files: Arc::new(RealFileStore::new()),
             clock,

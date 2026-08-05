@@ -890,3 +890,195 @@ impl wtm_core::ports::pty::PtySink for NullPtySink {
     ) {
     }
 }
+
+/// In-memory [`PipeHost`](wtm_core::ports::pipe::PipeHost).
+///
+/// Records what was spawned and what was written, and hands back canned lines. Unlike
+/// [`FakePty`] it does **not** emit on spawn: the protocols this port carries begin with a
+/// handshake the caller writes, so a fake that spoke first would let a test pass against a
+/// provider adapter that never sent one.
+pub struct FakePipe {
+    spawns: Mutex<Vec<Invocation>>,
+    writes: Mutex<Vec<String>>,
+    /// Lines handed to the sink on the next write, in order. Drained as they are used, so a
+    /// test can script a conversation turn by turn.
+    replies: Mutex<Vec<Vec<String>>>,
+    outcome: Mutex<wtm_core::model::ExitOutcome>,
+    fail_spawn: Mutex<Option<String>>,
+    stdin_closed: Mutex<bool>,
+    killed: Mutex<bool>,
+    sink: Mutex<Option<std::sync::Arc<dyn wtm_core::ports::pipe::PipeSink>>>,
+    session: Mutex<Option<wtm_core::model::SessionId>>,
+}
+
+/// Hand-written because a `dyn PipeSink` is not `Debug` and deriving would demand it of every
+/// sink a test writes. Reports the counts, which is what a failure message wants anyway.
+impl std::fmt::Debug for FakePipe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakePipe")
+            .field("spawns", &self.spawns.lock().len())
+            .field("writes", &self.writes.lock().len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Hand-written for the same reason [`FakePty`]'s is: `ExitOutcome` has no `Default`, and
+/// picking one here rather than in the domain is right — a fake's happy path is a test-fixture
+/// decision, not a property of the type.
+impl Default for FakePipe {
+    fn default() -> Self {
+        Self {
+            spawns: Mutex::new(Vec::new()),
+            writes: Mutex::new(Vec::new()),
+            replies: Mutex::new(Vec::new()),
+            outcome: Mutex::new(wtm_core::model::ExitOutcome::Success),
+            fail_spawn: Mutex::new(None),
+            stdin_closed: Mutex::new(false),
+            killed: Mutex::new(false),
+            sink: Mutex::new(None),
+            session: Mutex::new(None),
+        }
+    }
+}
+
+impl FakePipe {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Queue the lines the fake emits in response to the next write.
+    pub fn reply_with(&self, lines: &[&str]) {
+        self.replies
+            .lock()
+            .push(lines.iter().map(|l| (*l).to_owned()).collect());
+    }
+
+    pub fn fail_spawn_with(&self, message: impl Into<String>) {
+        self.fail_spawn.lock().replace(message.into());
+    }
+
+    #[must_use]
+    pub fn spawned(&self) -> Vec<Invocation> {
+        self.spawns.lock().clone()
+    }
+
+    #[must_use]
+    pub fn written(&self) -> Vec<String> {
+        self.writes.lock().clone()
+    }
+
+    #[must_use]
+    pub fn stdin_is_closed(&self) -> bool {
+        *self.stdin_closed.lock()
+    }
+
+    #[must_use]
+    pub fn was_killed(&self) -> bool {
+        *self.killed.lock()
+    }
+
+    /// Emit `line` as though the child had written it, outside any write.
+    ///
+    /// For the half of these protocols the caller does not drive: a server-initiated approval
+    /// request arrives on its own schedule, not as a reply to anything.
+    pub fn emit(&self, line: &str) {
+        let sink = self.sink.lock().clone();
+        let session = self.session.lock().clone();
+        if let (Some(sink), Some(session)) = (sink, session) {
+            sink.on_line(&session, line);
+        }
+    }
+
+    /// End the session, as the real host does when the child exits.
+    pub fn finish(&self) {
+        let sink = self.sink.lock().clone();
+        let session = self.session.lock().clone();
+        if let (Some(sink), Some(session)) = (sink, session) {
+            sink.on_exit(&session, &self.outcome.lock().clone());
+        }
+    }
+}
+
+impl wtm_core::ports::pipe::PipeHost for FakePipe {
+    fn spawn(
+        &self,
+        inv: &Invocation,
+        _worktree: Option<&str>,
+        sink: std::sync::Arc<dyn wtm_core::ports::pipe::PipeSink>,
+    ) -> Result<wtm_core::ports::pty::Spawned, ExecError> {
+        if let Some(message) = self.fail_spawn.lock().clone() {
+            return Err(ExecError::Spawn {
+                argv: inv.display(),
+                message,
+            });
+        }
+
+        self.spawns.lock().push(inv.clone());
+        let session = wtm_core::model::SessionId::new("fake-pipe-1");
+        self.sink.lock().replace(sink);
+        self.session.lock().replace(session.clone());
+
+        Ok(wtm_core::ports::pty::Spawned {
+            session,
+            argv: inv.argv.clone(),
+        })
+    }
+
+    fn write_line(
+        &self,
+        session: &wtm_core::model::SessionId,
+        line: &str,
+    ) -> Result<(), ExecError> {
+        if *self.stdin_closed.lock() {
+            return Err(ExecError::NoSuchSession(session.as_str().to_owned()));
+        }
+        self.writes.lock().push(line.to_owned());
+
+        let scripted = {
+            let mut replies = self.replies.lock();
+            if replies.is_empty() {
+                None
+            } else {
+                Some(replies.remove(0))
+            }
+        };
+        // Emitted outside the `replies` lock: a sink is free to call back in, and holding it
+        // across that would be a self-deadlock a test could only diagnose by hanging.
+        if let Some(lines) = scripted {
+            for reply in lines {
+                self.emit(&reply);
+            }
+        }
+        Ok(())
+    }
+
+    fn close_stdin(&self, _session: &wtm_core::model::SessionId) -> Result<(), ExecError> {
+        *self.stdin_closed.lock() = true;
+        Ok(())
+    }
+
+    fn kill(&self, _session: &wtm_core::model::SessionId) -> Result<(), ExecError> {
+        *self.killed.lock() = true;
+        Ok(())
+    }
+
+    fn sessions(&self) -> Vec<wtm_core::ports::pipe::PipeSession> {
+        Vec::new()
+    }
+}
+
+/// A [`PipeSink`](wtm_core::ports::pipe::PipeSink) that discards everything.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NullPipeSink;
+
+impl wtm_core::ports::pipe::PipeSink for NullPipeSink {
+    fn on_line(&self, _session: &wtm_core::model::SessionId, _line: &str) {}
+    fn on_stderr(&self, _session: &wtm_core::model::SessionId, _line: &str) {}
+    fn on_exit(
+        &self,
+        _session: &wtm_core::model::SessionId,
+        _outcome: &wtm_core::model::ExitOutcome,
+    ) {
+    }
+}

@@ -14,6 +14,10 @@
 //! - [`runner`] — [`Runner`], the captured-output [`CommandRunner`].
 //! - [`pty`] — [`PtyHostImpl`], interactive sessions for anything that prompts or
 //!   whose progress the user should watch.
+//! - [`pipe`] — [`PipeHostImpl`], long-lived sessions for a child that speaks a
+//!   newline-delimited protocol rather than talking to a human. Its port's docs
+//!   explain why a pty cannot serve that case: it echoes, it rewrites newlines, and
+//!   canonical mode silently truncates a line past `MAX_CANON`.
 //! - [`signal`] — process-*group* termination, `SIGTERM` then `SIGKILL`.
 //! - [`clock`] — [`SystemClock`], the real [`Clock`].
 //!
@@ -31,27 +35,39 @@
 
 pub mod clock;
 pub mod path;
+pub mod pipe;
 pub mod pty;
 pub mod runner;
 pub mod signal;
 
 pub use clock::SystemClock;
 pub use path::{PathSource, ResolvedPath, app_bundle, os_tokens};
+pub use pipe::PipeHostImpl;
 pub use pty::PtyHostImpl;
 pub use runner::Runner;
 
 /// Build the full set of OS-backed adapters with one probed `PATH`.
 ///
-/// Exists so the composition root cannot accidentally construct a [`Runner`] and a
-/// [`PtyHostImpl`] with two *different* resolved paths — a discrepancy that would be
-/// invisible until a command mysteriously worked in a terminal pane but not in a
-/// captured preflight check.
+/// Exists so the composition root cannot accidentally construct a [`Runner`], a
+/// [`PtyHostImpl`] and a [`PipeHostImpl`] with *different* resolved paths — a
+/// discrepancy that would be invisible until a command mysteriously worked in a
+/// terminal pane but not in a captured preflight check, or until an agent CLI was
+/// findable by the picker and not by the spawn.
+///
+/// A four-tuple rather than a struct, still. The alternative was considered when the
+/// pipe host was added and rejected for the same reason it was not a struct at three:
+/// there is exactly one caller, `App::with_paths`, and it destructures immediately, so
+/// a named type would add a definition and a set of field names without removing
+/// anything. If a fifth adapter appears, that trade changes.
 #[must_use]
-pub fn adapters(path_override: Option<&str>) -> (ResolvedPath, Runner, PtyHostImpl, SystemClock) {
+pub fn adapters(
+    path_override: Option<&str>,
+) -> (ResolvedPath, Runner, PtyHostImpl, PipeHostImpl, SystemClock) {
     let path = ResolvedPath::resolve(path_override);
     let runner = Runner::new(path.clone());
     let pty = PtyHostImpl::new(path.clone());
-    (path, runner, pty, SystemClock::new())
+    let pipe = PipeHostImpl::new(path.clone());
+    (path, runner, pty, pipe, SystemClock::new())
 }
 
 #[cfg(test)]
@@ -61,8 +77,13 @@ mod tests {
 
     #[test]
     fn adapters_share_one_resolved_path() {
-        let (path, runner, _pty, _clock) = adapters(Some("/usr/bin:/bin"));
+        let (path, runner, _pty, pipe, _clock) = adapters(Some("/usr/bin:/bin"));
         assert_eq!(path.value, "/usr/bin:/bin");
         assert_eq!(runner.resolved_path(), path.value);
+        // The pipe host is the reason this assertion exists rather than being taken on trust:
+        // an agent CLI findable by the openers catalogue and not by the spawn would present as
+        // an enabled button that fails on click. `PtyHostImpl` exposes no accessor, so its
+        // share of the invariant is still only assumed.
+        assert_eq!(pipe.path().value, path.value);
     }
 }

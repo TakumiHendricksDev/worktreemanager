@@ -226,7 +226,9 @@ pub enum ExecError {
     #[error("`{argv}` produced output that is not valid UTF-8")]
     NotUtf8 { argv: String },
 
-    #[error("pty session {0} is gone")]
+    /// No longer "pty session": [`crate::ports::pipe::PipeHost`] reports the same condition,
+    /// and a pipe session told the user it was a pty one for as long as the message said so.
+    #[error("session {0} is gone")]
     NoSuchSession(String),
 }
 

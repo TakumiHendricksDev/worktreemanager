@@ -24,6 +24,7 @@ pub mod fakes;
 pub mod fixture;
 
 pub use fakes::{
-    FakeClock, FakeFileStore, FakeGit, FakePty, FakeRunner, NullPtySink, RecordedProgress,
+    FakeClock, FakeFileStore, FakeGit, FakePipe, FakePty, FakeRunner, NullPipeSink, NullPtySink,
+    RecordedProgress,
 };
 pub use fixture::GitFixture;

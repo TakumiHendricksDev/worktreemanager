@@ -200,7 +200,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("build the application")
         .run(|handle, event| {
-            // Kill every pty session before the process goes.
+            // Kill every child session before the process goes.
             //
             // `RunEvent::Exit`, and neither of the two alternatives. `ExitRequested` can be
             // cancelled with `api.prevent_exit()`, so killing there risks an app that is still
@@ -213,6 +213,13 @@ pub fn run() {
             // `setsid()`, so each session is its own session leader and outlives its parent —
             // see `PtyHostImpl::kill_all`, which also records what that call cannot reach.
             //
+            // Agent sessions leak for a *different* reason and so need their own call rather
+            // than being folded into the same host. They have no controlling tty to hang up at
+            // all, and they are their own process group by way of `process_group(0)`, so
+            // nothing about the parent going away reaches them. A leaked one is worse than a
+            // leaked shell, too: it holds a model connection open and can still be running a
+            // turn that edits the worktree.
+            //
             // `try_state` rather than `state`: `state` panics on an unmanaged type, and a
             // panic in the exit callback would turn a tidy quit into a crash report.
             if matches!(event, tauri::RunEvent::Exit) {
@@ -222,6 +229,10 @@ pub fn run() {
                     let killed = app.pty.kill_all();
                     if killed > 0 {
                         tracing::info!(sessions = killed, "terminated pty sessions on quit");
+                    }
+                    let killed = app.pipe.kill_all();
+                    if killed > 0 {
+                        tracing::info!(sessions = killed, "terminated agent sessions on quit");
                     }
                 }
             }
