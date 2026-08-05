@@ -194,6 +194,7 @@ pub fn run() {
             commands::list_agents,
             commands::open_agent_session,
             commands::send_turn,
+            commands::answer_approval,
             commands::interrupt_turn,
             commands::list_agent_sessions,
             commands::close_agent_session,

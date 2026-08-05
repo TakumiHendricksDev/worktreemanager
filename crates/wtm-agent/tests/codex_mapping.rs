@@ -29,7 +29,7 @@
 use pretty_assertions::assert_eq;
 use wtm_agent::codex::Codex;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
-use wtm_core::model::{AgendaStatus, AgentEvent, NoticeLevel};
+use wtm_core::model::{AgendaStatus, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel};
 
 /// The two frames a session sends before it can do anything, and the replies to them.
 ///
@@ -424,4 +424,197 @@ fn resuming_asks_for_the_thread_by_id_and_keeps_the_rest_of_the_settings() {
     );
     assert_eq!(open["params"]["cwd"], "/tmp/worktree");
     assert_eq!(open["params"]["approvalPolicy"], "on-request");
+}
+
+#[test]
+fn a_command_approval_request_becomes_a_blocking_card_and_its_answer_replies_on_the_same_id() {
+    // The whole round trip, in one test, because the two halves are only correct together: an
+    // approval whose reply carries the wrong JSON-RPC id leaves the server blocked forever, and
+    // nothing about the request half alone would notice.
+    let mut driver = ready_driver();
+
+    // A server-initiated *request*: an id AND a method, unlike a notification. That distinction is
+    // the only thing separating "answer this" from "display this".
+    let steps = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":41,"method":"item/commandExecution/requestApproval","params":{"itemId":"item_7","threadId":"019fd37c-f1e4-7a22-81e7-02200fd6d127","turnId":"t1","startedAtMs":1785963000000,"command":"rm -rf node_modules && bun install","cwd":"/tmp/worktree","reason":"reinstalling dependencies"}}"#,
+    );
+
+    let id = match events(&steps).first().expect("an ApprovalRequested event") {
+        AgentEvent::ApprovalRequested {
+            id,
+            blocking,
+            request,
+        } => {
+            // Always blocking: the server does not continue the turn without a reply, so a card the
+            // user could scroll past would stall the session with nothing on screen to explain it.
+            assert!(*blocking, "a Codex approval always blocks its turn");
+            assert_eq!(
+                *request,
+                ApprovalRequest::Command {
+                    command: "rm -rf node_modules && bun install".to_owned(),
+                    cwd: Some("/tmp/worktree".to_owned()),
+                    reason: Some("reinstalling dependencies".to_owned()),
+                }
+            );
+            id.clone()
+        }
+        other => panic!("expected ApprovalRequested, got {other:?}"),
+    };
+
+    let answered = driver.answer(&id, &ApprovalAnswer::Allow);
+    let frames = writes(&answered);
+    assert_eq!(frames.len(), 1);
+    // The id is the only thing that correlates a reply with its request. 41, not a fresh one.
+    assert_eq!(frames[0]["id"], 41);
+    assert_eq!(frames[0]["result"]["decision"], "accept");
+    assert!(
+        answered.contains(&Step::Emit(AgentEvent::ApprovalResolved { id: id.clone() })),
+        "the card has to be told to collapse"
+    );
+
+    // The first answer wins. A second — two panes, or a click racing a keystroke — finds nothing,
+    // because `answer` removes the request when it replies. Replying twice on one id would
+    // desynchronise the server's view of the turn.
+    assert!(
+        driver
+            .answer(&id, &ApprovalAnswer::Deny { message: None })
+            .is_empty(),
+        "a second answer for the same request must write nothing"
+    );
+}
+
+#[test]
+fn denying_declines_rather_than_cancelling_so_the_rest_of_the_turn_survives() {
+    // Both verbs deny. The server documents `decline` as "the agent will continue the turn" and
+    // `cancel` as "the turn will also be immediately interrupted" — so refusing one command must
+    // not throw away the work around it. Stop is a separate button for when it should.
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":7,"method":"item/commandExecution/requestApproval","params":{"itemId":"i","threadId":"t","turnId":"t1","startedAtMs":1,"command":"curl example.com"}}"#,
+    );
+    let AgentEvent::ApprovalRequested { id, .. } = events(&steps)[0].clone() else {
+        panic!("expected an approval");
+    };
+
+    let frames = writes(&driver.answer(&id, &ApprovalAnswer::Deny { message: None }));
+    assert_eq!(frames[0]["result"]["decision"], "decline");
+}
+
+#[test]
+fn allow_for_session_uses_the_servers_own_verb() {
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":8,"method":"item/fileChange/requestApproval","params":{"itemId":"i","threadId":"t","turnId":"t1","startedAtMs":1,"reason":"writing outside the workspace"}}"#,
+    );
+    let AgentEvent::ApprovalRequested { id, request, .. } = events(&steps)[0].clone() else {
+        panic!("expected an approval");
+    };
+    assert!(matches!(request, ApprovalRequest::FileChange { .. }));
+
+    let frames = writes(&driver.answer(&id, &ApprovalAnswer::AllowForSession));
+    assert_eq!(frames[0]["result"]["decision"], "acceptForSession");
+}
+
+#[test]
+fn an_edited_allow_is_refused_rather_than_downgraded_to_a_plain_accept() {
+    // Claude Code's allow can carry a replacement payload and rewrite the call; Codex has no verb
+    // for it. Treating this as `accept` would run the command the user *edited*, unedited — the
+    // worst available outcome, and silent. The UI does not offer the affordance for this provider;
+    // this guards the case where it is offered by mistake.
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":9,"method":"item/commandExecution/requestApproval","params":{"itemId":"i","threadId":"t","turnId":"t1","startedAtMs":1,"command":"rm -rf /"}}"#,
+    );
+    let AgentEvent::ApprovalRequested { id, .. } = events(&steps)[0].clone() else {
+        panic!("expected an approval");
+    };
+
+    let refused = driver.answer(
+        &id,
+        &ApprovalAnswer::AllowWithEdits {
+            input: serde_json::json!({ "command": "rm -rf ./build" }),
+        },
+    );
+    assert!(
+        writes(&refused).is_empty(),
+        "nothing may be sent for an answer this provider cannot express"
+    );
+    assert!(matches!(
+        events(&refused).first(),
+        Some(AgentEvent::Failed { .. })
+    ));
+    // Still answerable: refusing the verb must not consume the request, or the session is stuck.
+    assert!(
+        !writes(&driver.answer(&id, &ApprovalAnswer::Allow)).is_empty(),
+        "the request must survive an answer this provider refused"
+    );
+}
+
+#[test]
+fn abandoning_declines_everything_outstanding_so_the_server_is_never_left_waiting() {
+    // On close and on quit. A server blocked on a reply does not read its stdin closing at all, so
+    // without this the child is only reachable by the kill — reported as `Signalled`, which reads
+    // in the UI as a crash rather than an end.
+    let mut driver = ready_driver();
+    for id in [11, 12] {
+        driver.on_line(&format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"item/commandExecution/requestApproval","params":{{"itemId":"i{id}","threadId":"t","turnId":"t1","startedAtMs":1,"command":"echo {id}"}}}}"#
+        ));
+    }
+
+    let steps = driver.abandon();
+    let frames = writes(&steps);
+    assert_eq!(
+        frames.len(),
+        2,
+        "every outstanding request must be answered"
+    );
+    for frame in &frames {
+        assert_eq!(frame["result"]["decision"], "decline");
+    }
+    assert_eq!(
+        events(&steps).len(),
+        2,
+        "each card has to be told to collapse"
+    );
+
+    // Drained, not iterated: abandoning twice must not reply twice on the same id.
+    assert!(driver.abandon().is_empty());
+}
+
+#[test]
+fn a_server_request_this_build_does_not_know_is_still_declinable() {
+    // An MCP elicitation, a tool asking for input — anything with an id and a method that is not
+    // one of the three approvals. Shown as `raw` rather than acted on, but *kept* in the pending
+    // map, because a request that is neither answered nor declined leaves the server blocked
+    // forever. Dropping it on the floor is the bug this test exists for.
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":21,"method":"mcpServer/elicitation/request","params":{"mode":"form"}}"#,
+    );
+    assert!(matches!(
+        events(&steps).first(),
+        Some(AgentEvent::Raw { .. })
+    ));
+
+    let frames = writes(&driver.abandon());
+    assert_eq!(frames.len(), 1, "an unknown request must still be declined");
+    assert_eq!(frames[0]["id"], 21);
+}
+
+#[test]
+fn a_command_approval_with_no_command_reported_still_names_itself() {
+    // `command` is nullable in the schema even for a command approval. An empty card with two
+    // buttons is unanswerable; a placeholder at least says what is being asked.
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":31,"method":"item/commandExecution/requestApproval","params":{"itemId":"i","threadId":"t","turnId":"t1","startedAtMs":1}}"#,
+    );
+    match events(&steps).first().expect("an approval") {
+        AgentEvent::ApprovalRequested { request, .. } => match request {
+            ApprovalRequest::Command { command, .. } => assert!(!command.is_empty()),
+            other => panic!("expected a Command approval, got {other:?}"),
+        },
+        other => panic!("expected ApprovalRequested, got {other:?}"),
+    }
 }

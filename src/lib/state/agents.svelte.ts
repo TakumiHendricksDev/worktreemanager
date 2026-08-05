@@ -35,6 +35,8 @@ import {
   type AgentExit,
   type AgentOption,
   type AgentReady,
+  type ApprovalAnswer,
+  type ApprovalRequest,
 } from '../ipc/types';
 
 /**
@@ -47,6 +49,12 @@ import {
  */
 const MAX_EVENTS = 20_000;
 
+/** An approval this session is blocked on. */
+export interface PendingApproval {
+  id: string;
+  request: ApprovalRequest;
+}
+
 export interface AgentPane {
   /** Backend session id. Null between asking for a session and being told its id. */
   session: string | null;
@@ -57,6 +65,15 @@ export interface AgentPane {
   events: AgentEvent[];
   /** False until `agent:ready`. The composer stays enabled — turns are queued, not refused. */
   ready: boolean;
+  /**
+   * Approvals awaiting an answer, oldest first.
+   *
+   * A list rather than a single slot: the server can have more than one outstanding at once — a
+   * command and a file change in the same turn — and dropping the second would stall the session
+   * with no card to explain it. Rendered one at a time, oldest first, because answering them in
+   * arrival order is the only order the transcript above makes sense in.
+   */
+  approvals: PendingApproval[];
   /** How the session ended, once it has. The pane stays so the transcript stays readable. */
   ended: string | null;
   /** A spawn that failed. Distinct from `ended`: there was never a session. */
@@ -120,6 +137,7 @@ class Agents {
         provider: s.provider,
         events: [],
         ready: true,
+        approvals: [],
         ended: null,
         error: null,
         generation: 0,
@@ -160,6 +178,7 @@ class Agents {
       provider,
       events: [],
       ready: false,
+      approvals: [],
       ended: null,
       error: null,
       generation: 0,
@@ -216,9 +235,37 @@ class Agents {
   private record(session: string, event: AgentEvent): void {
     const pane = this.paneFor(session);
     if (!pane) return;
+
+    // Tracked outside the event log as well as in it. The log is what the transcript renders; this
+    // is what the pane is *blocked on*, and deriving it by folding the whole log on every append
+    // would be O(events) per delta on the hottest path in the app.
+    if (event.kind === 'approval_requested') {
+      pane.approvals = [...pane.approvals, { id: event.id, request: event.request }];
+    } else if (event.kind === 'approval_resolved') {
+      pane.approvals = pane.approvals.filter((a) => a.id !== event.id);
+    }
+
     pane.events.push(event);
     if (pane.events.length > MAX_EVENTS) {
       pane.events.splice(0, pane.events.length - MAX_EVENTS);
+    }
+  }
+
+  /**
+   * Answer an approval.
+   *
+   * The card is removed locally as well as by the `approval_resolved` event that follows, so it
+   * disappears on click rather than after a round trip. Safe for the same reason `toggleFavorite`
+   * is optimistic: nothing else has an opinion about whether this card is still open, and the
+   * authoritative removal arrives moments later and agrees.
+   */
+  async answer(session: string, requestId: string, answer: ApprovalAnswer): Promise<void> {
+    const pane = this.paneFor(session);
+    if (pane) pane.approvals = pane.approvals.filter((a) => a.id !== requestId);
+    try {
+      await commands.answerApproval(session, requestId, answer);
+    } catch (e) {
+      this.error = errorMessage(e);
     }
   }
 

@@ -12,6 +12,7 @@ import type {
   Action,
   AgentOption,
   AgentSession,
+  ApprovalAnswer,
   CreateOutcome,
   Doctor,
   Form,
@@ -158,6 +159,16 @@ export const commands = {
 
   /** Send one turn. Queued by the provider if the handshake has not finished yet. */
   sendTurn: (session: string, text: string) => invoke<void>('send_turn', { session, text }),
+
+  /**
+   * Answer an outstanding approval.
+   *
+   * The first answer wins and a second for the same id succeeds silently — the provider removes the
+   * request when it replies, so two panes or a click racing a keystroke cannot both answer. The card
+   * collapses on the `approval_resolved` event either way.
+   */
+  answerApproval: (session: string, requestId: string, answer: ApprovalAnswer) =>
+    invoke<void>('answer_approval', { session, requestId, answer }),
 
   /** Ask the session to stop the turn it is running. */
   interruptTurn: (session: string) => invoke<void>('interrupt_turn', { session }),

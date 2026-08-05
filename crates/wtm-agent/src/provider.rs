@@ -108,6 +108,17 @@ pub trait Protocol: Send {
 
     /// The user asked to stop the current turn.
     fn interrupt(&mut self) -> Vec<Step>;
+
+    /// Decline everything still awaiting an answer.
+    ///
+    /// Called when a session is closing. A provider that has an outstanding server-initiated
+    /// request and is never answered leaves its CLI blocked on a reply that will not come — which
+    /// on close is a child that ignores its stdin closing and has to be killed, and on quit is a
+    /// process holding a model connection open waiting for a window that is gone.
+    ///
+    /// Declining rather than accepting, because the alternative is running a command nobody
+    /// approved on the way out of the door.
+    fn abandon(&mut self) -> Vec<Step>;
 }
 
 /// A provider: its identity, its argv, and a factory for per-session drivers.

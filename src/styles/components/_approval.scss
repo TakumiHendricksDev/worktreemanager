@@ -1,0 +1,76 @@
+/*
+ * A session asking permission.
+ *
+ * Components layer, its own block rather than a `c-transcript__*` element, because it is not a row
+ * of the transcript: it is pinned above the composer and outlives the scroll position. Splitting it
+ * also means the transcript's row vocabulary and this card's states can grow independently.
+ *
+ * # Why the tint and not just a border
+ *
+ * `--warn-soft` with `--warn-line`, the semantic pair that exists for exactly this — a tinted
+ * surface with a matching border. Colour is *not* the only signal: the card has a heading that ends
+ * in a question mark, its own buttons, and a position no other row occupies. `_semantic.scss` states
+ * why that matters, and an approval is the highest-stakes place in the app to get it wrong.
+ */
+
+.c-approval {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 var(--sp-4) var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+}
+
+.c-approval__ask {
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.c-approval__body {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  background: var(--bg-code);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  overflow-wrap: anywhere;
+  /* Its own scroller, and bounded. A patch can be hundreds of lines and the buttons must stay on
+     screen — a card whose Allow is below the fold is a card nobody can answer. */
+  overflow: auto;
+  max-height: 14lh;
+}
+
+.c-approval__body--diff,
+.c-approval__body--plan {
+  white-space: pre-wrap;
+}
+
+.c-approval__where,
+.c-approval__reason {
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.c-approval__grants {
+  font-size: var(--step--2);
+  font-family: var(--font-mono);
+}
+
+.c-approval__actions {
+  margin-top: var(--sp-1);
+  flex-wrap: wrap;
+}
+
+/* The same hairline the worktree header uses to hold a destructive control apart from the neutral
+   ones, for the same reason. */
+.c-approval__divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 var(--sp-1);
+  background: var(--warn-line);
+}

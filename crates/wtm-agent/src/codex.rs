@@ -33,7 +33,9 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-use wtm_core::model::{AgendaStatus, AgendaStep, AgentEvent, ApprovalAnswer, NoticeLevel, Usage};
+use wtm_core::model::{
+    AgendaStatus, AgendaStep, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
+};
 
 use crate::provider::{Protocol, Provider, ProviderId, SessionRequest, Step};
 
@@ -102,11 +104,83 @@ struct CodexProtocol {
     /// live before `thread/start` has come back. Queuing is invisible when the handshake is fast
     /// and is the difference between a lost first prompt and a slightly late one when it is not.
     queued: Vec<String>,
-    /// Server request ids awaiting a user answer, mapped to the JSON-RPC id to reply on.
-    pending: BTreeMap<String, Value>,
+    /// Server-initiated requests awaiting a user answer, keyed by the id the frontend hands back.
+    pending: BTreeMap<String, Pending>,
+}
+
+/// One server-initiated request the user has not answered yet.
+struct Pending {
+    /// The JSON-RPC id to reply on. The reply *must* carry this and nothing else identifies it.
+    rpc_id: Value,
 }
 
 impl CodexProtocol {
+    /// Turn a server-initiated request into an approval card, or into a `Raw` row.
+    ///
+    /// The three approval methods are the ones a user can act on. Everything else that arrives as
+    /// a request — an MCP elicitation, a tool asking for input — is surfaced as `Raw` for now
+    /// rather than silently ignored, and it stays in `pending` so `abandon` can decline it. A
+    /// request that is neither answered nor declined leaves the server blocked forever.
+    fn on_server_request(&mut self, rpc_id: i64, method: &str, params: &Value) -> Vec<Step> {
+        // Our own id for the card. The JSON-RPC id is unique within a session and is what the
+        // reply has to carry, so using it as the key means `answer` needs no second lookup.
+        let id = rpc_id.to_string();
+        let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_owned);
+
+        let request = match method {
+            "item/commandExecution/requestApproval" | "execCommandApproval" => {
+                ApprovalRequest::Command {
+                    // `command` is nullable in the schema even for a command approval, so an
+                    // absent one becomes a visible placeholder rather than an empty card.
+                    command: text("command").unwrap_or_else(|| "(command not reported)".to_owned()),
+                    cwd: text("cwd"),
+                    reason: text("reason"),
+                }
+            }
+            "item/fileChange/requestApproval" | "applyPatchApproval" => {
+                ApprovalRequest::FileChange {
+                    // The diff arrives with the `item/fileChange/*` stream rather than in the
+                    // approval params, so this card names what is being asked and the patch row
+                    // above it shows the change.
+                    unified_diff: text("patch").or_else(|| text("diff")).unwrap_or_default(),
+                    reason: text("reason").or_else(|| text("grantRoot")),
+                }
+            }
+            "item/permissions/requestApproval" => ApprovalRequest::Permissions {
+                summary: text("reason")
+                    .unwrap_or_else(|| "The session is asking for extra permissions".to_owned()),
+                items: permission_items(params),
+            },
+            _ => {
+                self.pending.insert(
+                    id.clone(),
+                    Pending {
+                        rpc_id: json!(rpc_id),
+                    },
+                );
+                return vec![Step::Emit(AgentEvent::Raw {
+                    provider: ID.to_owned(),
+                    event: method.to_owned(),
+                    payload: params.clone(),
+                })];
+            }
+        };
+
+        self.pending.insert(
+            id.clone(),
+            Pending {
+                rpc_id: json!(rpc_id),
+            },
+        );
+        vec![Step::Emit(AgentEvent::ApprovalRequested {
+            id,
+            // Always blocking: the server does not continue the turn until it has a reply, so a
+            // card the user can scroll past would stall the session with no explanation.
+            blocking: true,
+            request,
+        })]
+    }
+
     fn new(req: SessionRequest) -> Self {
         Self {
             req,
@@ -441,21 +515,12 @@ impl Protocol for CodexProtocol {
         // Note the absence of a `jsonrpc` check. Real replies omit the field — see the module
         // docs — so requiring it would reject every one of them.
         if let Some(id) = message.get("id").and_then(Value::as_i64) {
-            if message.get("method").is_some() {
-                // A server-initiated *request*: it has both an id and a method, and the client
-                // is expected to answer. Approvals arrive this way; wiring the answer is the
-                // next increment, so for now it is surfaced rather than silently ignored.
-                let method = message
-                    .get("method")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                self.pending.insert(id.to_string(), json!(id));
-                return vec![Step::Emit(AgentEvent::Raw {
-                    provider: ID.to_owned(),
-                    event: method,
-                    payload: message.get("params").cloned().unwrap_or(Value::Null),
-                })];
+            if let Some(method) = message.get("method").and_then(Value::as_str) {
+                // A server-initiated *request*: it has both an id and a method, and the client is
+                // expected to answer. This is how every approval arrives.
+                let method = method.to_owned();
+                let params = message.get("params").cloned().unwrap_or(Value::Null);
+                return self.on_server_request(id, &method, &params);
             }
             return self.on_reply(id, &message);
         }
@@ -490,10 +555,47 @@ impl Protocol for CodexProtocol {
         })]
     }
 
-    fn answer(&mut self, _id: &str, _answer: &ApprovalAnswer) -> Vec<Step> {
-        // Deliberately inert until the increment that builds the approval card and its test.
-        // An implementation here with nothing exercising it would be a claim, not a feature.
-        Vec::new()
+    fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step> {
+        // Removed rather than read: the first answer wins, and a second one for the same request
+        // finds nothing here. That is the whole concurrency story — two panes, or a click and a
+        // keystroke, cannot both reply and desynchronise the server's view of the turn.
+        let Some(pending) = self.pending.remove(id) else {
+            return Vec::new();
+        };
+
+        let decision = match answer {
+            ApprovalAnswer::Allow => json!("accept"),
+            ApprovalAnswer::AllowForSession => json!("acceptForSession"),
+            // `decline`, not `cancel`. Both deny, and the difference is what happens next: the
+            // server documents `decline` as "the agent will continue the turn" and `cancel` as
+            // "the turn will also be immediately interrupted". Denying one command should not
+            // throw away the rest of the work, and the user has a Stop button for when it should.
+            ApprovalAnswer::Deny { .. } => json!("decline"),
+            ApprovalAnswer::AllowWithEdits { .. } => {
+                // Codex has no verb for this. Claude Code's `allow` can carry an `updatedInput`
+                // and rewrite the call; there is no equivalent here, so this is refused loudly
+                // rather than downgraded to a plain `accept` — running a command the user edited,
+                // unedited, is the worst available outcome. The UI does not offer the affordance
+                // for this provider; this guards the case where it is offered by mistake.
+                self.pending.insert(id.to_owned(), pending);
+                return vec![Step::Emit(AgentEvent::Failed {
+                    message: "Codex cannot run an edited command — allow it as-is, or deny it."
+                        .to_owned(),
+                })];
+            }
+        };
+
+        vec![
+            Step::Write(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": pending.rpc_id,
+                    "result": { "decision": decision },
+                })
+                .to_string(),
+            ),
+            Step::Emit(AgentEvent::ApprovalResolved { id: id.to_owned() }),
+        ]
     }
 
     fn interrupt(&mut self) -> Vec<Step> {
@@ -502,6 +604,29 @@ impl Protocol for CodexProtocol {
         };
         let (_, step) = self.request("turn/interrupt", &json!({ "threadId": thread }));
         vec![step]
+    }
+
+    fn abandon(&mut self) -> Vec<Step> {
+        // Every outstanding request gets a `decline`, so the server is never left blocked on a
+        // reply from a window that has gone. Drained rather than iterated, because answering
+        // twice is exactly what `answer`'s `remove` exists to prevent.
+        let pending = std::mem::take(&mut self.pending);
+        pending
+            .into_iter()
+            .flat_map(|(id, entry)| {
+                [
+                    Step::Write(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": entry.rpc_id,
+                            "result": { "decision": "decline" },
+                        })
+                        .to_string(),
+                    ),
+                    Step::Emit(AgentEvent::ApprovalResolved { id }),
+                ]
+            })
+            .collect()
     }
 }
 
@@ -541,4 +666,37 @@ fn agenda_from(value: Option<&Value>) -> Vec<AgendaStep> {
             },
         })
         .collect()
+}
+
+/// The individual grants a permissions request is asking for, flattened for display.
+///
+/// Best-effort by design: the shape is `{ fileSystem: { read: [...], write: [...] }, network: {
+/// enabled } }` with every level optional and a documented migration in progress from `read`/`write`
+/// to `entries`. A card that listed nothing would be worse than one that lists what it recognises,
+/// so unknown shapes simply contribute nothing and the summary still names the request.
+fn permission_items(params: &Value) -> Vec<String> {
+    let mut items = Vec::new();
+    let profile = params.get("permissions").or_else(|| params.get("profile"));
+    let Some(profile) = profile else {
+        return items;
+    };
+
+    if let Some(fs) = profile.get("fileSystem") {
+        for (key, verb) in [("read", "read"), ("write", "write")] {
+            if let Some(paths) = fs.get(key).and_then(Value::as_array) {
+                for path in paths.iter().filter_map(Value::as_str) {
+                    items.push(format!("{verb} {path}"));
+                }
+            }
+        }
+    }
+    if profile
+        .get("network")
+        .and_then(|n| n.get("enabled"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        items.push("network access".to_owned());
+    }
+    items
 }

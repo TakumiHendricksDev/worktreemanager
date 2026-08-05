@@ -350,6 +350,19 @@ export type AgentEvent =
   | { kind: 'failed'; message: string }
   | { kind: 'raw'; provider: string; event: string; payload: unknown };
 
+/**
+ * What the user answered.
+ *
+ * `allow_with_edits` is Claude Code only — its allow can carry a replacement payload and rewrite
+ * the call. Codex refuses the answer rather than running the original unedited, so the UI must not
+ * offer the affordance where it cannot be honoured. See `ApprovalCard`'s `canEdit`.
+ */
+export type ApprovalAnswer =
+  | { kind: 'allow' }
+  | { kind: 'allow_for_session' }
+  | { kind: 'allow_with_edits'; input: unknown }
+  | { kind: 'deny'; message: string | null };
+
 /** Emitted as `agent:event`. */
 export interface AgentEventEnvelope {
   session: string;

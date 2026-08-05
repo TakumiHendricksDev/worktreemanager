@@ -1260,6 +1260,14 @@ pub async fn close_terminal(app: AppState<'_>, worktree_id: String) -> Reply<()>
 
 // ═══════════════════════════ agent sessions ═══════════════════════════
 
+/// What a new session asks for when nothing else says.
+///
+/// Codex's own spelling, deliberately not translated: an approval policy is provider-specific
+/// vocabulary, and a wtm-side enum mapping onto it would be a second name for the same thing that
+/// has to be kept in step with a CLI this app does not control. When a second provider arrives this
+/// becomes a per-provider default on the catalogue entry, which is where the spelling belongs.
+const DEFAULT_APPROVAL_POLICY: &str = "on-request";
+
 /// Every agent this build can drive, and whether this machine can.
 ///
 /// The whole catalogue, including what is not installed, with the reason — the same contract
@@ -1341,7 +1349,13 @@ pub async fn open_agent_session(
             cwd: worktree.path.to_string_lossy().into_owned(),
             model,
             effort,
-            mode,
+            // Ask before running anything, unless something asked for otherwise. A worktree is
+            // disposable and git is the undo, so a permissive default is defensible — but it is a
+            // decision the user should make deliberately rather than discover, and the safe
+            // direction is the one where the first surprising command is a card instead of a
+            // `git status` you cannot explain. `DEFAULT_APPROVAL_POLICY` is the provider's own
+            // spelling; a repo's config will be able to override it.
+            mode: mode.or_else(|| Some(DEFAULT_APPROVAL_POLICY.to_owned())),
             ..wtm_agent::SessionRequest::default()
         };
 
@@ -1362,17 +1376,32 @@ pub async fn open_agent_session(
 /// the composer is live the moment a pane opens, so that is the ordinary case on a slow start, not
 /// an edge case, and dropping it would lose the user's first prompt.
 #[tauri::command]
-pub async fn send_turn(
-    handle: tauri::AppHandle,
+pub async fn send_turn(app: AppState<'_>, session: String, text: String) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.with_agent(&session, |agent| agent.send_turn(&text))
+            .map_err(|e| ErrorView::new("exec", e.to_string()))
+    })
+    .await
+}
+
+/// Answer an outstanding approval.
+///
+/// The first answer wins: the provider removes the request when it replies, so a second call for
+/// the same id finds nothing and succeeds silently. That is deliberate rather than an oversight —
+/// two panes, or a click racing a keystroke, must not both reply and desynchronise the server's
+/// view of the turn, and an error here would surface a race the user did not cause as a failure
+/// they have to read. The card collapses on `approval_resolved` either way.
+#[tauri::command]
+pub async fn answer_approval(
     app: AppState<'_>,
     session: String,
-    text: String,
+    request_id: String,
+    answer: wtm_core::model::ApprovalAnswer,
 ) -> Reply<()> {
     let app = Arc::clone(&app);
     blocking(move || {
-        let sink: Arc<dyn wtm_agent::session::AgentSink> =
-            crate::agent_bridge::AgentEventSink::new(handle);
-        app.with_agent(&session, |agent| agent.send_turn(&sink, &text))
+        app.with_agent(&session, |agent| agent.answer(&request_id, &answer))
             .map_err(|e| ErrorView::new("exec", e.to_string()))
     })
     .await
@@ -1380,16 +1409,10 @@ pub async fn send_turn(
 
 /// Ask a session to stop the turn it is running.
 #[tauri::command]
-pub async fn interrupt_turn(
-    handle: tauri::AppHandle,
-    app: AppState<'_>,
-    session: String,
-) -> Reply<()> {
+pub async fn interrupt_turn(app: AppState<'_>, session: String) -> Reply<()> {
     let app = Arc::clone(&app);
     blocking(move || {
-        let sink: Arc<dyn wtm_agent::session::AgentSink> =
-            crate::agent_bridge::AgentEventSink::new(handle);
-        app.with_agent(&session, |agent| agent.interrupt(&sink))
+        app.with_agent(&session, wtm_agent::AgentSession::interrupt)
             .map_err(|e| ErrorView::new("exec", e.to_string()))
     })
     .await

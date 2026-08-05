@@ -11,6 +11,7 @@
    */
   import { agents, type AgentPane } from '../state/agents.svelte';
   import AgentTranscript from './AgentTranscript.svelte';
+  import ApprovalCard from './ApprovalCard.svelte';
   import Button from './ui/Button.svelte';
 
   const { pane }: { pane: AgentPane } = $props();
@@ -34,6 +35,25 @@
   const label = $derived(
     agents.options.find((o) => o.id === pane.provider)?.label ?? pane.provider,
   );
+
+  /**
+   * The oldest unanswered approval, or none.
+   *
+   * One at a time, in arrival order, because the transcript above the card is the context for it —
+   * showing a stack of three would ask the user to answer questions whose reasons are interleaved
+   * further up.
+   */
+  const blocking = $derived(pane.approvals[0] ?? null);
+
+  /**
+   * Whether this provider's allow can carry a rewritten payload.
+   *
+   * Claude Code's can; Codex refuses the answer rather than running the original unedited. Keyed off
+   * the provider id here rather than reported by the backend, because it is a property of the
+   * protocol rather than of the machine — and it will move onto the capability query when there is a
+   * second provider to compare.
+   */
+  const canEdit = $derived(pane.provider === 'claude');
 
   /** True while a turn is in flight, so the control reads Stop rather than Send. */
   const running = $derived.by(() => {
@@ -129,6 +149,17 @@
     {/if}
     <AgentTranscript events={pane.events} />
   </div>
+
+  {#if blocking}
+    <!-- Above the composer and outside the scroller, deliberately: the server does not continue the
+         turn until this is answered, so a card that could be scrolled away would stall the session
+         with nothing on screen to say why. -->
+    <ApprovalCard
+      request={blocking.request}
+      {canEdit}
+      onanswer={(answer) => void agents.answer(pane.session ?? '', blocking.id, answer)}
+    />
+  {/if}
 
   <form class="c-agent__composer" onsubmit={submit}>
     <!-- svelte-ignore a11y_autofocus -->

@@ -60,6 +60,7 @@
 /* Components — one partial per block, alphabetical within the layer. */
 @use 'components/add-project';
 @use 'components/agent';
+@use 'components/approval';
 @use 'components/banner';
 @use 'components/button';
 @use 'components/choice';

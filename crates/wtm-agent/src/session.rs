@@ -40,6 +40,10 @@ pub struct AgentSession {
     session: SessionId,
     host: Arc<dyn PipeHost>,
     driver: Arc<Mutex<Box<dyn Protocol>>>,
+    /// Held rather than passed per call, because `close` has to emit too — the declines it sends
+    /// on the way out are transcript events, and a `close` that took a sink argument would let a
+    /// caller hand it a different one from the session's own.
+    events: Arc<dyn AgentSink>,
 }
 
 impl std::fmt::Debug for AgentSession {
@@ -92,6 +96,7 @@ impl AgentSession {
             session,
             host,
             driver,
+            events: Arc::clone(events),
         })
     }
 
@@ -105,9 +110,9 @@ impl AgentSession {
     /// # Errors
     ///
     /// If the session's stdin is gone.
-    pub fn send_turn(&self, events: &Arc<dyn AgentSink>, text: &str) -> Result<(), ExecError> {
+    pub fn send_turn(&self, text: &str) -> Result<(), ExecError> {
         let steps = self.driver.lock().send_turn(text);
-        run(&self.session, &self.host, events, steps)
+        run(&self.session, &self.host, &self.events, steps)
     }
 
     /// Answer an outstanding approval.
@@ -115,14 +120,9 @@ impl AgentSession {
     /// # Errors
     ///
     /// If the session's stdin is gone.
-    pub fn answer(
-        &self,
-        events: &Arc<dyn AgentSink>,
-        id: &str,
-        answer: &ApprovalAnswer,
-    ) -> Result<(), ExecError> {
+    pub fn answer(&self, id: &str, answer: &ApprovalAnswer) -> Result<(), ExecError> {
         let steps = self.driver.lock().answer(id, answer);
-        run(&self.session, &self.host, events, steps)
+        run(&self.session, &self.host, &self.events, steps)
     }
 
     /// Ask the provider to stop the running turn.
@@ -130,9 +130,9 @@ impl AgentSession {
     /// # Errors
     ///
     /// If the session's stdin is gone.
-    pub fn interrupt(&self, events: &Arc<dyn AgentSink>) -> Result<(), ExecError> {
+    pub fn interrupt(&self) -> Result<(), ExecError> {
         let steps = self.driver.lock().interrupt();
-        run(&self.session, &self.host, events, steps)
+        run(&self.session, &self.host, &self.events, steps)
     }
 
     /// End the session.
@@ -145,6 +145,15 @@ impl AgentSession {
     ///
     /// If the session is already gone.
     pub fn close(&self) -> Result<(), ExecError> {
+        // Declined first, then EOF, then the kill. A server blocked on an approval reply does not
+        // read its stdin closing at all, so closing without this leaves a child that only the kill
+        // reaches — reported as `Signalled`, which in the UI reads as a crash rather than an end.
+        let steps = self.driver.lock().abandon();
+        if !steps.is_empty() {
+            // Errors ignored: this is a best-effort courtesy on the way out, and the pipe being
+            // gone already is the ordinary case when the CLI exited on its own.
+            let _ = run(&self.session, &self.host, &self.events, steps);
+        }
         let _ = self.host.close_stdin(&self.session);
         self.host.kill(&self.session)
     }
