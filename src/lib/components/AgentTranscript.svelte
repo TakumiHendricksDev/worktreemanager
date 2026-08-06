@@ -318,8 +318,32 @@
         {/if}
       </div>
     {:else if row.kind === 'tool'}
-      <div class="c-transcript__tool">
-        <p class="c-transcript__tool-name">
+      <!--
+        The name *is* the disclosure, so a tool call is one line.
+
+        It used to be two — a name, then a separate `▸ output` beneath it — and a turn that ran
+        seven tools was fourteen rows of machinery with paragraph-sized gaps between them, which
+        buried the actual conversation. There is nothing on the second row worth its own line: the
+        name says what ran and the status says how it went.
+
+        Never opened unprompted, including on failure. Auto-opening a failure was tried and is
+        wrong here: agents run speculative commands constantly — checking whether a file exists,
+        a `git` call on a branch with no upstream — so "failed" is routine and an expanded block
+        per occurrence is exactly the sprawl this row is trying to avoid. The word `failed` is what
+        tells you to click.
+      -->
+      {#if row.output}
+        <details class="c-transcript__tool">
+          <summary class="c-transcript__tool-name">
+            {row.title ?? row.name}
+            {#if row.ok === false}<span class="c-status--danger">failed</span>{/if}
+          </summary>
+          <pre class="c-transcript__out">{row.output}</pre>
+        </details>
+      {:else}
+        <!-- Nothing to disclose. A `<details>` with an empty body offers a marker that does
+             nothing, which is worse than no marker. -->
+        <p class="c-transcript__tool-name c-transcript__tool-name--bare">
           {row.title ?? row.name}
           {#if !row.done}
             <span class="c-status--subtle">running</span>
@@ -327,15 +351,7 @@
             <span class="c-status--danger">failed</span>
           {/if}
         </p>
-        {#if row.output}
-          <!-- Collapsed, and only when it failed is it worth opening unprompted — a successful
-               read of a file is not something anyone wants pasted into the conversation. -->
-          <details class="c-transcript__tool-out" open={row.ok === false}>
-            <summary>output</summary>
-            <pre class="c-transcript__out">{row.output}</pre>
-          </details>
-        {/if}
-      </div>
+      {/if}
     {:else if row.kind === 'patch'}
       <pre class="c-transcript__diff">{#each diffLines(row.diff) as line, i (i)}<span
             class="c-transcript__diff-line {line.cls}"

@@ -13,10 +13,18 @@
  * to the agenda's step states, which carry the status as a word beside the class.
  */
 
+/*
+ * The gap is sized for the machinery, not for the prose.
+ *
+ * A turn is mostly tool calls and thinking — single collapsed lines — and at a paragraph-sized gap
+ * a run of seven of them was taller than the answer they produced. So the flow gap is tight and the
+ * two prose rows buy their own breathing room back with a margin. That way adding air around a
+ * reply does not also add it between every line of the work that led to one.
+ */
 .c-transcript {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   /* A measure, because this is prose. Long lines are the single biggest thing that makes a
      transcript unreadable, and the pane can be as wide as the window. */
   max-width: 82ch;
@@ -30,6 +38,8 @@
   color: var(--fg-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  /* The prose rows' share of the spacing. See the block comment on `.c-transcript`. */
+  margin-block: var(--sp-1);
 }
 
 /*
@@ -42,13 +52,23 @@
  */
 .c-transcript__said {
   color: var(--fg);
+  /* See `.c-transcript__user`. */
+  margin-block: var(--sp-1);
 }
 
+/*
+ * The machinery: thinking, tool calls, and events this build does not know.
+ *
+ * One register for all three, because they are the same kind of thing — a line saying work
+ * happened, which you can open if you care. Keeping them identical is what lets the eye learn to
+ * skip the whole class and find the prose, which it cannot do if each is styled to its own taste.
+ */
 .c-transcript__thinking,
 .c-transcript__raw,
-.c-transcript__tool-out {
+.c-transcript__tool {
   font-size: var(--step--2);
   color: var(--fg-subtle);
+  line-height: 1.4;
 
   summary {
     cursor: pointer;
@@ -165,18 +185,36 @@
   color: var(--fg-subtle);
 }
 
-.c-transcript__tool {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+/*
+ * A tool call's name, which is also its disclosure.
+ *
+ * Left as the browser's default `list-item` rather than made a flex row, and that is the whole
+ * reason the status sits inline beside it: `display: flex` on a `<summary>` blockifies it in
+ * WebKit and the disclosure triangle disappears, taking the only signal that the row opens.
+ */
+/* Sized here rather than left to the group above, because this class is worn by two different
+   elements: the `<summary>`, which inherits from the `<details>`, and the bare `<p>`, which is not
+   inside one and would otherwise come out at the transcript's body size. */
+.c-transcript__tool-name {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.4;
 }
 
-.c-transcript__tool-name {
-  font-size: var(--step--1);
-  color: var(--fg-muted);
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
+/*
+ * A tool with nothing to show is a plain row, so it has no marker to indent behind.
+ *
+ * `9px` is off the spacing scale on purpose, and it is not a design value: it is the width the
+ * engine gives a `<summary>`'s `::marker`, measured. Rounding it to `--sp-2` puts this row's text
+ * one pixel left of every row above it, which in a vertical run of ten is visible as a wobble in
+ * the left edge. Aligning to a UA constant means matching the UA constant.
+ */
+.c-transcript__tool-name--bare {
+  padding-left: 9px;
+}
+
+.c-transcript__tool .c-transcript__out {
+  margin-top: var(--sp-1);
 }
 
 .c-transcript__steps {
