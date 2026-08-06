@@ -63,6 +63,18 @@
  * happened, which you can open if you care. Keeping them identical is what lets the eye learn to
  * skip the whole class and find the prose, which it cannot do if each is styled to its own taste.
  */
+/*
+ * A whole run of work, folded to one line.
+ *
+ * The row that makes a long turn readable. Forty tool calls and fifteen reasoning blocks used to be
+ * fifty-five rows between one paragraph of prose and the next, so the answer was never on screen at
+ * the same time as the question. This is all of it, closed.
+ *
+ * Styled as machinery rather than as a card on purpose: a bordered container would make the folded
+ * run *more* prominent than the thing it was burying. It is the same quiet register as its own
+ * members — one step down in the hierarchy, not one up.
+ */
+.c-transcript__group,
 .c-transcript__thinking,
 .c-transcript__raw,
 .c-transcript__tool {
@@ -122,10 +134,12 @@
   font-size: var(--step--1);
 }
 
+/* The shortened command on a step's summary line. `shortCommand` has already capped its length, so
+   this must not wrap — the cap is what keeps the row one line, and wrapping would undo it. */
 .c-transcript__cmd {
   font-family: var(--font-mono);
-  color: var(--fg);
-  overflow-wrap: anywhere;
+  color: var(--fg-muted);
+  white-space: nowrap;
 }
 
 .c-transcript__out,
@@ -199,6 +213,50 @@
   color: var(--fg-muted);
   font-size: var(--step--2);
   line-height: 1.4;
+}
+
+/* The count carries the weight: it is the one thing on the row that says how much is hidden. */
+.c-transcript__group-count {
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+/*
+ * What the turn is doing right now, appended to a group that is still growing.
+ *
+ * This is the whole of the live-progress story, and why folding a run does not mean flying blind:
+ * the name changes as the work moves. Subtle, because it is the least durable thing on the row —
+ * a second later it says something else — and truncated, because a shell command can be long and
+ * a summary that wraps stops being a summary.
+ */
+.c-transcript__group-now {
+  color: var(--fg-subtle);
+}
+
+/* The summary must stay one line whatever it holds — a shell command is long, and a two-line
+   summary of a folded run is the folded run starting to unfold itself. Clipped here rather than on
+   the live-step span, so the count and the failure marker are what survive a narrow pane. */
+.c-transcript__group-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * The members, once opened.
+ *
+ * Indented behind a rule so the run reads as one thing that was opened rather than as rows that
+ * have rejoined the transcript — without it, expanding a group is visually identical to the wall
+ * it replaced, and closing it again is the only way to tell where it ended.
+ */
+.c-transcript__group-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  margin-left: 4px;
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--border);
 }
 
 /*

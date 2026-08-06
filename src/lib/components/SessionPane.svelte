@@ -37,14 +37,16 @@
    */
   let sending = $state(false);
   let scroller = $state<HTMLElement | null>(null);
+  /** What is inside the scroller. Observed for height, which the scroller itself cannot report. */
+  let content = $state<HTMLElement | null>(null);
   let terminal = $state<ReturnType<typeof Terminal> | null>(null);
   /**
    * Whether the transcript is following its tail.
    *
-   * Recorded from a scroll listener rather than measured in the anchoring effect: by the time that
-   * effect runs the DOM has grown, so measuring then answers "is it pinned *after* the append" —
+   * Recorded from a scroll listener rather than measured in the anchoring observer: by the time
+   * that runs the DOM has grown, so measuring then answers "is it pinned *after* the append" —
    * which on first content is `scrollTop === 0` against a tall scroller and reads as "scrolled
-   * away". Not `$state`: only the effect reads it.
+   * away". Not `$state`: nothing renders from it.
    */
   let pinned = true;
 
@@ -89,9 +91,77 @@
     provider === null ? null : (sessions.capabilities[provider] ?? null),
   );
 
+  /*
+   * Follow the tail whenever the transcript changes height, for any reason.
+   *
+   * This watched `pane.events.length` for a long time, which meant it followed appends and nothing
+   * else. Every `<details>` in a transcript — thinking, a tool's output, a folded run of work —
+   * changes the height without adding an event, and none of them re-anchored. The browser does not
+   * cover for it either: scroll anchoring is a `overflow-anchor` feature and WebKit does not
+   * implement it, so on the platform this app actually ships to there was no fallback at all.
+   *
+   * A `ResizeObserver` on the content is the honest version of the same intent — "the document got
+   * taller, keep up" — and it costs one observer instead of a dependency list that has to be kept
+   * in step with every future thing that can change the layout. No feedback loop: setting
+   * `scrollTop` does not change `scrollHeight`.
+   */
+  /*
+   * Appends re-anchor even when nothing is being painted.
+   *
+   * Kept alongside the observer below rather than replaced by it, because a `ResizeObserver` is
+   * delivered by the rendering lifecycle and a document that is not rendering has no lifecycle:
+   * measured in a hidden tab, the observer fired **zero** times across a 250px growth. Panes here
+   * are hidden with `display: none` whenever their worktree is not selected, and a window can be
+   * minimised, so that is an ordinary state rather than an exotic one. Two lines to keep the
+   * guarantee the observer cannot make on its own.
+   */
   $effect(() => {
     void pane.events.length;
     if (scroller && pinned) scroller.scrollTop = scroller.scrollHeight;
+  });
+
+  $effect(() => {
+    const el = content;
+    const box = scroller;
+    if (!el || !box) return;
+
+    const observer = new ResizeObserver(() => {
+      if (pinned) box.scrollTop = box.scrollHeight;
+    });
+    observer.observe(el);
+
+    /*
+     * Opening a disclosure stops the pane following the tail.
+     *
+     * Without this the observer above fights the user: you open a folded run to read it, the
+     * content grows, and you are thrown to the bottom of the transcript — away from the thing you
+     * just asked to see. Opening one is the clearest statement there is that you are reading rather
+     * than watching. Closing one says nothing, so it leaves `pinned` alone.
+     *
+     * **`beforetoggle`, and that is the load-bearing part.** `toggle` is queued as a task and lands
+     * *after* the resize observer has already run for the same layout change, so unpinning there is
+     * one frame too late: measured, the view still jumped 550px to the tail before the flag was
+     * cleared. `beforetoggle` fires synchronously ahead of the state change. `toggle` is kept as
+     * well, so an engine that only has the older event still stops following — it just cannot undo
+     * that first jump.
+     *
+     * Capture on both, because neither bubbles. They still pass every ancestor on the way down.
+     */
+    const unpinOnOpen = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLDetailsElement)) return;
+      // `beforetoggle` reports the state it is moving to; by `toggle` the element already holds it.
+      const state = (event as Event & { newState?: string }).newState;
+      if (state === undefined ? target.open : state === 'open') pinned = false;
+    };
+    box.addEventListener('beforetoggle', unpinOnOpen, true);
+    box.addEventListener('toggle', unpinOnOpen, true);
+
+    return () => {
+      observer.disconnect();
+      box.removeEventListener('beforetoggle', unpinOnOpen, true);
+      box.removeEventListener('toggle', unpinOnOpen, true);
+    };
   });
 
   /*
@@ -244,10 +314,14 @@
     </div>
   {:else}
     <div class="c-pane__body" bind:this={scroller} onscroll={onScroll}>
-      {#if pane.events.length === 0 && pane.ready}
-        <p class="c-pane__empty">Ask {label} something.</p>
-      {/if}
-      <AgentTranscript events={pane.events} />
+      <!-- The scroller reports its own fixed height, not its content's, so the thing the
+           `ResizeObserver` has to watch is a wrapper inside it. -->
+      <div bind:this={content}>
+        {#if pane.events.length === 0 && pane.ready}
+          <p class="c-pane__empty">Ask {label} something.</p>
+        {/if}
+        <AgentTranscript events={pane.events} />
+      </div>
     </div>
 
     {#if blocking}

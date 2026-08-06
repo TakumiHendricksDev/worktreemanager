@@ -47,7 +47,21 @@
     | { key: string; kind: 'agenda'; explanation: string | null; steps: AgendaStep[] }
     | { key: string; kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
     | { key: string; kind: 'usage'; usage: AgentUsage; costUsd: number | null }
-    | { key: string; kind: 'raw'; provider: string; event: string; payload: unknown };
+    | { key: string; kind: 'raw'; provider: string; event: string; payload: unknown }
+    | {
+        key: string;
+        kind: 'steps';
+        steps: Step[];
+        /** Every reasoning run inside this group, concatenated. */
+        thinking: string;
+        /** Members that failed, so a collapsed group cannot hide one. */
+        failed: number;
+        /** True while the turn is still working. See `group()`. */
+        live: boolean;
+      };
+
+  /** A row that reports work rather than saying anything: the members of a `steps` group. */
+  type Step = Extract<Row, { kind: 'tool' | 'command' | 'raw' }>;
 
   const rows = $derived.by(() => {
     const out: Row[] = [];
@@ -223,8 +237,140 @@
       }
     });
 
-    return out;
+    return group(out);
   });
+
+  /**
+   * How many machinery rows it takes before they are worth folding away.
+   *
+   * A group of one is strictly worse than the row it replaces — same height, less information, one
+   * more click. Two is a wash. Three is where a run starts to read as a wall.
+   */
+  const MIN_GROUP = 3;
+
+  /**
+   * Fold runs of machinery into one row each.
+   *
+   * A second pass over the finished list rather than a change to the fold above, and deliberately
+   * so: that loop correlates commands and tools by id through `Map`s and mutates rows in place, and
+   * this needs none of that. Keeping them separate means grouping cannot break correlation.
+   *
+   * What counts as machinery is `tool`, `command` and `raw` — rows that report *that* work happened.
+   * A patch, an agenda, a notice and a usage line are content, so they end a run: the answer and the
+   * things the answer is made of stay at full weight, which is the entire point.
+   *
+   * Thinking is folded into the group rather than counted as a member. Fifteen rows reading
+   * `Thinking` and nothing else say less than one that holds all fifteen.
+   */
+  function group(rows: Row[]): Row[] {
+    const out: Row[] = [];
+    /* One ordered list rather than separate step and thinking buckets, so a run too short to fold
+       can be put back exactly as it arrived instead of reordered into tools-then-thinking. */
+    let pending: Row[] = [];
+
+    /** Emit whatever has accumulated: a group if it earned one, the bare rows if it did not. */
+    function flush(live: boolean) {
+      if (pending.length === 0) return;
+
+      const steps = pending.filter(isStep);
+      const thinking = pending
+        .filter((row) => row.kind === 'thinking')
+        .map((row) => row.text)
+        .join('\n\n');
+
+      // `steps.length > 0` because the summary counts steps: a group of nothing but reasoning would
+      // announce "0 steps". It cannot arise today — adjacent reasoning coalesces into one row, so a
+      // second thinking row implies a step between them — but the count has to be honest anyway.
+      if (pending.length >= MIN_GROUP && steps.length > 0) {
+        out.push({
+          // Keyed off the first member, never the size: a group that grows from three to four
+          // mid-stream has to keep its key or Svelte remounts the whole subtree on every tool call,
+          // which is the churn the header comment on keys exists to prevent.
+          key: `s:${pending[0]?.key}`,
+          kind: 'steps',
+          steps,
+          thinking,
+          failed: steps.filter(isFailed).length,
+          live,
+        });
+      } else {
+        out.push(...pending);
+      }
+      pending = [];
+    }
+
+    for (const row of rows) {
+      if (isStep(row) || row.kind === 'thinking') {
+        pending.push(row);
+        continue;
+      }
+      // Content. Whatever was accumulating ends here, and it ended because the turn moved on —
+      // so it is never the live one, whatever follows it.
+      flush(false);
+      out.push(row);
+    }
+
+    /*
+     * A trailing run is a turn still working.
+     *
+     * No turn tracking needed for this: `turn_finished` pushes a `usage` row, so a turn that has
+     * ended never leaves machinery last. Cheaper than reading turn ids, and more robust — Codex's
+     * comes from `.unwrap_or_default()` and can be the empty string.
+     */
+    flush(true);
+    return out;
+  }
+
+  /** How much of a command fits on a summary line before it stops being a line. */
+  const COMMAND_CHARS = 96;
+
+  /**
+   * A shell wrapper and the quoting it brings, so a command can be read at a glance.
+   *
+   * Codex sends the argv it actually ran, which for every shell step is
+   * `/bin/zsh -lc "rg -n \"class ExcelExport\" apps/exports && sed -n '820,890p' …"`. Rendered
+   * whole that is five to eight wrapped lines of which the first twelve characters are the same
+   * every time, and six of them filled the pane. What the reader wants is the command; `/bin/zsh
+   * -lc` is how it was delivered.
+   *
+   * Only the wrapper is stripped, and only when it is unambiguously there — a command that arrives
+   * bare (Claude's tools, or a provider that does not wrap) has to pass through untouched, so this
+   * matches an explicit list of shells rather than guessing at the first quoted argument.
+   */
+  function shortCommand(command: string): string {
+    const wrapped =
+      /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-[a-z]*c\s+(['"])([\s\S]*)\1\s*$/.exec(
+        command,
+      );
+    // Group 2 is the whole quoted body. Inner escapes of the *same* quote survive as written —
+    // unescaping them would be a shell parser, and this is a label.
+    const body = (wrapped?.[2] ?? command).replace(/\\(["'])/g, '$1');
+    const line = body.replace(/\s+/g, ' ').trim();
+    return line.length > COMMAND_CHARS ? `${line.slice(0, COMMAND_CHARS - 1)}…` : line;
+  }
+
+  /** Whether a row reports work rather than saying something. */
+  function isStep(row: Row): row is Step {
+    return row.kind === 'tool' || row.kind === 'command' || row.kind === 'raw';
+  }
+
+  function isFailed(step: Step): boolean {
+    if (step.kind === 'tool') return step.ok === false;
+    if (step.kind === 'command') return step.exit !== null && step.exit !== 0;
+    return false;
+  }
+
+  /**
+   * What a step is called, in a group's summary and in its list.
+   *
+   * Not `stepLabel`: that name is taken by the agenda's status word, and the two are unrelated —
+   * an agenda step is something the model plans to do, this is something it did.
+   */
+  function labelOf(step: Step): string {
+    if (step.kind === 'tool') return step.title ?? step.name;
+    if (step.kind === 'command') return shortCommand(step.command);
+    return `${step.provider} · ${step.event}`;
+  }
 
   /**
    * The state class for a step.
@@ -305,53 +451,48 @@
         <summary>Thinking</summary>
         <p>{row.text}</p>
       </details>
-    {:else if row.kind === 'command'}
-      <div class="c-transcript__card">
-        <code class="c-transcript__cmd">{row.command}</code>
-        {#if row.output}
-          <pre class="c-transcript__out">{row.output}</pre>
-        {/if}
-        {#if row.exit !== null}
-          <span class={row.exit === 0 ? 'c-status--ok' : 'c-status--danger'}
-            >exit {row.exit}</span
-          >
-        {/if}
-      </div>
-    {:else if row.kind === 'tool'}
+    {:else if isStep(row)}
+      {@render step(row)}
+    {:else if row.kind === 'steps'}
       <!--
-        The name *is* the disclosure, so a tool call is one line.
+        A run of work, as one line.
 
-        It used to be two — a name, then a separate `▸ output` beneath it — and a turn that ran
-        seven tools was fourteen rows of machinery with paragraph-sized gaps between them, which
-        buried the actual conversation. There is nothing on the second row worth its own line: the
-        name says what ran and the status says how it went.
-
-        Never opened unprompted, including on failure. Auto-opening a failure was tried and is
-        wrong here: agents run speculative commands constantly — checking whether a file exists,
-        a `git` call on a branch with no upstream — so "failed" is routine and an expanded block
-        per occurrence is exactly the sprawl this row is trying to avoid. The word `failed` is what
-        tells you to click.
+        Collapsed always, including while it is being added to. A turn that ran forty tools showed
+        forty rows and pushed the answer off the screen entirely; the count plus the step currently
+        underway is the part anyone reads, and the rest is a click away. Nothing is dropped — the
+        body below is exactly the list that used to be inline.
       -->
-      {#if row.output}
-        <details class="c-transcript__tool">
-          <summary class="c-transcript__tool-name">
-            {row.title ?? row.name}
-            {#if row.ok === false}<span class="c-status--danger">failed</span>{/if}
-          </summary>
-          <pre class="c-transcript__out">{row.output}</pre>
-        </details>
-      {:else}
-        <!-- Nothing to disclose. A `<details>` with an empty body offers a marker that does
-             nothing, which is worse than no marker. -->
-        <p class="c-transcript__tool-name c-transcript__tool-name--bare">
-          {row.title ?? row.name}
-          {#if !row.done}
-            <span class="c-status--subtle">running</span>
-          {:else if row.ok === false}
-            <span class="c-status--danger">failed</span>
+      <details class="c-transcript__group">
+        <summary class="c-transcript__group-name">
+          <span class="c-transcript__group-count">
+            {row.steps.length}
+            {row.steps.length === 1 ? 'step' : 'steps'}
+          </span>
+          {#if row.failed > 0}
+            <!-- Surfaced on the closed row, because a collapsed group must not be able to hide a
+                 failure — that would make folding a way to lose information rather than defer it. -->
+            <span class="c-status--danger">{row.failed} failed</span>
           {/if}
-        </p>
-      {/if}
+          {#if row.live}
+            <span class="c-transcript__group-now"
+              >{labelOf(row.steps[row.steps.length - 1]!)}</span
+            >
+          {/if}
+        </summary>
+        <div class="c-transcript__group-body">
+          {#if row.thinking}
+            <!-- Every reasoning run in the group, merged. Fifteen rows each reading `Thinking` and
+                 holding nothing visible said less than one row holding all fifteen. -->
+            <details class="c-transcript__thinking">
+              <summary>Thinking</summary>
+              <p>{row.thinking}</p>
+            </details>
+          {/if}
+          {#each row.steps as member (member.key)}
+            {@render step(member)}
+          {/each}
+        </div>
+      </details>
     {:else if row.kind === 'patch'}
       <pre class="c-transcript__diff">{#each diffLines(row.diff) as line, i (i)}<span
             class="c-transcript__diff-line {line.cls}"
@@ -383,13 +524,73 @@
       <p class="c-transcript__usage">
         {tokens(row.usage)}{#if cost(row.costUsd)}&nbsp;· {cost(row.costUsd)}{/if}
       </p>
-    {:else}
-      <!-- An event this build does not know. Shown, because dropping it would lose information
-           with no trace, and collapsed, because it is usually not interesting. -->
-      <details class="c-transcript__raw">
-        <summary>{row.provider} · {row.event}</summary>
-        <pre>{JSON.stringify(row.payload, null, 2)}</pre>
-      </details>
     {/if}
   {/each}
 </div>
+
+<!--
+  One machinery item, wherever it appears.
+
+  Rendered from a snippet because a step shows up in two places — loose, when its run was too short
+  to fold, and inside a group when it was not — and the two must be indistinguishable. Two copies of
+  this markup is how they would stop being.
+
+  Every kind is the same shape: one line that discloses. That uniformity is what lets a group hold a
+  mix of tool calls, shell commands and unknown events without reading as three different things.
+-->
+{#snippet step(row: Step)}
+  {#if row.kind === 'command'}
+    <!--
+      The command, not the argv that delivered it.
+
+      Codex reports what it actually ran, which for every shell step begins `/bin/zsh -lc "…"` and
+      wraps across five to eight lines in the card this used to be. Six of them filled the pane. The
+      summary is the command with that wrapper stripped and truncated; the untouched original is the
+      first thing inside, because a label you cannot verify is worse than no label.
+    -->
+    <details class="c-transcript__tool">
+      <summary class="c-transcript__tool-name">
+        <code class="c-transcript__cmd">{shortCommand(row.command)}</code>
+        {#if row.exit !== null && row.exit !== 0}
+          <span class="c-status--danger">exit {row.exit}</span>
+        {/if}
+      </summary>
+      <pre class="c-transcript__out">{row.command}</pre>
+      {#if row.output}<pre class="c-transcript__out">{row.output}</pre>{/if}
+    </details>
+  {:else if row.kind === 'raw'}
+    <!-- An event this build does not know. Shown, because dropping it would lose information with
+         no trace, and collapsed, because it is usually not interesting. -->
+    <details class="c-transcript__raw">
+      <summary>{row.provider} · {row.event}</summary>
+      <pre>{JSON.stringify(row.payload, null, 2)}</pre>
+    </details>
+  {:else if row.output}
+    <!--
+      The name *is* the disclosure, so a tool call is one line.
+
+      Never opened unprompted, including on failure: agents run speculative commands constantly —
+      checking whether a file exists, a `git` call on a branch with no upstream — so "failed" is
+      routine, and an expanded block per occurrence is the sprawl this row exists to avoid. The word
+      `failed` is what tells you to click.
+    -->
+    <details class="c-transcript__tool">
+      <summary class="c-transcript__tool-name">
+        {row.title ?? row.name}
+        {#if row.ok === false}<span class="c-status--danger">failed</span>{/if}
+      </summary>
+      <pre class="c-transcript__out">{row.output}</pre>
+    </details>
+  {:else}
+    <!-- Nothing to disclose. A `<details>` with an empty body offers a marker that does nothing,
+         which is worse than no marker. -->
+    <p class="c-transcript__tool-name c-transcript__tool-name--bare">
+      {row.title ?? row.name}
+      {#if !row.done}
+        <span class="c-status--subtle">running</span>
+      {:else if row.ok === false}
+        <span class="c-status--danger">failed</span>
+      {/if}
+    </p>
+  {/if}
+{/snippet}
