@@ -92,33 +92,8 @@
   font-size: var(--step--1);
 }
 
-/*
- * The model and effort row, between the transcript and the composer.
- *
- * Above the input rather than beside it: it is what the *next* turn will use, so it reads as a
- * setting on the message you are about to write. Beside the Send button it would read as part of the
- * send action, which it is not — changing it mid-session takes effect without restarting anything.
- */
-.c-pane__settings {
-  flex: 0 0 auto;
-  padding: var(--sp-2) var(--sp-3) 0;
-}
-
-.c-pane__composer {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-end;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  border-top: 1px solid var(--border);
-}
-
-.c-pane__input {
-  flex: 1 1 auto;
-  /* Grows rather than scrolling a two-line box, up to a third of the pane: a prompt is routinely
-     several lines — a stack trace, a diff, a file list. */
-  max-height: 33%;
-  resize: vertical;
-  font-family: var(--font-ui);
-  line-height: 1.5;
-}
+/* The composer and its settings live in `_composer.scss`. They were `.c-pane__settings` and
+   `.c-pane__composer` here, two strips separated by a hairline; they are now one card, which is a
+   control with its own focus behaviour rather than part of the pane's chrome. Only the gutter
+   around it — `.c-pane__foot` — still belongs to the pane, and it is declared beside the card it
+   spaces. */

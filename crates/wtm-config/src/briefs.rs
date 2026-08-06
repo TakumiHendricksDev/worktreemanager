@@ -218,8 +218,12 @@ pub fn title_of(markdown: &str) -> String {
 /// failure is logged rather than fatal: on a filesystem that cannot express a mode, refusing to save
 /// the plan would be worse than saving it with the default.
 fn restrict(path: &Path, mode: u32) {
-    // `cfg(unix)` rather than `cfg(target_os)`, so `platform_seams.rs` does not count it — and both
+    // `cfg(unix)` rather than a per-OS seam, so `platform_seams.rs` does not count it — and both
     // platforms this app builds for are unix, so no arm is deleted on either.
+    //
+    // Naming that attribute in full here is what *made* this a counted seam: the scan is by line
+    // text and does not care that the line is a comment, so the note explaining the avoidance
+    // tripped the check it was describing.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

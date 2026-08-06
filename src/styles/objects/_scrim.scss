@@ -13,4 +13,22 @@
   inset: 0;
   background: var(--bg-scrim);
   z-index: $z-scrim;
+  animation: o-scrim-in var(--dur-fast) var(--ease);
+}
+
+/*
+ * The dim fades in.
+ *
+ * On mount only, which is why it is an animation rather than a transition: the element does not
+ * exist until the dialog opens, so there is no previous state for a transition to run from. There
+ * is no matching exit — Svelte removes the node immediately on close, and an out transition would
+ * mean the scrim outliving the dialog it belongs to.
+ *
+ * No reduced-motion guard here: `generic/_motion.scss` already collapses every animation in the app
+ * to `0.01ms`, and this has no reason to differ from that default the way the progress bar does.
+ */
+@keyframes o-scrim-in {
+  from {
+    opacity: 0;
+  }
 }

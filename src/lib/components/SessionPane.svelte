@@ -29,6 +29,13 @@
   } = $props();
 
   let draft = $state('');
+  /**
+   * True from submit until the turn is accepted or refused.
+   *
+   * A turn can now wait several seconds for a session that is still starting, so the control has to
+   * say it is busy — and a second click during that wait would send the same text twice.
+   */
+  let sending = $state(false);
   let scroller = $state<HTMLElement | null>(null);
   let terminal = $state<ReturnType<typeof Terminal> | null>(null);
   /**
@@ -108,12 +115,43 @@
     pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
   }
 
-  function submit(event: Event) {
+  /*
+   * Grow the composer to fit what is in it.
+   *
+   * `_pane.scss` claimed this for a while without anything implementing it — `rows="2"` fixed the
+   * height and the `max-height: 33%` beside the claim resolved against a content-height form, so it
+   * did nothing. The bounds live in CSS; this only sets the height between them, and past the
+   * maximum the textarea's own `overflow-y` takes over.
+   *
+   * `height: auto` first, because `scrollHeight` never shrinks below the height already set — without
+   * the collapse the box would grow with a long paste and never come back down when it was deleted.
+   */
+  $effect(() => {
+    void draft;
+    const el = composer;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  });
+
+  async function submit(event: Event) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text) return;
-    draft = '';
-    void sessions.send(pane.id, text);
+    if (!text || sending) return;
+
+    /*
+     * The draft is held until the turn is accepted, not cleared on the way out.
+     *
+     * Clearing first destroyed the message whenever `send` could not deliver it, which was every
+     * turn composed before the session id landed — and nothing said so, because the composer looked
+     * exactly like one that had just sent successfully.
+     */
+    sending = true;
+    const sent = await sessions.send(pane.id, text);
+    sending = false;
+    // Only clear what actually went out. The wait can be seconds long on a pane that is still
+    // starting, and anything typed during it is the next message rather than part of this one.
+    if (sent && draft.trim() === text) draft = '';
   }
 
   /*
@@ -123,7 +161,7 @@
    * of files — and a composer where Enter submits makes pasting one an accident.
    */
   function onKeydown(event: KeyboardEvent) {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') submit(event);
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void submit(event);
   }
 </script>
 
@@ -223,45 +261,64 @@
       />
     {/if}
 
-    <div class="c-pane__settings">
-      <ModelPicker
-        {capability}
-        model={pane.model}
-        effort={pane.effort}
-        flags={pane.flags}
-        disabled={pane.ended !== null || pane.error !== null}
-        onchange={(next) => sessions.configure(pane.id, next)}
-      />
-    </div>
+    <!--
+      One card holding the message, what will run it, and the control that sends it.
 
-    <form class="c-pane__composer" onsubmit={submit}>
-      <textarea
-        class="c-input c-pane__input"
-        rows="2"
-        bind:this={composer}
-        placeholder="Ask {label}…  (⌘↵)"
-        aria-label="Message {label}"
-        bind:value={draft}
-        onkeydown={onKeydown}
-        disabled={pane.ended !== null || pane.error !== null}></textarea>
-      {#if running}
-        <Button
-          variant="neutral"
-          size="sm"
-          onclick={() => void sessions.interrupt(pane.id)}
-        >
-          Stop
-        </Button>
-      {:else}
-        <Button
-          variant="accent"
-          size="sm"
-          type="submit"
-          disabled={draft.trim().length === 0 || pane.ended !== null}
-        >
-          Send
-        </Button>
-      {/if}
-    </form>
+      These were two strips: a settings row floating above a hairline, then the form. Nothing said
+      the model belonged to the message you were writing, so the row read as pane chrome that had
+      come loose. Both desktop clients put all three inside one bordered field for that reason, and
+      it is also what lets the whole thing take the focus ring as a unit.
+    -->
+    <div class="c-pane__foot">
+      <form class="c-composer" onsubmit={(event) => void submit(event)}>
+        <!-- Deliberately NOT `.c-textarea`. That block is a bordered, filled form control, and its
+             partial sorts after this one in `main.scss` — so at equal specificity it won, and the
+             card ended up with a second bordered box and a resize grip inside it. The two
+             declarations actually wanted from it are restated in `.c-composer__input`; see there. -->
+        <textarea
+          class="c-composer__input"
+          bind:this={composer}
+          placeholder="Ask {label}…"
+          aria-label="Message {label}"
+          bind:value={draft}
+          onkeydown={onKeydown}
+          disabled={pane.ended !== null || pane.error !== null}></textarea>
+
+        <div class="c-composer__bar">
+          <ModelPicker
+            {capability}
+            model={pane.model}
+            effort={pane.effort}
+            flags={pane.flags}
+            disabled={pane.ended !== null || pane.error !== null}
+            onchange={(next) => sessions.configure(pane.id, next)}
+          />
+
+          <div class="c-composer__send">
+            {#if running}
+              <Button
+                variant="neutral"
+                size="sm"
+                onclick={() => void sessions.interrupt(pane.id)}
+              >
+                Stop
+              </Button>
+            {:else}
+              <!-- The shortcut lives here rather than in the placeholder, where it was competing
+                   with the prompt for the one line of text a user reads before typing. -->
+              <span class="c-composer__hint" aria-hidden="true">⌘↵</span>
+              <Button
+                variant="accent"
+                size="sm"
+                type="submit"
+                disabled={draft.trim().length === 0 || pane.ended !== null || sending}
+              >
+                {sending ? 'Sending…' : 'Send'}
+              </Button>
+            {/if}
+          </div>
+        </div>
+      </form>
+    </div>
   {/if}
 </section>

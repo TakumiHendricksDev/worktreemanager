@@ -39,9 +39,14 @@ impl AgentSink for Recorder {
 
 /// A session on a fake pipe, plus the fake and the recorder to inspect.
 fn session() -> (AgentSession, Arc<FakePipe>, Arc<Recorder>) {
-    let fake = Arc::new(FakePipe::new());
     let recorder = Arc::new(Recorder::default());
-    let sink: Arc<dyn AgentSink> = Arc::clone(&recorder) as Arc<dyn AgentSink>;
+    let (session, fake) = session_with(&(Arc::clone(&recorder) as Arc<dyn AgentSink>));
+    (session, fake, recorder)
+}
+
+/// The same, for a test that needs its own sink.
+fn session_with(sink: &Arc<dyn AgentSink>) -> (AgentSession, Arc<FakePipe>) {
+    let fake = Arc::new(FakePipe::new());
     let host: Arc<dyn PipeHost> = Arc::clone(&fake) as Arc<dyn PipeHost>;
 
     let session = AgentSession::open(
@@ -51,13 +56,13 @@ fn session() -> (AgentSession, Arc<FakePipe>, Arc<Recorder>) {
             ..SessionRequest::default()
         },
         host,
-        &sink,
+        sink,
         60_000,
         Some("/tmp/worktree"),
     )
     .expect("the fake always spawns");
 
-    (session, fake, recorder)
+    (session, fake)
 }
 
 /// Walk the fake through Codex's two-step handshake.
@@ -112,6 +117,64 @@ fn a_turn_reaches_the_pipe_and_is_echoed_to_the_transcript() {
             text: "do the thing".to_owned()
         }),
         "the turn must appear in the transcript, not only on the wire"
+    );
+}
+
+/// A sink that reads state its caller might already be holding — the shape the real one has.
+///
+/// `try_lock` rather than `lock`, and that is not a detail: the point is to *detect* re-entrancy,
+/// and a test that reproduced the deadlock faithfully would hang the suite instead of failing it.
+/// There is no `.config/nextest.toml`, so there is no per-test timeout to rescue one that did.
+#[derive(Default)]
+struct Reentrant {
+    /// Stands in for `App::agents`: state the sink reads, which a caller may already hold.
+    state: Mutex<()>,
+    /// Set when `on_event` found that state locked — i.e. the caller's guard was still alive.
+    blocked: Mutex<bool>,
+}
+
+impl AgentSink for Reentrant {
+    fn on_event(&self, _session: &SessionId, _event: &AgentEvent) {
+        if self.state.try_lock().is_none() {
+            *self.blocked.lock() = true;
+        }
+    }
+    fn on_exit(&self, _session: &SessionId, _outcome: &ExitOutcome) {}
+    fn on_ready(&self, _session: &SessionId) {}
+}
+
+#[test]
+fn a_sink_runs_on_the_calling_thread_so_a_caller_must_not_hold_what_it_reads() {
+    // The contract behind a real deadlock, pinned here because nothing else states it.
+    //
+    // `send_turn` applies its steps inline, and the first step of a turn is `Emit(UserEcho)`. So the
+    // sink runs on the caller's thread, *inside* whatever scope the caller is in. `src-tauri`'s sink
+    // answers `UserEcho` by calling `App::live_agents`, which locks the agent map; `App::with_agent`
+    // used to hold that same map's lock across this call, and `parking_lot::Mutex` is not reentrant.
+    // Every Send parked forever, holding the map, and every later agent command queued behind it.
+    //
+    // Reproduced with `try_lock` so this reports the hazard rather than hanging on it.
+    let rec = Arc::new(Reentrant::default());
+    let (session, fake) = session_with(&(Arc::clone(&rec) as Arc<dyn AgentSink>));
+    handshake(&fake);
+
+    {
+        // Exactly what `with_agent` used to do: take the lock, then run the session underneath it.
+        let _guard = rec.state.lock();
+        session.send_turn("under a held lock").expect("send");
+    }
+    assert!(
+        *rec.blocked.lock(),
+        "the sink must run inside the caller's scope — if this fails the hazard is gone and \
+         `App::agent_session` can be inlined again"
+    );
+
+    // And the shape `App` uses now: look the session up, drop the guard, then run it.
+    *rec.blocked.lock() = false;
+    session.send_turn("with nothing held").expect("send");
+    assert!(
+        !*rec.blocked.lock(),
+        "with no guard alive the sink reaches its own state, which is what makes Send work"
     );
 }
 

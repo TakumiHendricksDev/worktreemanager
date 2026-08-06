@@ -28,6 +28,22 @@
   color: var(--fg-muted);
 }
 
+/*
+ * A choice that cannot be made.
+ *
+ * The native box greys itself out, but the *label* did not, so the row read as available and only
+ * failed to respond when clicked. The composer's `ultracode` flag is the case: it disables itself
+ * whenever effort resolves below xhigh, which is most of the time.
+ *
+ * Matched on the input's state rather than a state class because nothing sets one — `Choice`
+ * forwards `disabled` to the native element and that is the whole of its API. `:has()` reads the
+ * fact already on the page instead of asking every call site to duplicate it into a class.
+ */
+.c-choice:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Secondary text beside the control, where the label itself is the field's name. */
 .c-choice__hint {
   color: var(--fg-muted);

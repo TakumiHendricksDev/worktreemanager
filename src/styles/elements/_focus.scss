@@ -12,6 +12,14 @@
  * 2px offset, is clipped by the parent's `overflow: hidden`. Later layer, same specificity,
  * component wins. Put this in Generic and that stops being true.
  *
+ * # Why the ring is a token
+ *
+ * A handful of components have to draw this themselves — anywhere the focusable element is not the
+ * element that should light up, such as a transparent `o-overlay-select__native` lying over a label
+ * it is not the parent of. Those copies were writing out `2px solid var(--border-focus)` by hand,
+ * so the app had one focus ring in principle and several in fact. `--focus-ring` is that value
+ * named once; see `settings/_semantic.scss`.
+ *
  * # There is deliberately no `border-radius` here
  *
  * There used to be — `border-radius: var(--r-sm)` — and it applied to *the focused element
@@ -22,8 +30,8 @@
  */
 
 :focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: 2px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 :focus:not(:focus-visible) {

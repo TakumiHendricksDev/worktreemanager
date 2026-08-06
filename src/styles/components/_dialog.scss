@@ -30,6 +30,26 @@
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-lg);
+  animation: c-dialog-in var(--dur-fast) var(--ease);
+}
+
+/*
+ * The panel rises the last few pixels as it appears.
+ *
+ * A modal that is simply *there* on the next frame gives the eye nothing to follow, and the
+ * question of where it came from is answered by the animation rather than by the user re-reading
+ * the screen. Short — `--dur-fast` — because this is on the path of every dialog in the app and a
+ * slow one is a tax on repetition.
+ *
+ * The `translate(-50%, -50%)` has to be restated in the keyframe: `transform` is one property, so
+ * animating it at all replaces the centring rather than composing with it, and the panel would fly
+ * in from the middle-right of the window.
+ */
+@keyframes c-dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px)) scale(0.98);
+  }
 }
 
 /* For a dialog that shows a live transcript rather than a question. */

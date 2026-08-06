@@ -32,15 +32,21 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * The agent's reply.
+ *
+ * Almost empty now, and that is the point: `.c-markdown` owns the typography, because the reply is
+ * a rendered document rather than a run of text. The `white-space: pre-wrap` that used to live here
+ * had to go with it — the parser has already decided which newlines are paragraph breaks, so
+ * preserving the source's newlines as well double-spaced everything it had folded.
+ */
 .c-transcript__said {
   color: var(--fg);
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .c-transcript__thinking,
-.c-transcript__raw {
+.c-transcript__raw,
+.c-transcript__tool-out {
   font-size: var(--step--2);
   color: var(--fg-subtle);
 
@@ -51,6 +57,23 @@
       color: var(--fg-muted);
     }
   }
+}
+
+/*
+ * An event this build does not understand, set apart from the conversation.
+ *
+ * Colour alone was not enough. A raw row shared the transcript's flow and gap with an assistant
+ * paragraph, so on a fresh pane — where Claude's `SessionStart` hooks were the only two events —
+ * two rows of protocol debris *were* the transcript, indistinguishable from content. Suppressing
+ * the hooks fixed that case; indenting behind a dotted rule fixes the class, because the next
+ * unlisted subtype will do the same thing and `agent.rs` is explicit that there will be one.
+ *
+ * Dotted rather than solid, to read as "not part of the record" beside the user's solid rule.
+ */
+.c-transcript__raw {
+  border-left: 1px dotted var(--border-strong);
+  padding-left: var(--sp-3);
+  font-family: var(--font-mono);
 }
 
 .c-transcript__thinking p {
@@ -102,9 +125,53 @@
 
 .c-transcript__diff {
   border: 1px solid var(--border);
+  /* The lines are spans, so the block must not add its own leading — each line carries its own. */
+  padding: 0;
+}
+
+/*
+ * One line of a unified diff.
+ *
+ * A block, so the tint reaches the full width of the scroller rather than stopping at the end of
+ * the text — a ragged highlight is much harder to scan than a solid band. The `+`/`-` character
+ * stays in the text: `_semantic.scss` forbids encoding state in colour alone, and this is the case
+ * that rule most obviously exists for.
+ */
+.c-transcript__diff-line {
+  display: block;
+  padding: 0 var(--sp-2);
+  /* Long lines keep their own line rather than wrapping — a wrapped diff loses the column
+     alignment that is most of what makes one readable. The block scrolls instead. */
+  white-space: pre;
+}
+
+.c-transcript__diff-line.is-add {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.c-transcript__diff-line.is-del {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* `@@ -1,7 +1,9 @@` is navigation, not content, and reads as a heading inside the block. */
+.c-transcript__diff-line.is-hunk {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
+.c-transcript__diff-line.is-meta {
+  color: var(--fg-subtle);
 }
 
 .c-transcript__tool {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-transcript__tool-name {
   font-size: var(--step--1);
   color: var(--fg-muted);
   display: flex;

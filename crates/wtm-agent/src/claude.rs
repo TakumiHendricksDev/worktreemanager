@@ -438,6 +438,12 @@ impl Protocol for ClaudeProtocol {
                 // content. `status` and `post_turn_summary` are the CLI talking to its own UI.
                 // Suppressed rather than `Raw`-ed because a real turn produced three of them around
                 // a two-word answer, and each one is a collapsed row nobody wants.
+                //
+                // The `hook_*` pair is the worst case of that and the reason this list is worth
+                // maintaining. A user's `SessionStart` hooks fire before anything else, so on a
+                // fresh pane they are the *only* two rows — and because `SessionPane` gates its
+                // "Ask Claude something." prompt on an empty transcript, they replaced the empty
+                // state with two lines of protocol debris the moment a pane opened.
                 Some(
                     "thinking_tokens"
                     | "status"
@@ -446,7 +452,9 @@ impl Protocol for ClaudeProtocol {
                     | "turn_duration"
                     | "session_state_changed"
                     | "vcs_state_changed"
-                    | "file_snapshot",
+                    | "file_snapshot"
+                    | "hook_started"
+                    | "hook_response",
                 ) => Vec::new(),
                 Some("api_error" | "permission_error") => {
                     vec![Step::Emit(AgentEvent::Failed {

@@ -288,6 +288,30 @@
         </Banner>
       {/if}
 
+      <!--
+        A session failure. Dismissed rather than retried: unlike a worktree list, there is nothing
+        here to re-run — the turn, the approval or the close either happened or did not.
+
+        This was written in six places in the store and rendered in none, so every one of them was
+        silent. A banner is further from the pane that failed than the error deserves, and a note in
+        the pane's own header would be better; that is a larger change than making them visible at
+        all, which is what was actually missing.
+      -->
+      {#if sessions.error}
+        <Banner>
+          {sessions.error}
+          {#snippet action()}
+            <Button
+              variant="inline"
+              onclick={() => (sessions.error = null)}
+              ariaLabel="Dismiss"
+            >
+              <Icon name="close" size={12} />
+            </Button>
+          {/snippet}
+        </Banner>
+      {/if}
+
       {#each workspace.brokenProjects as project (project.id)}
         <TrustBanner {project} />
       {/each}

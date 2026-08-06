@@ -46,10 +46,25 @@
   const startable = $derived(sessions.options.filter((o) => o.available));
 
   /*
-   * Read what can be resumed when the selection lands somewhere new.
+   * Read what can be resumed, what plans are stored, and what is running, when the selection lands
+   * somewhere new.
    *
    * On selection rather than on a timer: polling is banned, and the list only changes when this
    * window opens or closes a session — which is exactly when the store refreshes it itself.
+   *
+   * # This effect must depend on the selection and nothing else
+   *
+   * All three of these write a map. Each used to *read* that map before its first `await`, which
+   * put the read inside this effect's tracking window and made the effect depend on its own writes
+   * — so it re-ran forever. `refreshBackground` shells out to `claude agents` every call, and the
+   * Claude Code binary is a few hundred megabytes, so the loop was a fork bomb: hundreds of
+   * resident copies, the machine in swap, and `kernel_task` pegged.
+   *
+   * **The fix is in the store, not here.** The three methods now await before they touch the map,
+   * and skip the assignment when nothing moved. `untrack` around these calls was tried and does
+   * *not* work — measured against this project's Svelte, a pre-`await` read stays tracked whether
+   * it is wrapped or not, so wrapping it would only have looked like a guard. If you add a fourth
+   * call, the rule it has to follow is the one in `sessions.svelte.ts`, not one available here.
    */
   $effect(() => {
     const worktree = workspace.selectedWorktreeId;

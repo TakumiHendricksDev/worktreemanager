@@ -76,7 +76,57 @@ export const SHELL_SHORTCUT =
 export const INSPECTOR_SHORTCUT =
   document.documentElement.dataset.platform === 'linux' ? 'Ctrl-I' : '⌘I';
 
+/**
+ * How long a turn waits for its pane's session id. 100 tries, 50 ms apart — five seconds.
+ *
+ * Long enough for a CLI to come up on a cold cache, short enough that a spawn which failed does not
+ * leave a message looking like it is still going out.
+ */
+const SESSION_WAIT_TRIES = 100;
+const SESSION_WAIT_STEP_MS = 50;
+
+/**
+ * How many events are held for a session no pane has claimed yet.
+ *
+ * Small on purpose. This buffers the gap between a session being spawned and its id crossing IPC —
+ * a handshake, not a conversation — so anything past a handful means the id is never coming and the
+ * events belong to a session that failed to register. Holding thousands of those would be a leak
+ * dressed up as robustness.
+ */
+const MAX_EARLY_EVENTS = 64;
+
 export type SessionKind = { kind: 'shell' } | { kind: 'agent'; provider: string };
+
+/**
+ * Store `next` under `key`, or `null` when that would change nothing.
+ *
+ * The contract `workspace.merge` states, for the same reason that file gives: a freshly built object
+ * with identical contents is a **new identity**, so assigning one re-runs every effect that reads
+ * the map.
+ *
+ * Here that mattered more than it does there. The three refresh methods below are called from an
+ * effect, so an assignment that always signals is not a wasted render — it is a loop, and the
+ * `background` arm of it spawned a `claude` per iteration. Moving the read after the `await` is
+ * what breaks the cycle; this is the second layer, and the one that still holds if a later edit
+ * puts a read back in front of it. Both were measured against this project's Svelte: read-first
+ * runs unbounded, either fix alone settles in one or two passes. (`untrack` at the call site was
+ * the obvious third layer and does nothing at all — a pre-`await` read stays tracked inside it.)
+ *
+ * Deep equality via JSON, like `merge`'s and for the same reason: these lists are plain serialized
+ * data straight off the wire, so it is exactly the comparison that matters and it needs no
+ * per-field maintenance.
+ */
+function patch<T>(
+  map: Record<string, T[]>,
+  key: string,
+  next: T[],
+): Record<string, T[]> | null {
+  const current = map[key];
+  if (current !== undefined && JSON.stringify(current) === JSON.stringify(next)) {
+    return null;
+  }
+  return { ...map, [key]: next };
+}
 
 /** An approval a session is blocked on. */
 export interface PendingApproval {
@@ -167,6 +217,26 @@ class Sessions {
   /** Which pane the last request was for. Not `$state`: read only when the epoch fires. */
   focusTarget: string | null = null;
 
+  /*
+   * What arrived about a session before any pane owned its id.
+   *
+   * Both of these exist because *opening* a session and *hearing from* it are two different
+   * channels, and Rust has no reason to order them. `open_agent_session` returns the id only after
+   * the spawn and the handshake write; the driver's own events go straight out to the webview from
+   * wherever they are produced. For Claude the loss is not even a race — `ClaudeProtocol::open`
+   * returns `Step::Ready` synchronously, so `agent:ready` is *always* emitted before the id has
+   * crossed IPC. Matching on `paneBySession` alone dropped it every time, and since nothing else
+   * ever sets `ready`, the pane said "starting…" for the rest of its life.
+   *
+   * Not `$state`: nothing renders them, and a reactive read here would make `record` — the hottest
+   * path in the app — a dependency of whatever effect happened to be running.
+   */
+
+  /** Sessions that reported ready before their pane knew its id. */
+  private readonly readyAhead = new Set<string>();
+  /** Events that arrived before their pane knew its id, oldest first. */
+  private readonly eventsAhead = new Map<string, AgentEvent[]>();
+
   live = $derived(this.panes.filter((p) => p.ended === null && p.error === null));
 
   paneById(id: string | null): Pane | null {
@@ -211,6 +281,7 @@ class Sessions {
     const offReady = await listen<AgentReady>('agent:ready', (e) => {
       const pane = this.paneBySession(e.payload.session);
       if (pane) pane.ready = true;
+      else this.readyAhead.add(e.payload.session);
     });
     const offPtyExit = await listen<PtyExit>('pty:exit', (e) => {
       this.noteExit(e.payload.session, e.payload.summary);
@@ -280,13 +351,20 @@ class Sessions {
     pane.flags = next.flags;
   }
 
-  /** What can be resumed in a worktree. Silent on failure, like every auxiliary read here. */
+  /**
+   * What can be resumed in a worktree. Silent on failure, like every auxiliary read here.
+   *
+   * The await comes **before** the map is touched, and that ordering is the fix rather than a style
+   * choice. This used to read `this.resumable` in the spread of an object literal whose value was
+   * the await — and object properties evaluate in source order, so the read happened ahead of the
+   * suspension and therefore inside the tracking window of whatever effect called this. The three
+   * methods here are called from one. See `patch`.
+   */
   async refreshResumable(worktreeId: string): Promise<void> {
     try {
-      this.resumable = {
-        ...this.resumable,
-        [worktreeId]: await commands.listResumable(worktreeId),
-      };
+      const list = await commands.listResumable(worktreeId);
+      const next = patch(this.resumable, worktreeId, list);
+      if (next) this.resumable = next;
     } catch {
       /* Deliberately silent. A resume list that cannot be read is not worth a banner. */
     }
@@ -325,7 +403,7 @@ class Sessions {
         },
       });
       const live = this.paneById(pane.id);
-      if (live) live.session = session;
+      if (live) this.claimSession(live, session);
       // It is running now, so it must stop being offered — `list_resumable` excludes live sessions,
       // and refreshing is what makes the list agree with the screen.
       void this.refreshResumable(worktreeId);
@@ -345,25 +423,29 @@ class Sessions {
     await this.refreshResumable(worktreeId);
   }
 
-  /** Stored plans for a worktree. Silent on failure, like every auxiliary read here. */
+  /** Stored plans for a worktree. Silent on failure, and await-then-assign — see `refreshResumable`. */
   async refreshBriefs(projectId: string, worktreeId: string): Promise<void> {
     try {
-      this.briefs = {
-        ...this.briefs,
-        [worktreeId]: await commands.listBriefs(projectId, worktreeId),
-      };
+      const list = await commands.listBriefs(projectId, worktreeId);
+      const next = patch(this.briefs, worktreeId, list);
+      if (next) this.briefs = next;
     } catch {
       /* Deliberately silent. */
     }
   }
 
-  /** Background agents for a worktree. Empty when there is no `claude` on the PATH. */
+  /**
+   * Background agents for a worktree. Empty when there is no `claude` on the PATH.
+   *
+   * The most expensive of the three by a wide margin — it shells out to `claude agents`, and the
+   * Claude Code binary is a few hundred megabytes — which is why this was the arm of the loop that
+   * turned a re-render into an unusable machine. Await-then-assign, see `refreshResumable`.
+   */
   async refreshBackground(worktreeId: string): Promise<void> {
     try {
-      this.background = {
-        ...this.background,
-        [worktreeId]: await commands.listBackgroundTasks(worktreeId),
-      };
+      const list = await commands.listBackgroundTasks(worktreeId);
+      const next = patch(this.background, worktreeId, list);
+      if (next) this.background = next;
     } catch {
       /* Deliberately silent. */
     }
@@ -439,17 +521,10 @@ class Sessions {
     // The turn is sent before the handshake finishes; every provider queues it and echoes it, so the
     // prompt is visibly in the transcript rather than appearing to vanish.
     const prompt = `Review this plan and say what you would change.\n\n---\n\n${brief.markdown}`;
-    // A pane's session id arrives asynchronously, so wait for it rather than dropping the turn. Bounded
-    // because a spawn that failed will never produce one.
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const live = this.paneById(pane.id);
-      if (!live || live.error) return;
-      if (live.session) {
-        await this.send(pane.id, prompt);
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    // `send` waits for the session id itself, and says so when it gives up. This used to be an
+    // inline copy of that wait which returned silently on timeout — the one place in the increment
+    // that added it that failed without telling anyone.
+    await this.send(pane.id, prompt);
   }
 
   /** Re-probe which agents this machine has. Silent on failure — an auxiliary convenience. */
@@ -469,9 +544,19 @@ class Sessions {
     session: string,
   ): void {
     const pane = this.blank(kind, projectId, worktreeId);
-    pane.session = session;
-    pane.ready = true;
+    // Registered before it is claimed, unlike the rest of this function's history. `claimSession`
+    // drains anything buffered for the id by handing it to `record`, and `record` finds its pane by
+    // searching `this.panes` — so claiming an unregistered pane would quietly re-buffer instead of
+    // delivering. Looking the pane back up is also what gets the `$state` proxy rather than the raw
+    // object, which is why every other caller here does the same.
     this.panes = [...this.panes, pane];
+    const live = this.paneById(pane.id);
+    if (live) {
+      this.claimSession(live, session);
+      // Adopted, so it is running by definition — readiness was announced before this window
+      // existed and there is no second announcement coming.
+      live.ready = true;
+    }
     this.place(worktreeId, pane.id, 'right');
   }
 
@@ -545,7 +630,7 @@ class Sessions {
         cols: SPAWN_COLS,
       });
       const live = this.paneById(pane.id);
-      if (live) live.session = session;
+      if (live) this.claimSession(live, session);
     } catch (e) {
       const live = this.paneById(pane.id);
       if (live) live.error = errorMessage(e);
@@ -582,7 +667,7 @@ class Sessions {
         options: { model: pane.model, effort: pane.effort },
       });
       const live = this.paneById(pane.id);
-      if (live) live.session = session;
+      if (live) this.claimSession(live, session);
       this.error = null;
     } catch (e) {
       const live = this.paneById(pane.id);
@@ -607,13 +692,48 @@ class Sessions {
     this.layouts = { ...this.layouts, [worktreeId]: resize(layout, path, ratio) };
   }
 
-  async send(paneId: string, text: string): Promise<void> {
-    const pane = this.paneById(paneId);
-    if (!pane?.session) return;
+  /**
+   * Wait for a pane's session id, or give up.
+   *
+   * A pane exists before its session does — `blank` sets `session: null`, and `openAgentSession`
+   * fills it in a moment later — so a turn composed in that window has nowhere to go. Waiting is
+   * what makes typing into a pane that is still starting work at all, which is the ordinary thing
+   * to do: the composer is on screen and focused from the moment the pane opens.
+   *
+   * Bounded, because a spawn that failed will never produce one. Null covers all three ways this
+   * ends badly — the pane went away, the spawn errored, the session ended — so the caller has one
+   * case to handle rather than four.
+   */
+  private async awaitSession(paneId: string): Promise<Pane | null> {
+    for (let attempt = 0; attempt < SESSION_WAIT_TRIES; attempt += 1) {
+      const pane = this.paneById(paneId);
+      if (!pane || pane.error !== null || pane.ended !== null) return null;
+      if (pane.session !== null) return pane;
+      await new Promise((resolve) => setTimeout(resolve, SESSION_WAIT_STEP_MS));
+    }
+    return null;
+  }
+
+  /**
+   * Send a turn, waiting for the session id if it has not landed yet.
+   *
+   * **Reports whether the turn was accepted**, so the composer can hold the draft until it was.
+   * This returned `void` and dropped the text on the floor whenever `session` was still null, which
+   * is every message typed into a fresh pane before the CLI finished starting — and the composer,
+   * having already cleared itself, left no sign that anything had happened at all.
+   */
+  async send(paneId: string, text: string): Promise<boolean> {
+    const pane = await this.awaitSession(paneId);
+    if (!pane?.session) {
+      this.error = 'That session never started, so the message was not sent.';
+      return false;
+    }
     try {
       await commands.sendTurn(pane.session, text);
+      return true;
     } catch (e) {
       this.error = errorMessage(e);
+      return false;
     }
   }
 
@@ -700,21 +820,21 @@ class Sessions {
     this.focus(pane.worktreeId, pane.id);
 
     try {
-      if (pane.kind.kind === 'shell') {
-        pane.session = await commands.openTerminal({
-          projectId: pane.projectId,
-          worktreeId: pane.worktreeId,
-          rows: SPAWN_ROWS,
-          cols: SPAWN_COLS,
-        });
-      } else {
-        pane.session = await commands.openAgentSession({
-          projectId: pane.projectId,
-          worktreeId: pane.worktreeId,
-          agentId: pane.kind.provider,
-          options: { model: pane.model, effort: pane.effort },
-        });
-      }
+      const session =
+        pane.kind.kind === 'shell'
+          ? await commands.openTerminal({
+              projectId: pane.projectId,
+              worktreeId: pane.worktreeId,
+              rows: SPAWN_ROWS,
+              cols: SPAWN_COLS,
+            })
+          : await commands.openAgentSession({
+              projectId: pane.projectId,
+              worktreeId: pane.worktreeId,
+              agentId: pane.kind.provider,
+              options: { model: pane.model, effort: pane.effort },
+            });
+      this.claimSession(pane, session);
     } catch (e) {
       pane.error = errorMessage(e);
     }
@@ -753,9 +873,45 @@ class Sessions {
     this.atCapacity = false;
   }
 
+  /**
+   * Give a pane its backend session id, and hand it whatever already arrived for that id.
+   *
+   * Every site that learns a session id goes through here rather than assigning `pane.session`
+   * directly. That is the whole mechanism: the assignment and the drain have to be one step, or
+   * there is a window between them in which an event is dropped for the same reason it was dropped
+   * before — see `readyAhead`.
+   */
+  private claimSession(pane: Pane, session: string): void {
+    pane.session = session;
+
+    if (this.readyAhead.delete(session)) pane.ready = true;
+
+    const waiting = this.eventsAhead.get(session);
+    if (waiting) {
+      this.eventsAhead.delete(session);
+      for (const event of waiting) this.record(session, event);
+    }
+  }
+
+  /** Hold an event for a session no pane owns yet. Oldest dropped first, as the transcript does. */
+  private holdEvent(session: string, event: AgentEvent): void {
+    const waiting = this.eventsAhead.get(session) ?? [];
+    waiting.push(event);
+    if (waiting.length > MAX_EARLY_EVENTS)
+      waiting.splice(0, waiting.length - MAX_EARLY_EVENTS);
+    this.eventsAhead.set(session, waiting);
+  }
+
   private record(session: string, event: AgentEvent): void {
     const pane = this.paneBySession(session);
-    if (!pane) return;
+    if (!pane) {
+      // Not noise to discard: a CLI that is not logged in says so on stderr during the handshake,
+      // which is exactly the window where no pane owns the id yet. `session.rs` calls a silent
+      // session with no transcript the worst possible presentation of that failure, and dropping
+      // these was how it happened.
+      this.holdEvent(session, event);
+      return;
+    }
 
     // Tracked outside the log as well as in it. The log is what the transcript renders; this is what
     // the pane is *blocked on*, and folding the whole log on every append would be O(events) per

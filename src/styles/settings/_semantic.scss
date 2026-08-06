@@ -83,12 +83,19 @@
   --warn-line: color-mix(in oklab, var(--amber-500) 34%, transparent);
   --info-soft: color-mix(in oklab, var(--blue-500) 8%, transparent);
   --info-line: color-mix(in oklab, var(--blue-500) 35%, transparent);
+  /* `ok` completed the set late, when a diff needed an added-line tint. Kept at the same 8% as
+     danger so a `+` and a `-` line in one hunk carry equal weight — a diff where one side is
+     louder than the other reads as an opinion about the change. */
+  --ok-soft: color-mix(in oklab, var(--green-500) 10%, transparent);
+  --ok-line: color-mix(in oklab, var(--green-500) 40%, transparent);
   /* Its own role rather than `--warn-soft`: this one sits behind text rather than filling a
      panel, and needs more presence to read as a highlight at all. Same argument as `--star`. */
   --warn-mark: color-mix(in oklab, var(--amber-500) 16%, transparent);
 
+  /* Two levels, because the app has two elevated things: a control that has taken focus, and a
+     modal over a scrim. A middle rung was defined here for a year and never used once — see the
+     dark block for the argument against keeping one on spec. */
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
-  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.1);
   --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.18);
 }
 
@@ -139,9 +146,36 @@
   --warn-line: color-mix(in oklab, var(--amber-400) 34%, transparent);
   --info-soft: color-mix(in oklab, var(--blue-400) 8%, transparent);
   --info-line: color-mix(in oklab, var(--blue-400) 35%, transparent);
+  --ok-soft: color-mix(in oklab, var(--green-400) 10%, transparent);
+  --ok-line: color-mix(in oklab, var(--green-400) 40%, transparent);
   --warn-mark: color-mix(in oklab, var(--amber-400) 16%, transparent);
 
+  /*
+   * `--shadow-md` was here and is deliberately gone.
+   *
+   * It was defined in both themes and used nowhere, which is the dead weight §8a warns will
+   * accumulate now that nothing reports unused CSS. An unused token is worse than an unused rule:
+   * it reads as a scale, so the next person picks a rung by name rather than by looking at what the
+   * app actually does — and what it does is hairlines, with elevation reserved for the two cases
+   * below. Add a third the day something needs one, with the thing that needs it.
+   */
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.45);
   --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.6);
+}
+
+/*
+ * The focus ring, named once.
+ *
+ * Outside both theme blocks because neither half of it is a theme decision: the width and the offset
+ * are the same in light and dark, and the colour is already `--border-focus`, which is. Splitting it
+ * across the two blocks would be the same value written twice with nothing to keep them in step.
+ *
+ * It is a token because `elements/_focus.scss` is not the only place the ring gets drawn. A control
+ * whose focusable element is not the element that should light up — a transparent select stretched
+ * over a label, an inset ring where the global offset would be clipped — has to repeat it, and
+ * those repeats were literals.
+ */
+:root {
+  --focus-ring: 2px solid var(--border-focus);
+  --focus-offset: 2px;
 }

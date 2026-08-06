@@ -15,8 +15,6 @@
  * `o-overlay-select`. Do not unify them; they are different things that happen to share a tag.
  */
 
-@use '../tools' as t;
-
 .c-input,
 .c-select,
 .c-textarea {
@@ -26,8 +24,19 @@
   border-radius: var(--r-md);
   background: var(--bg-input);
   font-size: var(--step-0);
+  transition: border-color var(--dur-fast) var(--ease);
 
-  &:focus {
+  /* Every other interactive block in this app answers the pointer — buttons, tabs, the splitter,
+     the palette chips. A form control that did not was the one thing on screen that looked
+     inert. */
+  &:hover {
+    border-color: var(--border-strong);
+  }
+
+  /* `:focus-visible`, not `:focus`, to match `.c-search__input` — which had the same treatment
+     under the other selector, so clicking into a form field lit its border and clicking into the
+     sidebar filter did not. Two spellings of one rule is how they came to disagree. */
+  &:focus-visible {
     border-color: var(--border-focus);
   }
 }
@@ -50,13 +59,12 @@
 }
 
 /*
- * A compact input, for a control that sits inside another control's row.
+ * `.c-input--sm` was here and is deliberately gone.
  *
- * The two pickers in a composer, where the full size would make the row taller than the composer it
- * annotates. Sized through `control(sm)` rather than with its own padding, so it cannot become an
- * eighth number — which is the duplication `tools/_control.scss` exists to have removed.
+ * Its only two call sites were the composer's model and effort selects, which are now menu triggers
+ * in the `o-overlay-select` idiom — see `_model-picker.scss` for why. That left a modifier styled
+ * for nobody, and the same argument applies as to the shadow rung removed from `_semantic.scss`: an
+ * unused modifier reads as a size scale, so the next person reaches for a rung the app does not
+ * actually have. `control(sm)` still exists in `tools/` and `.c-button--sm` still uses it, so
+ * bringing this back the day a small form control appears is one line.
  */
-.c-input--sm {
-  @include t.control(sm);
-  width: auto;
-}

@@ -1,26 +1,94 @@
 /*
  * The model, effort and flag row in a composer.
  *
- * Components layer. Two native `<select>`s and any provider flags, laid out on one line and allowed
- * to wrap on a narrow pane — a picker that clipped would hide the effort, which is the half people
+ * Components layer. Two menu triggers and any provider flags, laid out on one line and allowed to
+ * wrap on a narrow pane — a picker that clipped would hide the effort, which is the half people
  * change most.
  *
- * Native selects, deliberately: the popup renders outside the stacking context, so neither menu
- * needs a `z-index`. `settings/_config.scss` says the app has two stacking levels and nothing else
- * should add one, and a hand-built listbox would have needed a third.
+ * # Quiet by default, and why
+ *
+ * These sit inside the composer card, a few pixels from the Send button. Given the same border and
+ * fill as a form control they competed with it: three boxed things in a row, one of which is the
+ * action. So a trigger is bare until it is pointed at, in the same register as `.c-button--quiet`.
+ * What is being set still reads at a glance, because the *value* is the label — the chrome is not
+ * carrying any of the meaning.
+ *
+ * The selects themselves are `o-overlay-select__native`: invisible, stretched over the label, and
+ * still the thing that opens the menu. See the object for why it is not `visibility: hidden`.
  */
 
 .c-model-picker {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--sp-2);
+  /* Wrapping only helps if the row is allowed to be narrower than its widest child. Without this a
+     flex item's automatic minimum size is content-based, so a long model id sized the trigger to
+     its own text and pushed the whole row past the pane instead of wrapping it. */
+  min-width: 0;
+  gap: var(--sp-1) var(--sp-2);
   font-size: var(--step--2);
+  color: var(--fg-muted);
 }
 
-.c-model-picker__field {
+.c-model-picker__trigger {
+  display: flex;
+  min-width: 0;
+  border-radius: var(--r-sm);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.c-model-picker__trigger:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* The native select is transparent and on top, so the ring has to be drawn by the wrapper — the
+   same division `_titlebar.scss` and `_split-button.scss` make, and the reason the object itself
+   deliberately ships no focus treatment. */
+.c-model-picker__trigger:focus-within {
+  background: var(--bg-hover);
+  color: var(--fg);
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* A disabled pane's picker still says what the session is set to, so it stays legible rather than
+   greying out — but it must stop advertising itself as something to press. */
+.c-model-picker__trigger.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.c-model-picker__value {
   display: flex;
   align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: 3px var(--sp-2);
+  /* The selected value is the loudest thing in the trigger. Everything else in this row — the
+     standing "Effort" word, the stale-list caveat — is subtle, so the hierarchy inside a pill runs
+     value first and annotation second rather than all three arriving at once. */
+  color: var(--fg);
+  /* The value can be a long model id in a quarter-width pane. It ellipsizes rather than wrapping,
+     because a two-line trigger would change the height of the whole composer toolbar. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* "Effort", the standing half of the label. Quieter than the value it names, so the eye lands on
+   the setting rather than on the word for it. */
+.c-model-picker__key {
+  color: var(--fg-subtle);
+}
+
+/* A caveat about the model list, riding on the model trigger. Kept at the same weight as the key so
+   it reads as annotation and never competes with the model's own name. */
+.c-model-picker__aside {
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
 }
 
 .c-model-picker__note {

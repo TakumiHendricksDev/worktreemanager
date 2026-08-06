@@ -65,7 +65,12 @@ struct AgentEntry {
     /// Empty until then. Kept so `resumable` can exclude a conversation that is already on screen —
     /// offering to resume one would hand the CLI two clients for one thread.
     provider_session: String,
-    session: wtm_agent::AgentSession,
+    /// Behind an `Arc` so a lookup can hand the session out and drop the map's lock.
+    ///
+    /// Not for sharing — nothing holds a second long-lived reference. It exists so
+    /// [`App::agent_session`] can return an owned handle rather than a borrow, which is what lets
+    /// the guard die before the caller runs anything. See that function.
+    session: Arc<wtm_agent::AgentSession>,
 }
 
 /// What the frontend needs to know about a live agent session.
@@ -762,7 +767,7 @@ impl App {
                 worktree: worktree.id.as_str().to_owned(),
                 provider: entry.id.to_owned(),
                 provider_session: String::new(),
-                session,
+                session: Arc::new(session),
             },
         );
         Ok(id)
@@ -788,26 +793,59 @@ impl App {
             .collect()
     }
 
-    /// Run `f` against a live agent session.
+    /// The session behind an id, with the map's lock already released.
     ///
-    /// Takes a closure rather than handing out the session, because the map's lock has to be
-    /// released before the caller does anything slow with it — and because a caller holding an
-    /// `&AgentSession` past the lock could use one this map has already replaced.
+    /// A separate function, and that is the entire point: the guard dies at this closing brace, so
+    /// a caller physically cannot still be holding it while it uses what came back. Doing the
+    /// lookup inline and using the result in the same scope is the bug this shape exists to make
+    /// unwriteable — see [`Self::with_agent`].
     ///
     /// # Errors
     ///
     /// If no session with that id is in the map.
+    fn agent_session(
+        &self,
+        session: &str,
+    ) -> Result<Arc<wtm_agent::AgentSession>, wtm_core::error::ExecError> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents
+            .lock()
+            .get(&id)
+            .map(|entry| Arc::clone(&entry.session))
+            .ok_or_else(|| wtm_core::error::ExecError::NoSuchSession(session.to_owned()))
+    }
+
+    /// Run `f` against a live agent session.
+    ///
+    /// Takes a closure rather than handing out the session, so a caller cannot keep an
+    /// `&AgentSession` past the lookup and use one this map has already replaced.
+    ///
+    /// # Why the lookup is a separate function
+    ///
+    /// This held `agents` across `f` for one release, and it deadlocked every Send.
+    /// `AgentSink::on_event` runs **synchronously on the calling thread** — `wtm-agent` guarantees
+    /// it, and `session_wiring.rs` pins it — and the first step of a turn is `Emit(UserEcho)`.
+    /// [`AgentEventSink::title`](crate::agent_bridge) answers that by calling
+    /// [`Self::live_agents`], which locks this same map. `parking_lot::Mutex` is not reentrant, so
+    /// the second acquisition parked the thread forever: no turn reached the CLI's stdin, and
+    /// because the guard was never dropped, every later `with_agent`, `open_agent` and
+    /// `close_agent` queued up behind it.
+    ///
+    /// So this must not be flattened back into one function, however much it reads like an
+    /// indirection. A sink that reaches back into `App` is the design, not an accident — the
+    /// resumable list is written from events — and the only durable defence is that there is no
+    /// live guard to re-enter.
+    ///
+    /// # Errors
+    ///
+    /// If no session with that id is in the map, or if `f` fails.
     pub fn with_agent<T>(
         &self,
         session: &str,
         f: impl FnOnce(&wtm_agent::AgentSession) -> Result<T, wtm_core::error::ExecError>,
     ) -> Result<T, wtm_core::error::ExecError> {
-        let agents = self.agents.lock();
-        let id = wtm_core::model::SessionId::new(session);
-        let entry = agents
-            .get(&id)
-            .ok_or_else(|| wtm_core::error::ExecError::NoSuchSession(session.to_owned()))?;
-        f(&entry.session)
+        let session = self.agent_session(session)?;
+        f(&session)
     }
 
     /// End an agent session and forget it.

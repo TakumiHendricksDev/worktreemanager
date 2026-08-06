@@ -17,6 +17,7 @@
    * drops from the front — so a row's key is its kind plus the id or ordinal it was built from.
    */
   import type { AgendaStep, AgentEvent, AgentUsage } from '../ipc/types';
+  import Markdown from './Markdown.svelte';
 
   const { events }: { events: AgentEvent[] } = $props();
 
@@ -32,7 +33,16 @@
     | { key: string; kind: 'assistant'; text: string }
     | { key: string; kind: 'thinking'; text: string }
     | { key: string; kind: 'command'; command: string; output: string; exit: number | null }
-    | { key: string; kind: 'tool'; name: string; title: string | null; done: boolean }
+    | {
+        key: string;
+        kind: 'tool';
+        name: string;
+        title: string | null;
+        done: boolean;
+        /** Null while running. The provider says whether it worked; the row has to show it. */
+        ok: boolean | null;
+        output: string | null;
+      }
     | { key: string; kind: 'patch'; diff: string }
     | { key: string; kind: 'agenda'; explanation: string | null; steps: AgendaStep[] }
     | { key: string; kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
@@ -119,6 +129,8 @@
             name: event.name,
             title: event.title,
             done: false,
+            ok: null,
+            output: null,
           };
           tools.set(event.id, row);
           out.push(row);
@@ -126,8 +138,15 @@
         }
 
         case 'tool_finished': {
+          // `ok` and `output` were arriving and being dropped, so a tool that failed rendered
+          // exactly like one that worked — the transcript said a thing had been attempted and never
+          // whether it succeeded.
           const row = tools.get(event.id);
-          if (row) row.done = true;
+          if (row) {
+            row.done = true;
+            row.ok = event.ok;
+            row.output = event.output;
+          }
           break;
         }
 
@@ -238,6 +257,37 @@
     if (usage.cached > 0) parts.push(`${usage.cached.toLocaleString()} cached`);
     return parts.join(' · ');
   }
+
+  /**
+   * What a turn cost, when the provider says.
+   *
+   * Carried on the event since it was added and never drawn. Four decimal places because a turn is
+   * routinely under a cent and `$0.00` for everything tells nobody anything.
+   */
+  function cost(usd: number | null): string | null {
+    if (usd === null || usd <= 0) return null;
+    return `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
+  }
+
+  /**
+   * Split a unified diff into classified lines.
+   *
+   * The gutter character stays in the text and is not replaced by the colour: `_semantic.scss` is
+   * explicit that nothing in this app encodes state in colour alone, and a diff read by someone who
+   * cannot separate red from green is exactly the case that rule exists for.
+   */
+  function diffLines(
+    diff: string,
+  ): { text: string; cls: 'is-add' | 'is-del' | 'is-hunk' | 'is-meta' | '' }[] {
+    return diff.split('\n').map((text) => {
+      if (text.startsWith('+++') || text.startsWith('---'))
+        return { text, cls: 'is-meta' } as const;
+      if (text.startsWith('@@')) return { text, cls: 'is-hunk' } as const;
+      if (text.startsWith('+')) return { text, cls: 'is-add' } as const;
+      if (text.startsWith('-')) return { text, cls: 'is-del' } as const;
+      return { text, cls: '' } as const;
+    });
+  }
 </script>
 
 <div class="c-transcript">
@@ -245,7 +295,9 @@
     {#if row.kind === 'user'}
       <p class="c-transcript__user">{row.text}</p>
     {:else if row.kind === 'assistant'}
-      <p class="c-transcript__said">{row.text}</p>
+      <!-- The one place arbitrary document structure appears. Rendered as elements rather than a
+           string of HTML, so nothing a model writes can become markup — see `markdown.ts`. -->
+      <div class="c-transcript__said"><Markdown source={row.text} /></div>
     {:else if row.kind === 'thinking'}
       <!-- Collapsed by default: thinking is useful when you want it and noise when you do not.
            A `<details>` rather than a state class, because the browser owns the disclosure. -->
@@ -266,12 +318,29 @@
         {/if}
       </div>
     {:else if row.kind === 'tool'}
-      <p class="c-transcript__tool">
-        {row.title ?? row.name}
-        {#if !row.done}<span class="c-status--subtle">running</span>{/if}
-      </p>
+      <div class="c-transcript__tool">
+        <p class="c-transcript__tool-name">
+          {row.title ?? row.name}
+          {#if !row.done}
+            <span class="c-status--subtle">running</span>
+          {:else if row.ok === false}
+            <span class="c-status--danger">failed</span>
+          {/if}
+        </p>
+        {#if row.output}
+          <!-- Collapsed, and only when it failed is it worth opening unprompted — a successful
+               read of a file is not something anyone wants pasted into the conversation. -->
+          <details class="c-transcript__tool-out" open={row.ok === false}>
+            <summary>output</summary>
+            <pre class="c-transcript__out">{row.output}</pre>
+          </details>
+        {/if}
+      </div>
     {:else if row.kind === 'patch'}
-      <pre class="c-transcript__diff">{row.diff}</pre>
+      <pre class="c-transcript__diff">{#each diffLines(row.diff) as line, i (i)}<span
+            class="c-transcript__diff-line {line.cls}"
+            >{line.text}
+</span>{/each}</pre>
     {:else if row.kind === 'agenda'}
       <div class="c-transcript__card">
         {#if row.explanation}<p>{row.explanation}</p>{/if}
@@ -295,7 +364,9 @@
         {row.text}
       </p>
     {:else if row.kind === 'usage'}
-      <p class="c-transcript__usage">{tokens(row.usage)}</p>
+      <p class="c-transcript__usage">
+        {tokens(row.usage)}{#if cost(row.costUsd)}&nbsp;· {cost(row.costUsd)}{/if}
+      </p>
     {:else}
       <!-- An event this build does not know. Shown, because dropping it would lose information
            with no trace, and collapsed, because it is usually not interesting. -->

@@ -1,0 +1,138 @@
+/*
+ * The box you write a turn in: the message, its settings, and Send.
+ *
+ * Components layer. Its own partial rather than more `.c-pane__*` rules, because the pane is chrome
+ * that holds a scroller and this is a control with three parts and its own focus behaviour — the
+ * same split `_transcript.scss` makes against the same file, for the same reason.
+ *
+ * # It is one card, and that is the design
+ *
+ * The predecessor was two siblings: a `.c-pane__settings` strip and a `.c-pane__composer` form,
+ * separated by a hairline. The model and effort therefore read as pane furniture rather than as
+ * settings on the message being written, and the strip looked orphaned above the border. Enclosing
+ * all three states the relationship structurally, and it is what allows `:focus-within` to light
+ * the whole field when the caret is anywhere inside it.
+ *
+ * # The message element does not wear `.c-textarea`, and cannot
+ *
+ * That block is a bordered, filled form control. Inside the card it drew a second frame around the
+ * same thing and brought a resize grip back with it. The obvious fix — override it here — does not
+ * work: components are one partial per block *sorted alphabetically*, so `input` loads after
+ * `composer`, and at equal specificity the later layer wins. Overriding would have meant
+ * `!important` in the components layer, which `CONTRIBUTING.md` forbids, or renaming the partial to
+ * cheat the sort, which is worse.
+ *
+ * So the element carries only `.c-composer__input` and this file restates the one declaration it
+ * genuinely wanted — the `font-family` correction, because a `textarea` inherits `monospace` from
+ * the browser rather than from `elements/_forms.scss`'s `font: inherit` in some engines.
+ */
+
+/* The gutter around the card. On the pane, not the card, so the card's own edges can be measured
+   against the pane's without the padding being part of the thing being measured. */
+.c-pane__foot {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+}
+
+.c-composer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.c-composer:hover {
+  border-color: var(--border-strong);
+}
+
+/*
+ * The whole field lights up, not the textarea inside it.
+ *
+ * `:focus-within` rather than `:focus`, because the focusable child is one of four — the textarea,
+ * two selects and a checkbox — and a ring around whichever one happens to have the caret would make
+ * a single control look like a row of separate ones. The elevation is `--shadow-sm`, which was
+ * defined in both themes and used nowhere until now.
+ */
+.c-composer:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-sm);
+}
+
+/*
+ * The message.
+ *
+ * `SessionPane` sets the height; this states the range it moves in. Both bounds are counted in
+ * lines, because that is the unit a prompt is written in: `3em` is two lines at `line-height: 1.5`
+ * and `12em` is eight. Unlike the previous version there is no border or padding to add back — the
+ * card owns those — so the numbers are the text box itself plus its own `--sp-3` of breathing room.
+ *
+ * Not `vh`, which was an earlier attempt: it measures the window, and this box lives in a pane that
+ * is routinely a quarter of one. A composer allowed 40% of the *window* would push the transcript
+ * out of a split pane entirely, which is the failure `resize: vertical` was removed for.
+ */
+.c-composer__input {
+  width: 100%;
+  min-width: 0;
+  min-height: calc(3em + 2 * var(--sp-3));
+  max-height: calc(12em + 2 * var(--sp-3));
+  overflow-y: auto;
+  /* The script owns the height, and a drag handle would fight it — a dragged composer is also
+     `flex: 0 0 auto`, so it grew without bound and ate the transcript. */
+  resize: none;
+  padding: var(--sp-3);
+  /* The card is the surface; this is only the text in it. */
+  background: transparent;
+  border: 0;
+  /* See the header: `.c-textarea` is not on this element, so its correction is restated. */
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+/* The card already draws the focus state for the whole field; a second ring inside it would be two
+   rings for one control. This is the one place the global `:focus-visible` is deliberately dropped,
+   and it is safe because what replaces it is more visible, not less. */
+.c-composer__input:focus,
+.c-composer__input:focus-visible {
+  outline: none;
+  border: 0;
+}
+
+/*
+ * Settings on the left, the action on the right.
+ *
+ * Wrapping, because the picker can be three controls wide and a pane can be a quarter of the
+ * window. `align-items: end` so that when it does wrap, Send stays on the baseline of the last row
+ * rather than floating against the top of a two-line picker.
+ */
+.c-composer__bar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 0 var(--sp-2) var(--sp-2);
+}
+
+.c-composer__send {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  /* Pushed to the trailing edge even when the picker has wrapped away from it, which
+     `justify-content` alone cannot do once the two are on separate lines. */
+  margin-left: auto;
+}
+
+/* The shortcut. Quiet enough to be ignorable once learned, which is the whole life cycle of a
+   keyboard hint. Hidden on a narrow pane rather than wrapping the button onto its own row. */
+.c-composer__hint {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}

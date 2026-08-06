@@ -1,0 +1,142 @@
+/*
+ * Rendered markdown inside an agent's reply.
+ *
+ * Components layer, and a block of its own rather than more `.c-transcript__*` rules: this is the
+ * one place in the app where arbitrary document structure appears — headings, lists, quotes — and
+ * folding it into the transcript would mean the row vocabulary and the prose vocabulary share a
+ * file and drift into each other.
+ *
+ * # Everything here is a descendant selector, deliberately
+ *
+ * `Markdown.svelte` emits `<p>`, `<ul>`, `<code>` and the rest with no classes, because putting a
+ * class on every node a parser produces would double the size of the renderer to say nothing new.
+ * The layer rules allow this — an element selector may appear as a descendant of a block class —
+ * and `.c-markdown` is that class. Nothing in here may be promoted to a bare element selector, and
+ * nothing may go past two compound parts.
+ *
+ * # Why it is quieter than the app's own type
+ *
+ * A reply is content inside a pane, not a page. `h1` in a document would be a heading two steps
+ * larger than the pane's own title, which reads as the agent shouting over the chrome; so the
+ * component shifts every level down and the largest lands at the app's body size, distinguished by
+ * weight rather than by size. Same argument `_pane.scss` makes for the pane's title.
+ */
+
+.c-markdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  color: var(--fg);
+  line-height: 1.65;
+  /* A model quotes paths, URLs and identifiers with no spaces in them, and one long token would
+     otherwise push the whole pane sideways. */
+  overflow-wrap: anywhere;
+}
+
+/* Runs of prose sit closer together than the block gap, which is sized for a heading meeting a
+   list. Nothing here uses margins: the flex gap owns the rhythm, so a block cannot collapse one. */
+.c-markdown p {
+  margin: 0;
+}
+
+.c-markdown__heading {
+  font-size: var(--step-0);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+}
+
+/* The gap already separates blocks; this is the extra air a new section wants above it, and only
+   when something precedes it. */
+.c-markdown__heading:not(:first-child) {
+  margin-top: var(--sp-2);
+}
+
+/*
+ * Lists stay in normal flow, and the reason is worth recording.
+ *
+ * A flex column with a `gap` is this file's usual way of spacing siblings, and it is wrong here in
+ * two ways at once. Flex *blockifies its children*, so `display: list-item` is lost and every
+ * marker disappears — the bullets and the numbers both. And an item's own text stops being inline:
+ * each run between the nested blocks becomes its own flex line, so `- Every **Send** deadlocked`
+ * renders as three stacked lines and the inline `<code>` in it stretches to the full width like a
+ * banner. Block flow gives correct markers and correct inline runs for free.
+ */
+.c-markdown ul,
+.c-markdown ol {
+  margin: 0;
+  /* Room for the marker without a hanging indent that fights the transcript's left rule. */
+  padding-left: var(--sp-5);
+}
+
+/* The spacing a `gap` would have given, applied to the item instead. `margin-top` on every item and
+   not `li + li`, because a sibling combinator would be a third compound part. The first item's
+   margin is harmless: its parent list is itself a gapped child of `.c-markdown`. */
+.c-markdown li {
+  margin-top: var(--sp-1);
+}
+
+.c-markdown li::marker {
+  color: var(--fg-subtle);
+}
+
+/* An inline literal: a name, a flag, a path. Tinted rather than boxed — a border on something this
+   small in running prose reads as a button. */
+.c-markdown__code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--bg-code);
+  border-radius: var(--r-sm);
+  padding: 0.1em 0.35em;
+}
+
+/*
+ * A fenced block.
+ *
+ * Bounded and self-scrolling for the reason `.c-transcript__out` is: a model asked for a file will
+ * happily quote three hundred lines of it, and an unbounded block buries every row after it. The
+ * pane is a summary; the terminal is where the whole thing lives.
+ */
+.c-markdown__block {
+  position: relative;
+  background: var(--bg-code);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+}
+
+.c-markdown__block pre {
+  margin: 0;
+  padding: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  line-height: 1.55;
+  overflow-x: auto;
+  max-height: 24lh;
+  overflow-y: auto;
+}
+
+/* The language, where a highlighter's theme would otherwise be doing the telling. Positioned rather
+   than in flow so it cannot push the first line of code down and misalign a pasted diff. */
+.c-markdown__lang {
+  position: absolute;
+  top: var(--sp-1);
+  right: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+  pointer-events: none;
+}
+
+.c-markdown blockquote {
+  margin: 0;
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--border);
+  color: var(--fg-muted);
+}
+
+.c-markdown hr {
+  width: 100%;
+  height: 1px;
+  border: 0;
+  background: var(--border);
+}
