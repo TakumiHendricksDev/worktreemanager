@@ -304,10 +304,44 @@ export interface AgentModel {
   efforts: EffortOption[];
 }
 
+/**
+ * How much a permission mode lets a session do without being asked.
+ *
+ * Three tiers rather than a boolean because the middle one is real: `acceptEdits` writes files
+ * without asking but still gates commands. The composer's mode control takes its colour from this,
+ * and it is decided in Rust rather than by a substring test here — a `name.includes('bypass')`
+ * check would rate Codex's `danger-full-access` as safe.
+ */
+export type ModeRisk = 'normal' | 'elevated' | 'unsandboxed';
+
+/** One permission or approval mode a provider offers. */
+export interface AgentMode {
+  /** The provider's own spelling. What goes on the wire, unchanged. */
+  id: string;
+  label: string;
+  description: string | null;
+  isDefault: boolean;
+  risk: ModeRisk;
+}
+
+/**
+ * One thing a session can be asked to do by name — the composer's `/` list.
+ *
+ * A Claude slash command and a Codex skill are the same affordance under two names. `description`
+ * is always null for Claude, whose init line reports names and nothing else, so a missing one is
+ * ordinary rather than an error.
+ */
+export interface AgentSkill {
+  name: string;
+  description: string | null;
+  /** Codex says `user`, `repo`, `system` or `admin`. Null where the provider does not say. */
+  scope: string | null;
+}
+
 /** What an agent can do on this machine. */
 export interface Capability {
   models: AgentModel[];
-  modes: string[];
+  modes: AgentMode[];
   /**
    * True when the models came from asking the CLI rather than from a table compiled into wtm.
    *
@@ -315,8 +349,6 @@ export interface Capability {
    * says which, because a stale list being the CLI's fault and being ours are different problems.
    */
   modelsAreLive: boolean;
-  /** Provider switches that are neither model nor effort — Claude's `ultracode`. */
-  flags: Record<string, string>;
 }
 
 /**
@@ -397,8 +429,14 @@ export type AgentEvent =
       providerSessionId: string;
       model: string | null;
       effort: string | null;
+      /**
+       * The mode the provider resolved to, which for Claude wtm cannot otherwise know: it passes
+       * no `--permission-mode`, so `~/.claude/settings.json` is the only thing that decided it.
+       */
+      mode: string | null;
       tools: string[];
     }
+  | { kind: 'skills_listed'; skills: AgentSkill[] }
   | { kind: 'turn_started'; turn: string }
   | { kind: 'turn_finished'; turn: string; usage: AgentUsage; costUsd: number | null }
   | { kind: 'user_echo'; text: string }

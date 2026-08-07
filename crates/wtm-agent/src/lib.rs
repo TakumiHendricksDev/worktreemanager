@@ -45,7 +45,7 @@ pub mod codex;
 pub mod provider;
 pub mod session;
 
-pub use capability::claude_capability;
+pub use capability::{claude_capability, codex_modes};
 pub use catalogue::{CATALOGUE, ProviderEntry, entry};
 pub use provider::{Provider, ProviderId, SessionRequest, Step};
 pub use session::AgentSession;

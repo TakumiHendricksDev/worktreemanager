@@ -120,6 +120,71 @@
   padding: 0 var(--sp-2) var(--sp-2);
 }
 
+/*
+ * The picker is what gives way when the row runs out of room: `+` is one square and Send is the
+ * action, so neither should be the thing that wraps first.
+ *
+ * `flex: 1 1 0`, and the zero basis is the whole point. With `auto` the picker's base size is its
+ * *content* width — three pills, about 430px — so in a quarter-width pane it did not fit beside the
+ * 22px `+` at all and took a flex line to itself before its pills started wrapping among
+ * themselves. Measured: at 260px the toolbar is **84px** tall with a zero basis and **112px** with
+ * `auto` or with no rule at all, and at 520px all three are 31px. One row saved where it is
+ * scarcest, nothing given up where it is not.
+ */
+.c-composer__bar > .c-model-picker {
+  flex: 1 1 0;
+}
+
+/*
+ * The `+` that adds files, and the menu hiding under it.
+ *
+ * Styled here rather than borrowing `.c-button--quiet` because it is not a button: it is an
+ * `o-overlay-select` trigger, so the visible mark is a drawn `<span>` with an invisible `<select>`
+ * stretched over it. Giving it the button block would have meant a button element's states applying
+ * to something that cannot receive them — the real control is the transparent one on top.
+ *
+ * Sized against the pills beside it, not against a button. It shares a row with
+ * `.c-model-picker__trigger`, so the two have to agree on height or the row develops a step in it.
+ */
+.c-composer__add {
+  display: flex;
+  flex: 0 0 auto;
+  /* Against the bar's `align-items: end`, which exists so Send keeps the last row's baseline. That
+     is right for Send and wrong here: on a narrow pane the picker beside this wraps to three lines
+     and becomes one tall flex item, so an end-aligned `+` sank to the bottom of it — level with the
+     mode pill, a row and a half below the row it belongs to. Top-aligned it stays next to the model
+     pill, which is where it reads as the first control rather than a stray one. */
+  align-self: start;
+  border-radius: var(--r-sm);
+  color: var(--fg-subtle);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.c-composer__add:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* The ring is the wrapper's job here, as everywhere this object is used: the select on top is
+   transparent, so its own focus ring would be invisible. */
+.c-composer__add:focus-within {
+  background: var(--bg-hover);
+  color: var(--fg);
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Square, and matching `.c-model-picker__value`'s vertical padding so the icon's centre lands on
+   the pills' text baseline rather than a pixel above it. */
+.c-composer__addmark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px var(--sp-1);
+}
+
 .c-composer__send {
   display: flex;
   align-items: center;

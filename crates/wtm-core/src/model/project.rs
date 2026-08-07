@@ -851,9 +851,6 @@ pub struct AgentSpec {
     /// to be kept in step with two CLIs this app does not control.
     #[serde(default)]
     pub mode: Option<String>,
-    /// Provider switches that are neither model nor effort — Claude's `ultracode`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub flags: Vec<String>,
     /// Appended to the argv the catalogue builds.
     ///
     /// Templated, like every other argv in this file, and subject to `[[guards.forbid]]` at spawn

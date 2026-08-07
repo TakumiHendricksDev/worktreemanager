@@ -12,10 +12,15 @@
    * The alternative — a `SessionPane` that only wraps and delegates — was tried and abandoned: it
    * meant every prop passed twice and every state class defined twice.
    */
+  import { getCurrentWebview } from '@tauri-apps/api/webview';
+  import { open } from '@tauri-apps/plugin-dialog';
+
   import { sessions, type Pane } from '../state/sessions.svelte';
+  import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
   import AgentTranscript from './AgentTranscript.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import ModelPicker from './ModelPicker.svelte';
+  import Suggest from './Suggest.svelte';
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -179,6 +184,8 @@
   });
 
   let composer = $state<HTMLTextAreaElement | null>(null);
+  /** The composer card. The drop target's bounds — see the drag-drop effect for why it is needed. */
+  let form = $state<HTMLElement | null>(null);
 
   function onScroll() {
     if (!scroller) return;
@@ -229,10 +236,207 @@
    *
    * That way round because an agent prompt is routinely several lines — a stack trace, a diff, a list
    * of files — and a composer where Enter submits makes pasting one an accident.
+   *
+   * The typeahead borrows Enter, Tab, the arrows and Escape, but **only while it is open** — which
+   * is why every branch here is guarded on `query !== null` rather than on a mode flag. A composer
+   * that swallowed Enter because a menu was open a moment ago is the failure this shape avoids.
    */
   function onKeydown(event: KeyboardEvent) {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') void submit(event);
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      void submit(event);
+      return;
+    }
+    if (query === null || suggestions.length === 0) return;
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      // Wraps, because a list this short is faster to reach from either end than to walk back
+      // along. `+ length` keeps the modulo positive when going up from zero.
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      active = (active + step + suggestions.length) % suggestions.length;
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      const chosen = suggestions[active];
+      if (chosen) pick(chosen.value);
+    } else if (event.key === 'Escape') {
+      // Dismissed without touching the draft, so a `/` typed as literal text survives. The trigger
+      // is still there, so the strip would reopen — `dismissed` is what remembers the refusal.
+      event.preventDefault();
+      dismissed = draft.slice(0, caret);
+    }
   }
+
+  // ── The `@` and `/` typeahead ───────────────────────────────────────────────────────────────
+  //
+  // The logic lives in `../suggest`, deliberately: there is no JS test runner here, so anything
+  // reachable only by typing into a live textarea cannot be checked. What is left in this file is
+  // the parts that genuinely need the DOM — where the caret is, and putting text back.
+
+  /**
+   * The caret, mirrored into state.
+   *
+   * `selectionStart` is not reactive, so the strip has to be recomputed from an explicit signal
+   * rather than read during render. Updated on input, click and keyup — the three ways a caret
+   * moves — because an arrow key that only moves the caret fires none of the other two.
+   */
+  let caret = $state(0);
+  let active = $state(0);
+  /**
+   * The draft-prefix an Escape was pressed against.
+   *
+   * Escape has to mean "not this one" rather than "not ever", and the trigger character is still in
+   * the text, so something has to distinguish the dismissed state from a fresh one. Comparing the
+   * text before the caret does it: type one more character and this no longer matches, so the strip
+   * comes back — which is right, because the query changed.
+   */
+  let dismissed = $state<string | null>(null);
+
+  const query = $derived.by(() => {
+    if (provider === null) return null;
+    const found = queryAt(draft, caret);
+    if (found === null || draft.slice(0, caret) === dismissed) return null;
+    return found;
+  });
+
+  const suggestions = $derived.by(() => {
+    if (query === null) return [];
+    return query.kind === 'file'
+      ? matchFiles(sessions.files[pane.worktreeId] ?? [], query.text)
+      : matchSkills(pane.skills, query.text);
+  });
+
+  // Back to the top whenever the offered set changes. Without this, narrowing a query from ten
+  // matches to two leaves the selection on an index that no longer exists — or worse, on a
+  // different row than the one that was highlighted a keystroke ago.
+  $effect(() => {
+    void suggestions;
+    active = 0;
+  });
+
+  /**
+   * Fill the `@` list the first time a pane needs it.
+   *
+   * On first `@` rather than on mount: this shells out to `git ls-files`, and a window with eight
+   * panes open would otherwise run eight of them at startup for a list most sessions never use.
+   */
+  $effect(() => {
+    if (query?.kind !== 'file') return;
+    if (sessions.files[pane.worktreeId] !== undefined) return;
+    void sessions.loadFiles(pane.worktreeId);
+  });
+
+  function noteCaret(event: Event) {
+    caret = (event.currentTarget as HTMLTextAreaElement).selectionStart;
+    // Any movement invalidates a previous Escape — see `dismissed`.
+    if (dismissed !== null && draft.slice(0, caret) !== dismissed) dismissed = null;
+  }
+
+  function pick(value: string) {
+    if (query === null) return;
+    const next = accept(draft, query, value);
+    draft = next.draft;
+    caret = next.caret;
+    dismissed = null;
+    // The caret has to be moved on the element too, not only in our mirror of it: Svelte writes
+    // `value`, which puts the real caret at the end of the whole draft rather than after what was
+    // just inserted. Deferred one tick so it runs after that write.
+    const el = composer;
+    if (el)
+      queueMicrotask(() => {
+        el.focus();
+        el.setSelectionRange(next.caret, next.caret);
+      });
+  }
+
+  /**
+   * Put paths into the draft, from the picker or from a drop.
+   *
+   * Appended at the end rather than at the caret, unlike an accepted suggestion. Both of these
+   * arrive from *outside* the keyboard — a dialog that took focus, a drop that never had it — so
+   * there is no meaningful caret to insert at, and guessing at the last one is how a path lands in
+   * the middle of a word.
+   */
+  function addPaths(paths: string[]) {
+    const mentions = paths.map((p) => `@${relativise(p, pane.worktreeId)}`).join(' ');
+    if (mentions === '') return;
+    const gap = draft === '' || draft.endsWith(' ') || draft.endsWith('\n') ? '' : ' ';
+    draft = `${draft}${gap}${mentions} `;
+    caret = draft.length;
+    composer?.focus();
+  }
+
+  /**
+   * The `+` button: the OS picker, rooted at the worktree.
+   *
+   * Covers what the typeahead cannot — directories, and anything outside the repository or inside
+   * `.gitignore`. `dialog:allow-open` is already granted for the Browse… button in Add a
+   * repository, so this needs no new permission and no new dependency.
+   */
+  function onAdd(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const choice = select.value;
+    // Back to the sentinel immediately, so the control reads "Add…" again rather than keeping the
+    // last action as if it were a setting. Reset before the await, because the dialog is modal and
+    // the stale label would be on screen underneath it for as long as it is open.
+    select.value = '';
+    if (choice === '') return;
+    void browse(choice === 'folders');
+  }
+
+  async function browse(directory: boolean) {
+    const picked = await open({
+      multiple: true,
+      directory,
+      defaultPath: pane.worktreeId,
+      title: directory ? 'Add folders' : 'Add files',
+    });
+    if (picked === null) return;
+    addPaths(Array.isArray(picked) ? picked : [picked]);
+  }
+
+  /**
+   * Files dropped from Finder onto this pane's composer.
+   *
+   * Registered per pane and filtered by position, because Tauri's drag-drop is a **window** event —
+   * there is one stream for every pane in the window, and each listener sees every drop. The
+   * position is physical, so it is divided by the device pixel ratio before being handed to
+   * `elementFromPoint`, which works in CSS pixels; skipping that puts the hit test at roughly twice
+   * the intended coordinates on any Retina display, which is every Mac this ships to.
+   *
+   * The window-level handler is also why `dragDropEnabled` had to be turned on in `tauri.conf.json`,
+   * and that has a real cost: it disables HTML5 drag events across the whole webview. The trade is
+   * worth it — a webview drop event cannot see a real path, which is the only thing an agent can
+   * use — but it is a whole-window change made for one control.
+   */
+  $effect(() => {
+    if (provider === null) return;
+    let stop: (() => void) | null = null;
+    let gone = false;
+
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== 'drop') return;
+        const ratio = window.devicePixelRatio || 1;
+        const at = document.elementFromPoint(
+          event.payload.position.x / ratio,
+          event.payload.position.y / ratio,
+        );
+        if (at === null || form === null || !form.contains(at)) return;
+        addPaths(event.payload.paths);
+      })
+      .then((unlisten) => {
+        // The subscription resolves asynchronously, so a pane closed in between would otherwise
+        // leak a listener that outlives it — and every drop after that would append to a draft
+        // nobody can see.
+        if (gone) unlisten();
+        else stop = unlisten;
+      });
+
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  });
 </script>
 
 <!--
@@ -344,7 +548,19 @@
       it is also what lets the whole thing take the focus ring as a unit.
     -->
     <div class="c-pane__foot">
-      <form class="c-composer" onsubmit={(event) => void submit(event)}>
+      <form class="c-composer" bind:this={form} onsubmit={(event) => void submit(event)}>
+        {#if suggestions.length > 0}
+          <!-- First child, so the card grows *upward* around it and the message stays where the
+               caret already is. In the flow rather than floating: see the component's own header
+               for why that is the design and not a limitation. -->
+          <Suggest
+            id="suggest-{pane.id}"
+            items={suggestions}
+            {active}
+            onpick={(value) => pick(value)}
+          />
+        {/if}
+
         <!-- Deliberately NOT `.c-textarea`. That block is a bordered, filled form control, and its
              partial sorts after this one in `main.scss` — so at equal specificity it won, and the
              card ended up with a second bordered box and a resize grip inside it. The two
@@ -352,18 +568,62 @@
         <textarea
           class="c-composer__input"
           bind:this={composer}
-          placeholder="Ask {label}…"
+          placeholder="Ask {label}… — @ for files, / for skills"
           aria-label="Message {label}"
           bind:value={draft}
+          oninput={noteCaret}
+          onclick={noteCaret}
+          onkeyup={noteCaret}
           onkeydown={onKeydown}
+          role="combobox"
+          aria-expanded={suggestions.length > 0}
+          aria-controls="suggest-{pane.id}"
+          aria-activedescendant={suggestions.length > 0
+            ? `suggest-${pane.id}-${active}`
+            : undefined}
           disabled={pane.ended !== null || pane.error !== null}></textarea>
 
         <div class="c-composer__bar">
+          <!--
+            Files first, then what will run them, then Send: the row reads left to right in the
+            order a turn is assembled. Icon-only, because the pills beside it are already three
+            words wide on a quarter-width pane and a `+` next to a message box is not ambiguous.
+
+            A menu rather than a plain button, because macOS separates the two dialogs: one picks
+            files, another picks directories, and there is no "either" mode to fall back on. So the
+            second entry is not a shortcut for the first — it is the only route to the other one,
+            and hiding it behind a right-click would make folders undiscoverable.
+
+            `o-overlay-select` for the same reason the model pills use it: the native popup renders
+            outside the stacking context, so this needs no third z-index. Fifth use of the idiom.
+          -->
+          <span class="c-composer__add o-overlay-select">
+            <span class="c-composer__addmark" aria-hidden="true">
+              <Icon name="plus" size={14} />
+            </span>
+            <!-- The sentinel is selectable and does nothing rather than `disabled`, because a
+                 disabled option cannot reliably be re-selected programmatically — and this control
+                 has to return to it after every use. Same note as `OpenInButton`. -->
+            <select
+              class="o-overlay-select__native"
+              aria-label="Add files or folders"
+              value=""
+              disabled={pane.ended !== null || pane.error !== null}
+              title="Add files or folders, or drop them here"
+              onchange={onAdd}
+            >
+              <option value="">Add…</option>
+              <option value="files">Files…</option>
+              <option value="folders">Folders…</option>
+            </select>
+          </span>
+
           <ModelPicker
             {capability}
             model={pane.model}
             effort={pane.effort}
-            flags={pane.flags}
+            mode={pane.mode}
+            effortPending={pane.effortPending}
             disabled={pane.ended !== null || pane.error !== null}
             onchange={(next) => sessions.configure(pane.id, next)}
           />

@@ -1,0 +1,95 @@
+/*
+ * The `@` and `/` rows, inside the composer card.
+ *
+ * Components layer. Its own partial rather than more `.c-composer__*` rules, because this is a
+ * listbox with a selection state and its own scroller — the same split `_transcript.scss` and
+ * `_composer.scss` already make against `_pane.scss`.
+ *
+ * # It lives in the flow, and every rule here follows from that
+ *
+ * No `position`, no `z-index`, no `transform`. A floating menu would need all three plus a portal,
+ * and `settings/_config.scss` allows exactly two stacking levels. So the strip is an ordinary block
+ * at the top of the card and the card grows upward around it, which is why there is a bottom border
+ * rather than a full one: it is a *region of* the field, not a thing on top of it.
+ */
+
+/*
+ * The bound is in `em`, deliberately, and matches how `.c-composer__input` states its own.
+ *
+ * Both boxes are counted in lines because that is the unit a list of names is read in — `14em` is
+ * roughly eight rows at this row height. In a quarter-width pane the composer already owns the
+ * bottom of the pane; an unbounded list of a few thousand files would own all of it.
+ */
+.c-suggest {
+  display: flex;
+  flex-direction: column;
+  max-height: 14em;
+  overflow-y: auto;
+  /* Reaches the card's inner edge rather than sitting inside the textarea's padding, so a
+     highlighted row is a full-width band. A ragged highlight is much harder to scan — the same
+     reason `.c-transcript__diff-line` is a block. */
+  padding: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+/*
+ * One row: what you typed towards on the left, where it is on the right.
+ *
+ * `align-items: baseline` so the two columns sit on one line even though they are different sizes,
+ * and `gap` rather than a margin so a row with no detail has no trailing space to explain.
+ */
+.c-suggest__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 3px var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: var(--step--1);
+}
+
+/*
+ * The selection.
+ *
+ * One class for both the arrow keys and the pointer, because they are the same state — a row the
+ * next Enter would take. Hover and keyboard diverging is how a list ends up showing two selections
+ * at once and acting on the one you are not looking at.
+ */
+.c-suggest__row:hover,
+.c-suggest__row.is-active {
+  background: var(--bg-hover);
+}
+
+/* Never colour alone: the active row is also the one the caret's Enter takes, which is stated by
+   `aria-selected` for a screen reader and by position for everyone else. */
+.c-suggest__row.is-active {
+  color: var(--fg);
+}
+
+/* The filename or the skill name — what was actually typed towards, so it does not shrink. */
+.c-suggest__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+/*
+ * The directory, or the description.
+ *
+ * Given up first when the pane is narrow — `flex-shrink` is the default and the label above resists
+ * — because a truncated *name* is unusable where a truncated path is merely less helpful. Aligned
+ * right so the column of names on the left stays a column.
+ */
+.c-suggest__detail {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}

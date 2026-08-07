@@ -30,8 +30,6 @@
 //! [`TurnFinished`](AgentEvent::TurnFinished) has one — but pricing Codex's tokens ourselves to
 //! fill it in would put a number on screen that goes stale silently.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 /// How hard a provider was asked to think.
@@ -150,8 +148,28 @@ pub enum AgentEvent {
         provider_session_id: String,
         model: Option<String>,
         effort: Option<Effort>,
+        /// The permission or approval mode the provider says it resolved to.
+        ///
+        /// Load-bearing for Claude, where wtm deliberately passes no `--permission-mode` so as not
+        /// to override `~/.claude/settings.json` — see `ProviderEntry::default_mode`. Without this
+        /// the UI would have to *guess* which mode a session is in, and the guess would be wrong
+        /// for exactly the users who cared enough to configure one.
+        mode: Option<String>,
         /// Tool names the provider says it has. For display only — wtm does not gate on it.
         tools: Vec<String>,
+    },
+    /// What the session can be asked to do by name, for the composer's `/` list.
+    ///
+    /// Its own event rather than a field on [`SessionReady`](AgentEvent::SessionReady) because
+    /// the two providers learn it at different times. Claude puts the whole list on its `init`
+    /// line, so it could have ridden along; Codex has to be *asked*, and its answer comes back
+    /// several frames after the thread is already open and usable. A field would have meant
+    /// either delaying readiness behind a list nobody is blocked on, or one provider filling it
+    /// and the other always sending an empty vector.
+    ///
+    /// Replaces rather than appends: a provider that answers twice is correcting itself.
+    SkillsListed {
+        skills: Vec<AgentSkill>,
     },
     TurnStarted {
         turn: String,
@@ -300,19 +318,66 @@ pub struct EffortOption {
     pub description: Option<String>,
 }
 
+/// One thing a session can be asked to do by name.
+///
+/// A Claude slash command and a Codex skill are the same affordance under two names, so they
+/// share a type. `description` is `None` for Claude, which reports names and nothing else — the
+/// UI must therefore treat a missing description as ordinary rather than as an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSkill {
+    pub name: String,
+    pub description: Option<String>,
+    /// Where it came from, in the provider's own words — Codex says `user`, `repo`, `system`
+    /// or `admin`. `None` where the provider does not say.
+    pub scope: Option<String>,
+}
+
+/// How much a permission mode lets a session do without asking.
+///
+/// Three tiers rather than a boolean because the middle one is real: `acceptEdits` writes files
+/// without asking but still gates commands, which is neither "asks about everything" nor "does
+/// anything at all". The UI colours the mode control from this, so the tiers have to be the
+/// provider-independent question — *how surprised could I be by what this does* — rather than a
+/// mirror of either CLI's vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeRisk {
+    /// Asks before anything that changes the world.
+    Normal,
+    /// Acts without asking, inside a sandbox or a narrowed set of actions.
+    Elevated,
+    /// Acts without asking and without a sandbox.
+    Unsandboxed,
+}
+
+/// One permission or approval mode a provider offers.
+///
+/// Structured rather than the bare `Vec<String>` this replaced, for two reasons. `bypassPermissions`
+/// is a wire value, not a label, and capitalising it in Svelte would be this app inventing display
+/// names for another program's settings — the same argument [`AgentModel`] already makes. And the
+/// risk tier has to be decided where the mode's meaning is known: a `name.includes('bypass')` test
+/// in the frontend would silently rate Codex's `danger-full-access` as safe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMode {
+    /// The provider's own spelling. This is what goes on the wire, unchanged.
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub is_default: bool,
+    pub risk: ModeRisk,
+}
+
 /// What a provider can do on this machine, as answered at runtime where possible.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCapability {
     pub models: Vec<AgentModel>,
-    /// Permission or approval modes this provider accepts, in the provider's own spelling.
-    pub modes: Vec<String>,
+    /// Permission or approval modes this provider accepts.
+    pub modes: Vec<AgentMode>,
     /// True when [`Self::models`] came from asking the CLI rather than from a compiled table.
     ///
     /// Surfaced so the UI can say "as reported by codex" versus "as of this wtm build", which
     /// is the difference between a stale list being the CLI's fault and being ours.
     pub models_are_live: bool,
-    /// Provider-specific switches that are neither model nor effort — Claude's `ultracode`,
-    /// which is a boolean requiring effort at or above `xhigh`, not a sixth rung.
-    pub flags: BTreeMap<String, String>,
 }

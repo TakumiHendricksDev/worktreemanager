@@ -38,7 +38,9 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-use wtm_core::model::{AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage};
+use wtm_core::model::{
+    AgentEvent, AgentSkill, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
+};
 
 use crate::provider::{Protocol, Provider, ProviderId, SessionRequest, Step};
 
@@ -49,6 +51,20 @@ const COMMAND_TOOLS: &[&str] = &["Bash", "BashOutput", "KillShell"];
 
 /// Tools whose approval is really "change these files".
 const FILE_TOOLS: &[&str] = &["Write", "Edit", "NotebookEdit", "MultiEdit"];
+
+/// The settings overlay that turns the `ultracode` rung on. Merged, not replacing — `--help` calls
+/// it "additional settings", so a user's own `settings.json` survives.
+const ULTRACODE_SETTINGS: &str = r#"{"ultracode":true}"#;
+
+/// The one mode this CLI spells two ways, resolved to the one the flag accepts.
+///
+/// `--permission-mode` takes `manual`; the `init` message reports the same state as `default`. Both
+/// mean "ask", and the CLI's own help calls `manual` an accepted alias for `default`. Everything
+/// else passes through untouched, including a mode a future release adds and this build has never
+/// heard of — the field is a free string end to end for the same reason `model` is.
+fn canonical_mode(mode: &str) -> &str {
+    if mode == "default" { "manual" } else { mode }
+}
 
 #[derive(Debug)]
 pub struct Claude;
@@ -97,13 +113,28 @@ impl Provider for Claude {
             argv.push("--model".to_owned());
             argv.push(model.clone());
         }
+        // `ultracode` is the top rung of the CLI's own `/effort` ladder but the *flag* rejects it —
+        // `--effort` takes `low|medium|high|xhigh|max` and nothing else. The programmatic route is
+        // the `ultracode` settings key, which the CLI documents as settable "via --settings or
+        // apply_flag_settings". So the rung is translated into the pair that actually means it.
+        //
+        // `max` rather than the documented minimum of `xhigh`, because the ladder puts ultracode
+        // above max and a user who picks the top rung should not quietly get less reasoning than
+        // the rung below it.
         if let Some(effort) = &req.effort {
-            argv.push("--effort".to_owned());
-            argv.push(effort.clone());
+            if effort == crate::capability::ULTRACODE {
+                argv.push("--effort".to_owned());
+                argv.push("max".to_owned());
+                argv.push("--settings".to_owned());
+                argv.push(ULTRACODE_SETTINGS.to_owned());
+            } else {
+                argv.push("--effort".to_owned());
+                argv.push(effort.clone());
+            }
         }
         if let Some(mode) = &req.mode {
             argv.push("--permission-mode".to_owned());
-            argv.push(mode.clone());
+            argv.push(canonical_mode(mode).to_owned());
         }
         if let Some(mcp) = &req.mcp_config {
             argv.push("--mcp-config".to_owned());
@@ -350,6 +381,21 @@ impl ClaudeProtocol {
     }
 
     /// The frame that answers a control request.
+    /// A control request *from* wtm, in the direction the channel is least documented in.
+    ///
+    /// The id is ours to choose and no caller waits on the reply — a failure surfaces as the
+    /// `Notice` that `on_line` makes out of an error `control_response`, not as a return value.
+    fn control_request(request: &Value) -> Step {
+        Step::Write(
+            json!({
+                "type": "control_request",
+                "request_id": uuid::Uuid::new_v4().to_string(),
+                "request": request,
+            })
+            .to_string(),
+        )
+    }
+
     fn control_response(request_id: &str, response: &Value) -> Step {
         Step::Write(
             json!({
@@ -404,32 +450,59 @@ impl Protocol for ClaudeProtocol {
         match kind {
             "system" => match message.get("subtype").and_then(Value::as_str) {
                 Some("init") => {
-                    let tools = message
-                        .get("tools")
-                        .and_then(Value::as_array)
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect()
+                    let names = |key: &str| -> Vec<String> {
+                        message
+                            .get(key)
+                            .and_then(Value::as_array)
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_owned)
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    };
+
+                    // The CLI's own merged list of user, project, plugin and built-in commands —
+                    // `--help` calls them skills too ("--disable-slash-commands: Disable all
+                    // skills"). Names only: `init` carries no descriptions, and re-deriving them by
+                    // scanning `~/.claude/skills` would be this app re-implementing another
+                    // program's discovery rules and going stale the first time they changed.
+                    let skills = names("slash_commands")
+                        .into_iter()
+                        .map(|name| AgentSkill {
+                            name,
+                            description: None,
+                            scope: None,
                         })
-                        .unwrap_or_default();
-                    vec![
-                        Step::Emit(AgentEvent::SessionReady {
-                            provider_session_id: message
-                                .get("session_id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_owned(),
-                            model: message
-                                .get("model")
-                                .and_then(Value::as_str)
-                                .map(str::to_owned),
-                            effort: None,
-                            tools,
-                        }),
-                        Step::Ready,
-                    ]
+                        .collect::<Vec<_>>();
+
+                    let mut steps = vec![Step::Emit(AgentEvent::SessionReady {
+                        provider_session_id: message
+                            .get("session_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        model: message
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        effort: None,
+                        // Whatever it resolved to, including from a `settings.json` wtm never saw.
+                        // Normalised because this message and the flag spell the same mode two
+                        // different ways — see `canonical_mode`.
+                        mode: message
+                            .get("permissionMode")
+                            .and_then(Value::as_str)
+                            .map(canonical_mode)
+                            .map(str::to_owned),
+                        tools: names("tools"),
+                    })];
+                    if !skills.is_empty() {
+                        steps.push(Step::Emit(AgentEvent::SkillsListed { skills }));
+                    }
+                    steps.push(Step::Ready);
+                    steps
                 }
                 // Recognised, and deliberately not shown.
                 //
@@ -510,6 +583,32 @@ impl Protocol for ClaudeProtocol {
                             payload: request,
                         })]
                     }
+                }
+            }
+            // The CLI answering one of *our* control requests — an interrupt, a model change, a
+            // mode change. Success is uninteresting by construction: nothing awaits these replies,
+            // so a success row would be a collapsed `Raw` line after every Stop press.
+            //
+            // A failure is very interesting, and this arm is the whole reason the picker is allowed
+            // to change a running session. `set_model` and `set_permission_mode` are read off the
+            // shipped binary rather than out of any published protocol, so a CLI that has renamed
+            // or dropped one answers with an error here — and without this the picker would show
+            // the new value while the session kept using the old one, which is the worst outcome
+            // available for a control that says "bypass permissions".
+            "control_response" => {
+                let response = message.get("response").unwrap_or(&Value::Null);
+                match response.get("subtype").and_then(Value::as_str) {
+                    Some("error") => vec![Step::Emit(AgentEvent::Notice {
+                        level: NoticeLevel::Warn,
+                        message: format!(
+                            "The CLI refused a settings change: {}",
+                            response
+                                .get("error")
+                                .and_then(Value::as_str)
+                                .unwrap_or("no reason given")
+                        ),
+                    })],
+                    _ => Vec::new(),
                 }
             }
             "result" => {
@@ -616,17 +715,35 @@ impl Protocol for ClaudeProtocol {
         ]
     }
 
+    /// Change the model or the permission mode without restarting.
+    ///
+    /// Two more control requests on the channel `interrupt` already uses. Both subtypes are read
+    /// off the shipped CLI rather than out of documentation — like `--permission-prompt-tool` in
+    /// the module header, they are real and unpublished — so the failure mode matters: a subtype
+    /// this CLI version does not know comes back as a `control_response` with `subtype: "error"`,
+    /// which [`Self::on_line`] already turns into a `Notice`. A rejected change therefore says so
+    /// in the transcript instead of leaving the picker quietly lying about the session's state.
+    fn reconfigure(&mut self, model: Option<&str>, mode: Option<&str>) -> Vec<Step> {
+        let mut steps = Vec::new();
+        if let Some(model) = model {
+            steps.push(Self::control_request(&json!({
+                "subtype": "set_model",
+                "model": model,
+            })));
+        }
+        if let Some(mode) = mode {
+            steps.push(Self::control_request(&json!({
+                "subtype": "set_permission_mode",
+                "mode": canonical_mode(mode),
+            })));
+        }
+        steps
+    }
+
     fn interrupt(&mut self) -> Vec<Step> {
         // A control *request* from us to the CLI, which is the one direction that channel runs in
         // both ways. The id is ours to choose and the reply is not interesting.
-        vec![Step::Write(
-            json!({
-                "type": "control_request",
-                "request_id": uuid::Uuid::new_v4().to_string(),
-                "request": { "subtype": "interrupt" },
-            })
-            .to_string(),
-        )]
+        vec![Self::control_request(&json!({ "subtype": "interrupt" }))]
     }
 
     fn abandon(&mut self) -> Vec<Step> {

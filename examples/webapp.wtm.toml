@@ -429,15 +429,20 @@ PATH = "{{ env.LOGIN_PATH }}"
 
 [agent.claude]
 model  = "opus"
-effort = "xhigh"
+# `ultracode` is the top rung, above `max`, because that is where the CLI's own `/effort` menu puts
+# it. It is not more raw reasoning than `max`: it means max plus standing workflow orchestration,
+# and `--effort` will not accept the word, so wtm sends `--effort max` together with the settings
+# key that turns it on. Codex's `ultra` is a different thing with a similar name — a real rung on
+# some of its models, and it appears in that provider's own list.
+effort = "ultracode"
 # `plan` so a session opens read-only on a repo where an unattended edit is expensive. It is the
 # provider's own spelling, not a wtm word: translating it would be a second name for the same thing,
 # needing to be kept in step with a CLI this project does not control.
+#
+# Claude takes `manual`, `acceptEdits`, `plan`, `auto`, `dontAsk` or `bypassPermissions`. Codex is
+# the one place wtm does invent vocabulary — `read-only`, `auto`, `full-access` — because its two
+# settings, an approval policy and a sandbox, have to move together to mean anything.
 mode   = "plan"
-# `ultracode` is NOT a sixth effort tier, however much the name suggests one — it is a switch meaning
-# "xhigh plus standing workflow orchestration", and the CLI refuses it if effort resolves below xhigh.
-# Codex's `ultra` *is* a tier and appears in its effort list. Two similar names, two different things.
-flags  = ["ultracode"]
 
 [agent.claude.env]
 # The load-bearing line for an installed app, exactly as `[setup.env]` needs it: a GUI launch does

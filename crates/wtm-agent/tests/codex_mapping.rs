@@ -109,7 +109,7 @@ fn the_handshake_is_initialize_then_initialized_then_a_thread_carrying_the_cwd()
     let mut driver = Codex.protocol(&SessionRequest {
         cwd: "/tmp/worktree".to_owned(),
         model: Some("gpt-5.6-sol".to_owned()),
-        mode: Some("on-request".to_owned()),
+        mode: Some("auto".to_owned()),
         ..SessionRequest::default()
     });
 
@@ -133,7 +133,11 @@ fn the_handshake_is_initialize_then_initialized_then_a_thread_carrying_the_cwd()
     // The cwd is the whole integration: it is what pins the thread to this worktree.
     assert_eq!(frames[1]["params"]["cwd"], "/tmp/worktree");
     assert_eq!(frames[1]["params"]["model"], "gpt-5.6-sol");
+    // One wtm mode, both protocol fields. Sending `approvalPolicy` alone — which is what this did
+    // before — left the sandbox at whatever `~/.codex/config.toml` said, so two sessions wtm
+    // believed were configured the same could have different filesystem reach.
     assert_eq!(frames[1]["params"]["approvalPolicy"], "on-request");
+    assert_eq!(frames[1]["params"]["sandbox"], "workspace-write");
 
     // Nothing is ready yet: `thread/start` is a second round trip, which is why `Step::Ready`
     // exists apart from the `SessionReady` event.
@@ -808,4 +812,139 @@ fn the_capability_frames_ask_without_the_experimental_capability() {
     assert_eq!(frames[1]["method"], "initialized");
     assert_eq!(frames[2]["method"], "model/list");
     assert_eq!(frames[2]["id"], wtm_agent::codex::MODEL_LIST_ID);
+}
+
+#[test]
+fn each_mode_preset_expands_to_both_protocol_axes() {
+    // The protocol has two independent fields and Codex's own TUI offers three named combinations
+    // of them. wtm offers the same three, so this is the table that has to stay true — a preset
+    // that sent the wrong sandbox would be a control whose label does not describe what it does.
+    for (mode, approval, sandbox) in [
+        ("read-only", "on-request", "read-only"),
+        ("auto", "on-request", "workspace-write"),
+        ("full-access", "never", "danger-full-access"),
+    ] {
+        let mut driver = Codex.protocol(&SessionRequest {
+            cwd: "/tmp/worktree".to_owned(),
+            mode: Some(mode.to_owned()),
+            ..SessionRequest::default()
+        });
+        driver.open();
+        let frames = writes(&driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#));
+        let open = &frames[1]["params"];
+        assert_eq!(open["approvalPolicy"], approval, "{mode} approval");
+        assert_eq!(open["sandbox"], sandbox, "{mode} sandbox");
+    }
+}
+
+#[test]
+fn a_mode_this_build_does_not_know_falls_back_to_the_cautious_preset() {
+    // A `wtm.toml` written against a later version, or a renamed preset. The unsafe direction is
+    // silent: opening the sandbox because a string did not match is how unreviewed writes happen.
+    // Falling back to the middle preset costs the user some approval prompts and nothing else.
+    let mut driver = Codex.protocol(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        mode: Some("yolo-mode-9000".to_owned()),
+        ..SessionRequest::default()
+    });
+    driver.open();
+    let frames = writes(&driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#));
+    assert_eq!(frames[1]["params"]["approvalPolicy"], "on-request");
+    assert_eq!(frames[1]["params"]["sandbox"], "workspace-write");
+}
+
+#[test]
+fn a_turn_re_sends_the_mode_which_is_why_this_provider_needs_no_restart() {
+    // The counterpart to Claude's control requests. Codex has no "change the mode" method at all —
+    // it re-reads these off every `turn/start` — so `reconfigure` writes nothing and the change
+    // rides the next turn instead. Note the key: `sandboxPolicy` here, `sandbox` at thread open.
+    let mut driver = ready_driver();
+    driver.reconfigure(Some("gpt-5.6-luna"), Some("full-access"));
+
+    let frames = writes(&driver.send_turn("go"));
+    let params = &frames[0]["params"];
+    assert_eq!(frames[0]["method"], "turn/start");
+    assert_eq!(params["model"], "gpt-5.6-luna");
+    assert_eq!(params["approvalPolicy"], "never");
+    assert_eq!(params["sandboxPolicy"], "danger-full-access");
+}
+
+#[test]
+fn reconfiguring_codex_writes_nothing_by_itself() {
+    // Deliberate, and the reason it has its own test: a frame here would be a second way to say
+    // the same thing, and a turn already in flight cannot be re-approved anyway. The change is
+    // recorded and lands on the next turn — see the method's docs.
+    let mut driver = ready_driver();
+    assert!(
+        driver
+            .reconfigure(Some("gpt-5.5"), Some("read-only"))
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_skills_list_is_asked_for_after_the_session_is_usable_and_scoped_to_its_worktree() {
+    // Nobody is blocked on the skill list, so gating `Ready` behind it would trade a pane that
+    // opens late for a list the user has not asked to see. And the `cwds` scoping is what stops one
+    // worktree's repo-scoped skills being offered in another's composer.
+    let mut driver = Codex.protocol(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        ..SessionRequest::default()
+    });
+    driver.open();
+    driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#);
+
+    let opened = driver.on_line(
+        r#"{"id":2,"result":{"thread":{"id":"019fd37c-f1e4-7a22-81e7-02200fd6d127","cwd":"/tmp/worktree"}}}"#,
+    );
+    assert!(opened.contains(&Step::Ready), "ready first, then ask");
+
+    let ask = writes(&opened);
+    assert_eq!(ask.len(), 1);
+    assert_eq!(ask[0]["method"], "skills/list");
+    assert_eq!(ask[0]["params"]["cwds"][0], "/tmp/worktree");
+
+    // The reply is grouped by cwd because the method takes several. Disabled entries are in the
+    // answer so a settings UI can grey them out; offering one here would insert a name that does
+    // nothing when sent.
+    let listed = driver.on_line(
+        r#"{"id":3,"result":{"data":[{"cwd":"/tmp/worktree","errors":[],"skills":[
+          {"name":"review","description":"A long model-facing prompt","shortDescription":"Review a diff","enabled":true,"path":"/s/review","scope":"repo"},
+          {"name":"deploy","description":"Ship it","enabled":false,"path":"/s/deploy","scope":"user"},
+          {"name":"plan","description":"Plan the work","enabled":true,"path":"/s/plan","scope":"user"}
+        ]}]}}"#,
+    );
+
+    match events(&listed).first().expect("SkillsListed") {
+        AgentEvent::SkillsListed { skills } => {
+            let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+            assert_eq!(names, ["review", "plan"], "the disabled one is dropped");
+            // `shortDescription` wins where there is one: the schema says the long `description` is
+            // the model-facing prompt, which is the wrong thing to put in a picker.
+            assert_eq!(skills[0].description.as_deref(), Some("Review a diff"));
+            assert_eq!(skills[1].description.as_deref(), Some("Plan the work"));
+            assert_eq!(skills[0].scope.as_deref(), Some("repo"));
+        }
+        other => panic!("expected SkillsListed, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_skills_reply_that_says_nothing_useful_yields_an_empty_list_rather_than_a_failure() {
+    // An older server without the method answers with an error, and this must not take the session
+    // down with it — the composer simply has no `/` list, which is the same state Claude is in
+    // before its init line arrives.
+    let mut driver = Codex.protocol(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        ..SessionRequest::default()
+    });
+    driver.open();
+    driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#);
+    driver.on_line(r#"{"id":2,"result":{"thread":{"id":"t","cwd":"/tmp/worktree"}}}"#);
+
+    let steps = driver.on_line(r#"{"id":3,"result":{"data":[]}}"#);
+    match events(&steps).first().expect("SkillsListed") {
+        AgentEvent::SkillsListed { skills } => assert!(skills.is_empty()),
+        other => panic!("expected SkillsListed, got {other:?}"),
+    }
 }

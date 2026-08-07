@@ -61,6 +61,56 @@
   pointer-events: none;
 }
 
+/*
+ * The two permissive modes, and the one deliberate break from this row's uniform quiet.
+ *
+ * Every other control here looks the same whatever it is set to, which is right: a model is a
+ * model. A permission mode is not — `Manual` and `Bypass permissions` are the difference between
+ * an agent that asks and one that does not, the setting persists silently across every turn, and
+ * it is the only one whose wrong value costs something that cannot be undone.
+ *
+ * The colour is never the signal. `settings/_semantic.scss` forbids that and this is the case the
+ * rule exists for, so the **label changes too** — "Auto", "Bypass permissions" — and the tier comes
+ * from the provider's own capability rather than from a string test in Svelte. What the tint adds
+ * is peripheral: it is legible without reading, which is the whole point for a state you are
+ * supposed to notice you left something in.
+ *
+ * Filled rather than merely tinted text, because these sit at `--step--2` against a card that is
+ * already `--bg-input`; coloured text alone at that size did not survive a glance.
+ */
+.c-model-picker__trigger.is-elevated {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.c-model-picker__trigger.is-unsandboxed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* The value inherits its own colour from `--fg` by default, which would beat the tier's on the one
+   element that carries the label. Chained rather than `!important` — utilities own that. */
+.c-model-picker__trigger.is-elevated .c-model-picker__value,
+.c-model-picker__trigger.is-unsandboxed .c-model-picker__value {
+  color: inherit;
+}
+
+/*
+ * An effort the running session is not using yet has **no styling of its own**, and that is a
+ * decision rather than an omission.
+ *
+ * A dotted underline was tried first and removed after looking at it: `text-decoration` on the
+ * trigger reaches every child, so the pill came out with "Effort", "ultracode" and "on restart" all
+ * dotted, which is three marks for one fact. The pill already says the fact in words, and those
+ * words are the same kind of annotation as the model pill's "as of this build" — which carries no
+ * decoration either. Two annotations in one row that look different would imply a difference that
+ * is not there.
+ *
+ * The class stays on the element as a hook, unstyled. Colour was never a candidate: a status hue
+ * here would put a routine "press Restart" in the same register as `bypassPermissions` two pills
+ * away, which is the one thing this row must not blur.
+ */
+
 .c-model-picker__value {
   display: flex;
   align-items: center;

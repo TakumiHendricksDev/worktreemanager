@@ -198,6 +198,26 @@ export const commands = {
   sendTurn: (session: string, text: string) => invoke<void>('send_turn', { session, text }),
 
   /**
+   * Change a running session's model or mode. `null` leaves one alone.
+   *
+   * Effort is deliberately not here: Claude's is an argv flag read once at startup, so accepting
+   * one would mean silently ignoring it on the provider it matters most on. The composer marks the
+   * effort control as needing a restart instead.
+   */
+  configureSession: (session: string, model: string | null, mode: string | null) =>
+    invoke<void>('configure_session', { session, model, mode }),
+
+  /**
+   * Every file in a worktree worth offering in the composer's `@` list.
+   *
+   * `git ls-files`, so `.gitignore` is honoured — a plain walk would offer `node_modules`, which is
+   * enough paths on its own to make a typeahead feel broken. Paths are relative to the worktree.
+   * Worth caching per worktree: this shells out, and the answer changes only when files do.
+   */
+  listWorktreeFiles: (worktreeId: string) =>
+    invoke<string[]>('list_worktree_files', { worktreeId }),
+
+  /**
    * Answer an outstanding approval.
    *
    * The first answer wins and a second for the same id succeeds silently — the provider removes the

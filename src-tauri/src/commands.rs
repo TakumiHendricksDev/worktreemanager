@@ -1458,6 +1458,95 @@ pub async fn answer_approval(
     .await
 }
 
+/// Change what a running session uses, without restarting it.
+///
+/// `None` for either argument means "leave that one alone", so the picker can change one without
+/// asserting a stale value for the other.
+///
+/// # Why effort is not a parameter
+///
+/// Because only one provider could honour it. Codex re-sends model, effort and both permission
+/// fields on every `turn/start`, so all four are free there. Claude has control requests for the
+/// model and the mode and **none** for effort, which is an argv flag read once at startup — so an
+/// `effort` parameter here would be accepted and silently ignored on the provider it matters most
+/// on. `SessionPane` marks the effort control as needing a restart instead, which is the honest
+/// version of the same information.
+#[tauri::command]
+pub async fn configure_session(
+    app: AppState<'_>,
+    session: String,
+    model: Option<String>,
+    mode: Option<String>,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.with_agent(&session, |agent| {
+            agent.reconfigure(model.as_deref(), mode.as_deref())
+        })
+        .map_err(|e| ErrorView::new("exec", e.to_string()))
+    })
+    .await
+}
+
+/// Every file in a worktree that is worth offering in the composer's `@` list.
+///
+/// `git ls-files --cached --others --exclude-standard`: everything tracked, plus everything
+/// untracked that is not ignored. That set is the point — a plain directory walk would offer
+/// `node_modules` and `target`, which on this repo alone is tens of thousands of paths nobody
+/// wants to reference and enough to make a typeahead feel broken.
+///
+/// It is also why this is `git` rather than a `walkdir` dependency: the ignore rules are already
+/// implemented, correctly, by the tool that owns them, and re-implementing `.gitignore` semantics
+/// well enough to agree with the repository is not a small job.
+///
+/// Paths come back relative to the worktree root and are handed to the model that way. Absolute
+/// paths would be correct too, but they are long, they bury the part that identifies the file, and
+/// they leak the user's home directory into every prompt.
+#[tauri::command]
+pub async fn list_worktree_files(app: AppState<'_>, worktree_id: String) -> Reply<Vec<String>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let inv = wtm_core::ports::exec::Invocation::new(
+            vec![
+                "git".to_owned(),
+                "ls-files".to_owned(),
+                "--cached".to_owned(),
+                "--others".to_owned(),
+                "--exclude-standard".to_owned(),
+                // NUL-separated, because a filename may legally contain a newline and splitting on
+                // one would turn a single odd path into two paths that do not exist.
+                "-z".to_owned(),
+            ],
+            std::path::PathBuf::from(&worktree_id),
+            FILES_TIMEOUT_MS,
+        );
+
+        // `run_allow_failure`: a worktree that has been removed from disk, or a directory that is
+        // not a repository, is an empty list rather than a banner. This backs a convenience, and
+        // the composer still works without it — the user types the path.
+        let output = app
+            .runner
+            .run_allow_failure(&inv, &wtm_core::ports::exec::CancelToken::new())
+            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+        if !output.is_success() {
+            tracing::debug!(stderr = %output.stderr, "could not list worktree files");
+            return Ok(Vec::new());
+        }
+
+        Ok(output
+            .stdout
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect())
+    })
+    .await
+}
+
+/// How long to wait for `git ls-files`. Generous for a cold cache on a large repository, short
+/// enough that a hung git does not leave the `@` list spinning.
+const FILES_TIMEOUT_MS: u64 = 5_000;
+
 /// Ask a session to stop the turn it is running.
 #[tauri::command]
 pub async fn interrupt_turn(app: AppState<'_>, session: String) -> Reply<()> {
@@ -1589,12 +1678,11 @@ pub async fn agent_capability(app: AppState<'_>, agent_id: String) -> Reply<Capa
         }
 
         let mut capability = probe_codex(&app).map_err(|e| ErrorView::new("exec", e))?;
-        // The modes are the app server's own spelling, which it does not enumerate — the schema
-        // does. Compiled in rather than queried, and the query is only for the part that moves.
-        capability.modes = ["untrusted", "on-request", "never"]
-            .iter()
-            .map(|m| (*m).to_owned())
-            .collect();
+        // Compiled in rather than queried, and the query is only for the part that moves. There is
+        // a `permissionProfile/list` method, but it answers with the *user's named profiles* rather
+        // than with the vocabulary the protocol accepts, so it is the wrong question for a picker
+        // that has to offer the same three choices on every machine.
+        capability.modes = wtm_agent::codex_modes();
         let _ = entry;
         Ok(CapabilityView::from(capability))
     })
@@ -1682,9 +1770,10 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
     }
     Ok(wtm_core::model::AgentCapability {
         models,
+        // Filled in by the caller, which is the only place that knows the modes are a compiled
+        // table while the models beside them are live.
         modes: Vec::new(),
         models_are_live: true,
-        flags: std::collections::BTreeMap::new(),
     })
 }
 

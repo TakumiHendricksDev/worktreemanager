@@ -34,7 +34,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 use wtm_core::model::{
-    AgendaStatus, AgendaStep, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
+    AgendaStatus, AgendaStep, AgentEvent, AgentSkill, ApprovalAnswer, ApprovalRequest, NoticeLevel,
+    Usage,
 };
 
 use crate::provider::{Protocol, Provider, ProviderId, SessionRequest, Step};
@@ -97,6 +98,9 @@ struct CodexProtocol {
     /// keeping a map of every id ever sent.
     init_id: Option<i64>,
     open_id: Option<i64>,
+    /// The `skills/list` request id, cleared when its reply arrives. `None` the rest of the time,
+    /// which is most of a session's life.
+    skills_id: Option<i64>,
     thread_id: Option<String>,
     /// Turns submitted before the handshake finished, replayed once it does.
     ///
@@ -193,6 +197,7 @@ impl CodexProtocol {
             next_id: 1,
             init_id: None,
             open_id: None,
+            skills_id: None,
             thread_id: None,
             queued: Vec::new(),
             pending: BTreeMap::new(),
@@ -227,7 +232,12 @@ impl CodexProtocol {
             params["model"] = json!(model);
         }
         if let Some(mode) = &self.req.mode {
-            params["approvalPolicy"] = json!(mode);
+            let (approval, sandbox) = expand_mode(mode);
+            params["approvalPolicy"] = json!(approval);
+            // The half that used to be missing. Sending only `approvalPolicy` left the sandbox at
+            // whatever `~/.codex/config.toml` said, so two sessions wtm believed were configured
+            // identically could have different filesystem reach.
+            params["sandbox"] = json!(sandbox);
         }
 
         let method = if let Some(resume) = self.req.resume.clone() {
@@ -255,6 +265,15 @@ impl CodexProtocol {
         }
         if let Some(effort) = &self.req.effort {
             params["effort"] = json!(effort);
+        }
+        // Same argument as model and effort, and the reason this provider needs no restart to
+        // change its mode. Note the key: `turn/start` spells it `sandboxPolicy` where
+        // `thread/start` spells it `sandbox`. Two names for one setting, both taken from the
+        // generated schema rather than guessed.
+        if let Some(mode) = &self.req.mode {
+            let (approval, sandbox) = expand_mode(mode);
+            params["approvalPolicy"] = json!(approval);
+            params["sandboxPolicy"] = json!(sandbox);
         }
         let (_, step) = self.request("turn/start", &params);
         Some(step)
@@ -305,10 +324,21 @@ impl CodexProtocol {
                     provider_session_id: thread,
                     model: self.req.model.clone(),
                     effort: self.req.effort.clone(),
+                    mode: self.req.mode.clone(),
                     tools: Vec::new(),
                 }),
                 Step::Ready,
             ];
+
+            // Asked for after the session is usable, never before it. Skills are a composer
+            // convenience and nobody is blocked on them, so gating `Ready` behind this reply would
+            // trade a pane that opens late for a list nobody has asked to see yet.
+            //
+            // Scoped to this worktree: the method takes `cwds` and resolves repo-scoped skills
+            // against each, so a session in one worktree must not offer another's.
+            let (id, step) = self.request("skills/list", &json!({ "cwds": [self.req.cwd] }));
+            self.skills_id = Some(id);
+            steps.push(step);
 
             for text in std::mem::take(&mut self.queued) {
                 if let Some(step) = self.turn_frame(&text) {
@@ -316,6 +346,13 @@ impl CodexProtocol {
                 }
             }
             return steps;
+        }
+
+        if Some(id) == self.skills_id {
+            self.skills_id = None;
+            return vec![Step::Emit(AgentEvent::SkillsListed {
+                skills: parse_skills(message),
+            })];
         }
 
         // A reply to something we sent and no longer care about — a `turn/start`
@@ -601,6 +638,27 @@ impl Protocol for CodexProtocol {
         })]
     }
 
+    /// Change the model or the mode on a running thread.
+    ///
+    /// No frame is written, and that is the whole implementation: `turn_frame` re-sends `model`,
+    /// `effort`, `approvalPolicy` and `sandboxPolicy` on *every* `turn/start`, and the server
+    /// treats each as "this turn and subsequent ones". So the change lands by mutating the request
+    /// the next turn will be built from.
+    ///
+    /// The consequence is worth being explicit about, because it differs from Claude: a change made
+    /// while a turn is already running does not affect that turn. It affects the next one. There is
+    /// no protocol method to re-approve a turn already in flight, and inventing one by interrupting
+    /// and resubmitting would throw away work the user did not ask to discard.
+    fn reconfigure(&mut self, model: Option<&str>, mode: Option<&str>) -> Vec<Step> {
+        if let Some(model) = model {
+            self.req.model = Some(model.to_owned());
+        }
+        if let Some(mode) = mode {
+            self.req.mode = Some(mode.to_owned());
+        }
+        Vec::new()
+    }
+
     fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step> {
         // Removed rather than read: the first answer wins, and a second one for the same request
         // finds nothing here. That is the whole concurrency story — two panes, or a click and a
@@ -775,6 +833,64 @@ fn turn_id(params: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
+}
+
+/// One wtm mode preset, as the two independent protocol fields it stands for.
+///
+/// Returns `(approvalPolicy, sandbox)`. See [`crate::capability::codex_modes`] for why the two axes
+/// are presented as three presets rather than as nine combinations.
+///
+/// An id this build does not know falls back to the middle preset rather than to the permissive
+/// one. A stale `wtm.toml` naming a mode a later version renamed must not silently open the sandbox
+/// — the safe direction for an unknown value is the cautious one, and if it is wrong the user sees
+/// approval prompts rather than unreviewed writes.
+fn expand_mode(mode: &str) -> (&'static str, &'static str) {
+    match mode {
+        "read-only" => ("on-request", "read-only"),
+        "full-access" => ("never", "danger-full-access"),
+        _ => ("on-request", "workspace-write"),
+    }
+}
+
+/// Turn a `skills/list` reply into the domain's skill list.
+///
+/// The reply is grouped by cwd — the method takes several and answers for each — so the groups are
+/// flattened. Disabled skills are dropped: they are in the answer so a settings UI can show them
+/// switched off, and offering one in a composer would insert a name that does nothing.
+///
+/// `shortDescription` first, because the schema says the long `description` is the model-facing
+/// prompt and the short one is the human-facing label. Falling back to the long one is still better
+/// than a bare name in a two-column list.
+fn parse_skills(reply: &Value) -> Vec<AgentSkill> {
+    let Some(groups) = reply
+        .get("result")
+        .and_then(|r| r.get("data"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let text = |value: &Value, key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+
+    groups
+        .iter()
+        .filter_map(|group| group.get("skills").and_then(Value::as_array))
+        .flatten()
+        .filter(|skill| skill.get("enabled").and_then(Value::as_bool) != Some(false))
+        .filter_map(|skill| {
+            Some(AgentSkill {
+                name: text(skill, "name")?,
+                description: text(skill, "shortDescription").or_else(|| text(skill, "description")),
+                scope: text(skill, "scope"),
+            })
+        })
+        .collect()
 }
 
 /// The frames that ask the app server for its model catalogue.

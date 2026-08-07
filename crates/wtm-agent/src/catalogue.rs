@@ -64,7 +64,11 @@ pub const CATALOGUE: &[ProviderEntry] = &[
         blurb: "OpenAI Codex, over its app server",
         // Explicit, because the app server's own default is not "ask" — and a worktree being
         // disposable is a reason the *user* may relax this, not a reason to start relaxed.
-        default_mode: Some("on-request"),
+        //
+        // A wtm preset id now rather than a raw `approvalPolicy`, because the sandbox is the other
+        // half of this setting and sending one without the other left it at whatever
+        // `~/.codex/config.toml` said. `codex::expand_mode` turns this into both fields.
+        default_mode: Some("auto"),
         provider: &Codex,
     },
 ];

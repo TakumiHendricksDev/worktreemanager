@@ -25,7 +25,7 @@
 use pretty_assertions::assert_eq;
 use wtm_agent::claude::Claude;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
-use wtm_core::model::{AgentEvent, ApprovalAnswer, ApprovalRequest};
+use wtm_core::model::{AgentEvent, ApprovalAnswer, ApprovalRequest, ModeRisk};
 
 fn driver() -> Box<dyn Protocol> {
     Claude.protocol(&SessionRequest {
@@ -515,31 +515,266 @@ fn the_compiled_capability_is_honest_about_being_compiled() {
     );
 
     // Aliases rather than dated ids: each resolves to the current model of its tier, so this list
-    // ages far better than `claude-opus-4-5-20251101` would.
+    // ages far better than `claude-opus-4-5-20251101` would. The *labels* carry a version and the
+    // ids do not, which is the trade the capability's own docs explain.
     let ids: Vec<&str> = capability.models.iter().map(|m| m.id.as_str()).collect();
     assert!(ids.contains(&"opus") && ids.contains(&"sonnet") && ids.contains(&"haiku"));
 
-    // Five rungs, the same for every model — the opposite of the other provider, where the ladder is
-    // per model. Straight from `--help`: `--effort <low|medium|high|xhigh|max>`.
+    // The rungs, the same for every model — the opposite of the other provider, where the ladder is
+    // per model. The first five are `--help`'s own list; `ultracode` is last because the CLI's
+    // interactive `/effort` puts it last.
     for model in &capability.models {
         let ladder: Vec<&str> = model.efforts.iter().map(|e| e.effort.as_str()).collect();
         assert_eq!(
             ladder,
-            ["low", "medium", "high", "xhigh", "max"],
-            "{} should carry the five documented tiers",
+            ["low", "medium", "high", "xhigh", "max", "ultracode"],
+            "{} should carry the documented ladder",
             model.id
         );
         assert!(
             !ladder.contains(&"ultra"),
-            "`ultra` is Codex's rung, not Claude's — see `ultracode`"
+            "`ultra` is Codex's rung. Claude's is `ultracode` — two names, two things"
+        );
+    }
+}
+
+#[test]
+fn every_offered_mode_is_one_the_permission_flag_actually_accepts() {
+    // The list this replaced contained `default`, which `--permission-mode` rejects outright, and
+    // was missing `auto`. Both failures present as a session that dies at spawn with the CLI's own
+    // usage error, which is a long way from the picker the user clicked.
+    //
+    // Verbatim from `claude --help` on 2.1.221:
+    //   --permission-mode <mode>  (choices: "acceptEdits", "auto", "bypassPermissions", "manual",
+    //                              "dontAsk", "plan")
+    let accepted = [
+        "acceptEdits",
+        "auto",
+        "bypassPermissions",
+        "manual",
+        "dontAsk",
+        "plan",
+    ];
+    let capability = wtm_agent::claude_capability();
+
+    for mode in &capability.modes {
+        assert!(
+            accepted.contains(&mode.id.as_str()),
+            "`{}` is not a value the flag takes",
+            mode.id
+        );
+        assert!(
+            mode.label != mode.id,
+            "`{}` needs a written label — a wire value is not a label",
+            mode.id
         );
     }
 
-    // `ultracode` is a flag, not a rung, and its description has to say the precondition because the
-    // CLI refuses it below xhigh with an error the user cannot otherwise act on.
-    let ultracode = capability
-        .flags
-        .get("ultracode")
-        .expect("ultracode is a flag");
-    assert!(ultracode.contains("xhigh"));
+    // The three that act without asking must be rated as such. A picker that renders every mode in
+    // the same quiet grey is how someone leaves a worktree in `bypassPermissions` overnight.
+    let risk = |id: &str| {
+        capability
+            .modes
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap_or_else(|| panic!("{id} should be offered"))
+            .risk
+    };
+    assert_eq!(risk("manual"), ModeRisk::Normal);
+    assert_eq!(risk("plan"), ModeRisk::Normal);
+    assert_eq!(risk("acceptEdits"), ModeRisk::Elevated);
+    assert_eq!(risk("auto"), ModeRisk::Elevated);
+    assert_eq!(risk("dontAsk"), ModeRisk::Elevated);
+    assert_eq!(risk("bypassPermissions"), ModeRisk::Unsandboxed);
+
+    // None marked default, unlike Codex. wtm passes no `--permission-mode` for this provider so
+    // that `~/.claude/settings.json` decides, and marking one here would make the picker send it on
+    // every session and silently override that setting. The pane learns the real mode from `init`.
+    assert!(
+        capability.modes.iter().all(|m| !m.is_default),
+        "a default here would override the user's own settings.json"
+    );
+
+    // Codex is the other way round, and for a reason that is not symmetry: its mode is *two*
+    // protocol fields that only mean something together, so wtm has to send both or neither.
+    assert_eq!(
+        wtm_agent::codex_modes()
+            .iter()
+            .filter(|m| m.is_default)
+            .count(),
+        1,
+        "codex must start somewhere, since wtm is the one composing its two settings"
+    );
+}
+
+#[test]
+fn the_ultracode_rung_becomes_a_settings_key_because_the_effort_flag_rejects_it() {
+    // `--effort` takes `low|medium|high|xhigh|max` and nothing else, so passing the sixth rung
+    // through verbatim would fail at spawn. The CLI's own words: ultracode is "set per session via
+    // the `ultracode` settings key (--settings or apply_flag_settings)".
+    let argv = Claude.argv(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        effort: Some("ultracode".to_owned()),
+        ..SessionRequest::default()
+    });
+
+    assert!(
+        !argv.contains(&"ultracode".to_owned()),
+        "the rung's name must never reach the CLI as a flag value: {argv:?}"
+    );
+
+    let effort = argv.iter().position(|a| a == "--effort").expect("--effort");
+    // `max`, not the documented minimum of `xhigh`: the ladder puts ultracode above max, so picking
+    // the top rung must not quietly buy less reasoning than the rung below it.
+    assert_eq!(argv[effort + 1], "max");
+
+    let settings = argv
+        .iter()
+        .position(|a| a == "--settings")
+        .expect("--settings");
+    assert_eq!(argv[settings + 1], r#"{"ultracode":true}"#);
+}
+
+#[test]
+fn an_ordinary_effort_still_passes_straight_through() {
+    // The translation above must be the special case and not the rule — a plain rung reaching the
+    // CLI as `--effort xhigh` with no settings overlay is what keeps a user's own `settings.json`
+    // untouched on every session that did not ask for ultracode.
+    let argv = Claude.argv(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        effort: Some("xhigh".to_owned()),
+        ..SessionRequest::default()
+    });
+
+    let effort = argv.iter().position(|a| a == "--effort").expect("--effort");
+    assert_eq!(argv[effort + 1], "xhigh");
+    assert!(!argv.contains(&"--settings".to_owned()));
+}
+
+#[test]
+fn the_mode_the_init_message_reports_is_spelled_the_way_the_flag_spells_it() {
+    // One state, two spellings: the flag takes `manual`, this message says `default`. Passing the
+    // message's word back through the picker would offer a mode the flag rejects, so it is
+    // normalized at the boundary rather than in the UI.
+    let argv = Claude.argv(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        mode: Some("default".to_owned()),
+        ..SessionRequest::default()
+    });
+    let at = argv
+        .iter()
+        .position(|a| a == "--permission-mode")
+        .expect("--permission-mode");
+    assert_eq!(argv[at + 1], "manual");
+}
+
+#[test]
+fn the_slash_commands_the_init_message_lists_become_the_composers_skill_list() {
+    // Already on the wire and previously discarded. The CLI calls these skills itself —
+    // `--disable-slash-commands` is documented as "Disable all skills" — and this is its own merged
+    // list of user, project, plugin and built-in, which is why wtm does not go looking on disk.
+    let mut d = driver();
+    let _ = d.open();
+
+    let steps = d.on_line(
+        r#"{"type":"system","subtype":"init","cwd":"/tmp/worktree","session_id":"e8581508-0000-4000-8000-06a0e8581508","tools":["Bash"],"model":"claude-haiku-4-5-20251001","permissionMode":"acceptEdits","slash_commands":["review","frontend-design"]}"#,
+    );
+
+    let listed = events(&steps)
+        .into_iter()
+        .find_map(|e| match e {
+            AgentEvent::SkillsListed { skills } => Some(skills),
+            _ => None,
+        })
+        .expect("SkillsListed");
+    let names: Vec<&str> = listed.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["review", "frontend-design"]);
+    // No descriptions on this transport, and none invented. A `None` here is what tells the UI to
+    // render one column instead of two.
+    assert!(listed.iter().all(|s| s.description.is_none()));
+
+    // And the mode it resolved to, which wtm cannot otherwise know: it deliberately passes no
+    // `--permission-mode`, so `~/.claude/settings.json` is the only thing that decided this.
+    match events(&steps).first().expect("SessionReady") {
+        AgentEvent::SessionReady { mode, .. } => assert_eq!(mode.as_deref(), Some("acceptEdits")),
+        other => panic!("expected SessionReady, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_session_with_no_slash_commands_emits_no_empty_skill_row() {
+    // An absent list and an empty one are the same thing, and neither should push an event that
+    // makes the composer show a `/` affordance with nothing behind it.
+    let mut d = driver();
+    let _ = d.open();
+    let steps = d.on_line(
+        r#"{"type":"system","subtype":"init","session_id":"e8581508-0000-4000-8000-06a0e8581508","tools":[],"model":"claude-haiku-4-5-20251001"}"#,
+    );
+    assert!(
+        !events(&steps)
+            .iter()
+            .any(|e| matches!(e, AgentEvent::SkillsListed { .. }))
+    );
+}
+
+#[test]
+fn changing_the_model_or_the_mode_writes_control_requests_rather_than_needing_a_restart() {
+    // Both subtypes were read off the shipped binary, like `--permission-prompt-tool` before them.
+    // This test is the record of what was observed, so a CLI that renames one fails here rather
+    // than silently leaving the picker showing a setting the session is not using.
+    let mut d = driver();
+    let _ = d.open();
+
+    let sent = writes(&d.reconfigure(Some("opus"), Some("acceptEdits")));
+    assert_eq!(sent.len(), 2, "one frame each, and nothing else");
+
+    assert_eq!(sent[0]["type"], "control_request");
+    assert_eq!(sent[0]["request"]["subtype"], "set_model");
+    assert_eq!(sent[0]["request"]["model"], "opus");
+    assert_eq!(sent[1]["request"]["subtype"], "set_permission_mode");
+    assert_eq!(sent[1]["request"]["mode"], "acceptEdits");
+    // The correlation id lives at the top level on this transport, not inside `request` — the same
+    // trap the module header calls out for inbound control requests.
+    assert!(sent[0]["request_id"].is_string());
+    assert_ne!(sent[0]["request_id"], sent[1]["request_id"]);
+}
+
+#[test]
+fn reconfiguring_only_one_setting_leaves_the_other_alone() {
+    // `None` has to mean "do not mention it" rather than "clear it". A caller changing the mode
+    // does not necessarily know the model, and a frame asserting a stale one would undo a change
+    // the user made a moment earlier.
+    let mut d = driver();
+    let _ = d.open();
+    assert_eq!(writes(&d.reconfigure(None, Some("plan"))).len(), 1);
+    assert!(writes(&d.reconfigure(None, None)).is_empty());
+}
+
+#[test]
+fn a_refused_settings_change_is_reported_instead_of_being_swallowed() {
+    // The failure mode that makes a live mode picker safe to ship. If the CLI does not know the
+    // subtype, the picker would otherwise show `bypassPermissions` while the session kept asking —
+    // or worse, show `manual` while it did not.
+    let mut d = driver();
+    let _ = d.open();
+
+    let steps = d.on_line(
+        r#"{"type":"control_response","response":{"subtype":"error","request_id":"x","error":"unknown subtype"}}"#,
+    );
+    match events(&steps).first().expect("a Notice") {
+        AgentEvent::Notice { level, message } => {
+            assert_eq!(*level, wtm_core::model::NoticeLevel::Warn);
+            assert!(message.contains("unknown subtype"), "{message}");
+        }
+        other => panic!("expected Notice, got {other:?}"),
+    }
+
+    // A successful one is silence. These are replies to frames nobody is waiting on, so rendering
+    // them would put a collapsed protocol row in the transcript after every Stop press.
+    assert!(
+        d.on_line(
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"x"}}"#
+        )
+        .is_empty()
+    );
 }

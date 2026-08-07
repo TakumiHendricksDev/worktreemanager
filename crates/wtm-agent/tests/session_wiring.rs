@@ -97,8 +97,16 @@ fn a_line_from_the_child_drives_the_driver_and_its_frames_reach_the_pipe() {
         .collect();
     assert_eq!(
         methods,
-        ["\"initialize\"", "\"initialized\"", "\"thread/start\""],
-        "the handshake's three frames, in order"
+        [
+            "\"initialize\"",
+            "\"initialized\"",
+            "\"thread/start\"",
+            // Last, and after `ready` is already true above. Skills are a composer convenience
+            // nobody is blocked on, so asking for them before readiness would trade a pane that
+            // opens late for a list the user has not looked at yet.
+            "\"skills/list\"",
+        ],
+        "the handshake's frames, in order, with the skill query trailing"
     );
 }
 

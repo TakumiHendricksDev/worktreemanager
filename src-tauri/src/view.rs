@@ -598,6 +598,39 @@ mod tests {
         assert!(!object.contains_key("is_main"), "must not emit snake_case");
     }
 
+    /// The capability, which is the newest thing on this boundary and the one with two nested
+    /// struct lists inside it.
+    ///
+    /// Worth its own test rather than a line in the one above, because `AgentMode` and `AgentModel`
+    /// are domain types serialized *directly* — `CapabilityView` holds them rather than converting
+    /// them — so their `rename_all` is a property of `wtm-core` that this boundary depends on and
+    /// cannot see. A reviewer removing the attribute over there would break the picker over here
+    /// with nothing in between to notice.
+    #[test]
+    fn a_capability_carries_camel_case_modes_and_models() {
+        let view = CapabilityView::from(wtm_agent::claude_capability());
+        let json = serde_json::to_value(&view).unwrap();
+
+        assert!(json.get("modelsAreLive").is_some(), "{json:?}");
+        assert!(
+            json.get("models_are_live").is_none(),
+            "must not emit snake_case"
+        );
+        // `flags` is gone: `ultracode` became a rung on the effort ladder, and with it went the
+        // last provider switch that was neither model nor effort.
+        assert!(json.get("flags").is_none(), "flags should be retired");
+
+        let model = &json["models"][0];
+        assert!(model.get("isDefault").is_some(), "{model:?}");
+        assert!(model.get("defaultEffort").is_some(), "{model:?}");
+
+        let mode = &json["modes"][0];
+        assert!(mode.get("isDefault").is_some(), "{mode:?}");
+        // The risk tier the composer colours its mode control from. `snake_case` *values*, unlike
+        // the keys around them — matching how every other enum on this boundary is tagged.
+        assert_eq!(mode["risk"], "normal");
+    }
+
     /// The whole key set, not a sample, and that is the point.
     ///
     /// No field on [`TerminalSessionView`] is multi-word, so `rename_all` is invisible today
@@ -683,6 +716,7 @@ mod tests {
             provider_session_id: "t1".to_owned(),
             model: None,
             effort: None,
+            mode: None,
             tools: Vec::new(),
         })
         .unwrap();
@@ -691,6 +725,23 @@ mod tests {
             ready.get("providerSessionId").is_some(),
             "payload fields must be camelCase, got {ready:?}"
         );
+
+        // A second shape: a variant whose payload is a list of structs, which is where a missing
+        // `rename_all` on the *inner* type would hide. `AgentSkill`'s fields are single words so
+        // camelCase and snake_case coincide today — this asserts the keys the frontend reads, so
+        // that renaming one to something with two words fails here rather than in the composer.
+        let skills = serde_json::to_value(AgentEvent::SkillsListed {
+            skills: vec![wtm_core::model::AgentSkill {
+                name: "review".to_owned(),
+                description: Some("Review a diff".to_owned()),
+                scope: Some("repo".to_owned()),
+            }],
+        })
+        .unwrap();
+        assert_eq!(skills["kind"], "skills_listed");
+        assert_eq!(skills["skills"][0]["name"], "review");
+        assert_eq!(skills["skills"][0]["description"], "Review a diff");
+        assert_eq!(skills["skills"][0]["scope"], "repo");
 
         let raw = serde_json::to_value(AgentEvent::Raw {
             provider: "codex".to_owned(),
@@ -851,13 +902,12 @@ pub struct ResumableView {
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityView {
     pub models: Vec<wtm_core::model::AgentModel>,
-    pub modes: Vec<String>,
+    pub modes: Vec<wtm_core::model::AgentMode>,
     /// True when the models came from asking the CLI rather than from a compiled table.
     ///
     /// Surfaced so the UI can say "as reported by codex" against "as of this wtm build" — which is
     /// the difference between a stale list being the CLI's fault and being ours.
     pub models_are_live: bool,
-    pub flags: std::collections::BTreeMap<String, String>,
 }
 
 impl From<wtm_core::model::AgentCapability> for CapabilityView {
@@ -866,7 +916,6 @@ impl From<wtm_core::model::AgentCapability> for CapabilityView {
             models: value.models,
             modes: value.modes,
             models_are_live: value.models_are_live,
-            flags: value.flags,
         }
     }
 }

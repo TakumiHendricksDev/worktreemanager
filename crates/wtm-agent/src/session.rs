@@ -115,6 +115,18 @@ impl AgentSession {
         run(&self.session, &self.host, &self.events, steps)
     }
 
+    /// Change the model or the mode without restarting. `None` leaves one alone.
+    ///
+    /// Effort is deliberately absent — see [`Protocol::reconfigure`] for why it cannot be here.
+    ///
+    /// # Errors
+    ///
+    /// If the session's stdin is gone.
+    pub fn reconfigure(&self, model: Option<&str>, mode: Option<&str>) -> Result<(), ExecError> {
+        let steps = self.driver.lock().reconfigure(model, mode);
+        run(&self.session, &self.host, &self.events, steps)
+    }
+
     /// Answer an outstanding approval.
     ///
     /// # Errors

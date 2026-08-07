@@ -19,32 +19,49 @@
    * which is the one thing the control exists to show. `o-overlay-select` is the app's existing
    * answer; `_input.scss` draws the line these two were on the wrong side of.
    *
-   * # `ultracode` is a checkbox, not a sixth rung
+   * # The mode pill is the one control here that changes colour with its value
    *
-   * However much the name suggests one. It is a boolean meaning "xhigh plus standing workflow
-   * orchestration", and the CLI refuses it if effort resolves below xhigh — so the checkbox disables
-   * itself below that and says why. Codex's `ultra` *is* a rung and appears in the effort list.
-   * Two similar names, two different things.
+   * Everything else in this row is deliberately uniform — value-first, quiet until pointed at — and
+   * breaking that for one control needs a reason. This is it: the permission mode is the most
+   * consequential setting in the app, it persists silently across every turn, and it is the only
+   * one whose wrong value can cost you something you cannot undo. A pane left in
+   * `bypassPermissions` overnight and a pane in `Manual` must not look the same.
+   *
+   * The colour is reinforcement and never the signal — `settings/_semantic.scss` forbids that, and
+   * this is the case the rule most obviously exists for. The **label changes too**, the risk tier
+   * comes from the backend rather than a substring test here, and the tier itself is provider
+   * independent: Codex's `full-access` and Claude's `bypassPermissions` are both `unsandboxed`
+   * without this file knowing what either word means.
+   *
+   * # There are no flag checkboxes any more
+   *
+   * There was one, `ultracode`, and it never did anything — no `flags` field existed on the request
+   * that reaches the CLI, so the value died here. It is now the top rung of the effort ladder,
+   * which is where the CLI's own `/effort` menu puts it, and `claude.rs` translates it into the
+   * settings key that actually turns it on. Codex's `ultra` is a different thing with a similar
+   * name — a real rung on some of its models, and it arrives in that provider's own effort list.
    */
   import type { Capability } from '../ipc/types';
-  import Choice from './ui/Choice.svelte';
   import Icon from './ui/Icon.svelte';
 
   const {
     capability,
     model,
     effort,
-    flags,
+    mode,
+    effortPending = false,
     disabled = false,
     onchange,
   }: {
     capability: Capability | null;
     model: string | null;
     effort: string | null;
-    /** Provider flags that are on. Keys match `capability.flags`. */
-    flags: string[];
+    /** The permission mode, in the provider's spelling. Null before the session reports one. */
+    mode: string | null;
+    /** Effort has been changed and the running session is not using it yet. */
+    effortPending?: boolean;
     disabled?: boolean;
-    onchange: (next: { model: string; effort: string; flags: string[] }) => void;
+    onchange: (next: { model: string; effort: string; mode: string | null }) => void;
   } = $props();
 
   const models = $derived(capability?.models ?? []);
@@ -63,8 +80,19 @@
       '',
   );
 
-  /** `ultracode` needs effort at xhigh or above — the CLI refuses it otherwise. */
-  const ultracodeReady = $derived(currentEffort === 'xhigh' || currentEffort === 'max');
+  const modes = $derived(capability?.modes ?? []);
+  /**
+   * The mode on screen.
+   *
+   * Falls through to the capability's default and then to nothing — not to the first entry, unlike
+   * the model above. Claude marks no default deliberately, because wtm passes no
+   * `--permission-mode` and lets `~/.claude/settings.json` decide; picking `modes[0]` here would
+   * put a confident "Manual" on the pill during the second before `session_ready` says otherwise,
+   * and that second is exactly when someone might glance at it.
+   */
+  const currentMode = $derived(
+    modes.find((m) => m.id === mode) ?? modes.find((m) => m.isDefault) ?? null,
+  );
 
   function pickModel(event: Event) {
     const next = (event.currentTarget as HTMLSelectElement).value;
@@ -76,38 +104,23 @@
       effort: keep
         ? currentEffort
         : (model?.defaultEffort ?? model?.efforts[0]?.effort ?? ''),
-      flags,
+      mode,
     });
   }
 
   function pickEffort(event: Event) {
-    const next = (event.currentTarget as HTMLSelectElement).value;
     onchange({
       model: selected?.id ?? '',
-      effort: next,
-      // A flag whose precondition the new effort breaks comes off, rather than being sent and
-      // refused by the CLI with a message the user cannot act on.
-      flags:
-        next === 'xhigh' || next === 'max' ? flags : flags.filter((f) => f !== 'ultracode'),
+      effort: (event.currentTarget as HTMLSelectElement).value,
+      mode,
     });
   }
 
-  /**
-   * A provider's flag key as something to put on screen.
-   *
-   * Capitalised and nothing more. The keys are provider-owned single words — `ultracode` is the only
-   * one today — so a lookup table here would be this app inventing names for another program's
-   * settings, and it would go stale silently the first time a CLI added one.
-   */
-  function label(name: string): string {
-    return name.charAt(0).toUpperCase() + name.slice(1);
-  }
-
-  function toggleFlag(name: string, on: boolean) {
+  function pickMode(event: Event) {
     onchange({
       model: selected?.id ?? '',
       effort: currentEffort,
-      flags: on ? [...new Set([...flags, name])] : flags.filter((f) => f !== name),
+      mode: (event.currentTarget as HTMLSelectElement).value,
     });
   }
 </script>
@@ -158,13 +171,24 @@
     </span>
 
     {#if efforts.length > 0}
-      <span class="c-model-picker__trigger o-overlay-select" class:is-disabled={disabled}>
+      <span
+        class="c-model-picker__trigger o-overlay-select"
+        class:is-disabled={disabled}
+        class:is-pending={effortPending}
+      >
         <!-- The word is drawn, not hidden. Both labels used to be `u-visually-hidden`, so the row
              was two unnamed dropdowns — and it also makes the provider's raw `xhigh` and `max`
              legible in place without a display-name table for values the backend owns. -->
         <span class="c-model-picker__value" aria-hidden="true">
           <span class="c-model-picker__key">Effort</span>
           {currentEffort}
+          {#if effortPending}
+            <!-- A word, not just the dotted underline the class draws. The one setting of the three
+                 that a running session cannot be told about: `--effort` is argv, read once, and
+                 there is no control request for it. Saying so is the honest alternative to
+                 restarting behind the user's back or greying the control out entirely. -->
+            <span class="c-model-picker__aside">on restart</span>
+          {/if}
           <Icon name="chevron-down" size={11} />
         </span>
         <select
@@ -173,7 +197,9 @@
           value={currentEffort}
           {disabled}
           onchange={pickEffort}
-          title={efforts.find((e) => e.effort === currentEffort)?.description ?? 'Effort'}
+          title={effortPending
+            ? 'Restart the session to apply this effort'
+            : (efforts.find((e) => e.effort === currentEffort)?.description ?? 'Effort')}
         >
           {#each efforts as option (option.effort)}
             <option value={option.effort}>{option.effort}</option>
@@ -182,26 +208,42 @@
       </span>
     {/if}
 
-    {#each Object.entries(capability.flags) as [name, description] (name)}
-      <Choice
-        size="sm"
-        checked={flags.includes(name)}
-        disabled={disabled || (name === 'ultracode' && !ultracodeReady)}
-        onchange={(on) => toggleFlag(name, on)}
+    {#if modes.length > 0}
+      <!-- The risk tier rides on the wrapper, so the pill's own fill and text colour change with
+           it. `is-` states are always chained per the CSS rules, and the three are mutually
+           exclusive by construction — `risk` is an enum, not a set of booleans. -->
+      <span
+        class="c-model-picker__trigger o-overlay-select"
+        class:is-disabled={disabled}
+        class:is-elevated={currentMode?.risk === 'elevated'}
+        class:is-unsandboxed={currentMode?.risk === 'unsandboxed'}
       >
-        <!-- The key, capitalised, with the sentence in the tooltip.
-             `{name}` alone put the literal lowercase `ultracode` on screen, which was the
-             complaint. Swapping in `description` overcorrected: it is a sentence, and at three
-             lines it took over the whole toolbar and pushed the effort control onto its own row.
-             A control needs a name; the explanation is what a tooltip is for. -->
-        <span
-          title={name === 'ultracode' && !ultracodeReady
-            ? `${description} — needs effort at xhigh or max`
-            : description}
-        >
-          {label(name)}
+        <span class="c-model-picker__value" aria-hidden="true">
+          <!-- No standing "Mode" word beside it, unlike Effort. A mode's label is a phrase that
+               already says what it is — "Accept edits", "Bypass permissions" — where `xhigh` on its
+               own is a value in search of a noun. The em dash is the placeholder for the second
+               before a session reports which mode it resolved to. -->
+          {currentMode?.label ?? '—'}
+          <Icon name="chevron-down" size={11} />
         </span>
-      </Choice>
-    {/each}
+        <select
+          class="o-overlay-select__native"
+          aria-label="Permission mode"
+          value={currentMode?.id ?? ''}
+          {disabled}
+          onchange={pickMode}
+          title={currentMode?.description ?? 'Permission mode'}
+        >
+          {#if currentMode === null}
+            <!-- A sentinel, because a `<select>` with no matching value shows its first option and
+                 would claim the session is in a mode nobody chose. Never selectable back. -->
+            <option value="" disabled>—</option>
+          {/if}
+          {#each modes as option (option.id)}
+            <option value={option.id}>{option.label}</option>
+          {/each}
+        </select>
+      </span>
+    {/if}
   {/if}
 </div>

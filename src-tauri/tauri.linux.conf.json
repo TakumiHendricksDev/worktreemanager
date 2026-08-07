@@ -14,7 +14,7 @@
         "decorations": true,
         "transparent": false,
 
-        "dragDropEnabled": false
+        "dragDropEnabled": true
       }
     ]
   },

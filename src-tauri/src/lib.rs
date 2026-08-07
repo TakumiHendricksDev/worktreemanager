@@ -195,6 +195,8 @@ pub fn run() {
             commands::agent_capability,
             commands::open_agent_session,
             commands::send_turn,
+            commands::configure_session,
+            commands::list_worktree_files,
             commands::answer_approval,
             commands::interrupt_turn,
             commands::list_agent_sessions,

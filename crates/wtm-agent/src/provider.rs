@@ -103,6 +103,25 @@ pub trait Protocol: Send {
     /// The user submitted a turn.
     fn send_turn(&mut self, text: &str) -> Vec<Step>;
 
+    /// The user changed the model or the mode on a session that is already running.
+    ///
+    /// `None` means "leave that one alone", so the caller can change either without knowing the
+    /// other's current value.
+    ///
+    /// # Why effort is not here
+    ///
+    /// Because neither provider can be told about it the same way. Codex re-sends `model` and
+    /// `effort` on every `turn/start`, so both are free; Claude has control requests for the model
+    /// and the mode (`set_model`, `set_permission_mode`) and **nothing** for effort, which is an
+    /// argv flag read once at startup. A `reconfigure` that accepted effort would therefore have to
+    /// silently drop it on the provider people use it on most. Effort is a restart, and
+    /// `SessionPane` says so on the control rather than here.
+    ///
+    /// Default: nothing. A provider that cannot change mid-session is not obliged to pretend.
+    fn reconfigure(&mut self, _model: Option<&str>, _mode: Option<&str>) -> Vec<Step> {
+        Vec::new()
+    }
+
     /// The user answered an outstanding approval.
     fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step>;
 

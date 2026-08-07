@@ -39,7 +39,7 @@
         },
 
         "acceptFirstMouse": true,
-        "dragDropEnabled": false
+        "dragDropEnabled": true
       }
     ],
     "security": {

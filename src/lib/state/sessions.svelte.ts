@@ -28,6 +28,7 @@ import {
   type AgentExit,
   type AgentOption,
   type AgentReady,
+  type AgentSkill,
   type ApprovalAnswer,
   type ApprovalRequest,
   type Capability,
@@ -163,8 +164,26 @@ export interface Pane {
    */
   model: string | null;
   effort: string | null;
-  /** Provider flags that are on, by name. Claude's `ultracode` is the only one today. */
-  flags: string[];
+  /** The permission or approval mode, in the provider's own spelling. */
+  mode: string | null;
+  /**
+   * True when `effort` has been changed to something the running session is not using.
+   *
+   * The one setting of the three that cannot be applied live. Claude reads `--effort` once at
+   * startup and offers no control request for it, so the honest options were to lock the control
+   * once a session starts, to restart behind the user's back, or to say so. This is saying so:
+   * the value is kept, the control is marked, and Restart picks it up.
+   *
+   * Never set for Codex, which re-sends effort on every turn.
+   */
+  effortPending: boolean;
+  /**
+   * What this session can be asked to do by name, for the composer's `/` list.
+   *
+   * Empty until the provider says — Claude answers on its init line, Codex a few frames after the
+   * thread opens — so an empty list means "not yet or none", and the composer treats both the same.
+   */
+  skills: AgentSkill[];
 }
 
 let nextPaneId = 0;
@@ -192,6 +211,19 @@ class Sessions {
    * for the same reason: polling is how these tools end up spinning a fan.
    */
   resumable = $state<Record<string, Resumable[]>>({});
+  /**
+   * The files in each worktree, for the composer's `@` list.
+   *
+   * Cached because it shells out to `git ls-files`, and the alternative — asking per keystroke —
+   * would spawn a process per character typed after an `@`. Filled on first use rather than on
+   * open, so a session nobody references a file in never pays for it.
+   *
+   * Deliberately not refreshed on a filesystem event: there is no watcher here and adding one for
+   * a typeahead would be a background cost for a convenience. It refreshes when a worktree is
+   * reselected, which in practice is often enough — and a path this list has not heard of can
+   * still be typed by hand.
+   */
+  files = $state<Record<string, string[]>>({});
   /** Stored plans, by worktree. */
   briefs = $state<Record<string, Brief[]>>({});
   /**
@@ -339,16 +371,63 @@ class Sessions {
     }
   }
 
-  /** Change what a pane's next turn uses. Takes effect without restarting the session. */
+  /**
+   * Change what a pane uses. Model and mode take effect on the running session; effort does not.
+   *
+   * The split is not arbitrary and it is not the same on both providers. Codex re-sends model,
+   * effort and both permission fields on every `turn/start`, so all of it is live there. Claude has
+   * control requests for the model and the mode and none for effort, which is an argv flag read at
+   * startup — so effort is stored, flagged, and applied by the next Restart.
+   *
+   * Optimistic: the pane shows the new value immediately and a provider that refuses the change
+   * says so in the transcript as a `Notice`. The alternative — awaiting the round trip before the
+   * pill updates — would make every menu selection feel like it did not register.
+   */
   configure(
     paneId: string,
-    next: { model: string; effort: string; flags: string[] },
+    next: { model: string; effort: string; mode: string | null },
   ): void {
     const pane = this.paneById(paneId);
     if (!pane) return;
+
+    const modelChanged = pane.model !== next.model;
+    const modeChanged = pane.mode !== next.mode;
+    // Sticky once set: a pane whose effort is already pending must not un-mark itself because a
+    // later change happened to land back on the value the session was started with.
+    if (pane.effort !== next.effort && pane.session !== null) pane.effortPending = true;
+
     pane.model = next.model;
     pane.effort = next.effort;
-    pane.flags = next.flags;
+    pane.mode = next.mode;
+
+    // Nothing to say to a session that does not exist yet — `openAgentSession` will carry these
+    // as spawn arguments instead.
+    if (pane.session === null || (!modelChanged && !modeChanged)) return;
+    void commands
+      .configureSession(
+        pane.session,
+        modelChanged ? next.model : null,
+        modeChanged ? next.mode : null,
+      )
+      .catch((e: unknown) => {
+        this.error = errorMessage(e);
+      });
+  }
+
+  /**
+   * Fill the `@` list for a worktree. Silent on failure, like every auxiliary read here.
+   *
+   * Not guarded against a second call the way `loadCapability` is, because this one is cheap,
+   * idempotent, and genuinely wants to re-run: reselecting a worktree is how a list that predates
+   * a `git checkout` gets corrected.
+   */
+  async loadFiles(worktreeId: string): Promise<void> {
+    try {
+      const files = await commands.listWorktreeFiles(worktreeId);
+      this.files = { ...this.files, [worktreeId]: files };
+    } catch {
+      /* The composer works without it — the user types the path. */
+    }
   }
 
   /**
@@ -576,7 +655,9 @@ class Sessions {
       generation: 0,
       model: null,
       effort: null,
-      flags: [],
+      mode: null,
+      effortPending: false,
+      skills: [],
     };
   }
 
@@ -654,6 +735,10 @@ class Sessions {
     const preferred = capability?.models.find((m) => m.isDefault) ?? capability?.models[0];
     pane.model = preferred?.id ?? null;
     pane.effort = preferred?.defaultEffort ?? null;
+    // Left null for Claude, whose capability marks no mode as the default — it deliberately passes
+    // no flag so the user's own settings decide, and `session_ready` reports back what they said.
+    // Codex does mark one, because there the mode is two protocol fields that wtm has to send.
+    pane.mode = capability?.modes.find((m) => m.isDefault)?.id ?? null;
 
     this.panes = [...this.panes, pane];
     this.place(worktreeId, pane.id, placement);
@@ -664,7 +749,7 @@ class Sessions {
         projectId,
         worktreeId,
         agentId: provider,
-        options: { model: pane.model, effort: pane.effort },
+        options: { model: pane.model, effort: pane.effort, mode: pane.mode },
       });
       const live = this.paneById(pane.id);
       if (live) this.claimSession(live, session);
@@ -817,6 +902,12 @@ class Sessions {
     pane.ready = false;
     pane.ended = null;
     pane.error = null;
+    // The whole point of the marker: the new process is spawned with the effort the picker is
+    // showing, so the two now agree and the "restart to apply" hint has been satisfied.
+    pane.effortPending = false;
+    // Re-announced by the new session, and a stale list is worse than none — a restarted pane may
+    // be a different provider's, and skills are worktree-scoped.
+    pane.skills = [];
     this.focus(pane.worktreeId, pane.id);
 
     try {
@@ -832,7 +923,7 @@ class Sessions {
               projectId: pane.projectId,
               worktreeId: pane.worktreeId,
               agentId: pane.kind.provider,
-              options: { model: pane.model, effort: pane.effort },
+              options: { model: pane.model, effort: pane.effort, mode: pane.mode },
             });
       this.claimSession(pane, session);
     } catch (e) {
@@ -920,6 +1011,15 @@ class Sessions {
       pane.approvals = [...pane.approvals, { id: event.id, request: event.request }];
     } else if (event.kind === 'approval_resolved') {
       pane.approvals = pane.approvals.filter((a) => a.id !== event.id);
+    } else if (event.kind === 'skills_listed') {
+      // Replaced, not merged: a provider that answers twice is correcting itself, and a skill
+      // deleted from disk should leave the list rather than linger because it was once there.
+      pane.skills = event.skills;
+    } else if (event.kind === 'session_ready' && event.mode !== null) {
+      // The one setting wtm can learn rather than choose. Claude passes no `--permission-mode`
+      // precisely so `~/.claude/settings.json` decides, so without adopting the answer the mode
+      // pill would show a default the session is not in.
+      pane.mode = event.mode;
     }
 
     pane.events.push(event);
