@@ -47,5 +47,5 @@ pub mod session;
 
 pub use capability::{claude_capability, codex_modes};
 pub use catalogue::{CATALOGUE, ProviderEntry, entry};
-pub use provider::{Provider, ProviderId, SessionRequest, Step};
+pub use provider::{McpServer, Provider, ProviderId, SessionRequest, Step};
 pub use session::AgentSession;

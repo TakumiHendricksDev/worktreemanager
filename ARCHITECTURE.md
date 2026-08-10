@@ -218,6 +218,74 @@ for the whole interesting period.
 
 ---
 
+## 6b. Agent handoff: why wtm is a server
+
+One agent asking another for a review — "have Codex look at this plan" — has two possible shapes, and
+the difference is entirely about who owns the second session.
+
+The cheap shape needs no code. `[agent.claude.mcp.codex]` points a Claude session at `codex mcp-server`
+and Claude opens a Codex thread through it. But that thread lives inside a process *Claude* spawned, so
+wtm cannot see it: no pane, no streaming, no approval card. The observable result is a tool call that
+spins for two minutes and returns a paragraph. For a feature whose entire point is *watching another
+agent work*, that is the wrong shape.
+
+So the second session has to be wtm's own, which means wtm has to expose a tool to the CLIs — and an
+MCP server is a child process the *CLI* spawns, starting life outside the app. Three consequences, each
+of which is the reason for a piece of `bridge.rs` and `handoff.rs`:
+
+**The server is the app's own binary, behind `--mcp-bridge`.** A separate sidecar would have to be
+declared as a Tauri `externalBin`, bundled, and then located again at runtime from inside a `.app`,
+where the path differs from the `cargo` layout. `current_exe()` is already correct in both, and the
+branch costs three lines in `main.rs`. The GUI is never constructed on that path, so nothing paints and
+stdout stays clean for the protocol — which `tests/mcp_bridge.rs` pins by driving the real executable,
+because a stray `println!` on the startup path would corrupt the first frame and present as an MCP
+server that failed to start.
+
+**A Unix socket, not a port.** `~/.config/wtm/handoff.sock` at 0600, set explicitly rather than left to
+the umask: the socket is the door into "start an agent in my worktree", so the permission bits *are* the
+access control. Binding unlinks first, because a socket file outlives the process that made it.
+
+**A token, because the socket cannot say who is calling.** Filesystem permissions establish that the
+caller is this user; they do not establish *which session* it is. That matters because the target
+worktree is deliberately not a parameter — it comes from who is asking, so there is no way for a model
+to start an agent somewhere the user is not looking. Each session is issued a token when its MCP config
+is built, and the token resolves to a worktree.
+
+Handoff is on for every session with no key to enable it, and that default is a judgement worth
+recording. The blast radius is not new: the target comes from the compiled catalogue rather than from
+config, it runs in the caller's own worktree, it is refused unless the repository offers it, and the new
+session's approval mode is the repository's own. An agent that can already run `bash` here is not
+meaningfully constrained by being unable to open a sibling pane — and unlike a subprocess, a handoff is
+*visible*.
+
+**A self-describing tool is not enough, and finding that out cost a real attempt.** The tool's
+description names the phrasings people use — "let Codex review this", "second opinion" — and it still
+lost. A user's global skills are in the same context, and a skill *named after an agent*, wrapping that
+agent's CLI, is a common thing to have; the one on the machine this was tested on declared `codex
+review` and `second opinion` as its own triggers. Against a name that direct, a tool called `ask_agent`
+does not win, and the observed failure was precisely that: "pass to codex" answered by a skill shelling
+out to a subprocess nobody could see.
+
+That is not a bug in the skill, and it is not fixable by writing a better description, because both are
+reasonable readings. The deciding fact is about the *environment* — this session is a pane in a window
+somebody is watching, so an agent reached any other way is invisible — and nothing in the session can
+know it unless wtm says so. So wtm appends it: `--append-system-prompt` on Claude,
+`developerInstructions` on Codex's `thread/start`. Both are **appends**; the neighbouring
+`--system-prompt` and `baseInstructions` *replace* the CLI's own prompt and would discard the user's
+`CLAUDE.md` or `AGENTS.md` along with it, which is a near-identical name for an opposite behaviour and
+therefore pinned by a test rather than left to review.
+
+The guidance names the two routes it is displacing — a skill, and a CLI through the shell — because
+"prefer the tool" is not actionable to something that does not realise it is choosing.
+
+One thing this exposed rather than introduced: `SessionRequest` used to carry pre-serialized
+`--mcp-config` JSON, and Codex has no such flag, so `codex.rs` ignored the field completely. A
+repository declaring MCP servers got them on one provider and silently got none on the other. Serializing
+per provider — a JSON document for Claude, `-c mcp_servers.…` overrides for Codex — is what a provider
+module is *for*, and `tests/mcp_argv.rs` is the regression test.
+
+---
+
 ## 5a. Two things the real repository taught us
 
 Both were found by running against a real repository rather than by reasoning, and both are the kind of

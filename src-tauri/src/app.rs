@@ -135,6 +135,12 @@ pub struct App {
     /// pane show" is a frontend concept `wtm-core` has no stake in, and keeping it in the
     /// composition root is what preserves the `wasm32` check. Liveness is never read from it —
     /// see `open_agent`.
+    /// Tokens issued to sessions so their MCP bridge can be traced back to a worktree.
+    ///
+    /// On `App` rather than in the listener because it is written on the command path — a token is
+    /// minted while a session's config is built — and read on the socket thread. One owner for both
+    /// is what keeps that from needing a channel.
+    pub handoff: crate::handoff::Hub,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
     /// Where the resume list lives, and the lock that serializes writes to it.
     ///
@@ -227,6 +233,7 @@ impl App {
             resolved_path,
             os_tokens: wtm_exec::os_tokens(),
             shells: parking_lot::Mutex::new(BTreeMap::new()),
+            handoff: crate::handoff::Hub::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             sessions_file: sessions_file.clone(),
             resume: parking_lot::Mutex::new(()),
@@ -942,6 +949,11 @@ impl App {
     /// Without this, a removed worktree leaves entries pointing at a path that no longer exists, and
     /// each would fail on click with an error about a missing directory.
     pub fn forget_worktree_sessions(&self, worktree_id: &str) {
+        // Handoff tokens go for the same reason and one step sooner: each names this worktree, so a
+        // handoff through a surviving one would open a pane and only then discover the directory is
+        // gone. Failing before the pane is the better order.
+        self.handoff.forget_worktree(worktree_id);
+
         let _guard = self.resume.lock();
         let mut store = wtm_config::SessionStore::load(&self.sessions_file);
         store.forget_worktree(worktree_id);

@@ -494,6 +494,27 @@ export interface AgentReady {
   session: string;
 }
 
+/**
+ * Emitted as `agent:spawned` — Rust opened a session nothing in the UI asked for.
+ *
+ * The inverse of every other session in the app. Normally the frontend calls `openAgentSession` and
+ * is handed an id; a handoff is started by a child process, so the session is already running by the
+ * time this window could know about it. Without adopting it, a CLI would be streaming into a pane
+ * that does not exist.
+ *
+ * Carries the model, effort and mode because an adopted pane never chose them, and a picker with
+ * nothing in it would suggest the session had no model rather than one this window did not pick.
+ */
+export interface SpawnedSession {
+  session: string;
+  project: string;
+  worktree: string;
+  provider: string;
+  model: string | null;
+  effort: string | null;
+  mode: string | null;
+}
+
 /** Emitted as `wtm:progress` while a pipeline runs. */
 export type ProgressEvent =
   | { kind: 'stage'; id: string; label: string; index: number; total: number }

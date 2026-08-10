@@ -38,7 +38,7 @@ use wtm_core::model::{
     Usage,
 };
 
-use crate::provider::{Protocol, Provider, ProviderId, SessionRequest, Step};
+use crate::provider::{McpServer, Protocol, Provider, ProviderId, SessionRequest, Step};
 
 pub const ID: &str = "codex";
 
@@ -69,6 +69,7 @@ impl Provider for Codex {
             // cannot silently move this onto a socket.
             "--stdio".to_owned(),
         ];
+        argv.extend(mcp_overrides(&req.mcp));
         argv.extend(req.extra_args.iter().cloned());
         argv
     }
@@ -76,6 +77,69 @@ impl Provider for Codex {
     fn protocol(&self, req: &SessionRequest) -> Box<dyn Protocol> {
         Box::new(CodexProtocol::new(req.clone()))
     }
+}
+
+/// Whether a name can be a TOML bare key, and therefore a safe `-c` path segment.
+///
+/// The check exists because `-c` takes a *dotted path* and the documented grammar is
+/// `foo.bar.baz` — a segment containing a dot would silently nest one level deeper than intended,
+/// and a segment containing a quote would produce something that parses as neither a bare nor a
+/// quoted key. TOML's own bare-key rule is exactly the safe set, so it is the one used.
+///
+/// Quoting the segment instead was the obvious alternative and was rejected: whether this CLI's
+/// path splitter honours `a."b.c".d` is not something wtm can know without depending on an
+/// undocumented parser detail, and guessing wrong would put a server under the wrong key rather
+/// than fail loudly.
+fn is_bare_key(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Every MCP server as `-c mcp_servers.…` overrides.
+///
+/// Codex has no `--mcp-config`: its servers come from `~/.codex/config.toml`, and `-c` is the
+/// documented way to override a value that file would otherwise supply. So the same set Claude
+/// receives as one JSON blob arrives here as a flat list of dotted assignments.
+///
+/// Values are emitted as JSON, which is deliberate rather than lazy: `-c` parses the right-hand
+/// side as TOML, and a JSON string and a TOML basic string are the same grammar, as are a JSON
+/// array of strings and a TOML array. A JSON *object* is not a TOML inline table — `:` versus `=` —
+/// which is why `env` is expanded into one assignment per variable rather than emitted whole.
+fn mcp_overrides(servers: &BTreeMap<String, McpServer>) -> Vec<String> {
+    let mut argv = Vec::new();
+    for (name, server) in servers {
+        if !is_bare_key(name) {
+            // Skipped rather than mangled. The caller validates too and reports this properly; this
+            // arm is the backstop that keeps a bad name from landing under the wrong key.
+            tracing::warn!(
+                name,
+                "skipping an MCP server whose name is not a TOML bare key"
+            );
+            continue;
+        }
+        let mut push = |path: String, value: &Value| {
+            argv.push("-c".to_owned());
+            argv.push(format!("{path}={value}"));
+        };
+        push(
+            format!("mcp_servers.{name}.command"),
+            &json!(server.command),
+        );
+        push(format!("mcp_servers.{name}.args"), &json!(server.args));
+        for (key, value) in &server.env {
+            if !is_bare_key(key) {
+                tracing::warn!(
+                    key,
+                    "skipping an MCP env var whose name is not a TOML bare key"
+                );
+                continue;
+            }
+            push(format!("mcp_servers.{name}.env.{key}"), &json!(value));
+        }
+    }
+    argv
 }
 
 /// Where a session is in its two-step handshake.
@@ -240,6 +304,16 @@ impl CodexProtocol {
             //
             // The string form here, the object form on `turn/start`. See `expand_mode`.
             params["sandbox"] = json!(sandbox);
+        }
+        // `developerInstructions`, not `baseInstructions`. Both exist on this frame and the names
+        // are close enough to be a trap: `baseInstructions` *replaces* the server's own prompt,
+        // taking the user's `AGENTS.md` with it. See `SessionRequest::instructions`.
+        //
+        // Sent on `thread/resume` too, by way of sharing this function. That is correct rather than
+        // incidental — a resumed session is running in the same window as a fresh one, so the fact
+        // this conveys is just as true, and the CLI does not carry it in the transcript.
+        if let Some(instructions) = &self.req.instructions {
+            params["developerInstructions"] = json!(instructions);
         }
 
         let method = if let Some(resume) = self.req.resume.clone() {

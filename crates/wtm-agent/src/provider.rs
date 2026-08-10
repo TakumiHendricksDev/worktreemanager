@@ -20,6 +20,8 @@
 //! is what a per-session object is for; the caller holds it behind the session mutex, which it
 //! needs anyway.
 
+use std::collections::BTreeMap;
+
 use wtm_core::model::{AgentEvent, ApprovalAnswer, Effort};
 
 /// Which provider. A newtype over a string rather than an enum, because the set is a compiled
@@ -62,8 +64,44 @@ pub struct SessionRequest {
     pub extra_args: Vec<String>,
     /// A session to resume rather than start. The provider's own id.
     pub resume: Option<String>,
-    /// MCP servers to hand the CLI, already serialized as that CLI expects.
-    pub mcp_config: Option<String>,
+    /// MCP servers to hand the CLI, rendered but **not** serialized.
+    ///
+    /// This used to be a `String` of pre-baked JSON, and the shape was wrong in a way that showed
+    /// up as a missing feature rather than a bug: only Claude accepts `--mcp-config`, so `codex.rs`
+    /// ignored the field entirely and a repository declaring servers silently got none of them on
+    /// one of its two providers. Serializing per provider is what this crate is *for* — the argv
+    /// that starts a CLI in the right mode is exactly the thing a provider module owns.
+    ///
+    /// Keyed, and ordered, because the key is the name the model sees in a tool call
+    /// (`mcp__codex__…`) and a set of servers that reordered between launches would produce a
+    /// different `-c` argv for an identical config, which is noise in a trust prompt.
+    pub mcp: BTreeMap<String, McpServer>,
+    /// Guidance appended to the session's system prompt, on top of whatever it already had.
+    ///
+    /// **Appended, never replacing.** Both CLIs also offer a way to substitute the base prompt
+    /// outright — Claude's `--system-prompt`, Codex's `baseInstructions` — and using either would
+    /// throw away the instructions that make the CLI work at all, along with the user's own
+    /// `CLAUDE.md` or `AGENTS.md`. wtm has one small thing to say and no business saying anything
+    /// else.
+    ///
+    /// What it is for: telling a session a fact about its *environment* that it cannot otherwise
+    /// know. A CLI has no idea it is running inside a window where a live pane is the point, so
+    /// asked to involve another agent it will reach for whichever skill or shell command matches
+    /// the request — which works, and is invisible to the person watching.
+    pub instructions: Option<String>,
+}
+
+/// One MCP server, with its templates already rendered and its guards already checked.
+///
+/// Distinct from `wtm_core::model::McpServerSpec`, which is the *declared* form: that one holds
+/// template strings a repository wrote, this one holds the argv that will actually be run. Keeping
+/// them as two types is what makes "rendered, then guarded, then handed over" a shape the compiler
+/// checks rather than a convention — a provider cannot accidentally be given an unrendered spec.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpServer {
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
 }
 
 /// One thing the caller should do as a result of feeding a line in.

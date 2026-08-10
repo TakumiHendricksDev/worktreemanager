@@ -8,8 +8,10 @@
 
 pub mod agent_bridge;
 pub mod app;
+pub mod bridge;
 pub mod commands;
 pub mod display;
+pub mod handoff;
 pub mod openers;
 pub mod pty_bridge;
 pub mod view;
@@ -152,6 +154,18 @@ pub fn run() {
             // there the title bar's gear and Ctrl-, are the whole story.
             if std::env::consts::OS == "macos" {
                 handle.set_menu(build_menu(handle.handle())?)?;
+            }
+
+            // The socket an agent's MCP bridge calls home on. Started here rather than before
+            // `Builder` because it needs an `AppHandle` to emit with — a handoff opens a pane, and a
+            // pane is announced to the window.
+            //
+            // Not fatal if it cannot bind: the app is entirely usable without handoff, and every
+            // other route to an agent session still works. `bridge::listen` logs and returns.
+            {
+                use tauri::Manager;
+                let app = Arc::clone(&*handle.state::<Arc<App>>());
+                bridge::listen(handle.handle().clone(), app);
             }
             Ok(())
         })

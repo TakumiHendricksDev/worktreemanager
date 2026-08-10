@@ -46,6 +46,9 @@ regex      = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 tracing    = { workspace = true }
+# Handoff tokens. A v4 is the right shape here: the token identifies which session's MCP bridge is
+# calling, so it must be unguessable by anything that did not receive it in its environment.
+uuid       = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]

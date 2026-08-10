@@ -42,6 +42,41 @@ pub const AGENT_EXIT_EVENT: &str = "agent:exit";
 /// Event name for a session becoming able to accept turns.
 pub const AGENT_READY_EVENT: &str = "agent:ready";
 
+/// Event name for a session Rust opened on its own initiative.
+///
+/// Every other session in the app exists because the frontend asked for one and was handed an id.
+/// A handoff inverts that: a child process asks, so the session is already running by the time the
+/// window could possibly know, and without this it would be a CLI streaming events to a pane that
+/// does not exist. The frontend adopts it — the same path a reload already uses for sessions that
+/// outlived the webview.
+pub const AGENT_SPAWNED_EVENT: &str = "agent:spawned";
+
+/// A session the frontend should adopt a pane for.
+///
+/// Carries the model, effort and mode as well as the identity, because an adopted pane otherwise
+/// renders its picker empty: the frontend normally learns those by *choosing* them before it opens a
+/// session, and here it did not choose them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnedSession {
+    pub session: String,
+    pub project: String,
+    pub worktree: String,
+    pub provider: String,
+    pub model: Option<String>,
+    pub effort: Option<wtm_core::model::Effort>,
+    pub mode: Option<String>,
+}
+
+/// Tell the window to open a pane for a session that already exists.
+pub fn announce_spawn(handle: &AppHandle, spawned: &SpawnedSession) {
+    if let Err(err) = handle.emit(AGENT_SPAWNED_EVENT, spawned) {
+        // The window is gone. The session keeps running and is reachable again through
+        // `list_agent_sessions` if a window comes back, which is the same degradation a reload has.
+        tracing::debug!(error = %err, "could not announce a spawned session");
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentEventPayload<'a> {

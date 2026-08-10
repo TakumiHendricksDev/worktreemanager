@@ -42,7 +42,7 @@ use wtm_core::model::{
     AgentEvent, AgentSkill, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
 };
 
-use crate::provider::{Protocol, Provider, ProviderId, SessionRequest, Step};
+use crate::provider::{McpServer, Protocol, Provider, ProviderId, SessionRequest, Step};
 
 pub const ID: &str = "claude";
 
@@ -136,9 +136,21 @@ impl Provider for Claude {
             argv.push("--permission-mode".to_owned());
             argv.push(canonical_mode(mode).to_owned());
         }
-        if let Some(mcp) = &req.mcp_config {
+        // One `--mcp-config` carrying every server as JSON. The flag accepts a file path or a
+        // literal object; the literal is used because the alternative is a temp file whose lifetime
+        // nothing here owns — the CLI reads it at some unspecified point after spawn, so deleting it
+        // is a race and leaving it is litter in a directory the user did not choose.
+        if !req.mcp.is_empty() {
             argv.push("--mcp-config".to_owned());
-            argv.push(mcp.clone());
+            argv.push(mcp_config_json(&req.mcp));
+        }
+
+        // `--append-system-prompt`, not `--system-prompt`. The latter replaces the CLI's own
+        // instructions wholesale, which would break far more than it fixed. See
+        // `SessionRequest::instructions`.
+        if let Some(instructions) = &req.instructions {
+            argv.push("--append-system-prompt".to_owned());
+            argv.push(instructions.clone());
         }
 
         // The cwd is already the worktree, but `--add-dir` is what puts it in the allow-list for
@@ -154,6 +166,27 @@ impl Provider for Claude {
     fn protocol(&self, _req: &SessionRequest) -> Box<dyn Protocol> {
         Box::new(ClaudeProtocol::default())
     }
+}
+
+/// Every MCP server as the one JSON object `--mcp-config` expects.
+///
+/// `{"mcpServers": {name: {command, args, env}}}`. Built here rather than by the caller because it
+/// is a fact about *this* CLI's flag: Codex takes the same set of servers as a pile of `-c` dotted
+/// overrides, and a caller that pre-serialized for one of them is the reason the other silently
+/// received nothing for an increment.
+fn mcp_config_json(servers: &BTreeMap<String, McpServer>) -> String {
+    let mut map = serde_json::Map::new();
+    for (name, server) in servers {
+        map.insert(
+            name.clone(),
+            serde_json::json!({
+                "command": server.command,
+                "args": server.args,
+                "env": server.env,
+            }),
+        );
+    }
+    serde_json::json!({ "mcpServers": map }).to_string()
 }
 
 /// One outstanding `can_use_tool`.

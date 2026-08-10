@@ -451,14 +451,42 @@ PATH = "{{ env.LOGIN_PATH }}"
 
 # ─────────────────────── session-to-session handoff ───────────────────────
 #
-# This one table is the whole feature. `codex mcp-server` is an MCP server exposing two tools, so a
-# Claude session handed it can open a Codex thread itself — "have Codex review the plan you just
-# wrote" — with no code in wtm involved at all. wtm sees an ordinary tool call and can pick the
-# returned thread up as a live pane.
+# Nothing below is needed for handoff. It is built in, and there is no key here to switch it on.
 #
-# It is an argv this file names, so it appears in the trust prompt with everything else, and it is
-# checked against `[[guards.forbid]]` after its templates are rendered. Both matter: an MCP server is
-# a child process with the same reach as any other.
+# Every session is handed one MCP server that wtm owns, named `wtm`, exposing a single tool the model
+# sees as `mcp__wtm__ask_agent`. So "have Codex review the plan you just wrote", typed at a Claude
+# session, works in a fresh repository with no `wtm.toml` at all — and the answer is a **live pane**
+# beside the one you are looking at: the other agent's thinking, its approval cards, its diffs, all
+# streaming as they happen, and its session left open afterwards so you can read the exchange.
+#
+# The `agent` argument is an enum of exactly the agents *this* repository offers, so `enabled = false`
+# below removes an agent from the tool's vocabulary as well as from the launcher — a model cannot ask
+# for one this project has refused.
+#
+# Three properties worth knowing, because they are what make it safe to have on by default:
+#
+#   - The handoff runs in the **caller's own worktree**. It is not a parameter; it comes from which
+#     session is asking. There is no way for a model to start an agent somewhere you are not looking.
+#   - The program comes from wtm's compiled catalogue, never from this file — the same rule that keeps
+#     a repository from naming the binary behind the word "Claude" in the UI.
+#   - The new session gets this file's own `mode`, so whatever you set below applies to a pane an
+#     agent opened exactly as it does to one you opened.
+#
+# ── the other route, and when you would want it ──
+#
+# `codex mcp-server` is Codex's own MCP server. Handing it to Claude directly, as below, also lets a
+# Claude session open a Codex thread — but that thread lives inside a process Claude spawned, so wtm
+# never sees it: no pane, no streaming, no approval cards. You get a tool call that spins and returns
+# a summary.
+#
+# That is occasionally what you want — it is cheaper, and it does not take a pane — so it is still
+# supported. For "let me watch it work", the built-in `wtm` server is the one you want, and you do
+# not have to ask for it.
+#
+# An MCP server named here is an argv this file names, so it appears in the trust prompt with
+# everything else and is checked against `[[guards.forbid]]` after its templates are rendered. Both
+# matter: an MCP server is a child process with the same reach as any other. `wtm` is the one name you
+# cannot use for one, because it is the handoff tool's own.
 [agent.claude.mcp.codex]
 command = "codex"
 args    = ["mcp-server"]

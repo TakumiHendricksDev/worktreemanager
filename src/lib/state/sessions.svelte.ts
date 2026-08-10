@@ -36,6 +36,7 @@ import {
   type BackgroundTask,
   type Brief,
   type Resumable,
+  type SpawnedSession,
 } from '../ipc/types';
 import {
   insert,
@@ -318,6 +319,9 @@ class Sessions {
     const offPtyExit = await listen<PtyExit>('pty:exit', (e) => {
       this.noteExit(e.payload.session, e.payload.summary);
     });
+    const offSpawned = await listen<SpawnedSession>('agent:spawned', (e) => {
+      this.adoptSpawned(e.payload);
+    });
 
     await this.refreshOptions();
 
@@ -349,7 +353,47 @@ class Sessions {
       offAgentExit();
       offReady();
       offPtyExit();
+      offSpawned();
     };
+  }
+
+  /**
+   * Show a pane for a session Rust started on its own — a handoff.
+   *
+   * # Why this ignores the pane cap
+   *
+   * Because the session is *already running*. The cap exists to stop someone opening a fifth CLI in
+   * one worktree, and it refuses rather than evicting precisely so a running session is never
+   * discarded. Refusing here would not prevent the fifth CLI; it would only leave it running with
+   * nothing on screen able to reach it — the exact failure `adopt` exists to prevent after a reload.
+   *
+   * The pane is focused, which is deliberate and is the whole point of the feature. The user asked
+   * one agent to consult another and the answer to "what is it doing" has to be visible without
+   * hunting for it.
+   */
+  private adoptSpawned(spawned: SpawnedSession): void {
+    // A second announcement for a session already on screen would open a duplicate pane pointed at
+    // one CLI. Cheap to guard and impossible to notice if it ever happened.
+    if (this.paneBySession(spawned.session)) return;
+
+    const pane = this.blank(
+      { kind: 'agent', provider: spawned.provider },
+      spawned.project,
+      spawned.worktree,
+    );
+    pane.model = spawned.model;
+    pane.effort = spawned.effort;
+    pane.mode = spawned.mode;
+    this.panes = [...this.panes, pane];
+
+    const live = this.paneById(pane.id);
+    if (live) this.claimSession(live, spawned.session);
+    this.place(spawned.worktree, pane.id, 'right');
+    void this.loadCapability(spawned.provider);
+    // It is running, so it must stop being offered as resumable — the same correction `resume` makes.
+    void this.refreshResumable(spawned.worktree);
+    // A cap that refused a *user's* pane earlier should not keep saying so once this one appeared.
+    this.atCapacity = false;
   }
 
   /**

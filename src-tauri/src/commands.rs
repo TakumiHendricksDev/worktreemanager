@@ -14,6 +14,7 @@
 //! and "these fields are invalid" from "something failed", and `ErrorView::detail` carries
 //! the structured payload for those cases.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ use wtm_core::ports::pty::PtyHost;
 
 use crate::app::App;
 use crate::display;
+use crate::handoff;
 use crate::openers;
 use crate::view::{
     ActionView, AgentOptionView, AgentSessionView, BackgroundTaskView, BriefView, CapabilityView,
@@ -1387,28 +1389,19 @@ pub async fn open_agent_session(
         }
 
         let spec = project.agent_spec(&agent_id);
-        let mcp_config = mcp_config_of(&app, &project, &spec)?;
-
-        let req = wtm_agent::SessionRequest {
-            cwd: worktree.path.to_string_lossy().into_owned(),
-            // The caller's choice wins, then the repository's, then the provider's own. Three
-            // layers rather than two because a picker change must not be overridden by config, and
-            // a repo's default must not be overridden by a compiled one.
-            model: model.or(spec.model.clone()),
-            effort: effort.or(spec.effort.clone()),
-            // Ask before running anything, unless something asked for otherwise. A worktree is
-            // disposable and git is the undo, so a permissive default is defensible — but it is a
-            // decision the user should make deliberately rather than discover, and the safe
-            // direction is the one where the first surprising command is a card rather than a
-            // `git status` you cannot explain. The spelling is the provider's own; see
-            // `ProviderEntry::default_mode`.
-            mode: mode
-                .or(spec.mode.clone())
-                .or_else(|| entry.default_mode.map(str::to_owned)),
-            resume,
-            extra_args: spec.extra_args.clone(),
-            mcp_config,
-        };
+        let req = session_request_for(
+            &app,
+            &project,
+            &spec,
+            entry,
+            &worktree,
+            Some(SessionOptions {
+                model,
+                effort,
+                mode,
+                resume,
+            }),
+        )?;
 
         let sink: Arc<dyn wtm_agent::session::AgentSink> =
             crate::agent_bridge::AgentEventSink::new(handle);
@@ -1777,29 +1770,152 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
     })
 }
 
-/// The `--mcp-config` JSON for a session, or `None` when the repository declares no servers.
+/// Everything a session needs to start, resolved from config and the caller's choices.
 ///
-/// # Why this is rendered rather than passed through
+/// Extracted because there are now **two** routes to a session and they must agree. A handoff opens
+/// one from the socket thread, and if it built its request by hand then a repository's `extra_args`,
+/// its `[agent.*.mcp.*]` servers, or its mode default would apply to a pane the user opened and not
+/// to one an agent opened — a difference nothing in the UI would explain.
 ///
-/// Each server's argv is a template, like every other argv in `wtm.toml`, so `{{ repo.root }}` works
-/// in one. And each is checked against `[[guards.forbid]]` **after** rendering, for exactly the reason
-/// the setup command is: an argv is only fully known once its templates have run, so a guard checked
-/// any earlier can be evaded by a template.
+/// `options` is `None` for a handoff, which has no picker to express a preference with and therefore
+/// takes the repository's defaults throughout.
 ///
-/// The shape is the one both CLIs accept — `{"mcpServers": {name: {command, args, env}}}` — which is
-/// why it is built here rather than in `wtm-agent`: it is a fact about two external programs, and
-/// this is the crate that already knows how to render a template.
-fn mcp_config_of(
+/// # Errors
+///
+/// If a template in an MCP server's argv fails to render, or a rendered argv is forbidden by a guard.
+pub fn session_request_for(
     app: &Arc<App>,
     project: &wtm_core::model::Project,
     spec: &wtm_core::model::AgentSpec,
-) -> Result<Option<String>, ErrorView> {
-    if spec.mcp.is_empty() {
-        return Ok(None);
+    entry: &'static wtm_agent::ProviderEntry,
+    worktree: &wtm_core::model::Worktree,
+    options: Option<SessionOptions>,
+) -> Result<wtm_agent::SessionRequest, ErrorView> {
+    let SessionOptions {
+        model,
+        effort,
+        mode,
+        resume,
+    } = options.unwrap_or_default();
+
+    Ok(wtm_agent::SessionRequest {
+        cwd: worktree.path.to_string_lossy().into_owned(),
+        // The caller's choice wins, then the repository's, then the provider's own. Three
+        // layers rather than two because a picker change must not be overridden by config, and
+        // a repo's default must not be overridden by a compiled one.
+        model: model.or_else(|| spec.model.clone()),
+        effort: effort.or_else(|| spec.effort.clone()),
+        // Ask before running anything, unless something asked for otherwise. A worktree is
+        // disposable and git is the undo, so a permissive default is defensible — but it is a
+        // decision the user should make deliberately rather than discover, and the safe
+        // direction is the one where the first surprising command is a card rather than a
+        // `git status` you cannot explain. The spelling is the provider's own; see
+        // `ProviderEntry::default_mode`.
+        mode: mode
+            .or_else(|| spec.mode.clone())
+            .or_else(|| entry.default_mode.map(str::to_owned)),
+        resume,
+        extra_args: spec.extra_args.clone(),
+        mcp: mcp_servers_for(app, project, spec, worktree, entry.id)?,
+        instructions: handoff_instructions(project, entry.id),
+    })
+}
+
+/// What to tell a session about the handoff tool, or `None` when there is nobody to hand to.
+///
+/// # Why this is needed at all, when the tool already describes itself
+///
+/// Because the tool's description is not the only thing competing for "let Codex review this". A
+/// user's global skills and slash commands are in the same context, and one of them is very likely
+/// to be *named* after an agent — a `codex` skill wrapping the `codex` CLI is a popular thing to
+/// have, and its trigger phrases are the obvious ones: "codex review", "second opinion". Against a
+/// name that direct, a tool called `ask_agent` loses, and the observed failure is exactly that: a
+/// handoff request answered by shelling out to a CLI in a subprocess nobody can see.
+///
+/// That is not a bug in the skill. Both are reasonable readings of the request, and the CLI has no
+/// way to prefer one, because the deciding fact is about the *environment*: this session is a pane in
+/// a window somebody is watching, so an agent started any other way is invisible to them. Nothing in
+/// the session can know that unless wtm says it.
+///
+/// # Why it names the alternatives explicitly
+///
+/// "Prefer the tool" is not actionable if the model does not realise it is choosing. Naming the two
+/// routes it would otherwise take — a skill, or a CLI through the shell — is what turns this from a
+/// preference into a tie-break it can apply.
+///
+/// `None` rather than a paragraph nobody can act on when the repository offers no other agent: a
+/// session told to hand off, with nothing to hand off to, would reach for the tool and be refused.
+fn handoff_instructions(project: &wtm_core::model::Project, provider: &str) -> Option<String> {
+    let others: Vec<&str> = wtm_agent::CATALOGUE
+        .iter()
+        .filter(|entry| entry.id != provider && project.offers_agent(entry.id))
+        .map(|entry| entry.label)
+        .collect();
+    if others.is_empty() {
+        return None;
     }
 
-    let mut servers = serde_json::Map::new();
+    let roster = others.join(" and ");
+    Some(format!(
+        "You are running inside Worktree Manager (wtm). This session is a live pane in a window the \
+         user is watching, alongside the other panes for this worktree.\n\n\
+         {roster} {} available here as a handoff target through the `mcp__wtm__ask_agent` tool. When \
+         the user asks you to involve another agent — \"let Codex review this\", \"pass this to \
+         Codex\", \"ask Claude what it thinks\", \"get a second opinion\", \"have the other model \
+         check this\" — use that tool.\n\n\
+         Prefer it over every other way of reaching another agent: over running that agent's CLI \
+         yourself with Bash, and over any skill, slash command, or wrapper you have that does. Those \
+         all work, but they run the other agent inside a subprocess that is invisible to the user. \
+         The tool opens it as a real pane beside this one, so they can watch it think, answer its \
+         approval prompts, and read its transcript afterwards — which is the reason they asked you \
+         here rather than in a terminal.\n\n\
+         The tool blocks until the other agent finishes, and it does not share your conversation, so \
+         put everything it needs in the prompt rather than referring to what is above.",
+        if others.len() == 1 { "is" } else { "are" }
+    ))
+}
+
+/// The MCP servers a session is handed: wtm's own bridge, plus whatever the repository declared.
+///
+/// # Why this is rendered here and serialized elsewhere
+///
+/// Each server's argv is a template, like every other argv in `wtm.toml`, so `{{ repo.root }}` works
+/// in one, and each is checked against `[[guards.forbid]]` **after** rendering — for exactly the
+/// reason the setup command is: an argv is only fully known once its templates have run, so a guard
+/// checked any earlier can be evaded by a template. Rendering and guarding are this crate's job
+/// because it owns the template engine.
+///
+/// *Serializing* is not, and used to be. This returned pre-baked `--mcp-config` JSON, which meant
+/// Codex — which has no such flag — silently received nothing. Handing over a structured map lets
+/// each provider spell it its own way. See `wtm_agent::SessionRequest::mcp`.
+fn mcp_servers_for(
+    app: &Arc<App>,
+    project: &wtm_core::model::Project,
+    spec: &wtm_core::model::AgentSpec,
+    worktree: &wtm_core::model::Worktree,
+    provider: &str,
+) -> Result<BTreeMap<String, wtm_agent::McpServer>, ErrorView> {
+    let mut servers = BTreeMap::new();
+
+    if let Some(bridge) = handoff_server(app, project, worktree, provider) {
+        servers.insert(handoff::SERVER_NAME.to_owned(), bridge);
+    }
+
     for (name, server) in &spec.mcp {
+        // A repository cannot shadow the bridge, and this is checked before anything else in the loop
+        // so the message is about the name rather than about whatever the argv happened to do. Without
+        // it, `[agent.claude.mcp.wtm]` would `insert` over the handoff tool — a name the model already
+        // trusts, pointed at an argv of the repository's choosing. It is the one key in this map that
+        // is wtm's rather than the repository's, so it is the one that must not be overridable.
+        if name == handoff::SERVER_NAME {
+            return Err(ErrorView::new(
+                "config",
+                format!(
+                    "`{name}` is reserved for wtm's own handoff tool — rename `[agent.*.mcp.{name}]`"
+                ),
+            ));
+        }
+
         // Rendered through the same engine and the same base context every other argv in this file
         // goes through, so `{{ repo.root }}` works in an MCP server's arguments too.
         let ctx = display::base_context(project, app.os_tokens());
@@ -1824,19 +1940,69 @@ fn mcp_config_of(
                 format!("`[agent.*.mcp.{name}]` has an empty `command`"),
             )
         })?;
+
         servers.insert(
             name.clone(),
-            serde_json::json!({
-                "command": program,
-                "args": arguments,
-                "env": server.env,
-            }),
+            wtm_agent::McpServer {
+                command: program.clone(),
+                args: arguments.to_vec(),
+                env: server.env.clone(),
+            },
         );
     }
 
-    Ok(Some(
-        serde_json::json!({ "mcpServers": servers }).to_string(),
-    ))
+    Ok(servers)
+}
+
+/// wtm's own bridge, as an MCP server this session can call.
+///
+/// `None` when the socket path cannot be resolved — the same degradation `bridge::listen` takes, and
+/// for the same reason: a session that cannot hand off is worth strictly more than no session.
+///
+/// Every session gets one, and that default is deliberate. The blast radius is not new: the target
+/// comes from the compiled catalogue rather than from config, it runs in the *caller's own* worktree,
+/// it is refused unless the repository offers it, and its own approval mode applies exactly as it
+/// would to a hand-opened pane. An agent that can already run `bash` in this directory is not
+/// meaningfully further constrained by being unable to open a sibling pane — and a handoff is visible
+/// on screen, which a subprocess is not.
+fn handoff_server(
+    app: &Arc<App>,
+    project: &wtm_core::model::Project,
+    worktree: &wtm_core::model::Worktree,
+    provider: &str,
+) -> Option<wtm_agent::McpServer> {
+    let socket = crate::bridge::socket_path().ok()?;
+    // `current_exe` rather than a bundled sidecar. See `main.rs`.
+    let program = std::env::current_exe().ok()?;
+
+    // Only the agents this repository actually offers, so the tool's `enum` cannot suggest one that
+    // would be refused the moment it was chosen.
+    let roster = wtm_agent::CATALOGUE
+        .iter()
+        .filter(|entry| project.offers_agent(entry.id))
+        .map(|entry| format!("{}:{}", entry.id, entry.label))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let token = app.handoff.issue(handoff::Caller {
+        project: project.id.as_str().to_owned(),
+        worktree: worktree.id.as_str().to_owned(),
+        provider: provider.to_owned(),
+    });
+
+    let mut env = BTreeMap::new();
+    env.insert(handoff::TOKEN_ENV.to_owned(), token);
+    env.insert(
+        handoff::SOCKET_ENV.to_owned(),
+        socket.to_string_lossy().into_owned(),
+    );
+    env.insert(handoff::AGENTS_ENV.to_owned(), roster);
+
+    Some(wtm_agent::McpServer {
+        command: program.to_string_lossy().into_owned(),
+        args: vec![crate::bridge::ARGV_FLAG.to_owned()],
+        env,
+    })
 }
 
 // ═══════════════════════════ plans and background work ═══════════════════════════
