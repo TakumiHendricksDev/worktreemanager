@@ -175,6 +175,12 @@ struct ClaudeProtocol {
     pending: BTreeMap<String, Pending>,
     /// Tool calls seen this turn, so a `tool_result` can name the tool it belongs to.
     tools: BTreeMap<String, String>,
+    /// Whether a text delta has arrived since the last `assistant` message.
+    ///
+    /// Cleared by each `assistant` message rather than by each turn, because one turn produces
+    /// several of them — one per tool round trip — and a later message that streamed nothing must
+    /// not be silenced by an earlier one that did. See [`Self::on_assistant`].
+    streamed: bool,
     turn: u64,
 }
 
@@ -222,6 +228,9 @@ impl ClaudeProtocol {
                 };
                 match delta.and_then(|d| d.get("type")).and_then(Value::as_str) {
                     Some("text_delta") => {
+                        // Recorded so `on_assistant` can tell whether the whole message it is about
+                        // to see has already been shown. See there.
+                        self.streamed = true;
                         vec![Step::Emit(AgentEvent::MessageDelta { text: text("text") })]
                     }
                     Some("thinking_delta") => vec![Step::Emit(AgentEvent::ReasoningDelta {
@@ -240,15 +249,42 @@ impl ClaudeProtocol {
 
     /// An `assistant` message. Its content blocks are already-complete versions of what the deltas
     /// carried, plus the tool calls, which only arrive here.
+    ///
+    /// # Unless nothing was streamed, in which case this is the only copy
+    ///
+    /// Dropping the text blocks unconditionally was a real bug with a bad presentation. The CLI
+    /// answers some turns **without calling the model at all** — an expired OAuth session, a
+    /// refusal — and those come back as one `assistant` message with `model: "<synthetic>"`, no
+    /// `stream_event` deltas before it, and the reason in a `text` block. So a session whose auth
+    /// had lapsed showed a user's message, a usage row of zeros, and *nothing else*: the CLI had
+    /// said "Failed to authenticate: OAuth session expired and could not be refreshed" and wtm
+    /// discarded it on the grounds that deltas had already carried it. They had not.
+    ///
+    /// `streamed` makes the assumption a fact this driver checks rather than one it asserts.
     fn on_assistant(&mut self, message: &Value) -> Vec<Step> {
         let Some(blocks) = message.get("content").and_then(Value::as_array) else {
             return Vec::new();
         };
 
+        let streamed = std::mem::take(&mut self.streamed);
         blocks
             .iter()
             .filter_map(|block| {
                 match block.get("type").and_then(Value::as_str) {
+                    // The whole message, when the deltas did not carry it. `Message` rather than
+                    // `MessageDelta`, which is what that variant exists for — a provider that only
+                    // reports complete messages.
+                    Some("text") if !streamed => {
+                        let text = block
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        (!text.is_empty()).then(|| {
+                            Step::Emit(AgentEvent::Message {
+                                text: text.to_owned(),
+                            })
+                        })
+                    }
                     Some("tool_use") => {
                         let id = block
                             .get("id")
@@ -267,8 +303,8 @@ impl ClaudeProtocol {
                             name,
                         }))
                     }
-                    // `text` and `thinking` already arrived as deltas; emitting them again would
-                    // duplicate every reply. Dropped here rather than in the frontend, so a
+                    // `text` and `thinking` that already arrived as deltas; emitting them again
+                    // would duplicate every reply. Dropped here rather than in the frontend, so a
                     // provider that streams and a provider that does not both work unchanged.
                     _ => None,
                 }
@@ -619,7 +655,32 @@ impl Protocol for ClaudeProtocol {
                         .and_then(Value::as_u64)
                         .unwrap_or_default()
                 };
-                vec![Step::Emit(AgentEvent::TurnFinished {
+                let mut steps = Vec::new();
+
+                /*
+                 * A turn that failed says so here, and this used to read straight past it.
+                 *
+                 * `is_error` is `true` and `result` carries the reason, while `subtype` stays
+                 * `"success"` — the subtype describes the *shape* of the reply, not the outcome, so
+                 * matching on it is not an alternative. Ignoring both is how an expired OAuth
+                 * session presented as a pane with a message in it, a usage row of zeros, and no
+                 * explanation of any kind.
+                 *
+                 * Before the finish, not after: the failure is the reason the turn ended, so it
+                 * reads above the row that closes it.
+                 */
+                if message.get("is_error").and_then(Value::as_bool) == Some(true) {
+                    steps.push(Step::Emit(AgentEvent::Failed {
+                        message: message
+                            .get("result")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("the turn failed and the CLI gave no reason")
+                            .to_owned(),
+                    }));
+                }
+
+                steps.push(Step::Emit(AgentEvent::TurnFinished {
                     turn: self.turn_label(),
                     usage: Usage {
                         tokens_in: field("input_tokens"),
@@ -630,7 +691,8 @@ impl Protocol for ClaudeProtocol {
                     // Claude reports real currency, where Codex reports none. Surfaced rather than
                     // normalized away, because the number is genuinely available on one side.
                     cost_usd: message.get("total_cost_usd").and_then(Value::as_f64),
-                })]
+                }));
+                steps
             }
             "rate_limit_event" => Vec::new(),
             "error" => vec![Step::Emit(AgentEvent::Failed {

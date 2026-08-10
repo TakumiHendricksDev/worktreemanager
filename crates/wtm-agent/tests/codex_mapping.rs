@@ -40,6 +40,7 @@
 #![allow(clippy::unwrap_used)]
 
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use wtm_agent::codex::Codex;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
 use wtm_core::model::{
@@ -819,10 +820,20 @@ fn each_mode_preset_expands_to_both_protocol_axes() {
     // The protocol has two independent fields and Codex's own TUI offers three named combinations
     // of them. wtm offers the same three, so this is the table that has to stay true — a preset
     // that sent the wrong sandbox would be a control whose label does not describe what it does.
-    for (mode, approval, sandbox) in [
-        ("read-only", "on-request", "read-only"),
-        ("auto", "on-request", "workspace-write"),
-        ("full-access", "never", "danger-full-access"),
+    //
+    // `thread/start` spells the sandbox as a **string**. `turn/start` spells the same setting as a
+    // tagged **object** under a different key, which is why the two are asserted separately below
+    // rather than sharing one expectation. Both spellings are copied from
+    // `codex app-server generate-json-schema` — `SandboxMode` and `SandboxPolicy`.
+    for (mode, approval, sandbox, policy) in [
+        ("read-only", "on-request", "read-only", "readOnly"),
+        ("auto", "on-request", "workspace-write", "workspaceWrite"),
+        (
+            "full-access",
+            "never",
+            "danger-full-access",
+            "dangerFullAccess",
+        ),
     ] {
         let mut driver = Codex.protocol(&SessionRequest {
             cwd: "/tmp/worktree".to_owned(),
@@ -834,6 +845,27 @@ fn each_mode_preset_expands_to_both_protocol_axes() {
         let open = &frames[1]["params"];
         assert_eq!(open["approvalPolicy"], approval, "{mode} approval");
         assert_eq!(open["sandbox"], sandbox, "{mode} sandbox");
+        assert!(
+            open["sandbox"].is_string(),
+            "thread/start takes SandboxMode, a string"
+        );
+
+        driver.on_line(r#"{"id":2,"result":{"thread":{"id":"t","cwd":"/tmp/worktree"}}}"#);
+        let turn = writes(&driver.send_turn("go"));
+        let params = &turn[0]["params"];
+        assert_eq!(params["approvalPolicy"], approval, "{mode} turn approval");
+        // The object form, and the assertion that would have caught the bug that shipped: a plain
+        // string here is rejected by the server, and a rejected `turn/start` produces no answer at
+        // all — a session that takes a message, says `0 in 0 out`, and never replies.
+        assert!(
+            params["sandboxPolicy"].is_object(),
+            "turn/start takes SandboxPolicy, a tagged object — got {}",
+            params["sandboxPolicy"]
+        );
+        assert_eq!(
+            params["sandboxPolicy"]["type"], policy,
+            "{mode} turn policy"
+        );
     }
 }
 
@@ -854,10 +886,28 @@ fn a_mode_this_build_does_not_know_falls_back_to_the_cautious_preset() {
 }
 
 #[test]
+fn a_turn_start_the_server_rejects_is_surfaced_rather_than_looking_like_silence() {
+    // How the `sandboxPolicy` bug presented, and the reason it took a report to find rather than a
+    // glance: a rejected `turn/start` is an error reply, the turn simply never happens, and the
+    // pane shows a usage row of zeros with nothing above it. This asserts the error reaches the
+    // transcript, so the next protocol mistake reads as a failure instead of as a quiet agent.
+    let mut driver = ready_driver();
+    driver.send_turn("go");
+
+    let steps = driver.on_line(
+        r#"{"id":3,"error":{"code":-32602,"message":"invalid type: string \"workspace-write\", expected internally tagged enum SandboxPolicy"}}"#,
+    );
+    match events(&steps).first().expect("a Failed event") {
+        AgentEvent::Failed { message } => assert!(message.contains("SandboxPolicy"), "{message}"),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_turn_re_sends_the_mode_which_is_why_this_provider_needs_no_restart() {
     // The counterpart to Claude's control requests. Codex has no "change the mode" method at all —
     // it re-reads these off every `turn/start` — so `reconfigure` writes nothing and the change
-    // rides the next turn instead. Note the key: `sandboxPolicy` here, `sandbox` at thread open.
+    // rides the next turn instead.
     let mut driver = ready_driver();
     driver.reconfigure(Some("gpt-5.6-luna"), Some("full-access"));
 
@@ -866,7 +916,14 @@ fn a_turn_re_sends_the_mode_which_is_why_this_provider_needs_no_restart() {
     assert_eq!(frames[0]["method"], "turn/start");
     assert_eq!(params["model"], "gpt-5.6-luna");
     assert_eq!(params["approvalPolicy"], "never");
-    assert_eq!(params["sandboxPolicy"], "danger-full-access");
+    // `{"type":"dangerFullAccess"}`, not the `"danger-full-access"` string `thread/start` takes.
+    // This line asserted the string until a real session found it: the server rejected every turn
+    // and the pane answered nothing. Different key, different casing, different JSON type — see
+    // `expand_mode`.
+    assert_eq!(
+        params["sandboxPolicy"],
+        json!({ "type": "dangerFullAccess" })
+    );
 }
 
 #[test]

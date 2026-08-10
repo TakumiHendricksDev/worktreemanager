@@ -205,14 +205,29 @@ fn a_tool_call_and_its_result_pair_up_by_id() {
 }
 
 #[test]
-fn an_assistant_messages_text_block_is_dropped_because_the_deltas_already_carried_it() {
-    // Otherwise every reply appears twice: once streamed, once whole. Dropped here rather than in
-    // the frontend, so a provider that streams and one that does not both work unchanged.
+fn an_assistant_messages_thinking_block_is_dropped_because_the_deltas_already_carried_it() {
+    // Narrowed from "text and thinking are always dropped", which was too strong and cost a user a
+    // silent pane: when nothing streamed, the `assistant` message is the *only* copy of the reply.
+    // See `a_turn_the_cli_could_not_run_reports_why_instead_of_an_empty_pane`.
+    //
+    // Thinking stays unconditional. It has no synthetic case — a refusal or an auth failure carries
+    // a `text` block and never a `thinking` one — and re-emitting a completed chain of thought
+    // would put the whole thing in the transcript a second time, unstreamed, after the answer.
     let mut d = driver();
+    d.on_line(
+        r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"DONE"}},"session_id":"s"}"#,
+    );
     let steps = d.on_line(
         r#"{"type":"assistant","message":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"DONE"},{"type":"thinking","thinking":"…","signature":"x"}]},"session_id":"s"}"#,
     );
-    assert!(steps.is_empty());
+    assert!(steps.is_empty(), "both blocks already streamed");
+
+    // And with no deltas at all, the thinking block is *still* dropped while the text is not.
+    let mut fresh = driver();
+    let alone = fresh.on_line(
+        r#"{"type":"assistant","message":{"id":"msg_2","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"…","signature":"x"}]},"session_id":"s"}"#,
+    );
+    assert!(alone.is_empty(), "thinking is never re-emitted whole");
 }
 
 #[test]
@@ -777,4 +792,111 @@ fn a_refused_settings_change_is_reported_instead_of_being_swallowed() {
         )
         .is_empty()
     );
+}
+
+#[test]
+fn a_turn_the_cli_could_not_run_reports_why_instead_of_an_empty_pane() {
+    // Captured from a real session whose OAuth had lapsed, and the reason this test exists: wtm
+    // showed the user's message, `0 in · 0 out`, and nothing else. The CLI had said exactly what
+    // was wrong, twice, and both copies were discarded — the `assistant` text because "the deltas
+    // already carried it" (there were no deltas), and `is_error` because `result` was only ever
+    // read for token counts.
+    //
+    // Note `subtype: "success"` alongside `is_error: true`. The subtype describes the shape of the
+    // reply, not the outcome, so matching on it would not have caught this.
+    let mut d = driver();
+    let _ = d.open();
+
+    let synthetic = d.on_line(
+        r#"{"type":"assistant","message":{"id":"7aeab005","model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]}}"#,
+    );
+    match events(&synthetic)
+        .first()
+        .expect("the reason, as a message")
+    {
+        AgentEvent::Message { text } => assert!(text.contains("OAuth session expired"), "{text}"),
+        other => panic!("expected Message, got {other:?}"),
+    }
+
+    let finished = d.on_line(
+        r#"{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed","terminal_reason":"api_error","num_turns":1,"session_id":"s","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0},"modelUsage":{}}"#,
+    );
+    let seen = events(&finished);
+    match seen.first().expect("a Failed event") {
+        AgentEvent::Failed { message } => assert!(message.contains("OAuth"), "{message}"),
+        other => panic!("expected Failed first, got {other:?}"),
+    }
+    // The failure reads above the row that closes the turn, because it is the reason it closed.
+    assert!(matches!(seen.get(1), Some(AgentEvent::TurnFinished { .. })));
+
+    // The zeros themselves were never wrong. No request reached the model, so nothing was spent —
+    // which is why the fix is to explain the row rather than to change it.
+    match seen.get(1).expect("TurnFinished") {
+        AgentEvent::TurnFinished { usage, .. } => {
+            assert_eq!((usage.tokens_in, usage.tokens_out), (0, 0));
+        }
+        other => panic!("expected TurnFinished, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_streamed_reply_is_not_repeated_by_the_message_that_completes_it() {
+    // The other half of the same change, and the regression it must not cause: when deltas *did*
+    // arrive, the `assistant` message is a duplicate of what is already on screen. Emitting both
+    // would double every reply this provider gives — which is far more visible than the bug being
+    // fixed, and is why the original unconditional drop existed.
+    let mut d = driver();
+    let _ = d.open();
+    d.on_line(
+        r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}"#,
+    );
+    let delta = d.on_line(
+        r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi there"}}}"#,
+    );
+    assert!(matches!(
+        events(&delta).first(),
+        Some(AgentEvent::MessageDelta { .. })
+    ));
+
+    let whole = d.on_line(
+        r#"{"type":"assistant","message":{"id":"m1","model":"claude-haiku-4-5-20251001","role":"assistant","type":"message","content":[{"type":"text","text":"Hi there"}]}}"#,
+    );
+    assert!(
+        events(&whole).is_empty(),
+        "the deltas carried it; got {:?}",
+        events(&whole)
+    );
+
+    // And the flag is per message, not per turn: a second reply in the same turn that streams
+    // nothing — a synthetic refusal after a tool call — must still be shown.
+    let second = d.on_line(
+        r#"{"type":"assistant","message":{"id":"m2","model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"Refused"}]}}"#,
+    );
+    match events(&second).first().expect("the second reply") {
+        AgentEvent::Message { text } => assert_eq!(text, "Refused"),
+        other => panic!("expected Message, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_successful_result_stays_silent_about_failure_and_still_reports_its_tokens() {
+    // The guard on the arm above: `is_error: false` must not produce a `Failed` row, and the usage
+    // mapping that was already correct must stay correct. A successful result really does populate
+    // the top-level `usage` — the zeros in the failing case were the absence of a request, not a
+    // field read from the wrong place.
+    let mut d = driver();
+    let _ = d.open();
+    let steps = d.on_line(
+        r#"{"type":"result","subtype":"success","is_error":false,"session_id":"s","total_cost_usd":0.03,"usage":{"input_tokens":26,"output_tokens":931,"cache_read_input_tokens":81276},"modelUsage":{"claude-haiku-4-5-20251001":{"contextWindow":200000}}}"#,
+    );
+    let seen = events(&steps);
+    assert_eq!(seen.len(), 1, "no Failed row on a successful turn");
+    match seen[0] {
+        AgentEvent::TurnFinished { usage, .. } => {
+            assert_eq!((usage.tokens_in, usage.tokens_out), (26, 931));
+            assert_eq!(usage.cached, 81276);
+            assert_eq!(usage.context_window, Some(200_000));
+        }
+        other => panic!("expected TurnFinished, got {other:?}"),
+    }
 }

@@ -33,20 +33,29 @@
 }
 
 /*
- * One row: what you typed towards on the left, where it is on the right.
+ * One row: the name, and under it what it is.
  *
- * `align-items: baseline` so the two columns sit on one line even though they are different sizes,
- * and `gap` rather than a margin so a row with no detail has no trailing space to explain.
+ * # Stacked, not two columns
+ *
+ * The first version put them side by side, name left and detail right. That works for a file, whose
+ * detail is a short directory, and fails for a skill: Codex reports a name *and* a sentence, so on
+ * one line the sentence took the width and clipped the name — the one thing the row exists to
+ * identify, and the thing being typed towards. Truncating the answer to fit the explanation is
+ * backwards, and a name is not something the reader can infer from its first eight characters.
+ *
+ * So the name gets a line of its own and is never clipped, and the description sits beneath it in a
+ * quieter register. Rows are taller, which is why `.c-suggest`'s cap is stated in `em` and moves
+ * with them rather than in a fixed pixel height.
  */
 .c-suggest__row {
   display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
+  flex-direction: column;
   min-width: 0;
   padding: 3px var(--sp-2);
   border-radius: var(--r-sm);
   cursor: pointer;
   font-size: var(--step--1);
+  line-height: 1.35;
 }
 
 /*
@@ -67,26 +76,29 @@
   color: var(--fg);
 }
 
-/* The filename or the skill name — what was actually typed towards, so it does not shrink. */
+/*
+ * The filename or the skill name — what was actually typed towards.
+ *
+ * Wraps rather than ellipsizing, which is the whole point of the stack above: a skill called
+ * `frontend-design` clipped to `frontend-de…` in a narrow pane is a row you cannot act on. A long
+ * name takes two lines and stays readable. `anywhere` rather than `break-word`, because these are
+ * hyphenated slugs and paths with no spaces to break at.
+ */
 .c-suggest__label {
-  flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   color: var(--fg);
 }
 
 /*
  * The directory, or the description.
  *
- * Given up first when the pane is narrow — `flex-shrink` is the default and the label above resists
- * — because a truncated *name* is unusable where a truncated path is merely less helpful. Aligned
- * right so the column of names on the left stays a column.
+ * One line and clipped, unlike the name above: this is context, and losing the tail of a sentence
+ * costs the reader nothing they cannot get by opening the thing. It is also what keeps a list of
+ * twenty Codex skills — each with a full sentence — scannable instead of a wall of prose.
  */
 .c-suggest__detail {
   min-width: 0;
-  margin-left: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

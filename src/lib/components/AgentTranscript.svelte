@@ -227,13 +227,30 @@
         // Deliberately not drawn. `session_ready` and `turn_started` are state the pane header
         // shows; a mid-turn `usage` is superseded by the one on `turn_finished`; approvals get
         // their own card in the increment that can answer them, and `approval_resolved` only ever
-        // removes one. Listed rather than defaulted, so a new event kind is a type error here.
+        // removes one; `skills_listed` is the composer's `/` menu, not a thing that happened.
         case 'session_ready':
         case 'turn_started':
         case 'usage':
         case 'approval_requested':
         case 'approval_resolved':
+        case 'skills_listed':
           break;
+
+        /*
+         * The exhaustiveness check, which the comment above used to only *claim*.
+         *
+         * A `switch` over a discriminated union proves nothing on its own inside a `forEach` —
+         * there is no return type to be incomplete — so `skills_listed` was added to the union and
+         * silently fell through here without `svelte-check` saying a word. It happened to want
+         * ignoring, which is the bad kind of luck: the next kind might have been a message.
+         *
+         * Assigning the narrowed `event` to `never` is what makes an unhandled kind a build error.
+         * A new event must now be listed above, even if the decision is to draw nothing.
+         */
+        default: {
+          const unreachable: never = event;
+          void unreachable;
+        }
       }
     });
 

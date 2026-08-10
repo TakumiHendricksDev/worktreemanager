@@ -232,11 +232,13 @@ impl CodexProtocol {
             params["model"] = json!(model);
         }
         if let Some(mode) = &self.req.mode {
-            let (approval, sandbox) = expand_mode(mode);
+            let (approval, sandbox, _) = expand_mode(mode);
             params["approvalPolicy"] = json!(approval);
             // The half that used to be missing. Sending only `approvalPolicy` left the sandbox at
             // whatever `~/.codex/config.toml` said, so two sessions wtm believed were configured
             // identically could have different filesystem reach.
+            //
+            // The string form here, the object form on `turn/start`. See `expand_mode`.
             params["sandbox"] = json!(sandbox);
         }
 
@@ -267,13 +269,13 @@ impl CodexProtocol {
             params["effort"] = json!(effort);
         }
         // Same argument as model and effort, and the reason this provider needs no restart to
-        // change its mode. Note the key: `turn/start` spells it `sandboxPolicy` where
-        // `thread/start` spells it `sandbox`. Two names for one setting, both taken from the
-        // generated schema rather than guessed.
+        // change its mode. Note the key *and the type*: `turn/start` takes `sandboxPolicy`, a
+        // tagged object, where `thread/start` takes `sandbox`, a plain string. Sending the string
+        // to both is what broke every turn on this provider once; see `expand_mode`.
         if let Some(mode) = &self.req.mode {
-            let (approval, sandbox) = expand_mode(mode);
+            let (approval, _, policy) = expand_mode(mode);
             params["approvalPolicy"] = json!(approval);
-            params["sandboxPolicy"] = json!(sandbox);
+            params["sandboxPolicy"] = policy;
         }
         let (_, step) = self.request("turn/start", &params);
         Some(step)
@@ -835,20 +837,43 @@ fn turn_id(params: &Value) -> String {
         .to_owned()
 }
 
-/// One wtm mode preset, as the two independent protocol fields it stands for.
+/// One wtm mode preset, as the protocol fields it stands for.
 ///
-/// Returns `(approvalPolicy, sandbox)`. See [`crate::capability::codex_modes`] for why the two axes
-/// are presented as three presets rather than as nine combinations.
+/// Returns `(approvalPolicy, sandbox, sandboxPolicy)`. See [`crate::capability::codex_modes`] for
+/// why the two axes are presented as three presets rather than as nine combinations.
+///
+/// # The sandbox is spelled two different ways and they are not interchangeable
+///
+/// `thread/start` takes `sandbox`, a **string** from `SandboxMode`: `read-only`, `workspace-write`,
+/// `danger-full-access`. `turn/start` takes `sandboxPolicy`, a **tagged object** from
+/// `SandboxPolicy`: `{"type":"readOnly"}`, `{"type":"workspaceWrite"}`, `{"type":"dangerFullAccess"}`
+/// — kebab against camel, and a different JSON type. Both are returned here so the two call sites
+/// cannot pick the wrong one.
+///
+/// This is not a hypothetical. The first version of this function returned one string and sent it
+/// to both, so every `turn/start` was rejected by the server and turns produced nothing at all —
+/// a session that took a message, reported `0 in 0 out`, and answered nothing. The tests passed,
+/// because they asserted the string this code sent rather than the shape the server accepts. That
+/// is exactly the failure this file's own header warns about, one paragraph long, about fixtures
+/// invented from a schema instead of captured from the wire.
 ///
 /// An id this build does not know falls back to the middle preset rather than to the permissive
 /// one. A stale `wtm.toml` naming a mode a later version renamed must not silently open the sandbox
 /// — the safe direction for an unknown value is the cautious one, and if it is wrong the user sees
 /// approval prompts rather than unreviewed writes.
-fn expand_mode(mode: &str) -> (&'static str, &'static str) {
+fn expand_mode(mode: &str) -> (&'static str, &'static str, Value) {
     match mode {
-        "read-only" => ("on-request", "read-only"),
-        "full-access" => ("never", "danger-full-access"),
-        _ => ("on-request", "workspace-write"),
+        "read-only" => ("on-request", "read-only", json!({ "type": "readOnly" })),
+        "full-access" => (
+            "never",
+            "danger-full-access",
+            json!({ "type": "dangerFullAccess" }),
+        ),
+        _ => (
+            "on-request",
+            "workspace-write",
+            json!({ "type": "workspaceWrite" }),
+        ),
     }
 }
 
