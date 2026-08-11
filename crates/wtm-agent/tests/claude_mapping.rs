@@ -554,6 +554,38 @@ fn the_compiled_capability_is_honest_about_being_compiled() {
 }
 
 #[test]
+fn the_compiled_default_effort_is_the_preferred_rung_on_every_tier() {
+    // wtm's own editorial answer rather than the CLI's, which is `high`. Asserted per model because
+    // the table builds them from one closure today and might not tomorrow.
+    for model in &wtm_agent::claude_capability().models {
+        assert_eq!(
+            model.default_effort.as_deref(),
+            Some(wtm_agent::capability::PREFERRED_EFFORT),
+            "{} should start on wtm's preferred rung",
+            model.id
+        );
+    }
+}
+
+#[test]
+fn every_compiled_model_starts_on_a_rung_its_own_ladder_contains() {
+    // The circularity guard. `PREFERRED_EFFORT` is applied to this table unconditionally because
+    // every ladder in it happens to contain that rung — so editing the ladder without editing the
+    // constant would seed every model on an effort the CLI would reject at startup.
+    for model in &wtm_agent::claude_capability().models {
+        let seed = model
+            .default_effort
+            .as_deref()
+            .expect("a compiled model must name a default effort");
+        assert!(
+            model.efforts.iter().any(|e| e.effort == seed),
+            "{} defaults to `{seed}`, which is not on its own ladder",
+            model.id
+        );
+    }
+}
+
+#[test]
 fn every_offered_mode_is_one_the_permission_flag_actually_accepts() {
     // The list this replaced contained `default`, which `--permission-mode` rejects outright, and
     // was missing `auto`. Both failures present as a session that dies at spawn with the CLI's own

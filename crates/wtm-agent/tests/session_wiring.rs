@@ -85,6 +85,17 @@ fn the_handshake_is_written_before_open_returns() {
 }
 
 #[test]
+fn agent_protocol_children_are_explicitly_non_colored() {
+    let (_session, fake, _rec) = session();
+    let spawned = fake.spawned();
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(
+        spawned[0].env.get("NO_COLOR").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
 fn a_line_from_the_child_drives_the_driver_and_its_frames_reach_the_pipe() {
     let (_session, fake, rec) = session();
     handshake(&fake);

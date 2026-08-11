@@ -2,11 +2,15 @@
   /**
    * Settings.
    *
-   * Three sections, and each one is a preference that already existed in
-   * `~/.config/wtm/config.toml` with no way to reach it from the app. Nothing here is a new
-   * setting invented for a settings screen — `ui.opener` was written only as a side effect
-   * of using the split button, and `exec.path` was file-only despite being the documented
-   * fix for the app's most common failure.
+   * Four sections. Three of them are preferences that already existed in
+   * `~/.config/wtm/config.toml` with no way to reach it from the app — `ui.opener` was written
+   * only as a side effect of using the split button, and `exec.path` was file-only despite
+   * being the documented fix for the app's most common failure.
+   *
+   * Notifications is the one exception, and it earns it: `ui.notify` is a tri-state whose
+   * unset value means "ask", the asking happens once through a toast, and without a
+   * permanent home a user who answered "Not now" would have no way back. It is also the
+   * only setting here whose effect is outside the window.
    *
    * # Everything applies immediately
    *
@@ -24,6 +28,7 @@
    */
   import { commands } from '../ipc/commands';
   import { errorMessage, type Doctor } from '../ipc/types';
+  import { attention } from '../state/attention.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
@@ -35,7 +40,7 @@
 
   const { onclose }: { onclose: () => void } = $props();
 
-  type Section = 'appearance' | 'general' | 'advanced';
+  type Section = 'appearance' | 'general' | 'notifications' | 'advanced';
   let section = $state<Section>('appearance');
 
   const MODES: { value: ThemeChoice; label: string }[] = [
@@ -128,6 +133,13 @@
         onclick={() => (section = 'general')}
       >
         General
+      </button>
+      <button
+        class="c-tabs__tab"
+        class:is-active={section === 'notifications'}
+        onclick={() => (section = 'notifications')}
+      >
+        Notifications
       </button>
       <button
         class="c-tabs__tab"
@@ -226,6 +238,39 @@
             {/each}
           </select>
         </Field>
+      </div>
+    {:else if section === 'notifications'}
+      <div class="o-stack o-stack--loose c-settings__panel">
+        <!--
+          The permanent home for a preference that is otherwise only ever offered once, by a toast on
+          the first focus after something was missed — so this is also the recovery path for anyone who
+          answered "Not now" and later wanted them.
+
+          Applies immediately, like everything else here. It needs no equivalent of the PATH field's
+          blur exception: that one saves on blur because every `set_pref` rewrites the whole config
+          file and a keystroke-level save would do it dozens of times, where this is one click.
+        -->
+        <Choice
+          type="checkbox"
+          checked={attention.pref === 'on'}
+          onchange={() =>
+            void (attention.pref === 'on' ? attention.disable() : attention.enable())}
+        >
+          Notify me when a session needs attention
+        </Choice>
+        <p class="c-field__help">
+          Only while wtm is in the background — a session in the window says so itself, in
+          the pane and in the sidebar. Nothing is ever sent about the worktree you are
+          looking at.
+        </p>
+        {#if attention.blocked}
+          <!-- Said rather than swallowed: a preference that is on and silent is indistinguishable
+               from a broken app, and the fix is somewhere wtm cannot reach. -->
+          <p class="c-field__help c-status--warn">
+            macOS is not delivering wtm's notifications. Turn them on for Worktree Manager
+            in System Settings → Notifications.
+          </p>
+        {/if}
       </div>
     {:else}
       <div class="o-stack o-stack--loose c-settings__panel">

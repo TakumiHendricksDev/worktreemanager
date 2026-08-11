@@ -140,6 +140,21 @@ pub struct Caller {
     pub worktree: String,
     /// The provider that was issued this token, for the log line and to label the pane.
     pub provider: String,
+    /// The effort the calling session is running at.
+    ///
+    /// # Why a snapshot taken at token time is exact
+    ///
+    /// Because **no provider changes effort live.** `configure_session` has no effort parameter,
+    /// `CodexProtocol::reconfigure` deliberately mutates only model and mode, and Claude reads
+    /// `--effort` from argv once at startup — which is the whole reason the picker marks a changed
+    /// effort "on restart". So a session's spawn effort *is* its live effort for its whole life, and
+    /// a restart re-runs `session_request_for`, which mints a fresh token. The snapshot cannot go
+    /// stale without the session it describes being replaced.
+    ///
+    /// This is also the only place the value is reachable from. Neither `AgentSession` nor
+    /// `AgentEntry` keeps the `SessionRequest`, so asking "what effort is that pane on" from the
+    /// socket thread has no answer — hence riding it on the token rather than looking it up.
+    pub effort: Option<String>,
 }
 
 /// The token registry and the socket that reaches it.
@@ -370,8 +385,45 @@ fn open_pane(
     }
 
     let spec = project.agent_spec(target);
-    let req = crate::commands::session_request_for(app, &project, &spec, entry, &worktree, None)
-        .map_err(|e| e.message)?;
+
+    /*
+     * The caller's effort, in the target's own vocabulary.
+     *
+     * `options` stays `None` — there is no picker on this route, so model and mode still come from
+     * the repository and the compiled defaults. Effort is the one setting worth carrying, and the
+     * only one that *can* be: it is a shared word ladder, where a model id is not (`opus` means
+     * nothing to Codex) and a mode is provider vocabulary (`acceptEdits` likewise). Someone who set
+     * a session to `max` before asking it for a second opinion meant the second opinion to be
+     * considered too, and taking the target's interactive default instead quietly ignored that.
+     *
+     * `carried_effort` owns the translation, including the two top rungs that must not cross. It
+     * returns `None` when nothing sensible carries, which falls through to the layers
+     * `session_request_for` already had.
+     */
+    let inherited = caller
+        .effort
+        .as_deref()
+        .and_then(|effort| wtm_agent::carried_effort(&caller.provider, target, effort));
+    if let Some(rung) = inherited.as_deref() {
+        tracing::debug!(
+            from = %caller.provider,
+            to = target,
+            caller_effort = ?caller.effort,
+            carried = rung,
+            "handoff carrying the caller's effort"
+        );
+    }
+
+    let req = crate::commands::session_request_for(
+        app,
+        &project,
+        &spec,
+        entry,
+        &worktree,
+        None,
+        inherited.as_deref(),
+    )
+    .map_err(|e| e.message)?;
 
     let (tx, rx) = mpsc::channel();
     let capture = Arc::new(Capture {
@@ -441,7 +493,20 @@ mod tests {
             project: "/repo".to_owned(),
             worktree: worktree.to_owned(),
             provider: "claude".to_owned(),
+            effort: Some("max".to_owned()),
         }
+    }
+
+    #[test]
+    fn a_token_carries_the_effort_its_session_was_started_with() {
+        // The only route by which a handoff can know what the caller is running at: neither
+        // `AgentSession` nor `AgentEntry` keeps the request, so if the token does not carry it,
+        // nothing does. See `Caller::effort` for why a snapshot is exact.
+        let hub = Hub::default();
+        let token = hub.issue(caller("wt-a"));
+
+        let resolved = hub.resolve(&token).expect("a fresh token should resolve");
+        assert_eq!(resolved.effort.as_deref(), Some("max"));
     }
 
     #[test]

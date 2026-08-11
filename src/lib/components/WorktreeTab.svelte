@@ -7,15 +7,26 @@
    * is how the "tabs down the left" interaction is supposed to be described.
    */
   import type { Worktree } from '../ipc/types';
+  import { STATUS_WORD, type PaneStatus } from '../status';
   import Icon from './ui/Icon.svelte';
+  import SessionDot from './ui/SessionDot.svelte';
 
   const {
     worktree,
+    status,
     selected,
     onselect,
     onfavorite,
   }: {
     worktree: Worktree;
+    /**
+     * The most urgent thing happening in any session here, or null for nothing worth saying.
+     *
+     * A prop rather than a store read, for two reasons: this stays a component the compiler can check
+     * against its call sites, and the aggregate is computed once for the whole list instead of once
+     * per row. The sidebar owns which statuses earn a dot — see `inRail`.
+     */
+    status: PaneStatus | null;
     selected: boolean;
     onselect: () => void;
     onfavorite: () => void;
@@ -23,6 +34,28 @@
 
   // Only surface divergence that exists — a row of zeroes is noise.
   const diverged = $derived(worktree.ahead > 0 || worktree.behind > 0);
+
+  /**
+   * The tone for a session status in this row.
+   *
+   * `working` is `--muted` rather than `--info`: a turn in flight asks nothing of you, and it is the
+   * state a session spends most of its life in, so at `--info` every busy row in the list would be
+   * lit up in the same colour as the ones that are actually news.
+   *
+   * A record rather than interpolation, because the stylesheet is global and a tone that does not
+   * exist fails silently — a typed lookup is the only thing that catches it. Only the four statuses
+   * `inRail` admits need an entry, but all seven are listed so the record stays total and a new status
+   * is a compile error here rather than a missing class at runtime.
+   */
+  const TONE: Record<PaneStatus, string> = {
+    attention: 'c-status--warn',
+    failed: 'c-status--danger',
+    done: 'c-status--info',
+    working: 'c-status--muted',
+    starting: 'c-status--subtle',
+    ended: 'c-status--subtle',
+    idle: 'c-status--subtle',
+  };
 </script>
 
 <!--
@@ -55,8 +88,23 @@
       </span>
     </span>
 
-    {#if worktree.dirty || worktree.untracked > 0 || diverged || worktree.prunable}
+    {#if status || worktree.dirty || worktree.untracked > 0 || diverged || worktree.prunable}
       <span class="c-worktree-tab__line c-worktree-tab__flags">
+        {#if status}
+          <!--
+            First in the row, because a session waiting on you outranks every git fact beside it.
+
+            In this row rather than a corner of the tab on purpose: it is already `--font-mono` and
+            already pairs a glyph with a word — `● modified` — so a dot plus a word is the pattern the
+            row was built for rather than a new invention. The word is also what makes the state part
+            of the tab's *accessible name*, since that is built from its text content: a screen reader
+            reads "feature/foo, task-123, needs you, modified" and the dot stays `aria-hidden`, which
+            is both the colour-alone rule satisfied and the state announced exactly once.
+          -->
+          <span class={TONE[status]} title={STATUS_WORD[status]}>
+            <SessionDot {status} />&nbsp;{STATUS_WORD[status]}
+          </span>
+        {/if}
         {#if worktree.dirty}
           <span class="c-status--warn" title="Tracked files are modified"
             >●&nbsp;modified</span

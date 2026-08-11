@@ -627,6 +627,40 @@ mod tests {
     }
 
     #[test]
+    fn a_notification_preference_round_trips_without_a_rust_field() {
+        // The mechanism `set_pref`'s doc promises, exercised by the preference that relies on it:
+        // `ui.notify` has no field on `UiPrefs` and needs none, so the frontend added a setting with
+        // no change to this crate at all.
+        //
+        // The reload matters as much as the value. `ui.extra` serializes as plain keys under `[ui]`,
+        // and TOML requires those *before* any nested table — so an unknown key landing after
+        // `[ui.palettes]` would write a file that no longer parses, and the failure would be at
+        // runtime on the next launch rather than here.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[ui.palettes.nord]\n\
+             name = \"Nord\"\n\
+             hue = 245\n",
+        )
+        .unwrap();
+
+        let mut config = UserConfig::load(&path).unwrap();
+        assert_eq!(config.pref("ui.notify"), None, "unset means ask");
+
+        config.set_pref("ui.notify", "on");
+        config.save(&path).unwrap();
+
+        let reloaded = UserConfig::load(&path).unwrap();
+        assert_eq!(reloaded.pref("ui.notify").as_deref(), Some("on"));
+        assert!(
+            reloaded.ui.palettes.contains_key("nord"),
+            "the table after the new key must still parse"
+        );
+    }
+
+    #[test]
     fn a_config_with_no_palettes_writes_no_palettes_table() {
         // Same argument as `favorites`: a file nobody has customized must look exactly as it
         // did before this feature existed.

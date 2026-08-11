@@ -19,6 +19,7 @@
    * click-outside and Escape all come free and behave the way macOS menus are expected to.
    * It is styled to read as a title-bar button, not a form control.
    */
+  import { sessions } from '../state/sessions.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
@@ -90,9 +91,22 @@
         {#if workspace.projects.length === 0}
           <option value="">No projects yet</option>
         {/if}
+        <!--
+          A text glyph rather than a dot component, and `icons.ts` states the rule: an `<option>` may
+          contain text and nothing else, so an SVG cannot go here at all. The `⚠` beside it is the
+          same exemption, already taken for the same reason.
+
+          This one glyph matters more than it looks. Panes carry a `projectId`, but the sidebar lists
+          only the *active* project's worktrees — so the row dots alone still leave a session blocked
+          in another project completely invisible. This and the dock badge are what close that.
+        -->
         {#each workspace.projects as project (project.id)}
           <option value={project.id}>
-            {project.name}{project.usable ? '' : '  ⚠'}
+            {project.name}{project.usable ? '' : '  ⚠'}{sessions.wantsAttentionIn(
+              project.id,
+            )
+              ? '  ●'
+              : ''}
           </option>
         {/each}
         <option value="__add__">Add a repository…</option>

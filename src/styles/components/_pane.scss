@@ -70,6 +70,40 @@
   margin-left: auto;
 }
 
+/*
+ * The handle a pane is dragged by.
+ *
+ * A real `<button>` rather than a bare `<span>`, which is what makes it a tab stop and lets the arrow
+ * keys move a pane without a pointer — so unlike the resize separator it needs no `svelte-ignore`. Not
+ * built from `Button.svelte`: that component forwards `onclick` only, and widening a shared control to
+ * carry `onpointerdown` and `onkeydown` for one caller is worse than a raw button with a class of its
+ * own. The same call the row-action buttons in `SessionSurface` made.
+ *
+ * `cursor: grab` is the whole affordance — there is no drag ghost and no floating window, because a
+ * pane is never detached from the tiling. The lifted pane's opacity and the drop indicator are what
+ * say a drag is happening; see `objects/_tiles.scss`.
+ *
+ * The global `:focus-visible` ring in `elements/` covers it, so there is nothing to add here.
+ */
+.c-pane__grip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--sp-1);
+  border: 0;
+  background: none;
+  color: var(--fg-subtle);
+  cursor: grab;
+
+  &:hover {
+    color: var(--fg);
+  }
+}
+
+.c-pane__grip:active {
+  cursor: grabbing;
+}
+
 .c-pane__body {
   flex: 1 1 auto;
   /* See the header. */

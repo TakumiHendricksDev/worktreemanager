@@ -497,7 +497,12 @@ model  = "gpt-5.6-sol"
 # ladder from `model/list`, so a value the installed CLI does not know surfaces as a warning on the
 # session rather than as a config load error — a config outlives the CLI it was written against.
 effort = "ultra"
-mode   = "on-request"
+# One of the three presets `codex_modes()` offers — `read-only`, `auto`, `full-access` — not a raw
+# `approvalPolicy`. This said `on-request` for a while, which is the protocol's own word for half of
+# what a mode is; `expand_mode`'s catch-all arm made it behave as `auto` while the pill in the pane
+# showed something this file had not asked for. The presets exist because the sandbox is the other
+# half, and sending one axis without the other left it at whatever `~/.codex/config.toml` said.
+mode   = "auto"
 
 # ═══════════════════════════════════ GUARDS ═══════════════════════════════════
 #

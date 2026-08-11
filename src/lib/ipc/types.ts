@@ -267,6 +267,13 @@ export interface AgentOption {
   label: string;
   blurb: string;
   available: boolean;
+  /**
+   * Whether the *repository* offers it — a different refusal from not being installed.
+   *
+   * Separate from `available` because the two have different fixes, and only one of them is about
+   * the user's machine. True when no project is in scope.
+   */
+  offered: boolean;
   detail: string | null;
 }
 

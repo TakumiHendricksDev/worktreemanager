@@ -142,8 +142,13 @@ export const commands = {
    *
    * Includes what is not installed, with the reason, so the launcher can show a greyed row
    * explaining why. Nothing is cached in Rust, so a CLI installed since launch shows up.
+   *
+   * The project decides what `offered` says — a repository can decline an agent, and this list did
+   * not used to know it, so the launcher offered agents whose spawn would be refused. Omit it for
+   * the startup call, before anything is selected.
    */
-  listAgents: () => invoke<AgentOption[]>('list_agents'),
+  listAgents: (projectId?: string | null) =>
+    invoke<AgentOption[]>('list_agents', { projectId: projectId ?? null }),
 
   /**
    * Start a session in a worktree. Returns the session id to attach to.

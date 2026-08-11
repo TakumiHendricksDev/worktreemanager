@@ -19,11 +19,11 @@
    * It does not open a session for a worktree because you selected one. Browsing six worktrees would
    * otherwise start six CLIs. A session starts when someone asks.
    */
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
 
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
-  import SessionSplit from './SessionSplit.svelte';
+  import SessionTree from './SessionTree.svelte';
   import Button from './ui/Button.svelte';
 
   const {
@@ -43,7 +43,14 @@
   const stillRunning = $derived(
     background.filter((t) => t.state !== 'done' && t.state !== 'failed'),
   );
-  const startable = $derived(sessions.options.filter((o) => o.available));
+  /**
+   * The agents that could actually start here: installed **and** offered by this repository.
+   *
+   * `available` alone offered agents whose spawn `open_agent_session` refuses on `offers_agent`, so
+   * a repo that turned Codex off still showed a Codex button that failed with a config error once
+   * clicked. Two flags rather than one because the two refusals have different fixes.
+   */
+  const startable = $derived(sessions.options.filter((o) => o.available && o.offered));
 
   /*
    * Read what can be resumed, what plans are stored, and what is running, when the selection lands
@@ -73,6 +80,33 @@
     void sessions.refreshResumable(worktree);
     void sessions.refreshBriefs(project, worktree);
     void sessions.refreshBackground(worktree);
+    // The fourth call, and it follows the same rule: `refreshOptions` awaits before it touches
+    // `options` and skips an assignment that would change nothing. `offered` is the repository's
+    // answer, so it has to be re-asked when the project moves.
+    void sessions.refreshOptions(project);
+  });
+
+  /*
+   * Selecting a worktree is looking at it.
+   *
+   * A separate effect rather than a line in the one above, because that effect's comment insists it
+   * depend on the selection and nothing else, and it deserves to keep saying so — the fork bomb it
+   * describes is what happens when something is added to it carelessly.
+   *
+   * One effect covers *every* route to a selection: `select`, `selectRelative`, `selectProject`, the
+   * sidebar's arrow keys, a toast click, and the cache-restore path. Patching the three call sites
+   * instead would have missed the last two.
+   *
+   * `untrack` because the body writes `pane.unseen` on panes it finds by scanning `panes`, and an
+   * effect that both reads and writes that array is exactly the loop the other comment describes. It
+   * genuinely works here, unlike at the call sites that comment warns about: what defeats `untrack`
+   * there is a read that happens *before an await* inside an async function, which no wrapper can
+   * contain. This body is synchronous.
+   */
+  $effect(() => {
+    const worktree = workspace.selectedWorktreeId;
+    if (!visible) return;
+    untrack(() => sessions.markSeen(worktree));
   });
 
   /*
@@ -149,7 +183,7 @@
         header — this is the property the whole component exists for.
       -->
       <div class="c-surface__tree" class:is-inactive={worktreeId !== activeId}>
-        <SessionSplit {layout} {worktreeId} visible={visible && worktreeId === activeId} />
+        <SessionTree {layout} {worktreeId} visible={visible && worktreeId === activeId} />
       </div>
     {/if}
   {/each}
@@ -167,11 +201,16 @@
           directory and can read and change the files there.
         </p>
         <div class="o-row">
+          <!-- Every agent, including the ones that cannot start, each with the reason in its
+               tooltip — the contract `list_agents` keeps and the diagnosis for this app's most
+               likely failure. `offered` as well as `available`, because a repository declining an
+               agent used to leave an enabled button whose spawn was refused. -->
           {#each sessions.options as option (option.id)}
+            {@const startable = option.available && option.offered}
             <Button
-              variant={option.available ? 'accent' : 'neutral'}
+              variant={startable ? 'accent' : 'neutral'}
               size="sm"
-              disabled={!option.available}
+              disabled={!startable}
               title={option.detail ?? option.blurb}
               onclick={() =>
                 void sessions.openAgent(
@@ -307,9 +346,17 @@
           </ul>
         {/if}
 
+        <!-- Two messages rather than one, because the two ways of having nothing to start have
+             different fixes and only one of them is about this machine. Keyed on `available` alone
+             first, so the PATH diagnosis keeps saying exactly what it always said. -->
         {#if sessions.options.every((o) => !o.available)}
           <p class="c-status--warn">
             No agent CLI is on wtm's PATH. Settings → Advanced shows the PATH wtm resolved.
+          </p>
+        {:else if startable.length === 0}
+          <p class="c-status--warn">
+            This repository's <code>wtm.toml</code> does not offer any of the agents installed
+            here. Hover a button above for which.
           </p>
         {/if}
       {:else}

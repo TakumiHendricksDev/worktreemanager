@@ -82,7 +82,11 @@ impl AgentSession {
             provider: provider.id().as_str().to_owned(),
         });
 
-        let inv = Invocation::new(provider.argv(req), req.cwd.clone(), timeout_ms);
+        let mut inv = Invocation::new(provider.argv(req), req.cwd.clone(), timeout_ms);
+        // This is a JSON protocol child, never a terminal. Codex otherwise colours tracing output
+        // on stderr when wtm was launched from Finder without an ambient `NO_COLOR`, and those
+        // escape bytes have no meaning in a transcript.
+        inv.env.insert("NO_COLOR".to_owned(), "1".to_owned());
         let spawned = host.spawn(&inv, worktree, relay as Arc<dyn PipeSink>)?;
 
         let session = spawned.session;
@@ -193,7 +197,9 @@ impl PipeSink for Relay {
             session,
             &AgentEvent::Notice {
                 level: wtm_core::model::NoticeLevel::Warn,
-                message: line.to_owned(),
+                // `NO_COLOR` handles cooperative CLIs. Strip terminal sequences too because stderr
+                // is third-party output and a transcript must stay readable if one ignores it.
+                message: strip_terminal_sequences(line),
             },
         );
     }
@@ -202,6 +208,47 @@ impl PipeSink for Relay {
         tracing::debug!(provider = %self.provider, session = %session, "agent session ended");
         self.events.on_exit(session, outcome);
     }
+}
+
+/// Remove common ANSI/ECMA-48 terminal sequences from a line destined for the transcript.
+///
+/// Covers CSI styling/cursor sequences plus OSC/DCS-style strings terminated by BEL or ST. The
+/// input is already valid UTF-8, so walking chars keeps non-ASCII diagnostics intact.
+fn strip_terminal_sequences(line: &str) -> String {
+    let mut clean = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            clean.push(ch);
+            continue;
+        }
+
+        match chars.next() {
+            // Control Sequence Introducer: parameters/intermediates end at the first final byte.
+            Some('[') => {
+                for part in chars.by_ref() {
+                    if ('@'..='~').contains(&part) {
+                        break;
+                    }
+                }
+            }
+            // Operating-system commands and the other string controls end at BEL or ESC `\\`.
+            Some(']' | 'P' | 'X' | '^' | '_') => {
+                let mut saw_escape = false;
+                for part in chars.by_ref() {
+                    if part == '\u{7}' || (saw_escape && part == '\\') {
+                        break;
+                    }
+                    saw_escape = part == '\u{1b}';
+                }
+            }
+            // A two-byte escape sequence. Both bytes are control data and are discarded.
+            Some(_) | None => {}
+        }
+    }
+
+    clean
 }
 
 /// Apply steps, reporting a failed write as a transcript event.
@@ -248,4 +295,21 @@ fn run(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_terminal_sequences;
+
+    #[test]
+    fn terminal_styling_is_removed_without_damaging_text() {
+        let line = "\u{1b}[2m2026-08-11\u{1b}[0m \u{1b}[31mERROR\u{1b}[0m: café";
+        assert_eq!(strip_terminal_sequences(line), "2026-08-11 ERROR: café");
+    }
+
+    #[test]
+    fn terminal_string_controls_are_removed_too() {
+        let line = "before \u{1b}]8;;https://example.com\u{1b}\\link\u{1b}]8;;\u{7} after";
+        assert_eq!(strip_terminal_sequences(line), "before link after");
+    }
 }

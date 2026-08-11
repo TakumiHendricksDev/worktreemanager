@@ -1,0 +1,132 @@
+/*
+ * A worktree's panes, positioned from its split tree. Geometry only, no cosmetics.
+ *
+ * An Object rather than a Component because it passes the test `_row.scss` states: strip every
+ * declaration that mentions a colour, border, radius or font and it still does its whole job. The two
+ * things that paint — the handle's hairline and the drop indicator's fill — come from the `splitter()`
+ * mixin and from `components/_drop.scss`.
+ *
+ * # Why absolute rather than nested flex
+ *
+ * This replaced `.o-split`, which nested a flex pair per split node. That reads beautifully and
+ * **destroys panes**: a leaf becoming a split reparents an element, Svelte cannot move DOM between
+ * parents, so the pane was torn down and rebuilt — losing a shell's scrollback permanently, since
+ * `Terminal` disposes its xterm and Rust buffers nothing to resend. Positioned tiles turn a reshape
+ * into four changed numbers, and the panes are a keyed list that reorders rather than a tree that
+ * rebuilds. See `SessionTree.svelte`.
+ *
+ * `min-width: 0` / `min-height: 0` stop being load-bearing on the children, which is a real loss of
+ * the old design's tidiness — a flex item's automatic minimum size was what the old file had to fight.
+ * An absolutely positioned box has no such rule, so the width it is given is the width it takes. They
+ * stay on `.c-pane` and `.c-pane__body`, which need them for their own documented reasons.
+ *
+ * # Still no `z-index`
+ *
+ * `settings/_config.scss` has three stacking levels and all three belong to the modal and the toast
+ * stack. Absolute positioning alone creates no stacking context, so tiles and the indicator order by
+ * tree position — which is why the indicator is the last child and needs nothing else. The one
+ * exception is documented on `isolation` below, and it is the declaration in this file most likely to
+ * be deleted by someone tidying up.
+ */
+
+@use '../tools' as t;
+
+.o-tiles {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* While either drag is live, suppress selection across the whole surface — otherwise a drag over a
+   transcript highlights everything it passes. The pointerdown's `preventDefault` covers the rest. */
+.o-tiles.is-dragging,
+.o-tiles.is-moving {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.o-tiles.is-moving {
+  cursor: grabbing;
+}
+
+.o-tiles__tile {
+  position: absolute;
+  display: flex;
+  overflow: hidden;
+  /* The tree's four fractions, set inline by the component. Percentages of the positioned ancestor,
+     which is `.o-tiles` — so a window resize needs no recomputation at all. */
+  left: calc(var(--tile-x) * 100%);
+  top: calc(var(--tile-y) * 100%);
+  width: calc(var(--tile-w) * 100%);
+  height: calc(var(--tile-h) * 100%);
+
+  /*
+   * Load-bearing, and the reason is entirely outside this codebase.
+   *
+   * `@xterm/xterm/css/xterm.css` sets `z-index: 5` on `.xterm-helpers`, `10` on
+   * `.xterm-accessibility` and `11` on the scrollable element's visible layer — and neither `.xterm`
+   * nor anything above it establishes a stacking context, so those values would compete in the same
+   * context as the drop indicator and win. This traps them inside the tile, so a `z-index: auto`
+   * indicator painting by tree order goes over a terminal as well as over a transcript.
+   *
+   * Delete this and dragging over a shell pane silently stops showing where the drop will land.
+   */
+  isolation: isolate;
+}
+
+/* The dragged pane reads as lifted. Opacity only — no colour, so it says "this one is moving"
+   without borrowing a status hue for a thing that is not a status. */
+.o-tiles__tile.is-lifted {
+  opacity: 0.6;
+}
+
+/*
+ * A split's divider, laid along the boundary its ratio puts it on.
+ *
+ * # Why `position: absolute` is written three times
+ *
+ * Once here, because it is the fact both handles share and this is the class the markup names — a
+ * class in the markup with no rule behind it is dead weight nothing in this project can warn about.
+ *
+ * And once inside each modifier, because `splitter()` sets `position: relative` for the `::after`
+ * that widens its hit area. That declaration lands *inside* the modifier's own block, so it beats the
+ * base rule on order; re-asserting after the mixin is what keeps the handle positioned. Absolute
+ * still establishes the containing block the `::after` needs, so the three-pixels-each-side target
+ * survives — reverse the two and the line is back to 1px and unhittable.
+ */
+.o-tiles__handle {
+  position: absolute;
+}
+
+.o-tiles__handle--row {
+  @include t.splitter(vertical);
+  position: absolute;
+  /* Along the split's own frame, at its ratio. The 1px line straddles the boundary rather than
+     consuming a pixel from either side, which is what a positioned tree lets it do. */
+  left: calc((var(--tile-x) + var(--tile-w) * var(--tile-at)) * 100%);
+  top: calc(var(--tile-y) * 100%);
+  width: 1px;
+  height: calc(var(--tile-h) * 100%);
+}
+
+.o-tiles__handle--col {
+  @include t.splitter(horizontal);
+  position: absolute;
+  left: calc(var(--tile-x) * 100%);
+  top: calc((var(--tile-y) + var(--tile-h) * var(--tile-at)) * 100%);
+  width: calc(var(--tile-w) * 100%);
+  height: 1px;
+}
+
+/* Where the drop would land. Same four-fraction idiom as a tile; the look is `.c-drop`. */
+.o-tiles__drop {
+  position: absolute;
+  left: calc(var(--tile-x) * 100%);
+  top: calc(var(--tile-y) * 100%);
+  width: calc(var(--tile-w) * 100%);
+  height: calc(var(--tile-h) * 100%);
+  /* Never a drop target itself, and never in the way of the hit test — which reads geometry rather
+     than the DOM, but a pointer event landing here would still change what `:hover` says. */
+  pointer-events: none;
+}

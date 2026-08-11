@@ -96,8 +96,12 @@
 }
 
 /*
- * An effort the running session is not using yet has **no styling of its own**, and that is a
+ * A setting the running session is not using yet has **no styling of its own**, and that is a
  * decision rather than an omission.
+ *
+ * Two controls carry the hook now — effort, and the model pill once it is pointed at a provider the
+ * process is not. Both say "on restart" in words, and neither draws anything, which is what keeps
+ * them reading as one fact rather than two.
  *
  * A dotted underline was tried first and removed after looking at it: `text-decoration` on the
  * trigger reaches every child, so the pill came out with "Effort", "ultracode" and "on restart" all

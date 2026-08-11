@@ -8,7 +8,8 @@
  * # It lives in the flow, and every rule here follows from that
  *
  * No `position`, no `z-index`, no `transform`. A floating menu would need all three plus a portal,
- * and `settings/_config.scss` allows exactly two stacking levels. So the strip is an ordinary block
+ * and every stacking level this app has is enumerated in `settings/_config.scss` — a menu that
+ * appears per keystroke is not a thing worth adding one for. So the strip is an ordinary block
  * at the top of the card and the card grows upward around it, which is why there is a bottom border
  * rather than a full one: it is a *region of* the field, not a thing on top of it.
  */

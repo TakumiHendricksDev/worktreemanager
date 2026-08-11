@@ -52,8 +52,6 @@
         key: string;
         kind: 'steps';
         steps: Step[];
-        /** Every reasoning run inside this group, concatenated. */
-        thinking: string;
         /** Members that failed, so a collapsed group cannot hide one. */
         failed: number;
         /** True while the turn is still working. See `group()`. */
@@ -266,6 +264,17 @@
   const MIN_GROUP = 3;
 
   /**
+   * How long a run of machinery gets before it is broken up regardless.
+   *
+   * Reasoning is what normally paces a turn — a model narrates, works, narrates again — so most
+   * groups end long before this. A model that is *not* thinking out loud still produces long runs,
+   * though, and one line reading "40 steps" is a wall with a marker on it: nothing about it says
+   * which part of the turn you are looking at, and the only way to find out is to open all forty.
+   * Breaking at a bound gives the run a shape without needing anything to interrupt it.
+   */
+  const MAX_GROUP = 12;
+
+  /**
    * Fold runs of machinery into one row each.
    *
    * A second pass over the finished list rather than a change to the fold above, and deliberately
@@ -276,38 +285,36 @@
    * A patch, an agenda, a notice and a usage line are content, so they end a run: the answer and the
    * things the answer is made of stay at full weight, which is the entire point.
    *
-   * Thinking is folded into the group rather than counted as a member. Fifteen rows reading
-   * `Thinking` and nothing else say less than one that holds all fifteen.
+   * # Reasoning is content, and that is the change that makes a turn readable
+   *
+   * It used to be folded *into* the group, on the argument that fifteen rows each reading `Thinking`
+   * and holding nothing visible said less than one row holding all fifteen. The premise was right and
+   * the conclusion was wrong: the fix for a row that says nothing is to make it say something, not to
+   * hide it. Absorbing it also meant nothing ever interrupted a run, so a turn that ran forty tools
+   * across six separate trains of thought collapsed into **one** `<details>` — and the narration that
+   * explained the forty was buried two disclosures deep inside it.
+   *
+   * Treating it as content instead gives the turn the shape it actually has: a sentence about what
+   * the model is about to do, the handful of steps it took, another sentence, more steps. Which is
+   * what the reader wanted from the transcript in the first place, and it costs one line moved.
    */
   function group(rows: Row[]): Row[] {
     const out: Row[] = [];
-    /* One ordered list rather than separate step and thinking buckets, so a run too short to fold
-       can be put back exactly as it arrived instead of reordered into tools-then-thinking. */
-    let pending: Row[] = [];
+    let pending: Step[] = [];
 
     /** Emit whatever has accumulated: a group if it earned one, the bare rows if it did not. */
     function flush(live: boolean) {
       if (pending.length === 0) return;
 
-      const steps = pending.filter(isStep);
-      const thinking = pending
-        .filter((row) => row.kind === 'thinking')
-        .map((row) => row.text)
-        .join('\n\n');
-
-      // `steps.length > 0` because the summary counts steps: a group of nothing but reasoning would
-      // announce "0 steps". It cannot arise today — adjacent reasoning coalesces into one row, so a
-      // second thinking row implies a step between them — but the count has to be honest anyway.
-      if (pending.length >= MIN_GROUP && steps.length > 0) {
+      if (pending.length >= MIN_GROUP) {
         out.push({
           // Keyed off the first member, never the size: a group that grows from three to four
           // mid-stream has to keep its key or Svelte remounts the whole subtree on every tool call,
           // which is the churn the header comment on keys exists to prevent.
           key: `s:${pending[0]?.key}`,
           kind: 'steps',
-          steps,
-          thinking,
-          failed: steps.filter(isFailed).length,
+          steps: pending,
+          failed: pending.filter(isFailed).length,
           live,
         });
       } else {
@@ -317,12 +324,16 @@
     }
 
     for (const row of rows) {
-      if (isStep(row) || row.kind === 'thinking') {
+      if (isStep(row)) {
         pending.push(row);
+        // Bounded, so no single group can swallow a whole turn. Not live: the run did not end
+        // because the turn moved on, but there is more machinery coming either way, and the *last*
+        // group of a trailing run is the one that gets the marker.
+        if (pending.length >= MAX_GROUP) flush(false);
         continue;
       }
-      // Content. Whatever was accumulating ends here, and it ended because the turn moved on —
-      // so it is never the live one, whatever follows it.
+      // Content — including reasoning. Whatever was accumulating ends here, and it ended because
+      // the turn moved on, so it is never the live one whatever follows it.
       flush(false);
       out.push(row);
     }
@@ -364,6 +375,52 @@
     const body = (wrapped?.[2] ?? command).replace(/\\(["'])/g, '$1');
     const line = body.replace(/\s+/g, ' ').trim();
     return line.length > COMMAND_CHARS ? `${line.slice(0, COMMAND_CHARS - 1)}…` : line;
+  }
+
+  /** How much reasoning fits on a summary line before it stops being a line. */
+  const THINKING_CHARS = 120;
+
+  /**
+   * The opening of a reasoning run, as one line.
+   *
+   * The `<summary>` used to be the literal word `Thinking`, which is the same failure the tool rows
+   * had before a06b05a: a disclosure whose label describes its *category* rather than its contents
+   * makes the reader open it to find out whether they wanted to. Both CLIs put a short statement of
+   * intent at the front of a reasoning block — "I need to check how the config is loaded first" — so
+   * the first sentence is very close to the narration line the transcript wants, and it is free.
+   *
+   * The whole text is still one click away, and unlike a tool's output it is *always* worth having:
+   * the summary is a prefix of the body rather than a name for it.
+   *
+   * Cut at a sentence boundary when there is one near the front, because a clause ending mid-word
+   * reads as damage. Falls back to a hard truncation, then to the category word for a block that
+   * somehow arrived empty — a `<summary>` with nothing in it is an invisible control.
+   *
+   * # Why a leading `**heading**` is a case of its own
+   *
+   * Because Codex writes them, routinely: its reasoning summaries arrive as `**Checking the loader**`
+   * followed by the prose. This is a `<summary>`, not `<Markdown>` — deliberately, since nothing a
+   * model writes may become markup here — so the asterisks would be on screen as themselves. A
+   * model-written heading is also a *better* summary than the first sentence of the prose under it,
+   * which is why this looks for one rather than merely tolerating it.
+   *
+   * Only that one construct, and only at the front. Anything more is a markdown parser, and there is
+   * already one of those in `markdown.ts` for the place that needs it.
+   */
+  function firstLine(text: string): string {
+    const line = text.replace(/\s+/g, ' ').trim();
+    if (line === '') return 'Thinking';
+
+    const heading = /^\*\*\s*(.+?)\s*\*\*/.exec(line);
+    if (heading?.[1]) return clip(heading[1]);
+
+    const stop = /[.!?](?:\s|$)/.exec(line);
+    if (stop && stop.index < THINKING_CHARS) return clip(line.slice(0, stop.index + 1));
+    return clip(line);
+  }
+
+  function clip(text: string): string {
+    return text.length > THINKING_CHARS ? `${text.slice(0, THINKING_CHARS - 1)}…` : text;
   }
 
   /** Whether a row reports work rather than saying something. */
@@ -462,10 +519,21 @@
            string of HTML, so nothing a model writes can become markup — see `markdown.ts`. -->
       <div class="c-transcript__said"><Markdown source={row.text} /></div>
     {:else if row.kind === 'thinking'}
-      <!-- Collapsed by default: thinking is useful when you want it and noise when you do not.
-           A `<details>` rather than a state class, because the browser owns the disclosure. -->
+      <!--
+        The narration line, and the reason it is one line rather than the word `Thinking`.
+
+        A run of reasoning is what the model was about to do and why, which is the one thing a reader
+        scanning a turn actually wants — so its opening sentence is on screen rather than behind a
+        marker that says only which *category* of thing is hidden. The rest is still one click away,
+        and the summary is a prefix of the body rather than a name for it, so opening it never
+        contradicts what was already read.
+
+        Still a `<details>` rather than a state class, because the browser owns the disclosure — and
+        still collapsed by default: a whole reasoning block is useful when you want it and a wall when
+        you do not.
+      -->
       <details class="c-transcript__thinking">
-        <summary>Thinking</summary>
+        <summary>{firstLine(row.text)}</summary>
         <p>{row.text}</p>
       </details>
     {:else if isStep(row)}
@@ -478,6 +546,9 @@
         forty rows and pushed the answer off the screen entirely; the count plus the step currently
         underway is the part anyone reads, and the rest is a click away. Nothing is dropped — the
         body below is exactly the list that used to be inline.
+
+        A run now ends at the next thing the model *says*, reasoning included, so these are the gaps
+        between narration rather than one box per turn. See `group()`.
       -->
       <details class="c-transcript__group">
         <summary class="c-transcript__group-name">
@@ -497,14 +568,6 @@
           {/if}
         </summary>
         <div class="c-transcript__group-body">
-          {#if row.thinking}
-            <!-- Every reasoning run in the group, merged. Fifteen rows each reading `Thinking` and
-                 holding nothing visible said less than one row holding all fifteen. -->
-            <details class="c-transcript__thinking">
-              <summary>Thinking</summary>
-              <p>{row.thinking}</p>
-            </details>
-          {/if}
           {#each row.steps as member (member.key)}
             {@render step(member)}
           {/each}

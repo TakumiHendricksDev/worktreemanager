@@ -16,6 +16,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
 
   import { sessions, type Pane } from '../state/sessions.svelte';
+  import { STATUS_WORD, type PaneStatus } from '../status';
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
   import AgentTranscript from './AgentTranscript.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
@@ -24,13 +25,28 @@
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
+  import SessionDot from './ui/SessionDot.svelte';
 
   const {
     pane,
     visible,
+    onmovestart,
+    onmovekey,
   }: {
     pane: Pane;
     visible: boolean;
+    /**
+     * The grip was pressed. Raw event, so the tree can decide what it means.
+     *
+     * Required rather than optional, deliberately: `svelte-check` is the only guard this codebase has
+     * on a component's call sites, so a required prop is what turns "someone rendered a pane without
+     * wiring the grip" into a build error instead of a handle that silently does nothing.
+     *
+     * The geometry stays out of this file. `SessionTree` owns the pane rectangles, so it is the only
+     * thing that can say what a drag or an arrow key resolves to.
+     */
+    onmovestart: (event: PointerEvent) => void;
+    onmovekey: (event: KeyboardEvent) => void;
   } = $props();
 
   let draft = $state('');
@@ -70,15 +86,46 @@
 
   const isFocused = $derived(sessions.focused[pane.worktreeId] === pane.id);
 
-  /** True while a turn is in flight, so the control reads Stop rather than Send. */
-  const running = $derived.by(() => {
-    for (let i = pane.events.length - 1; i >= 0; i -= 1) {
-      const kind = pane.events[i]?.kind;
-      if (kind === 'turn_finished') return false;
-      if (kind === 'turn_started') return true;
-    }
-    return false;
-  });
+  /**
+   * This pane's state, as one word.
+   *
+   * Replaces a backward scan over `pane.events` for the nearest `turn_started`/`turn_finished`, which
+   * was O(events) against a log bounded at 20 000 — affordable for one reader and not for the sidebar,
+   * which needs the same answer per row. `sessions.record` now maintains `pane.working` in O(1) and
+   * `status.ts` owns the vocabulary. See both for why.
+   */
+  const status = $derived(sessions.statusOfPane(pane));
+
+  /**
+   * Which `c-status--*` tone the header note takes.
+   *
+   * A lookup rather than interpolation, for the reason every UI primitive here states its contract as
+   * a union: the stylesheet is global, so a tone that does not exist fails silently, and a typed
+   * record is the only thing that catches it.
+   */
+  const TONE: Record<PaneStatus, string> = {
+    failed: 'c-status--danger',
+    ended: 'c-status--warn',
+    attention: 'c-status--warn',
+    working: 'c-status--info',
+    done: 'c-status--info',
+    starting: 'c-status--subtle',
+    idle: 'c-status--subtle',
+  };
+
+  /**
+   * What the header note says.
+   *
+   * The two states that have a message of their own use it; the rest use the status word. An error or
+   * an exit summary says *what* went wrong, which "failed" does not.
+   */
+  const note = $derived(
+    status === 'failed'
+      ? pane.error
+      : status === 'ended'
+        ? pane.ended
+        : STATUS_WORD[status],
+  );
 
   /** The oldest unanswered approval. One at a time, in arrival order. */
   const blocking = $derived(pane.approvals[0] ?? null);
@@ -92,9 +139,47 @@
    */
   const canEdit = $derived(provider === 'claude');
 
-  const capability = $derived(
-    provider === null ? null : (sessions.capabilities[provider] ?? null),
+  /**
+   * Every agent that could run a turn in this pane, with what each can do.
+   *
+   * All of them, not just this pane's, because the model menu is grouped by provider — see
+   * `ModelPicker`'s header. Filtered on `offered` as well as `available`: a repository that declines
+   * an agent must not have it appear in a menu whose selection would be refused at spawn.
+   *
+   * The capabilities are already warm. `sessions.init` asks for every available provider's at
+   * startup and `loadCapability` caches for the window's life, so reading more of that map than this
+   * pane's own costs nothing — which is the whole reason the grouped menu is cheap.
+   */
+  const groups = $derived(
+    sessions.options
+      .filter((o) => o.available && o.offered)
+      .map((o) => ({
+        id: o.id,
+        label: o.label,
+        capability: sessions.capabilities[o.id] ?? null,
+      })),
   );
+
+  /**
+   * What a restart would apply, as a sentence — or null when it would apply nothing.
+   *
+   * Doubles as the flag for whether Restart is the thing to press: the two settings a running
+   * session cannot be told about are the provider and the effort, so this is the only reason to
+   * offer the control prominently rather than as a quiet icon. Spelled out rather than left as
+   * "Restart to apply changes", because the two are worth distinguishing — switching agent throws
+   * away a conversation that switching effort keeps.
+   */
+  const pending = $derived.by(() => {
+    const target = pane.pendingProvider;
+    const label =
+      target === null ? null : (groups.find((g) => g.id === target)?.label ?? target);
+    if (label !== null && pane.effortPending) {
+      return `Restart to switch to ${label} at effort ${pane.effort}`;
+    }
+    if (label !== null) return `Restart to switch to ${label}`;
+    if (pane.effortPending) return `Restart to apply effort ${pane.effort}`;
+    return null;
+  });
 
   /*
    * Follow the tail whenever the transcript changes height, for any reason.
@@ -459,24 +544,93 @@
   onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
 >
   <header class="c-pane__head">
+    <!--
+      First, before the title, because it is what the pane is held by — and because a handle after the
+      name reads as an action on the name rather than on the pane.
+
+      A real `<button>`, so it is a tab stop and the arrow keys can move a pane without a pointer.
+      Pointer events rather than HTML5 drag: `dragDropEnabled` in tauri.conf.json disables `dragstart`
+      across the whole webview, in exchange for Finder drops carrying real paths. See the drag-drop
+      effect above.
+    -->
+    <button
+      class="c-pane__grip"
+      type="button"
+      aria-label="Move this session"
+      aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
+      title="Drag to move this pane, or use the arrow keys"
+      onpointerdown={onmovestart}
+      onkeydown={onmovekey}
+    >
+      <Icon name="grip" size={12} />
+    </button>
+
     <h2 class="c-pane__title">{label}</h2>
 
-    {#if pane.error}
-      <p class="c-pane__note c-status--danger">{pane.error}</p>
-    {:else if pane.ended}
-      <p class="c-pane__note c-status--warn">{pane.ended}</p>
-    {:else if provider !== null && !pane.ready}
-      <p class="c-pane__note c-status--subtle">starting…</p>
-    {:else if running}
-      <p class="c-pane__note c-status--info">working…</p>
+    <!--
+      One branch instead of four, and a dot beside the word.
+
+      The word is what carries the state — `_semantic.scss` forbids colour alone, and here that rule
+      is satisfied outright rather than worked around, which is why the dot is `aria-hidden`: it is
+      the same fact drawn a second way, so naming it too would have a screen reader read the state
+      twice. `idle` draws nothing at all, exactly as before.
+
+      `attention` is new, and it is a correction: a pane blocked on an approval is still between
+      `turn_started` and `turn_finished`, so this used to report it as "working…" while it was in fact
+      doing nothing and waiting for an answer. See `statusOf`.
+    -->
+    {#if status !== 'idle' && note}
+      <p class="c-pane__note {TONE[status]}">
+        <SessionDot {status} />
+        {note}
+      </p>
     {/if}
 
+    <!--
+      Restart · Split · Close, in that order, and the order does not change with the pane's state.
+
+      Restart used to appear *only* on a pane that had ended or failed, which left both "on restart"
+      markers — effort, and now the provider — pointing at a control that did not exist. It also meant
+      the header swapped Split for Restart when a session died, sliding Close left under whatever the
+      pointer was already over.
+
+      Prominence tracks whether anything is waiting on it: a quiet icon while it is merely available,
+      a labelled button when it is the thing to press. Same register the row already used for Split
+      against Restart-on-ended.
+    -->
     <div class="c-pane__actions">
       {#if pane.ended || pane.error}
         <Button variant="neutral" size="sm" onclick={() => void sessions.restart(pane.id)}>
           Restart
         </Button>
-      {:else if provider !== null}
+      {:else if pending !== null}
+        <Button
+          variant="neutral"
+          size="sm"
+          title={pending}
+          onclick={() => void sessions.restart(pane.id)}
+        >
+          Restart
+        </Button>
+      {:else}
+        <!-- No confirmation, deliberately. Close is one control to the right, deletes the pane and
+             its position as well as the transcript, and asks nothing — so a dialog on the strictly
+             lesser action would read as inconsistency rather than as care. And the transcript is not
+             the durable artefact: both CLIs keep the conversation, and `restart` refreshes the
+             resume list, so it reappears under "Pick up where you left off". -->
+        <Button
+          variant="quiet"
+          size="sm"
+          icon="sm"
+          title="Restart this session — the transcript is cleared and the conversation stays resumable"
+          ariaLabel="Restart session"
+          onclick={() => void sessions.restart(pane.id)}
+        >
+          <Icon name="restart" size={12} />
+        </Button>
+      {/if}
+
+      {#if provider !== null && !pane.ended && !pane.error}
         <Button
           variant="quiet"
           size="sm"
@@ -489,11 +643,15 @@
               pane.worktreeId,
               provider ?? '',
               'right',
+              // The pane whose button was pressed, not whichever one the focus map thinks. See
+              // `Sessions.place` for why those differ on macOS.
+              pane.id,
             )}
         >
           <Icon name="split-right" size={13} />
         </Button>
       {/if}
+
       <Button
         variant="quiet"
         size="sm"
@@ -619,7 +777,9 @@
           </span>
 
           <ModelPicker
-            {capability}
+            providers={groups}
+            provider={provider ?? ''}
+            pendingProvider={pane.pendingProvider}
             model={pane.model}
             effort={pane.effort}
             mode={pane.mode}
@@ -629,7 +789,16 @@
           />
 
           <div class="c-composer__send">
-            {#if running}
+            <!--
+              `pane.working`, deliberately **not** `status === 'working'`.
+
+              This is the one place that wants the raw field. `attention` outranks `working` in the
+              status vocabulary — correctly, because a blocked pane is waiting on you rather than
+              thinking — but a turn *is* still in flight while an approval is unanswered, so keying the
+              control off the status would flip it from Stop back to Send mid-turn, offering to send a
+              second message into a session that cannot take one.
+            -->
+            {#if pane.working}
               <Button
                 variant="neutral"
                 size="sm"

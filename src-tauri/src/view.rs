@@ -683,11 +683,12 @@ mod tests {
             label: "Codex".to_owned(),
             blurb: "OpenAI Codex".to_owned(),
             available: false,
+            offered: true,
             detail: Some("not on wtm's PATH".to_owned()),
         };
         assert_eq!(
             keys_of(&serde_json::to_value(&option).unwrap()),
-            ["available", "blurb", "detail", "id", "label"]
+            ["available", "blurb", "detail", "id", "label", "offered"]
         );
 
         let session = AgentSessionView {
@@ -838,6 +839,15 @@ pub struct AgentOptionView {
     pub label: String,
     pub blurb: String,
     pub available: bool,
+    /// Whether the *repository* offers it, which is a different refusal from not being installed.
+    ///
+    /// Kept apart from [`Self::available`] rather than folded into it, because a greyed row has to
+    /// say **which** of the two it is: "install `codex`" and "this repo's `wtm.toml` turned it off"
+    /// have different fixes, and one of them is not the user's machine.
+    ///
+    /// True when no project is in scope, so the startup call before anything is selected still
+    /// reports the whole catalogue.
+    pub offered: bool,
     /// Why it cannot be used, for a tooltip. `None` when it can.
     pub detail: Option<String>,
 }

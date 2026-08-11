@@ -8,6 +8,7 @@
    * case that actually matters (you did something in a terminal and came back).
    */
   import { listen } from '@tauri-apps/api/event';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onMount } from 'svelte';
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
@@ -19,6 +20,7 @@
   import SettingsDialog from './lib/components/SettingsDialog.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
+  import Toasts from './lib/components/Toasts.svelte';
   import TrustBanner from './lib/components/TrustBanner.svelte';
   import Banner from './lib/components/ui/Banner.svelte';
   import Button from './lib/components/ui/Button.svelte';
@@ -26,6 +28,7 @@
   import Logo from './lib/components/ui/Logo.svelte';
   import { commands } from './lib/ipc/commands';
   import { errorMessage } from './lib/ipc/types';
+  import { attention } from './lib/state/attention.svelte';
   import { sessions } from './lib/state/sessions.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { workspace } from './lib/state/workspace.svelte';
@@ -57,6 +60,8 @@
    * whatever effect happened to read it.
    */
   let offSessions: (() => void) | null = null;
+  /** The focus/blur listeners behind the notification gate. Same contract as `offSessions`. */
+  let offAttention: (() => void) | null = null;
 
   onMount(() => {
     void (async () => {
@@ -67,6 +72,12 @@
       if (Number.isFinite(parsed)) {
         sidebarWidth = Math.min(Math.max(parsed, MIN_SIDEBAR), MAX_SIDEBAR);
       }
+
+      // Before `sessions.init`, because that one starts delivering events and every event is judged
+      // against the notification preference this reads. Started in the other order, the first
+      // approval of a session adopted from a reload would be judged as "not asked yet" whatever the
+      // user had already answered.
+      offAttention = await attention.init();
 
       // Awaited, unlike the worktree list it precedes: this subscribes to every `pty:*` and
       // `agent:*` stream, and a session whose events arrive before the listeners attach streams
@@ -80,6 +91,15 @@
 
     const onFocus = () => {
       if (booted) void workspace.refreshWorktrees();
+      /*
+       * Coming back to the window is looking at what is on screen.
+       *
+       * The third and most important of the three routes that clear an unread mark, because it is the
+       * common case by a wide margin: an agent finishes a turn while you are in another application,
+       * you ⌘-Tab back, and the pane is right there. Without this the dot would insist you had not
+       * seen a thing you were looking at.
+       */
+      sessions.markSeen(workspace.selectedWorktreeId);
     };
     window.addEventListener('focus', onFocus);
 
@@ -157,7 +177,27 @@
       window.removeEventListener('keydown', onKey);
       void unlistenSettings.then((off) => off());
       offSessions?.();
+      offAttention?.();
     };
+  });
+
+  /*
+   * The count of sessions waiting on an answer, on the dock icon.
+   *
+   * The only indicator that reaches someone when wtm is not the front application *and* notifications
+   * are off — and the only one that covers a session in a project other than the selected one, since
+   * the sidebar lists only the active project's worktrees.
+   *
+   * A runtime call rather than a `#[cfg]`, and errors swallowed: a platform with no dock simply does
+   * nothing here, and a badge that could not be set is not worth a banner over the approval it was
+   * trying to report. `undefined` rather than `0` to clear it — that is the API's own way of saying
+   * "no badge", where zero would be a badge reading 0.
+   */
+  $effect(() => {
+    const waiting = sessions.waitingCount;
+    void getCurrentWindow()
+      .setBadgeCount(waiting > 0 ? waiting : undefined)
+      .catch(() => {});
   });
 
   /**
@@ -388,4 +428,14 @@
       onclose={() => (showInspector = false)}
     />
   {/if}
+
+  <!--
+    Last child, and unconditional: the list is a live region, and one added to the document at the same
+    moment as its first content is not announced. It sits below the scrim by `$z-toast`, so an open
+    dialog dims it and it comes back when the dialog closes — see `settings/_config.scss`.
+
+    `onselectworktree` for the same reason `Sidebar` takes one: clicking a toast selects a worktree, and
+    doing that while the create pane owns the screen would look like nothing happened.
+  -->
+  <Toasts onselectworktree={() => (mainView = 'worktree')} />
 </div>

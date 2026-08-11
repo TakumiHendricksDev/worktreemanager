@@ -1,0 +1,139 @@
+/*
+ * Cards for a session in a worktree you are not looking at.
+ *
+ * The one thing in the app that floats, and the reason `settings/_config.scss` grew a third stacking
+ * level after saying nothing should. Read the note there for why it is *below* the scrim.
+ *
+ * # These do not expire
+ *
+ * Unusual for a toast, and the point. One is removed by being clicked, by its own ✕, or by arriving at
+ * the worktree it is about — never by elapsed time. `setTimeout` per card would be a timer per card,
+ * and the ban in `ARCHITECTURE.md` is about not having machinery that runs when nothing has happened.
+ * A card that waits is also the honest behaviour for the thing it reports: an approval does not stop
+ * blocking a session because thirty seconds passed.
+ */
+
+@use '../settings/config' as *;
+
+.c-toasts {
+  position: fixed;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  z-index: $z-toast;
+  display: flex;
+  /* Newest nearest the corner, so a second card grows the stack upward and the one you were about to
+     click does not move out from under the pointer. */
+  flex-direction: column-reverse;
+  gap: var(--sp-2);
+  width: min(360px, 40vw);
+  /*
+   * Load-bearing, not tidiness.
+   *
+   * This box is fixed over the bottom-right corner of the window, which is exactly where the
+   * composer's Send button is. Without this an *empty* stack — the state it is in almost always —
+   * swallows every click on the primary action of the app. Each card turns it back on for itself.
+   */
+  pointer-events: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.c-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  /* The only shadow in the app doing what a shadow is for: saying this layer is above the others. */
+  box-shadow: var(--shadow-lg);
+  animation: c-toast-in var(--dur-fast) var(--ease);
+}
+
+/* The border carries the kind, and the card's own text carries it too — see the component, which
+   renders a dot and a sentence. Border rather than fill, because a filled card at this size reads as
+   an error dialog whatever colour it is. */
+.c-toast--attention {
+  border-color: var(--warn-line);
+}
+
+.c-toast--failed {
+  border-color: var(--danger-line);
+}
+
+.c-toast--done {
+  border-color: var(--info-line);
+}
+
+.c-toast--ask {
+  border-color: var(--border-strong);
+}
+
+.c-toast__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* A button, so it needs the reset — and `text-align: left` because a button centres by default and
+     this one is a paragraph. */
+  border: 0;
+  padding: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.c-toast__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.c-toast__detail {
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}
+
+.c-toast__actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.c-toast__close {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  border: 0;
+  padding: 2px;
+  background: none;
+  color: var(--fg-subtle);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--fg);
+  }
+}
+
+/*
+ * Entry only, and no reduced-motion guard of its own.
+ *
+ * Unlike `_dot.scss`, which needs one: that animation loops, so the global 0.01ms override turns it
+ * into a flicker. This one runs once and ends in its resting state, so collapsing its duration is
+ * exactly the right behaviour — the card simply appears. Same call `_scrim.scss` makes.
+ */
+@keyframes c-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}

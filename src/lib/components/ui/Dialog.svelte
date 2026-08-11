@@ -9,7 +9,8 @@
    * # Not `<dialog>.showModal()`
    *
    * The native element promotes to the top layer, which sits above everything regardless of
-   * `z-index`. That invalidates the two stacking levels in `settings/_config.scss` and makes
+   * `z-index`. That invalidates every level in `settings/_config.scss` at once — including the
+   * toast stack, which is deliberately *below* the scrim — and makes
    * the hand-drawn scrim redundant in a way that would need the whole thing rebuilt rather than
    * adjusted. Worth doing one day; not as a side effect of a class rename.
    *

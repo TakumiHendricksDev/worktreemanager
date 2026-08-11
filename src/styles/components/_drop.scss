@@ -1,0 +1,27 @@
+/*
+ * Where a dragged pane would land.
+ *
+ * The paint only — `objects/_tiles.scss` positions it, and the element carries both classes. That
+ * division is the app's existing idiom for a thing that is geometry plus a look; see the composer's
+ * add button, which is `c-composer__add o-overlay-select`.
+ *
+ * # Why an edge drop and a swap look different
+ *
+ * They mean different things, and the shape says which. A solid outline over half a pane is "the pane
+ * goes here, beside that one"; a dashed outline over a whole pane is "these two exchange places". Both
+ * are the accent, because both are the same *kind* of thing — a target — and using a second hue would
+ * imply one of them was riskier.
+ *
+ * No `z-index`. See the note in `_tiles.scss` about `isolation` on the tile, which is what lets an
+ * indicator painting by tree order sit over a live terminal.
+ */
+
+.c-drop {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+}
+
+.c-drop.is-swap {
+  border-style: dashed;
+}

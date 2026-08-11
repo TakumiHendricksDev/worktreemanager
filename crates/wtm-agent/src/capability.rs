@@ -25,13 +25,36 @@
 //! its `Cargo.toml` has no `wtm-exec`, which is the proof. So the composition root drives the
 //! process and hands the reply to [`crate::codex::parse_models`], which is pure and testable.
 
-use wtm_core::model::{AgentCapability, AgentMode, AgentModel, EffortOption, ModeRisk};
+use wtm_core::model::{AgentCapability, AgentMode, AgentModel, Effort, EffortOption, ModeRisk};
 
 /// The effort that means "and orchestrate workflows", which the `--effort` flag will not accept.
 ///
 /// Exported because [`crate::claude`] has to recognise it when building argv and cannot import a
 /// literal twice without the two spellings drifting.
 pub const ULTRACODE: &str = "ultracode";
+
+/// Codex's own top rung, which is that provider's analogue of [`ULTRACODE`].
+///
+/// A constant for the same reason: [`carried_effort`] has to recognise it, and a literal spelled in
+/// two files is one that drifts.
+pub const CODEX_ULTRA: &str = "ultra";
+
+/// The rung wtm starts a session on when it gets to choose.
+///
+/// **This is wtm's editorial answer, not either CLI's.** Both providers advertise a lower default —
+/// Claude's table said `high`, Codex's `model/list` says `medium` for `gpt-5.6-sol` — and neither is
+/// what someone driving several agents against a worktree wants: the whole point of the tool is
+/// running work that takes a while, so the depth that pays for itself is the one above the CLI's
+/// interactive default. Written down once, here, because the picker's seed and the spawn path both
+/// have to agree and they reach it by different routes.
+pub const PREFERRED_EFFORT: &str = "xhigh";
+
+/// The shared rungs, weakest first — the vocabulary both providers spell the same way.
+///
+/// Neither provider's *top* rung is on this list, and that is the point: `ultracode` and
+/// [`CODEX_ULTRA`] change what the agent *does*, not how hard it thinks, so they are not
+/// comparable levels. See [`carried_effort`].
+const LADDER: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Claude Code's capabilities, as of this build.
 ///
@@ -81,12 +104,15 @@ pub fn claude_capability() -> AgentCapability {
         .collect()
     };
 
+    // `PREFERRED_EFFORT` unconditionally, because every ladder above is the same six rungs and
+    // `xhigh` is one of them. The per-model check that `preferred_effort` does is for the other
+    // provider, where the ladder differs between models.
     let model = |id: &str, label: &str, description: &str, is_default: bool| AgentModel {
         id: id.to_owned(),
         label: label.to_owned(),
         description: Some(description.to_owned()),
         is_default,
-        default_effort: Some("high".to_owned()),
+        default_effort: Some(PREFERRED_EFFORT.to_owned()),
         efforts: efforts(),
     };
 
@@ -218,4 +244,110 @@ pub fn codex_modes() -> Vec<AgentMode> {
             false,
         ),
     ]
+}
+
+/// The rungs every Codex model supports, weakest first.
+///
+/// A compiled floor, and the only thing [`carried_effort`] can honestly use. Asking the real
+/// question would mean spawning a `codex app-server` per handoff — the query
+/// [`crate::codex::parse_models`] parses costs a process — and a handoff is answered on a socket
+/// thread while a model waits on the other end of it.
+///
+/// So this is the **intersection** of the ladders in the table at the top of this module, not the
+/// union: `gpt-5.5` stops at `xhigh`, so `max` is not here. Erring permissive would mean a
+/// `turn/start` that the server rejects; erring strict costs one rung of depth on the models that
+/// have it. One of those is a failure and the other is a rounding error.
+#[must_use]
+pub fn codex_effort_floor() -> Vec<EffortOption> {
+    ["low", "medium", "high", "xhigh"]
+        .iter()
+        .map(|effort| EffortOption {
+            effort: (*effort).to_owned(),
+            description: None,
+        })
+        .collect()
+}
+
+/// The rung wtm seeds `model` on: [`PREFERRED_EFFORT`] when that model's own ladder has it, and the
+/// model's advertised default otherwise.
+///
+/// Per model rather than per provider, because Codex's ladders differ *within* the provider — see
+/// the table at the top of this module. A model that never advertised a default and lacks the
+/// preferred rung gets `None`, which is what it had before.
+#[must_use]
+pub fn preferred_effort(model: &AgentModel) -> Option<Effort> {
+    if model.efforts.iter().any(|e| e.effort == PREFERRED_EFFORT) {
+        return Some(PREFERRED_EFFORT.to_owned());
+    }
+    model.default_effort.clone()
+}
+
+/// Apply [`preferred_effort`] across a whole capability.
+///
+/// # Why this is a second pass and not part of the query
+///
+/// [`crate::codex::parse_models`] reports what the CLI said, under `models_are_live: true`. Baking
+/// a preference into it would make the parser lie about its own source — and its test asserts the
+/// advertised value precisely so that a CLI which changes its defaults is visible. So the CLI's
+/// answer is parsed faithfully and *then* overridden here, where the override is the subject of the
+/// function rather than a side effect of one.
+pub fn prefer_effort(capability: &mut AgentCapability) {
+    for model in &mut capability.models {
+        model.default_effort = preferred_effort(model);
+    }
+}
+
+/// The rung to start `to` on when a session on `from` hands off to it.
+///
+/// `None` when nothing sensible carries, which the caller reads as "use the target's own default" —
+/// the only other honest answer.
+///
+/// # Why a top rung is demoted rather than translated
+///
+/// `ultracode` and [`CODEX_ULTRA`] look like counterparts and are not. Both switch on delegation:
+/// `ultracode` is `max` plus standing multi-agent orchestration (see the ladder above, and
+/// [`crate::claude::argv`], which translates it into a settings key rather than a depth), and
+/// Codex's is that provider's equivalent. Mapping one to the other would mean an agent asked for a
+/// code review quietly starting a fleet of sub-agents at a cost nobody authorised — the user turned
+/// that on for **one** provider, deliberately, and a handoff is not consent to turn it on for
+/// another. `max` is the highest rung that means only "think harder" on both sides.
+///
+/// # Why it clamps down and never up
+///
+/// The target's ladder is the vocabulary its protocol accepts, so a rung it does not have is a
+/// spawn that fails or a frame it rejects. Stepping down to the nearest rung it does have keeps the
+/// user's intent — "spend more here than the default" — without inventing a level.
+#[must_use]
+pub fn carried_effort(from: &str, to: &str, effort: &str) -> Option<Effort> {
+    // Same provider: nothing to translate, and a Codex-to-Codex handoff must not be demoted by the
+    // conservative floor below.
+    if from == to {
+        return Some(effort.to_owned());
+    }
+
+    let requested = if effort == ULTRACODE || effort == CODEX_ULTRA {
+        "max"
+    } else {
+        effort
+    };
+    let wanted = LADDER.iter().position(|rung| *rung == requested)?;
+
+    let accepts: Vec<Effort> = match to {
+        crate::codex::ID => codex_effort_floor().into_iter().map(|e| e.effort).collect(),
+        crate::claude::ID => claude_capability()
+            .models
+            .first()
+            .map(|m| m.efforts.iter().map(|e| e.effort.clone()).collect())
+            .unwrap_or_default(),
+        // An agent this build does not know. Its ladder is not ours to guess at.
+        _ => return None,
+    };
+
+    // The highest rung the target accepts at or below the one asked for.
+    LADDER
+        .iter()
+        .take(wanted + 1)
+        .rev()
+        .find(|rung| accepts.iter().any(|a| a == *rung))
+        .map(|rung| (*rung).to_owned())
 }

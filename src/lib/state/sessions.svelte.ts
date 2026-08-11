@@ -38,13 +38,17 @@ import {
   type Resumable,
   type SpawnedSession,
 } from '../ipc/types';
+import { statusOf, worse, type PaneStatus } from '../status';
+import { attention, type Announceable } from './attention.svelte';
 import {
   insert,
+  move,
   panesOf,
   remove,
   resize,
   type Layout,
   type Placement,
+  type Target,
 } from './layout.svelte';
 
 /**
@@ -152,6 +156,28 @@ export interface Pane {
   /** Agent transcript. Empty for a shell, whose transcript lives in its xterm instance. */
   events: AgentEvent[];
   approvals: PendingApproval[];
+  /**
+   * True between `turn_started` and `turn_finished`.
+   *
+   * Maintained in `record` alongside `approvals`, and for the same reason that one gives: this was a
+   * `$derived` inside `SessionPane` that scanned `events` **backwards** for the nearest of the two,
+   * which is O(events) per read against a log bounded at 20 000. One reader could afford that; the
+   * sidebar needs the same answer for every pane on every render, and cannot.
+   *
+   * A plain boolean rather than a depth counter, because the scan it replaces was already
+   * "nearest wins" — an assignment reproduces it exactly, where a counter would additionally have to
+   * survive an unpaired `turn_finished`.
+   */
+  working: boolean;
+  /**
+   * A turn finished, or a session failed, while this pane's worktree was not the selected one.
+   *
+   * The blue dot, and it is **unread rather than recent**: it is cleared by looking (see `markSeen`),
+   * never by elapsed time. Deliberately, and not only because polling and timers are banned here —
+   * "did anything happen while I was away" is the question a person actually has, and it is not the
+   * same question as "did it happen in the last five minutes".
+   */
+  unseen: boolean;
   ready: boolean;
   ended: string | null;
   error: string | null;
@@ -178,6 +204,24 @@ export interface Pane {
    * Never set for Codex, which re-sends effort on every turn.
    */
   effortPending: boolean;
+  /**
+   * A provider the picker has been pointed at that the running session is not.
+   *
+   * **`kind` stays authoritative for the process.** Nothing else may read a provider from here —
+   * the title, the transcript, the mode pill and the spawn all keep describing what is actually
+   * running, because a pane that claimed to be Codex while a Claude process answered it would be
+   * lying about the thing the user most needs to know.
+   *
+   * The same split as `effort`/`effortPending`, for the same reason: the provider is a property of
+   * the process, and the process reads it once. One deliberate difference — this clears when the
+   * selection comes back to the running provider, because "which agent" is a choice you can take
+   * back, where an effort the session may or may not be using cannot be un-known.
+   *
+   * Null on a pane that has never been asked anything: `configure` restarts those outright rather
+   * than marking them, since there is nothing to lose and a marker you have to act on is worse than
+   * doing the obvious thing.
+   */
+  pendingProvider: string | null;
   /**
    * What this session can be asked to do by name, for the composer's `/` list.
    *
@@ -270,7 +314,51 @@ class Sessions {
   /** Events that arrived before their pane knew its id, oldest first. */
   private readonly eventsAhead = new Map<string, AgentEvent[]>();
 
-  live = $derived(this.panes.filter((p) => p.ended === null && p.error === null));
+  /**
+   * The one status each worktree's sidebar row shows, keyed by worktree id. Absent means no dot.
+   *
+   * One `$derived` map rather than a `statusIn(id)` the sidebar calls per row: a method would re-scan
+   * every pane once per rendered row on every pane change, where this scans once and every row reads
+   * a key out of the result.
+   *
+   * **It does not read `pane.events`.** A `$state` proxy signals per property, so appending to the
+   * log — which happens once per streamed token — does not invalidate this. That is the whole reason
+   * `working` is a field rather than a fold over the log, and it is the property to preserve if this
+   * map ever grows a new input.
+   *
+   * Replaces a `live` derived that nothing ever read.
+   */
+  statuses = $derived.by(() => {
+    const out: Record<string, PaneStatus> = {};
+    for (const pane of this.panes) {
+      const next = statusOf(facts(pane));
+      const held = out[pane.worktreeId];
+      out[pane.worktreeId] = held === undefined ? next : worse(held, next);
+    }
+    return out;
+  });
+
+  /** The status of one pane, for its own header. */
+  statusOfPane(pane: Pane): PaneStatus {
+    return statusOf(facts(pane));
+  }
+
+  /**
+   * How many sessions are waiting on an answer, anywhere — including in another project.
+   *
+   * The dock badge reads this. It is the only indicator that reaches someone when wtm is not the
+   * front application and notifications are off, and the only one that covers a project other than
+   * the selected one: panes carry a `projectId`, but the sidebar only lists the active project's
+   * worktrees, so sidebar dots alone still hide a blocked session one project over.
+   */
+  waitingCount = $derived(this.panes.filter((p) => p.approvals.length > 0).length);
+
+  /** Whether any pane in a project wants attention, for the project switcher's rows. */
+  wantsAttentionIn(projectId: string): boolean {
+    return this.panes.some(
+      (p) => p.projectId === projectId && (p.approvals.length > 0 || p.error !== null),
+    );
+  }
 
   paneById(id: string | null): Pane | null {
     if (id === null) return null;
@@ -429,16 +517,48 @@ class Sessions {
    */
   configure(
     paneId: string,
-    next: { model: string; effort: string; mode: string | null },
+    next: { provider: string; model: string; effort: string; mode: string | null },
   ): void {
     const pane = this.paneById(paneId);
     if (!pane) return;
+    // A shell has no picker, so there is nothing here that could have called this.
+    const running = pane.kind.kind === 'agent' ? pane.kind.provider : null;
+    if (running === null) return;
+
+    const swapping = next.provider !== running;
+
+    /*
+     * A pane nobody has asked anything yet just becomes the other agent.
+     *
+     * Nothing to lose, so nothing to warn about — and a marker the user has to act on is strictly
+     * worse than doing the obvious thing. `events.length === 0` is the wrong test: `session_ready`,
+     * `skills_listed` and any stderr notice from the handshake are all in the log before the first
+     * prompt, so a pane that has been open for two seconds is not empty by that measure.
+     *
+     * The model and effort are written first so the restart spawns with them; `restart` adopts
+     * `pendingProvider` itself.
+     */
+    if (swapping) {
+      const untouched = !pane.events.some(
+        (e) => e.kind === 'user_echo' || e.kind === 'turn_started',
+      );
+      if (untouched) {
+        pane.model = next.model;
+        pane.effort = next.effort;
+        pane.pendingProvider = next.provider;
+        void this.restart(paneId);
+        return;
+      }
+    }
 
     const modelChanged = pane.model !== next.model;
     const modeChanged = pane.mode !== next.mode;
     // Sticky once set: a pane whose effort is already pending must not un-mark itself because a
     // later change happened to land back on the value the session was started with.
     if (pane.effort !== next.effort && pane.session !== null) pane.effortPending = true;
+    // Not sticky, unlike effort: pointing the picker back at the running agent is a retraction, and
+    // there is nothing left pending once it agrees with the process again.
+    pane.pendingProvider = swapping ? next.provider : null;
 
     pane.model = next.model;
     pane.effort = next.effort;
@@ -446,7 +566,12 @@ class Sessions {
 
     // Nothing to say to a session that does not exist yet — `openAgentSession` will carry these
     // as spawn arguments instead.
-    if (pane.session === null || (!modelChanged && !modeChanged)) return;
+    //
+    // And nothing to say to one whose vocabulary these values are not in: a Claude process asked to
+    // use `gpt-5.6-sol` answers with a `Notice`, which lands in the transcript as a real error
+    // report for a change the user never made. A pending swap is applied by Restart, not by
+    // telling the wrong process about it.
+    if (pane.session === null || swapping || (!modelChanged && !modeChanged)) return;
     void commands
       .configureSession(
         pane.session,
@@ -650,10 +775,22 @@ class Sessions {
     await this.send(pane.id, prompt);
   }
 
-  /** Re-probe which agents this machine has. Silent on failure — an auxiliary convenience. */
-  async refreshOptions(): Promise<void> {
+  /**
+   * Re-probe which agents this machine has, and which this repository offers.
+   *
+   * Silent on failure — an auxiliary convenience. Called at startup without a project and again
+   * whenever the selection lands on a new one, because `offered` is the repository's answer and
+   * changes with it.
+   *
+   * Assigned only when something moved, for the reason `patch` gives: a freshly built array with
+   * identical contents is a **new identity**, and this list feeds `SessionPane`'s `label` derived —
+   * so an unconditional assignment re-renders every pane header for nothing. Called from an effect,
+   * which is the other half of why it matters.
+   */
+  async refreshOptions(projectId?: string | null): Promise<void> {
     try {
-      this.options = await commands.listAgents();
+      const next = await commands.listAgents(projectId);
+      if (JSON.stringify(this.options) !== JSON.stringify(next)) this.options = next;
     } catch {
       /* Deliberately silent, as `workspace.refreshOpeners` is and for the same reason. */
     }
@@ -693,6 +830,8 @@ class Sessions {
       session: null,
       events: [],
       approvals: [],
+      working: false,
+      unseen: false,
       ready: false,
       ended: null,
       error: null,
@@ -701,17 +840,38 @@ class Sessions {
       effort: null,
       mode: null,
       effortPending: false,
+      pendingProvider: null,
       skills: [],
     };
   }
 
-  private place(worktreeId: string, paneId: string, placement: Placement): void {
+  /**
+   * Put a new pane into a worktree's tree and focus it.
+   *
+   * # Why `beside` is a parameter and not just the focus map
+   *
+   * Because the focus map is stale exactly when it matters. The only click-driven writer is a
+   * **bubble-phase** `onclick` on the pane's `<section>`, which runs *after* the split button's own
+   * handler — and macOS WebKit does not focus a `<button>` on click, so the `onfocusin` beside it
+   * does not cover for that. Clicking Split on a pane that was not already focused therefore
+   * inserted the new pane beside whichever pane *was*, which is not where the button was.
+   *
+   * So a caller that knows its target says so. The fallback is kept for the callers that genuinely
+   * do not have one — a resume, an adopt, a handoff — where "beside whatever was last focused" is
+   * the only answer available.
+   */
+  private place(
+    worktreeId: string,
+    paneId: string,
+    placement: Placement,
+    beside?: string | null,
+  ): void {
     this.layouts = {
       ...this.layouts,
       [worktreeId]: insert(
         this.layoutFor(worktreeId),
         paneId,
-        this.focused[worktreeId] ?? null,
+        beside ?? this.focused[worktreeId] ?? null,
         placement,
       ),
     };
@@ -762,12 +922,18 @@ class Sessions {
     }
   }
 
-  /** Start an agent session. Not idempotent — several in one worktree is the feature. */
+  /**
+   * Start an agent session. Not idempotent — several in one worktree is the feature.
+   *
+   * `beside` names the pane the new one lands next to. Pass it whenever the caller knows; see
+   * `place` for what goes wrong when it does not.
+   */
   async openAgent(
     projectId: string,
     worktreeId: string,
     provider: string,
     placement: Placement = 'right',
+    beside?: string,
   ): Promise<void> {
     if (!this.hasRoom(worktreeId)) return;
 
@@ -785,7 +951,7 @@ class Sessions {
     pane.mode = capability?.modes.find((m) => m.isDefault)?.id ?? null;
 
     this.panes = [...this.panes, pane];
-    this.place(worktreeId, pane.id, placement);
+    this.place(worktreeId, pane.id, placement, beside);
     void this.loadCapability(provider);
 
     try {
@@ -808,11 +974,58 @@ class Sessions {
     this.focused = { ...this.focused, [worktreeId]: paneId };
     this.focusTarget = paneId;
     this.focusEpoch += 1;
+    this.seen(paneId);
   }
 
   /** Note focus without asking for it, so a click does not re-trigger the focus effect. */
   noteFocus(worktreeId: string, paneId: string): void {
     this.focused = { ...this.focused, [worktreeId]: paneId };
+    this.seen(paneId);
+  }
+
+  /**
+   * Forget that anything happened in this worktree unseen.
+   *
+   * **"Looked at" means the worktree became the selected one**, not that a pane took focus. Every
+   * pane in the selected worktree is on screen — `SessionSurface` hides by worktree, not by pane — so
+   * a four-way split where one pane finished is a thing the user is already looking at, and a dot
+   * demanding a click would be asking them to acknowledge something in front of them.
+   *
+   * Guarded on the flag so the common case — nothing unseen, which is most selections — signals no
+   * reader at all.
+   */
+  markSeen(worktreeId: string | null): void {
+    if (worktreeId === null) return;
+    for (const pane of this.panes) {
+      if (pane.worktreeId === worktreeId && pane.unseen) pane.unseen = false;
+    }
+    attention.clear(worktreeId);
+  }
+
+  /** Clear one pane's unread mark. Guarded, so an ordinary click writes nothing. */
+  private seen(paneId: string): void {
+    const pane = this.paneById(paneId);
+    if (pane?.unseen) pane.unseen = false;
+  }
+
+  /**
+   * Reposition a pane that is already open.
+   *
+   * A move is a layout edit and nothing else: no session is started or ended, so `hasRoom` is not
+   * consulted and no cap applies. `move` refuses anything that would be a no-op and returns the tree
+   * it was given, so the identity check is what keeps a drop-where-it-already-was from signalling
+   * every reader for nothing.
+   *
+   * `noteFocus` rather than `focus`: the caller decides where the caret lands, because the pointer path
+   * and the keyboard path want different answers — a drag should hand focus to the pane, an arrow key
+   * has to hand it back to the grip so the next press works.
+   */
+  movePane(worktreeId: string, paneId: string, target: Target): void {
+    const layout = this.layoutFor(worktreeId);
+    const next = move(layout, paneId, target);
+    if (next === layout) return;
+    this.layouts = { ...this.layouts, [worktreeId]: next };
+    this.noteFocus(worktreeId, paneId);
   }
 
   setRatio(worktreeId: string, path: string, ratio: number): void {
@@ -894,7 +1107,12 @@ class Sessions {
     }
   }
 
-  /** End a session and drop its pane. The only thing that discards a transcript. */
+  /**
+   * End a session and drop its pane.
+   *
+   * The only thing that discards a transcript *and the pane with it* — `restart` also clears the
+   * transcript, but keeps the pane and its position, and leaves the conversation resumable.
+   */
   async close(paneId: string): Promise<void> {
     const pane = this.paneById(paneId);
     if (!pane) return;
@@ -943,6 +1161,10 @@ class Sessions {
     pane.session = null;
     pane.events = [];
     pane.approvals = [];
+    // A fresh session has no turn in flight and nothing you have not seen. Both would otherwise
+    // survive the reset and describe a process that no longer exists.
+    pane.working = false;
+    pane.unseen = false;
     pane.ready = false;
     pane.ended = null;
     pane.error = null;
@@ -952,6 +1174,25 @@ class Sessions {
     // Re-announced by the new session, and a stale list is worse than none — a restarted pane may
     // be a different provider's, and skills are worktree-scoped.
     pane.skills = [];
+
+    /*
+     * The one place a pane's provider changes, and it is here because this is the only moment it
+     * can: the provider *is* the process, so pointing a pane at a different agent means replacing
+     * the process, which is what a restart already does.
+     *
+     * The mode is dropped rather than carried. A mode is provider vocabulary — `acceptEdits` means
+     * nothing to Codex and `full-access` nothing to Claude — so the new session takes the target's
+     * own default (`ProviderEntry::default_mode`, or the repository's) and reports back what it
+     * resolved to on `session_ready`. Model and effort are already the target's: the picker set them
+     * when it set `pendingProvider`.
+     */
+    if (pane.pendingProvider !== null && pane.kind.kind === 'agent') {
+      pane.kind = { kind: 'agent', provider: pane.pendingProvider };
+      pane.pendingProvider = null;
+      pane.mode = null;
+      void this.loadCapability(pane.kind.provider);
+    }
+
     this.focus(pane.worktreeId, pane.id);
 
     try {
@@ -973,6 +1214,11 @@ class Sessions {
     } catch (e) {
       pane.error = errorMessage(e);
     }
+
+    // The conversation this just ended is no longer running, so it can be offered again. That is
+    // what makes a one-click Restart defensible: the transcript on screen is discarded, but the
+    // conversation itself reappears under "Pick up where you left off".
+    if (pane.kind.kind === 'agent') void this.refreshResumable(pane.worktreeId);
   }
 
   /**
@@ -1048,11 +1294,33 @@ class Sessions {
       return;
     }
 
-    // Tracked outside the log as well as in it. The log is what the transcript renders; this is what
-    // the pane is *blocked on*, and folding the whole log on every append would be O(events) per
-    // delta on the hottest path in the app.
+    /*
+     * Tracked outside the log as well as in it. The log is what the transcript renders; this is what
+     * the pane is *blocked on* and whether it is *busy*, and folding the whole log on every append
+     * would be O(events) per delta on the hottest path in the app.
+     *
+     * `working` is the second thing held under that argument, and it replaced a backward scan that
+     * used to live in `SessionPane`. Every arm below is O(1); `announce` allocates, but only on an
+     * approval, a finished turn or a failure — never on a `message_delta` or a `command_output`, so a
+     * chatty tool adds nothing.
+     *
+     * Reading the selection from `attention` is safe here, and the reason is worth stating because
+     * `patch` and `SessionSurface` both document the trap: this is a `listen()` callback, not an
+     * effect body, so a read cannot make an effect depend on a write.
+     */
+    if (event.kind === 'turn_started') {
+      pane.working = true;
+    } else if (event.kind === 'turn_finished') {
+      pane.working = false;
+      if (attention.announce('finished', announceable(pane))) pane.unseen = true;
+    } else if (event.kind === 'failed') {
+      pane.working = false;
+      if (attention.announce('failed', announceable(pane))) pane.unseen = true;
+    }
+
     if (event.kind === 'approval_requested') {
       pane.approvals = [...pane.approvals, { id: event.id, request: event.request }];
+      if (attention.announce('approval', announceable(pane))) pane.unseen = true;
     } else if (event.kind === 'approval_resolved') {
       pane.approvals = pane.approvals.filter((a) => a.id !== event.id);
     } else if (event.kind === 'skills_listed') {
@@ -1077,9 +1345,47 @@ class Sessions {
     if (!pane) return;
     pane.ended = summary;
     pane.ready = false;
+    pane.working = false;
+    /*
+     * News if it happened out of sight — but no notification and no toast.
+     *
+     * `close` removes the pane before its exit arrives, so in principle everything reaching here is
+     * unexpected and worth saying. In practice a `restart` can race it, and a toast about a session
+     * the user restarted a moment ago would be a lie about a thing they did on purpose. The dot is
+     * cheap enough to be wrong; an alert is not.
+     */
+    if (attention.offScreen(pane.worktreeId)) pane.unseen = true;
     // An approval nobody can answer any more would sit on screen forever.
     pane.approvals = [];
   }
+}
+
+/**
+ * The parts of a pane an announcement needs.
+ *
+ * A module function rather than a method, so `attention` takes a structural argument and neither
+ * store imports the other's types — which is what keeps `sessions → attention → workspace` a chain
+ * rather than a cycle.
+ */
+/** A pane, as the fields `statusOf` reads. See `status.ts` for why the argument is structural. */
+function facts(pane: Pane): Parameters<typeof statusOf>[0] {
+  return {
+    agent: pane.kind.kind === 'agent',
+    ready: pane.ready,
+    ended: pane.ended,
+    error: pane.error,
+    approvals: pane.approvals,
+    working: pane.working,
+    unseen: pane.unseen,
+  };
+}
+
+function announceable(pane: Pane): Announceable {
+  return {
+    id: pane.id,
+    worktreeId: pane.worktreeId,
+    provider: pane.kind.kind === 'agent' ? pane.kind.provider : null,
+  };
 }
 
 export const sessions = new Sessions();

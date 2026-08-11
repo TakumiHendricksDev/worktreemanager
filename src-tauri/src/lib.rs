@@ -141,9 +141,15 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app)
         .plugin(platform_plugin())
-        // Unlike `platform_plugin` above, this one declares commands, so it *does* need an
-        // entry in `capabilities/default.json` — `dialog:allow-open`, and nothing else.
+        // Unlike `platform_plugin` above, these declare commands, so they *do* need entries in
+        // `capabilities/default.json` — `dialog:allow-open` and the three `notification:allow-*`,
+        // and nothing else. Both files argue for their own narrowness; read that description before
+        // adding a third.
         .plugin(tauri_plugin_dialog::init())
+        // No `#[cfg]`: it compiles on Linux and no-ops where there is no notification daemon, which
+        // is what keeps the platform-specific code confined to the two files `tests/platform_seams.rs`
+        // caps it at.
+        .plugin(tauri_plugin_notification::init())
         .setup(|handle| {
             // A runtime check rather than `#[cfg]`, the same way `platform_plugin` reads
             // `std::env::consts::OS`: both arms compile, so `build_menu` stays under test on

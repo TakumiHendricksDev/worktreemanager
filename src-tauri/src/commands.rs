@@ -1300,24 +1300,48 @@ pub struct SessionOptions {
 /// for doubles as the diagnosis of a GUI-launched app that cannot see the user's `PATH`.
 ///
 /// Nothing is cached, so a CLI installed since the app started shows up without a restart.
+///
+/// # Why it takes a project
+///
+/// Because a repository can decline an agent, and this list did not know that — `offers_agent` was
+/// enforced at spawn, in `handoff::open_pane`, and in the handoff tool's own `enum`, but the
+/// launcher offered every installed agent regardless and failed with a config error once one was
+/// clicked. `None` reports the whole catalogue as offered, for the startup call that happens before
+/// a project is selected.
 #[tauri::command]
-pub async fn list_agents(app: AppState<'_>) -> Reply<Vec<AgentOptionView>> {
+pub async fn list_agents(
+    app: AppState<'_>,
+    project_id: Option<String>,
+) -> Reply<Vec<AgentOptionView>> {
     let app = Arc::clone(&app);
     blocking(move || {
+        // Resolved once rather than per entry, and silently: a project id that no longer loads is
+        // not this command's failure to report, and the honest degradation is the catalogue-wide
+        // answer this had before.
+        let project = project_id.and_then(|id| app.project(&id).ok());
+
         Ok(wtm_agent::CATALOGUE
             .iter()
             .map(|entry| {
                 let program = entry.provider.program();
                 let found = app.runner.which(program).is_some();
+                let offered = project.as_ref().is_none_or(|p| p.offers_agent(entry.id));
                 AgentOptionView {
                     id: entry.id.to_owned(),
                     label: entry.label.to_owned(),
                     blurb: entry.blurb.to_owned(),
                     available: found,
-                    detail: if found {
-                        None
-                    } else {
+                    offered,
+                    // Not installed first, because that is the one the user can act on from here.
+                    detail: if !found {
                         Some(format!("no `{program}` on wtm's PATH"))
+                    } else if !offered {
+                        Some(format!(
+                            "this repository's `wtm.toml` does not offer `{}`",
+                            entry.id
+                        ))
+                    } else {
+                        None
                     },
                 }
             })
@@ -1401,6 +1425,8 @@ pub async fn open_agent_session(
                 mode,
                 resume,
             }),
+            // Nothing to inherit: this route has a picker, and it already spoke.
+            None,
         )?;
 
         let sink: Arc<dyn wtm_agent::session::AgentSink> =
@@ -1666,16 +1692,23 @@ pub async fn agent_capability(app: AppState<'_>, agent_id: String) -> Reply<Capa
             )
         })?;
 
-        if agent_id == wtm_agent::claude::ID {
-            return Ok(CapabilityView::from(wtm_agent::claude_capability()));
-        }
+        let mut capability = if agent_id == wtm_agent::claude::ID {
+            wtm_agent::claude_capability()
+        } else {
+            let mut probed = probe_codex(&app).map_err(|e| ErrorView::new("exec", e))?;
+            // Compiled in rather than queried, and the query is only for the part that moves. There
+            // is a `permissionProfile/list` method, but it answers with the *user's named profiles*
+            // rather than with the vocabulary the protocol accepts, so it is the wrong question for
+            // a picker that has to offer the same three choices on every machine.
+            probed.modes = wtm_agent::codex_modes();
+            probed
+        };
 
-        let mut capability = probe_codex(&app).map_err(|e| ErrorView::new("exec", e))?;
-        // Compiled in rather than queried, and the query is only for the part that moves. There is
-        // a `permissionProfile/list` method, but it answers with the *user's named profiles* rather
-        // than with the vocabulary the protocol accepts, so it is the wrong question for a picker
-        // that has to offer the same three choices on every machine.
-        capability.modes = wtm_agent::codex_modes();
+        // One call for both providers, deliberately: this is the seed the picker shows, and the
+        // spawn path reaches the same preference by its own route through `session_request_for`. If
+        // the two disagreed, a fresh pane would say one rung and run at another.
+        wtm_agent::prefer_effort(&mut capability);
+
         let _ = entry;
         Ok(CapabilityView::from(capability))
     })
@@ -1777,8 +1810,9 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
 /// its `[agent.*.mcp.*]` servers, or its mode default would apply to a pane the user opened and not
 /// to one an agent opened — a difference nothing in the UI would explain.
 ///
-/// `options` is `None` for a handoff, which has no picker to express a preference with and therefore
-/// takes the repository's defaults throughout.
+/// `options` is `None` for a handoff, which has no picker to express a preference with. `inherited`
+/// is how that route still gets an effort: the calling session's own, already translated into this
+/// target's vocabulary by [`wtm_agent::carried_effort`].
 ///
 /// # Errors
 ///
@@ -1790,6 +1824,7 @@ pub fn session_request_for(
     entry: &'static wtm_agent::ProviderEntry,
     worktree: &wtm_core::model::Worktree,
     options: Option<SessionOptions>,
+    inherited: Option<&str>,
 ) -> Result<wtm_agent::SessionRequest, ErrorView> {
     let SessionOptions {
         model,
@@ -1798,13 +1833,30 @@ pub fn session_request_for(
         resume,
     } = options.unwrap_or_default();
 
+    /*
+     * Four layers, and the order between the middle two is the only interesting decision.
+     *
+     * 1. The picker, or a resume record — a value the user chose *for this pane*.
+     * 2. `[agent.<id>] effort` in the repository's `wtm.toml`.
+     * 3. The effort a handoff caller was running at.
+     * 4. `ProviderEntry::default_effort`, which is `PREFERRED_EFFORT`.
+     *
+     * Config outranks the inherited value because the repo line was typed by a human *for this
+     * agent*, where the inherited one was typed for a different one — a repository that pins Codex
+     * to `low` because its test suite is slow means that whoever opened the pane. It stays below the
+     * picker for the reason the layers below already state: a value chosen for this pane wins.
+     */
+    let effort = effort
+        .or_else(|| spec.effort.clone())
+        .or_else(|| inherited.map(str::to_owned))
+        .or_else(|| entry.default_effort.map(str::to_owned));
+
     Ok(wtm_agent::SessionRequest {
         cwd: worktree.path.to_string_lossy().into_owned(),
         // The caller's choice wins, then the repository's, then the provider's own. Three
         // layers rather than two because a picker change must not be overridden by config, and
         // a repo's default must not be overridden by a compiled one.
         model: model.or_else(|| spec.model.clone()),
-        effort: effort.or_else(|| spec.effort.clone()),
         // Ask before running anything, unless something asked for otherwise. A worktree is
         // disposable and git is the undo, so a permissive default is defensible — but it is a
         // decision the user should make deliberately rather than discover, and the safe
@@ -1816,8 +1868,11 @@ pub fn session_request_for(
             .or_else(|| entry.default_mode.map(str::to_owned)),
         resume,
         extra_args: spec.extra_args.clone(),
-        mcp: mcp_servers_for(app, project, spec, worktree, entry.id)?,
+        // The resolved effort, not the caller's — so a session's handoff token offers the rung it is
+        // actually running at. See `handoff::Caller::effort`.
+        mcp: mcp_servers_for(app, project, spec, worktree, entry.id, effort.as_deref())?,
         instructions: handoff_instructions(project, entry.id),
+        effort,
     })
 }
 
@@ -1894,10 +1949,11 @@ fn mcp_servers_for(
     spec: &wtm_core::model::AgentSpec,
     worktree: &wtm_core::model::Worktree,
     provider: &str,
+    effort: Option<&str>,
 ) -> Result<BTreeMap<String, wtm_agent::McpServer>, ErrorView> {
     let mut servers = BTreeMap::new();
 
-    if let Some(bridge) = handoff_server(app, project, worktree, provider) {
+    if let Some(bridge) = handoff_server(app, project, worktree, provider, effort) {
         servers.insert(handoff::SERVER_NAME.to_owned(), bridge);
     }
 
@@ -1970,6 +2026,7 @@ fn handoff_server(
     project: &wtm_core::model::Project,
     worktree: &wtm_core::model::Worktree,
     provider: &str,
+    effort: Option<&str>,
 ) -> Option<wtm_agent::McpServer> {
     let socket = crate::bridge::socket_path().ok()?;
     // `current_exe` rather than a bundled sidecar. See `main.rs`.
@@ -1988,6 +2045,7 @@ fn handoff_server(
         project: project.id.as_str().to_owned(),
         worktree: worktree.id.as_str().to_owned(),
         provider: provider.to_owned(),
+        effort: effort.map(str::to_owned),
     });
 
     let mut env = BTreeMap::new();

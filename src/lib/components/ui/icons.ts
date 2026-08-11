@@ -47,9 +47,11 @@ export type IconName =
   | 'chevron-right'
   | 'check'
   | 'close'
+  | 'grip'
   | 'star'
   | 'star-outline'
   | 'plus'
+  | 'restart'
   | 'search'
   | 'settings'
   | 'split-right'
@@ -81,9 +83,29 @@ export const icons: Record<IconName, IconSpec> = {
   'chevron-right': { stroke: 'M6.25 4 L10.25 8 L6.25 12' },
   check: { stroke: 'M3.5 8.25 L6.5 11.25 L12.5 4.75' },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
+  /*
+   * Three bars, not six dots.
+   *
+   * The six-dot grip is the more expected glyph and it fails the grammar above: two columns of three
+   * dots on a 16 grid are zero-length subpaths relying on `stroke-linecap: round` to render at all, and
+   * at 1.5 stroke they merge into two blurred vertical smudges — the same failure the cog had. Three
+   * short rules survive the size, and they are what Lucide ships for a drag handle.
+   */
+  grip: { stroke: 'M5.5 5 H10.5 M5.5 8 H10.5 M5.5 11 H10.5' },
   star: { fill: STAR, stroke: STAR },
   'star-outline': { stroke: STAR },
   plus: { stroke: 'M8 3.5 L8 12.5 M3.5 8 L12.5 8' },
+  /*
+   * An arc with one arrowhead, not a closed loop with two.
+   *
+   * The gap is what makes it read as *restart* rather than as "syncing": a full circle of arrows is
+   * the refresh idiom, and this control ends a process and starts another one. Three-quarters of a
+   * circle leaves room for the head at 1.5 stroke on a 16 grid, which two heads did not — they
+   * collided with the arc at this size, which is the same test the cog and the terminal box failed.
+   */
+  restart: {
+    stroke: 'M12.9 5.4 A5.6 5.6 0 1 0 13.1 10.2 M12.9 5.4 L12.9 2.4 M12.9 5.4 L9.9 5.4',
+  },
   search: {
     stroke:
       'M7.25 2.5 A4.75 4.75 0 1 0 7.25 12 A4.75 4.75 0 1 0 7.25 2.5 M10.9 10.9 L13.5 13.5',

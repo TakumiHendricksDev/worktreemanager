@@ -35,6 +35,13 @@ pub struct ProviderEntry {
     /// Not translated into a wtm-side enum, deliberately: that would be a second name for the same
     /// thing, needing to be kept in step with two CLIs this app does not control.
     pub default_mode: Option<&'static str>,
+    /// The effort a new session gets when nothing else says.
+    ///
+    /// Mirrors [`Self::default_mode`] and exists for the same reason: the spawn path resolves its
+    /// arguments without a capability in hand, so the compiled floor has to be reachable from
+    /// there. Both entries name [`crate::capability::PREFERRED_EFFORT`] — the per-provider shape is
+    /// what lets one of them stop doing so without a second mechanism.
+    pub default_effort: Option<&'static str>,
     pub provider: &'static (dyn Provider + Sync),
 }
 
@@ -56,6 +63,7 @@ pub const CATALOGUE: &[ProviderEntry] = &[
         // `--permission-mode` passed at all. Saying nothing also leaves whatever the user set in
         // `~/.claude/settings.json` intact, which overriding would not.
         default_mode: None,
+        default_effort: Some(crate::capability::PREFERRED_EFFORT),
         provider: &Claude,
     },
     ProviderEntry {
@@ -69,6 +77,7 @@ pub const CATALOGUE: &[ProviderEntry] = &[
         // half of this setting and sending one without the other left it at whatever
         // `~/.codex/config.toml` said. `codex::expand_mode` turns this into both fields.
         default_mode: Some("auto"),
+        default_effort: Some(crate::capability::PREFERRED_EFFORT),
         provider: &Codex,
     },
 ];

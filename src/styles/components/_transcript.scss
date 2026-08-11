@@ -108,6 +108,22 @@
   font-family: var(--font-mono);
 }
 
+/*
+ * The narration line, one step out of the machinery register it shares a rule with.
+ *
+ * It sits in the group above because it is still a disclosure and still quiet — but its summary is
+ * no longer the word `Thinking`, it is the model's own sentence about what it is about to do, and
+ * that is the line a reader scanning a turn is following. At `--fg-subtle` alongside forty tool
+ * rows it read as more debris; `--fg-muted` puts it between the machinery and the answer, which is
+ * where it belongs.
+ *
+ * After the shared rule rather than inside it, because the two land on equal specificity and the
+ * later one has to win. Moving it above would silently undo this.
+ */
+.c-transcript__thinking summary {
+  color: var(--fg-muted);
+}
+
 .c-transcript__thinking p {
   margin-top: var(--sp-2);
   padding-left: var(--sp-3);

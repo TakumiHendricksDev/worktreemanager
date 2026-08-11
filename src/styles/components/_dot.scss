@@ -1,0 +1,100 @@
+/*
+ * A session's state as a dot.
+ *
+ * # Three channels, and the reason it is three
+ *
+ * `settings/_semantic.scss` forbids state encoded in colour alone, and a coloured dot in a list of
+ * two hundred rows is the case that rule most obviously exists for — a palette's accent can sit right
+ * next to a status role, and one in eight readers cannot separate the two hues this file leans on
+ * most. So every state carries a **shape** as well as a hue, and every position that renders one also
+ * renders a **word**:
+ *
+ *   hollow          idle, ended
+ *   hollow, pulsing starting
+ *   filled, pulsing working
+ *   filled          done, failed
+ *   filled + ring   attention
+ *
+ * The ring is the important one. `attention` is the only state that is *larger* than the others,
+ * which is what makes it findable in greyscale and at a glance down a long rail — the two things a
+ * hue on its own cannot do.
+ *
+ * # Why `working` is the quietest of the filled states
+ *
+ * `--fg-muted`, not `--accent`. A turn in flight asks nothing of you: it is the state a session
+ * spends most of its life in, and the one you least need to be told about. Making it accent-coloured
+ * would put the routine case in the same register as `done`, which is news — and it would collide
+ * with the accent/`--info` proximity the semantic layer already warns about.
+ */
+
+.c-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  /* The border draws the hollow states and thickens the filled ones, so one box does both without a
+     second element or a background-clip trick. */
+  border: 1.5px solid currentColor;
+  /* Baseline rather than middle: these sit inline beside text at `--step--2`, and `middle` aligns to
+     the x-height of a font that is not necessarily the one next to it. */
+  vertical-align: baseline;
+}
+
+.c-dot--idle,
+.c-dot--ended {
+  color: var(--fg-subtle);
+  background: transparent;
+}
+
+.c-dot--starting {
+  color: var(--fg-subtle);
+  background: transparent;
+  animation: c-dot-pulse 1.6s var(--ease) infinite;
+}
+
+.c-dot--working {
+  color: var(--fg-muted);
+  background: currentColor;
+  animation: c-dot-pulse 1.6s var(--ease) infinite;
+}
+
+.c-dot--done {
+  color: var(--info);
+  background: currentColor;
+}
+
+.c-dot--failed {
+  color: var(--danger);
+  background: currentColor;
+}
+
+/* The one state drawn larger than the rest. See the header — this is what survives greyscale. */
+.c-dot--attention {
+  color: var(--warn);
+  background: currentColor;
+  box-shadow: 0 0 0 3px var(--warn-soft);
+}
+
+@keyframes c-dot-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/*
+ * Component-local, and **not** covered by `generic/_motion.scss`.
+ *
+ * That block sets `animation-duration: 0.01ms !important`, which for a two-keyframe opacity loop
+ * means the dot flickers as fast as the compositor will let it rather than stopping — the opposite of
+ * what the preference asked for. `animation: none` is what actually holds it still, and it works
+ * despite the `!important` because the global rule only overrides the *duration*, never the name.
+ *
+ * The same exemption `_progress.scss` takes, for the same reason. Held still the state is still
+ * legible: the word beside it is required by the colour-alone rule and is what carries the meaning.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .c-dot--working,
+  .c-dot--starting {
+    animation: none;
+  }
+}

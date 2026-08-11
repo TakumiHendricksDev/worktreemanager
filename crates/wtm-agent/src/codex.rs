@@ -166,6 +166,11 @@ struct CodexProtocol {
     /// which is most of a session's life.
     skills_id: Option<i64>,
     thread_id: Option<String>,
+    /// The in-flight turn reported by `turn/started`.
+    ///
+    /// Codex requires both this and `threadId` on `turn/interrupt`. Keeping only the thread id
+    /// made Stop look wired while every request was rejected as missing `turnId`.
+    active_turn_id: Option<String>,
     /// Turns submitted before the handshake finished, replayed once it does.
     ///
     /// Without this, typing into a pane the instant it opens loses the message: the composer is
@@ -263,6 +268,7 @@ impl CodexProtocol {
             open_id: None,
             skills_id: None,
             thread_id: None,
+            active_turn_id: None,
             queued: Vec::new(),
             pending: BTreeMap::new(),
             usage: Usage::default(),
@@ -451,19 +457,27 @@ impl CodexProtocol {
             // `params.turn.id`, not `params.turnId`. Verified on the wire: both turn
             // notifications carry a whole turn object, and reading the flat key gave an empty
             // string — which is a turn id that matches nothing.
-            "turn/started" => AgentEvent::TurnStarted {
-                turn: turn_id(params),
-            },
-            "turn/completed" => AgentEvent::TurnFinished {
-                turn: turn_id(params),
-                // `turn/completed` carries **no usage at all** — also verified on the wire, where
-                // reading one produced a row of zeros. Token counts arrive separately on
-                // `thread/tokenUsage/updated`, so the last one seen is what this reports.
-                usage: self.usage,
-                // Codex reports tokens and no currency. See the `agent` model's docs for why
-                // this is left empty rather than priced here.
-                cost_usd: None,
-            },
+            "turn/started" => {
+                let turn = turn_id(params);
+                self.active_turn_id = (!turn.is_empty()).then(|| turn.clone());
+                AgentEvent::TurnStarted { turn }
+            }
+            "turn/completed" => {
+                let turn = turn_id(params);
+                // Turns do not overlap on one thread. Clear unconditionally so a malformed or
+                // newer completion payload cannot leave Stop targeting a turn that already ended.
+                self.active_turn_id = None;
+                AgentEvent::TurnFinished {
+                    turn,
+                    // `turn/completed` carries **no usage at all** — also verified on the wire,
+                    // where reading one produced a row of zeros. Token counts arrive separately on
+                    // `thread/tokenUsage/updated`, so the last one seen is what this reports.
+                    usage: self.usage,
+                    // Codex reports tokens and no currency. See the `agent` model's docs for why
+                    // this is left empty rather than priced here.
+                    cost_usd: None,
+                }
+            }
             "item/agentMessage/delta" => AgentEvent::MessageDelta {
                 text: text("delta"),
             },
@@ -782,7 +796,13 @@ impl Protocol for CodexProtocol {
         let Some(thread) = self.thread_id.clone() else {
             return Vec::new();
         };
-        let (_, step) = self.request("turn/interrupt", &json!({ "threadId": thread }));
+        let Some(turn) = self.active_turn_id.clone() else {
+            return Vec::new();
+        };
+        let (_, step) = self.request(
+            "turn/interrupt",
+            &json!({ "threadId": thread, "turnId": turn }),
+        );
         vec![step]
     }
 

@@ -422,8 +422,18 @@ fn interrupting_before_a_thread_exists_writes_nothing() {
 }
 
 #[test]
-fn interrupting_a_ready_session_targets_its_thread() {
+fn interrupting_an_idle_ready_session_writes_nothing() {
     let mut driver = ready_driver();
+    assert!(driver.interrupt().is_empty());
+}
+
+#[test]
+fn interrupting_an_active_turn_targets_its_thread_and_turn() {
+    let mut driver = ready_driver();
+    driver.on_line(
+        r#"{"method":"turn/started","params":{"turn":{"id":"turn-7","status":"inProgress"}}}"#,
+    );
+
     let frames = writes(&driver.interrupt());
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["method"], "turn/interrupt");
@@ -431,6 +441,20 @@ fn interrupting_a_ready_session_targets_its_thread() {
         frames[0]["params"]["threadId"],
         "019fd37c-f1e4-7a22-81e7-02200fd6d127"
     );
+    assert_eq!(frames[0]["params"]["turnId"], "turn-7");
+}
+
+#[test]
+fn a_completed_turn_is_no_longer_interruptible() {
+    let mut driver = ready_driver();
+    driver.on_line(
+        r#"{"method":"turn/started","params":{"turn":{"id":"turn-7","status":"inProgress"}}}"#,
+    );
+    driver.on_line(
+        r#"{"method":"turn/completed","params":{"turn":{"id":"turn-7","status":"completed"}}}"#,
+    );
+
+    assert!(driver.interrupt().is_empty());
 }
 
 #[test]
@@ -769,6 +793,9 @@ fn the_model_list_reply_yields_per_model_effort_ladders() {
     assert_eq!(sol.id, "gpt-5.6-sol");
     assert_eq!(sol.label, "GPT-5.6-Sol");
     assert!(sol.is_default);
+    // The server's own word, faithfully. `prefer_effort` overrides this afterwards and on purpose —
+    // see `capability::prefer_effort` for why the override is a second pass rather than part of the
+    // parse. This assertion is what makes a CLI that changes its own defaults visible.
     assert_eq!(sol.default_effort.as_deref(), Some("medium"));
     let ladder: Vec<&str> = sol.efforts.iter().map(|e| e.effort.as_str()).collect();
     assert_eq!(ladder, ["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -781,6 +808,50 @@ fn the_model_list_reply_yields_per_model_effort_ladders() {
     // Four rungs, not six. This is the assertion a hardcoded ladder would fail.
     assert_eq!(models[1].efforts.len(), 4);
     assert!(!models[1].efforts.iter().any(|e| e.effort == "ultra"));
+}
+
+#[test]
+fn preferring_a_rung_leaves_a_model_whose_ladder_lacks_it_on_its_own_default() {
+    // The reason `prefer_effort` checks per model rather than assigning one constant: these ladders
+    // differ *within* the provider, so an unconditional override would seed a model on a rung its
+    // own protocol rejects. `gpt-5.6-sol` has `xhigh` and moves onto it; the synthetic model below
+    // does not and keeps what the server advertised.
+    let reply: serde_json::Value = serde_json::from_str(
+        r#"{"id":3,"result":{"data":[
+          {"id":"gpt-5.6-sol","model":"gpt-5.6-sol","displayName":"GPT-5.6-Sol","description":"","hidden":false,"isDefault":true,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low","description":""},{"reasoningEffort":"medium","description":""},{"reasoningEffort":"high","description":""},{"reasoningEffort":"xhigh","description":""}]},
+          {"id":"gpt-tiny","model":"gpt-tiny","displayName":"GPT-Tiny","description":"","hidden":false,"isDefault":false,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low","description":""},{"reasoningEffort":"medium","description":""}]}
+        ],"nextCursor":null}}"#,
+    )
+    .unwrap();
+
+    let mut capability = wtm_core::model::AgentCapability {
+        models: wtm_agent::codex::parse_models(&reply),
+        modes: wtm_agent::codex_modes(),
+        models_are_live: true,
+    };
+    wtm_agent::prefer_effort(&mut capability);
+
+    assert_eq!(
+        capability.models[0].default_effort.as_deref(),
+        Some(wtm_agent::capability::PREFERRED_EFFORT),
+        "a model whose ladder has the preferred rung should be seeded on it"
+    );
+    assert_eq!(
+        capability.models[1].default_effort.as_deref(),
+        Some("low"),
+        "a model without that rung keeps the default it advertised"
+    );
+
+    // The property that matters more than either specific value: whatever the seed ends up being, it
+    // has to be a rung the model will accept.
+    for model in &capability.models {
+        let seed = model.default_effort.as_deref().unwrap();
+        assert!(
+            model.efforts.iter().any(|e| e.effort == seed),
+            "{} was seeded on `{seed}`, which is not on its own ladder",
+            model.id
+        );
+    }
 }
 
 #[test]

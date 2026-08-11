@@ -12,7 +12,9 @@
    */
   import { onMount } from 'svelte';
 
+  import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import { inRail, type PaneStatus } from '../status';
   import WorktreeTab from './WorktreeTab.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -25,6 +27,22 @@
     /** Picking a worktree means "show me that one", so the pane leaves the create view. */
     onselectworktree?: () => void;
   } = $props();
+
+  /**
+   * The dot a row shows, or null for nothing worth saying.
+   *
+   * This is why the sidebar knows about sessions at all, and it is the gap the whole status feature
+   * exists to close: `SessionSurface` hides an unselected worktree's panes with `display: none`, and
+   * both CLIs stop a turn until an approval is answered — so a blocked session in another worktree had
+   * no representation anywhere in the chrome. It could sit there indefinitely.
+   *
+   * `sessions.statuses` is one derived map for the whole list, so this is a key lookup per row rather
+   * than a scan per row. `inRail` is what keeps the quiet states out; see `status.ts`.
+   */
+  function railStatus(worktreeId: string): PaneStatus | null {
+    const status = sessions.statuses[worktreeId];
+    return status !== undefined && inRail(status) ? status : null;
+  }
 
   let listEl = $state<HTMLDivElement | null>(null);
   let searchEl = $state<HTMLInputElement | null>(null);
@@ -176,6 +194,7 @@
         {#each workspace.favorites as worktree (worktree.id)}
           <WorktreeTab
             {worktree}
+            status={railStatus(worktree.id)}
             selected={worktree.id === workspace.selectedWorktreeId}
             onselect={() => {
               workspace.select(worktree.id);
@@ -191,6 +210,7 @@
         {#each workspace.others as worktree (worktree.id)}
           <WorktreeTab
             {worktree}
+            status={railStatus(worktree.id)}
             selected={worktree.id === workspace.selectedWorktreeId}
             onselect={() => {
               workspace.select(worktree.id);

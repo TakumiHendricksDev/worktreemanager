@@ -14,8 +14,24 @@
 /// variable and the colours are not.
 $bp-narrow: 900px;
 
-/// The two stacking levels the app has. Both belong to the modal: the scrim covers the app,
-/// the dialog sits on the scrim. Nothing else in the app sets `z-index`, and nothing should
-/// without appearing here — a z-index chosen locally is one nobody can reason about.
+/// The modal's two levels: the scrim covers the app, the dialog sits on the scrim.
+///
+/// These were for a long time *the* two levels, and the rule they came with still holds: nothing in
+/// the app sets `z-index` without appearing in this file, because a z-index chosen locally is one
+/// nobody can reason about. There are three now — see `$z-toast` — and the count being in one place
+/// is the whole point of the rule rather than an exception to it.
 $z-scrim: 10;
 $z-dialog: 11;
+
+/// The third level, and the only one that is not the modal.
+///
+/// A toast reports something that happened somewhere you are not looking, so it has to clear the app
+/// chrome — a card behind a pane is a card that failed at its one job. But it sits **below** the
+/// scrim rather than above the dialog, and that is the whole decision.
+///
+/// Two reasons, and the second is the load-bearing one. A toast over an open modal competes with the
+/// question the user is currently answering, which is the worst moment to interrupt. And it would not
+/// work anyway: `Dialog` promises `aria-modal` and bounces focus back from anything outside itself, so
+/// "click this to go to that worktree" is not a coherent action while one is open. Below the scrim it
+/// dims with the rest of the app and is still there, still clickable, the moment the dialog closes.
+$z-toast: 9;
