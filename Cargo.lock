@@ -5376,7 +5376,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-agent"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "parking_lot",
  "pretty_assertions",
@@ -5390,7 +5390,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "parking_lot",
  "regex",
@@ -5416,7 +5416,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-config"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "etcetera",
  "insta",
@@ -5439,7 +5439,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "insta",
  "pretty_assertions",
@@ -5454,7 +5454,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-exec"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "nix 0.31.3",
  "parking_lot",
@@ -5472,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-git"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "insta",
  "pretty_assertions",
@@ -5487,7 +5487,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-render"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "insta",
  "minijinja",
@@ -5501,7 +5501,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-testkit"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "parking_lot",
  "serde_json",
