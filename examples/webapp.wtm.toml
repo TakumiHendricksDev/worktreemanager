@@ -343,11 +343,6 @@ title = "{{ worktree.dirname }}"
 subtitle = "{{ worktree.branch | default_if_empty('(detached)') }}"
 
 [[display.badge]]
-label = "compose"
-# docker compose's own fallback when COMPOSE_PROJECT_NAME is unset: slugify the directory.
-value = "{{ env.COMPOSE_PROJECT_NAME | default_if_empty(worktree.dirname | slugify) }}"
-
-[[display.badge]]
 label = "jira"
 value = "{{ lookup.jira.status }}"
 when = "lookup.jira.status != ''"

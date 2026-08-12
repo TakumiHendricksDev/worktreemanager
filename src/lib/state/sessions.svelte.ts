@@ -23,12 +23,14 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { commands } from '../ipc/commands';
 import {
   errorMessage,
+  type AgentAttachment,
   type AgentEvent,
   type AgentEventEnvelope,
   type AgentExit,
   type AgentOption,
   type AgentReady,
   type AgentSkill,
+  type AgentUsage,
   type ApprovalAnswer,
   type ApprovalRequest,
   type Capability,
@@ -156,6 +158,8 @@ export interface Pane {
   /** Agent transcript. Empty for a shell, whose transcript lives in its xterm instance. */
   events: AgentEvent[];
   approvals: PendingApproval[];
+  /** Most recent provider-reported context totals, maintained outside the transcript log. */
+  usage: AgentUsage | null;
   /**
    * True between `turn_started` and `turn_finished`.
    *
@@ -229,6 +233,8 @@ export interface Pane {
    * thread opens — so an empty list means "not yet or none", and the composer treats both the same.
    */
   skills: AgentSkill[];
+  /** Parent pane for an ephemeral `/btw` fork. Side panes are rendered as overlays, not splits. */
+  sideOf: string | null;
 }
 
 let nextPaneId = 0;
@@ -331,6 +337,7 @@ class Sessions {
   statuses = $derived.by(() => {
     const out: Record<string, PaneStatus> = {};
     for (const pane of this.panes) {
+      if (pane.sideOf !== null) continue;
       const next = statusOf(facts(pane));
       const held = out[pane.worktreeId];
       out[pane.worktreeId] = held === undefined ? next : worse(held, next);
@@ -351,12 +358,17 @@ class Sessions {
    * the selected one: panes carry a `projectId`, but the sidebar only lists the active project's
    * worktrees, so sidebar dots alone still hide a blocked session one project over.
    */
-  waitingCount = $derived(this.panes.filter((p) => p.approvals.length > 0).length);
+  waitingCount = $derived(
+    this.panes.filter((p) => p.sideOf === null && p.approvals.length > 0).length,
+  );
 
   /** Whether any pane in a project wants attention, for the project switcher's rows. */
   wantsAttentionIn(projectId: string): boolean {
     return this.panes.some(
-      (p) => p.projectId === projectId && (p.approvals.length > 0 || p.error !== null),
+      (p) =>
+        p.sideOf === null &&
+        p.projectId === projectId &&
+        (p.approvals.length > 0 || p.error !== null),
     );
   }
 
@@ -372,7 +384,12 @@ class Sessions {
 
   panesIn(worktreeId: string | null): Pane[] {
     if (worktreeId === null) return [];
-    return this.panes.filter((p) => p.worktreeId === worktreeId);
+    return this.panes.filter((p) => p.worktreeId === worktreeId && p.sideOf === null);
+  }
+
+  /** The one dismissible side question belonging to a pane, if it has one. */
+  sideFor(paneId: string): Pane | null {
+    return this.panes.find((p) => p.sideOf === paneId) ?? null;
   }
 
   layoutFor(worktreeId: string | null): Layout | null {
@@ -552,10 +569,13 @@ class Sessions {
     }
 
     const modelChanged = pane.model !== next.model;
+    const effortChanged = pane.effort !== next.effort;
     const modeChanged = pane.mode !== next.mode;
     // Sticky once set: a pane whose effort is already pending must not un-mark itself because a
     // later change happened to land back on the value the session was started with.
-    if (pane.effort !== next.effort && pane.session !== null) pane.effortPending = true;
+    if (effortChanged && pane.session !== null && running !== 'codex')
+      pane.effortPending = true;
+    if (running === 'codex') pane.effortPending = false;
     // Not sticky, unlike effort: pointing the picker back at the running agent is a retraction, and
     // there is nothing left pending once it agrees with the process again.
     pane.pendingProvider = swapping ? next.provider : null;
@@ -571,11 +591,18 @@ class Sessions {
     // use `gpt-5.6-sol` answers with a `Notice`, which lands in the transcript as a real error
     // report for a change the user never made. A pending swap is applied by Restart, not by
     // telling the wrong process about it.
-    if (pane.session === null || swapping || (!modelChanged && !modeChanged)) return;
+    const liveEffortChanged = running === 'codex' && effortChanged;
+    if (
+      pane.session === null ||
+      swapping ||
+      (!modelChanged && !liveEffortChanged && !modeChanged)
+    )
+      return;
     void commands
       .configureSession(
         pane.session,
         modelChanged ? next.model : null,
+        liveEffortChanged ? next.effort : null,
         modeChanged ? next.mode : null,
       )
       .catch((e: unknown) => {
@@ -830,6 +857,7 @@ class Sessions {
       session: null,
       events: [],
       approvals: [],
+      usage: null,
       working: false,
       unseen: false,
       ready: false,
@@ -842,6 +870,7 @@ class Sessions {
       effortPending: false,
       pendingProvider: null,
       skills: [],
+      sideOf: null,
     };
   }
 
@@ -1064,17 +1093,71 @@ class Sessions {
    * is every message typed into a fresh pane before the CLI finished starting — and the composer,
    * having already cleared itself, left no sign that anything had happened at all.
    */
-  async send(paneId: string, text: string): Promise<boolean> {
+  async send(
+    paneId: string,
+    text: string,
+    attachments: AgentAttachment[] = [],
+  ): Promise<boolean> {
     const pane = await this.awaitSession(paneId);
     if (!pane?.session) {
       this.error = 'That session never started, so the message was not sent.';
       return false;
     }
     try {
-      await commands.sendTurn(pane.session, text);
+      await commands.sendTurn(pane.session, text, attachments);
       return true;
     } catch (e) {
       this.error = errorMessage(e);
+      return false;
+    }
+  }
+
+  /**
+   * Fork a live conversation for `/btw` without adding either side of the exchange to its log.
+   *
+   * The hidden pane is intentional: it reuses the ordinary event/session plumbing, but has no
+   * layout node. `SessionPane` renders it as a dismissible card owned by the parent instead.
+   */
+  async openSide(
+    parentId: string,
+    question: string,
+    attachments: AgentAttachment[] = [],
+  ): Promise<boolean> {
+    const parent = await this.awaitSession(parentId);
+    if (!parent?.session || parent.kind.kind !== 'agent') {
+      this.error = 'That conversation is not ready for a side question yet.';
+      return false;
+    }
+
+    const previous = this.sideFor(parentId);
+    if (previous) await this.close(previous.id);
+
+    const side = this.blank(parent.kind, parent.projectId, parent.worktreeId);
+    side.sideOf = parent.id;
+    side.model = parent.model;
+    side.effort = parent.effort;
+    side.mode = parent.mode;
+    this.panes = [...this.panes, side];
+
+    try {
+      const session = await commands.openAgentSideSession({
+        parentSession: parent.session,
+        options: { model: side.model, effort: side.effort, mode: side.mode },
+      });
+      const live = this.paneById(side.id);
+      if (!live) {
+        await commands.closeAgentSession(session);
+        return false;
+      }
+      this.claimSession(live, session);
+      if (question.length > 0 || attachments.length > 0) {
+        await commands.sendTurn(session, question, attachments);
+      }
+      this.error = null;
+      return true;
+    } catch (e) {
+      const live = this.paneById(side.id);
+      if (live) live.error = errorMessage(e);
       return false;
     }
   }
@@ -1161,6 +1244,7 @@ class Sessions {
     pane.session = null;
     pane.events = [];
     pane.approvals = [];
+    pane.usage = null;
     // A fresh session has no turn in flight and nothing you have not seen. Both would otherwise
     // survive the reset and describe a process that no longer exists.
     pane.working = false;
@@ -1312,15 +1396,25 @@ class Sessions {
       pane.working = true;
     } else if (event.kind === 'turn_finished') {
       pane.working = false;
-      if (attention.announce('finished', announceable(pane))) pane.unseen = true;
+      if (pane.sideOf === null && attention.announce('finished', announceable(pane))) {
+        pane.unseen = true;
+      }
+      // A side question is single-turn. Keep its answer in the overlay, not a spare CLI process.
+      if (pane.sideOf !== null && pane.session) {
+        void commands.closeAgentSession(pane.session);
+      }
     } else if (event.kind === 'failed') {
       pane.working = false;
-      if (attention.announce('failed', announceable(pane))) pane.unseen = true;
+      if (pane.sideOf === null && attention.announce('failed', announceable(pane))) {
+        pane.unseen = true;
+      }
     }
 
     if (event.kind === 'approval_requested') {
       pane.approvals = [...pane.approvals, { id: event.id, request: event.request }];
-      if (attention.announce('approval', announceable(pane))) pane.unseen = true;
+      if (pane.sideOf === null && attention.announce('approval', announceable(pane))) {
+        pane.unseen = true;
+      }
     } else if (event.kind === 'approval_resolved') {
       pane.approvals = pane.approvals.filter((a) => a.id !== event.id);
     } else if (event.kind === 'skills_listed') {
@@ -1332,6 +1426,16 @@ class Sessions {
       // precisely so `~/.claude/settings.json` decides, so without adopting the answer the mode
       // pill would show a default the session is not in.
       pane.mode = event.mode;
+    } else if (event.kind === 'usage') {
+      pane.usage = {
+        tokensIn: event.tokensIn,
+        tokensOut: event.tokensOut,
+        cached: event.cached,
+        contextUsed: event.contextUsed,
+        contextWindow: event.contextWindow,
+      };
+    } else if (event.kind === 'turn_finished') {
+      pane.usage = event.usage;
     }
 
     pane.events.push(event);
@@ -1354,7 +1458,7 @@ class Sessions {
      * the user restarted a moment ago would be a lie about a thing they did on purpose. The dot is
      * cheap enough to be wrong; an alert is not.
      */
-    if (attention.offScreen(pane.worktreeId)) pane.unseen = true;
+    if (pane.sideOf === null && attention.offScreen(pane.worktreeId)) pane.unseen = true;
     // An approval nobody can answer any more would sit on screen forever.
     pane.approvals = [];
   }

@@ -65,6 +65,10 @@ struct AgentEntry {
     /// Empty until then. Kept so `resumable` can exclude a conversation that is already on screen —
     /// offering to resume one would hand the CLI two clients for one thread.
     provider_session: String,
+    /// First user prompt, cached even when it arrives before the provider handshake.
+    title: Option<String>,
+    /// Side-question forks are live long enough to stream one answer, but are never resumable.
+    ephemeral: bool,
     /// Behind an `Arc` so a lookup can hand the session out and drop the map's lock.
     ///
     /// Not for sharing — nothing holds a second long-lived reference. It exists so
@@ -84,6 +88,16 @@ pub struct AgentSessionFacts {
     pub project: String,
     pub worktree: String,
     pub provider: String,
+    pub ephemeral: bool,
+}
+
+/// The durable provider conversation behind a live pane, used as the source of a side fork.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentForkSource {
+    pub project: String,
+    pub worktree: String,
+    pub provider: String,
+    pub provider_session: String,
 }
 
 /// Everything the app needs, wired once at startup.
@@ -774,6 +788,8 @@ impl App {
                 worktree: worktree.id.as_str().to_owned(),
                 provider: entry.id.to_owned(),
                 provider_session: String::new(),
+                title: None,
+                ephemeral: req.ephemeral,
                 session: Arc::new(session),
             },
         );
@@ -796,6 +812,7 @@ impl App {
                 project: entry.project.clone(),
                 worktree: entry.worktree.clone(),
                 provider: entry.provider.clone(),
+                ephemeral: entry.ephemeral,
             })
             .collect()
     }
@@ -1015,6 +1032,52 @@ impl App {
             .get(&id)
             .map(|entry| entry.provider_session.clone())
             .filter(|id| !id.is_empty())
+    }
+
+    #[must_use]
+    pub fn session_title_of(&self, session: &str) -> Option<String> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents
+            .lock()
+            .get(&id)
+            .and_then(|entry| entry.title.clone())
+    }
+
+    /// Cache the first prompt immediately, then persist it once the provider id is known.
+    pub fn title_live_session(&self, session: &str, title: &str) {
+        let id = wtm_core::model::SessionId::new(session);
+        let destination = {
+            let mut agents = self.agents.lock();
+            let Some(entry) = agents.get_mut(&id) else {
+                return;
+            };
+            if entry.ephemeral || entry.title.is_some() {
+                return;
+            }
+            entry.title = Some(title.to_owned());
+            (!entry.provider_session.is_empty())
+                .then(|| (entry.provider.clone(), entry.provider_session.clone()))
+        };
+        if let Some((provider, provider_session)) = destination {
+            self.title_session(&provider, &provider_session, title);
+        }
+    }
+
+    /// Resolve everything needed to fork a live agent without exposing provider ids to the UI.
+    #[must_use]
+    pub fn agent_fork_source(&self, session: &str) -> Option<AgentForkSource> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents.lock().get(&id).and_then(|entry| {
+            if entry.provider_session.is_empty() {
+                return None;
+            }
+            Some(AgentForkSource {
+                project: entry.project.clone(),
+                worktree: entry.worktree.clone(),
+                provider: entry.provider.clone(),
+                provider_session: entry.provider_session.clone(),
+            })
+        })
     }
 
     /// Note the provider's own id for a running session, so `resumable` can exclude it.

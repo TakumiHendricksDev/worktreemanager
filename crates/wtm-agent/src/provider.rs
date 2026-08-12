@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use wtm_core::model::{AgentEvent, ApprovalAnswer, Effort};
+use wtm_core::model::{AgentAttachment, AgentEvent, ApprovalAnswer, Effort};
 
 /// Which provider. A newtype over a string rather than an enum, because the set is a compiled
 /// catalogue that grows, and an enum would put every provider's name in `wtm-core`'s vocabulary
@@ -64,6 +64,13 @@ pub struct SessionRequest {
     pub extra_args: Vec<String>,
     /// A session to resume rather than start. The provider's own id.
     pub resume: Option<String>,
+    /// A conversation to fork into a separate side session. The provider's own id.
+    ///
+    /// Distinct from `resume`: a resume continues the named transcript, while a fork may read it
+    /// but must never append the side question or its answer back to the parent.
+    pub fork: Option<String>,
+    /// Whether the fork is temporary UI rather than a conversation the user can resume later.
+    pub ephemeral: bool,
     /// MCP servers to hand the CLI, rendered but **not** serialized.
     ///
     /// This used to be a `String` of pre-baked JSON, and the shape was wrong in a way that showed
@@ -139,24 +146,24 @@ pub trait Protocol: Send {
     fn on_line(&mut self, line: &str) -> Vec<Step>;
 
     /// The user submitted a turn.
-    fn send_turn(&mut self, text: &str) -> Vec<Step>;
+    fn send_turn(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step>;
 
-    /// The user changed the model or the mode on a session that is already running.
+    /// The user changed the model, effort or mode on a session that is already running.
     ///
     /// `None` means "leave that one alone", so the caller can change either without knowing the
     /// other's current value.
     ///
-    /// # Why effort is not here
-    ///
-    /// Because neither provider can be told about it the same way. Codex re-sends `model` and
-    /// `effort` on every `turn/start`, so both are free; Claude has control requests for the model
-    /// and the mode (`set_model`, `set_permission_mode`) and **nothing** for effort, which is an
-    /// argv flag read once at startup. A `reconfigure` that accepted effort would therefore have to
-    /// silently drop it on the provider people use it on most. Effort is a restart, and
-    /// `SessionPane` says so on the control rather than here.
+    /// Codex can apply all three on its next turn. Claude can apply the model and mode but must
+    /// restart for effort; its implementation deliberately ignores that argument and the UI marks
+    /// it as pending instead of pretending it was applied.
     ///
     /// Default: nothing. A provider that cannot change mid-session is not obliged to pretend.
-    fn reconfigure(&mut self, _model: Option<&str>, _mode: Option<&str>) -> Vec<Step> {
+    fn reconfigure(
+        &mut self,
+        _model: Option<&str>,
+        _effort: Option<&str>,
+        _mode: Option<&str>,
+    ) -> Vec<Step> {
         Vec::new()
     }
 

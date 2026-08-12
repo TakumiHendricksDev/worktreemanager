@@ -202,6 +202,16 @@ impl Git for GitCli {
         Ok(branches)
     }
 
+    fn remotes(&self, repo_root: &Path) -> Result<Vec<String>, GitError> {
+        let out = self.git(repo_root, &["remote"], QUERY_TIMEOUT)?;
+        Ok(out
+            .lines()
+            .map(str::trim)
+            .filter(|remote| !remote.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
     fn rev_parse(&self, repo_root: &Path, rev: &str) -> Result<Option<CommitId>, GitError> {
         // `--verify --quiet` exits non-zero for an unknown ref without writing to
         // stderr, which is what makes "does not exist" an expected answer here

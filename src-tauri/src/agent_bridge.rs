@@ -152,13 +152,16 @@ impl AgentEventSink {
         };
 
         app.note_provider_session(session.as_str(), provider_session_id);
+        if facts.ephemeral {
+            return;
+        }
         app.remember_session(wtm_config::SessionRecord {
             provider: facts.provider,
             worktree: facts.worktree,
             provider_session: provider_session_id.clone(),
-            // Filled in by the first turn, which is where a useful label comes from — a session's
-            // own id is not something anyone recognises in a list.
-            title: None,
+            // The first turn can be submitted before the handshake. The live entry caches its
+            // label so SessionReady does not turn that ordinary race into “Untitled session”.
+            title: app.session_title_of(session.as_str()),
             model: model.clone(),
             effort: effort.clone(),
             updated: Some(app.clock.now_iso()),
@@ -182,17 +185,14 @@ impl AgentEventSink {
         else {
             return;
         };
-        let Some(provider_session) = app.provider_session_of(session.as_str()) else {
-            // The turn was queued before the handshake finished, so there is nothing to label yet.
-            // The next turn will carry one, and a session with no title still resumes.
+        if facts.ephemeral {
             return;
-        };
-
+        }
         let mut label: String = text.chars().take(72).collect();
         if text.chars().count() > 72 {
             label.push('…');
         }
-        app.title_session(&facts.provider, &provider_session, &label);
+        app.title_live_session(session.as_str(), &label);
     }
 }
 

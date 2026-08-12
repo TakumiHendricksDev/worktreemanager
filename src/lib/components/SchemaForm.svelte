@@ -121,7 +121,25 @@
           <span class="c-choice__hint">{field.help ?? ''}</span>
         </label>
       {:else if field.kind === 'select' || field.kind === 'multiselect'}
-        <div class="c-schema-form__select-row">
+        {#if field.allowCustom}
+          <!-- One searchable combobox: typing filters the browser's suggestions and is also a
+               valid custom ref. The old select-plus-input made the same value look like two fields. -->
+          <input
+            id={`f-${field.key}`}
+            class="c-input"
+            type="text"
+            list={`options-${field.key}`}
+            placeholder={options[field.key]?.loading
+              ? 'Loading refs…'
+              : (field.placeholder ?? 'Search or type a ref')}
+            bind:value={values[field.key]}
+          />
+          <datalist id={`options-${field.key}`}>
+            {#each optionsFor(field) as option (option)}
+              <option value={option}></option>
+            {/each}
+          </datalist>
+        {:else}
           <select id={`f-${field.key}`} class="c-select" bind:value={values[field.key]}>
             {#if options[field.key]?.loading}
               <option value={values[field.key]}>Loading…</option>
@@ -136,17 +154,7 @@
               {/each}
             {/if}
           </select>
-          {#if field.allowCustom}
-            <input
-              class="c-input c-schema-form__custom"
-              type="text"
-              placeholder="or type a ref"
-              value={values[field.key] ?? ''}
-              oninput={(e) =>
-                (values[field.key] = (e.currentTarget as HTMLInputElement).value)}
-            />
-          {/if}
-        </div>
+        {/if}
       {:else if field.kind === 'multiline'}
         <textarea
           id={`f-${field.key}`}

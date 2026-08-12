@@ -74,3 +74,111 @@
   margin: 0 var(--sp-1);
   background: var(--warn-line);
 }
+
+.c-approval__questions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-height: min(42vh, 28rem);
+  overflow-y: auto;
+}
+
+.c-approval__question {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.c-approval__question legend {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: var(--sp-2);
+  font-size: var(--step--1);
+  color: var(--fg);
+}
+
+.c-approval__question legend small,
+.c-approval__choice small,
+.c-approval__notes small {
+  font-size: var(--step--2);
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+
+.c-approval__eyebrow {
+  font-size: var(--step--2);
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.c-approval__choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  gap: var(--sp-2);
+}
+
+.c-approval__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg-input) 78%, transparent);
+  cursor: pointer;
+}
+
+.c-approval__choice:has(input:checked) {
+  border-color: var(--border-focus);
+  background: var(--bg-input);
+}
+
+.c-approval__choice > span {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.c-approval__choice input[type='radio'],
+.c-approval__choice input[type='checkbox'] {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.c-approval__choice--other {
+  flex-wrap: wrap;
+}
+
+.c-approval__other {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-left: calc(1em + var(--sp-2));
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  color: var(--fg);
+}
+
+.c-approval__freeform {
+  width: 100%;
+}
+
+.c-approval__notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--step--2);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.c-approval__notes textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+}

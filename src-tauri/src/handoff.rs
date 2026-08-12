@@ -327,7 +327,9 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
         Err(error) => return Response::failed(error),
     };
 
-    if let Err(error) = app.with_agent(session.as_str(), |agent| agent.send_turn(&request.prompt)) {
+    if let Err(error) = app.with_agent(session.as_str(), |agent| {
+        agent.send_turn(&request.prompt, &[])
+    }) {
         // The pane is left on screen rather than torn down. It carries the stderr notice explaining
         // why the CLI would not take a turn, which is the only useful artefact of a failure here.
         return Response::failed(format!(

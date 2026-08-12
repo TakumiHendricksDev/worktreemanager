@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use wtm_core::error::ExecError;
-use wtm_core::model::{AgentEvent, ApprovalAnswer, ExitOutcome, SessionId};
+use wtm_core::model::{AgentAttachment, AgentEvent, ApprovalAnswer, ExitOutcome, SessionId};
 use wtm_core::ports::exec::Invocation;
 use wtm_core::ports::pipe::{PipeHost, PipeSink};
 
@@ -114,20 +114,23 @@ impl AgentSession {
     /// # Errors
     ///
     /// If the session's stdin is gone.
-    pub fn send_turn(&self, text: &str) -> Result<(), ExecError> {
-        let steps = self.driver.lock().send_turn(text);
+    pub fn send_turn(&self, text: &str, attachments: &[AgentAttachment]) -> Result<(), ExecError> {
+        let steps = self.driver.lock().send_turn(text, attachments);
         run(&self.session, &self.host, &self.events, steps)
     }
 
-    /// Change the model or the mode without restarting. `None` leaves one alone.
-    ///
-    /// Effort is deliberately absent — see [`Protocol::reconfigure`] for why it cannot be here.
+    /// Change the model, effort or mode without restarting. `None` leaves one alone.
     ///
     /// # Errors
     ///
     /// If the session's stdin is gone.
-    pub fn reconfigure(&self, model: Option<&str>, mode: Option<&str>) -> Result<(), ExecError> {
-        let steps = self.driver.lock().reconfigure(model, mode);
+    pub fn reconfigure(
+        &self,
+        model: Option<&str>,
+        effort: Option<&str>,
+        mode: Option<&str>,
+    ) -> Result<(), ExecError> {
+        let steps = self.driver.lock().reconfigure(model, effort, mode);
         run(&self.session, &self.host, &self.events, steps)
     }
 

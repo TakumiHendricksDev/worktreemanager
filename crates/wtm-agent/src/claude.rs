@@ -36,10 +36,14 @@
 //! while the mapping was wrong.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 use serde_json::{Value, json};
 use wtm_core::model::{
-    AgentEvent, AgentSkill, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
+    AgentAttachment, AgentEvent, AgentSkill, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
+    UserInputOption, UserInputQuestion,
 };
 
 use crate::provider::{McpServer, Protocol, Provider, ProviderId, SessionRequest, Step};
@@ -64,6 +68,66 @@ const ULTRACODE_SETTINGS: &str = r#"{"ultracode":true}"#;
 /// heard of — the field is a free string end to end for the same reason `model` is.
 fn canonical_mode(mode: &str) -> &str {
     if mode == "default" { "manual" } else { mode }
+}
+
+/// Recover the visible transcript Claude keeps for a resumed session.
+///
+/// Claude's streaming process does not replay prior messages on `--resume`; its own terminal UI
+/// reads the JSONL store first. The GUI has to do the same or a correctly resumed process is
+/// attached to a pane that looks empty. Provider internals stay here rather than becoming a second
+/// transcript store in wtm.
+fn claude_history(req: &SessionRequest) -> Vec<AgentEvent> {
+    let Some(session) = req.resume.as_deref() else {
+        return Vec::new();
+    };
+    // Apart from rejecting path traversal, this avoids walking the store for a malformed record.
+    if uuid::Uuid::parse_str(session).is_err() {
+        return Vec::new();
+    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+    let projects = Path::new(&home).join(".claude/projects");
+    let Ok(directories) = std::fs::read_dir(projects) else {
+        return Vec::new();
+    };
+
+    for directory in directories.flatten() {
+        let path = directory.path().join(format!("{session}.jsonl"));
+        let Ok(file) = File::open(path) else { continue };
+        return claude_history_from(BufReader::new(file));
+    }
+    Vec::new()
+}
+
+fn claude_history_from(reader: impl BufRead) -> Vec<AgentEvent> {
+    reader
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .filter(|row| row.get("isSidechain").and_then(Value::as_bool) != Some(true))
+        .filter_map(|row| {
+            let message = row.get("message")?;
+            let text = match message.get("content")? {
+                Value::String(text) => text.clone(),
+                Value::Array(blocks) => blocks
+                    .iter()
+                    .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|block| block.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => String::new(),
+            };
+            if text.is_empty() {
+                return None;
+            }
+            match row.get("type").and_then(Value::as_str) {
+                Some("user") => Some(AgentEvent::UserEcho { text }),
+                Some("assistant") => Some(AgentEvent::Message { text }),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -101,7 +165,18 @@ impl Provider for Claude {
 
         // Resume by id, or claim one. Claude is the provider that lets wtm *choose* the session id,
         // which is why `SessionReady` reports whatever it ends up being rather than assuming.
-        if let Some(resume) = &req.resume {
+        if let Some(fork) = &req.fork {
+            argv.push("--resume".to_owned());
+            argv.push(fork.clone());
+            argv.push("--fork-session".to_owned());
+            if req.ephemeral {
+                // Claude's native `/btw` is one response over the parent's context with no tools,
+                // and neither side of the exchange belongs in the durable conversation list.
+                argv.push("--no-session-persistence".to_owned());
+                argv.push("--tools".to_owned());
+                argv.push(String::new());
+            }
+        } else if let Some(resume) = &req.resume {
             argv.push("--resume".to_owned());
             argv.push(resume.clone());
         } else {
@@ -163,8 +238,11 @@ impl Provider for Claude {
         argv
     }
 
-    fn protocol(&self, _req: &SessionRequest) -> Box<dyn Protocol> {
-        Box::new(ClaudeProtocol::default())
+    fn protocol(&self, req: &SessionRequest) -> Box<dyn Protocol> {
+        Box::new(ClaudeProtocol {
+            history: claude_history(req),
+            ..ClaudeProtocol::default()
+        })
     }
 }
 
@@ -202,6 +280,8 @@ struct Pending {
 
 #[derive(Default)]
 struct ClaudeProtocol {
+    /// Visible messages recovered from Claude's durable JSONL when this is a resume.
+    history: Vec<AgentEvent>,
     /// Which content block index is currently a thinking block, so its deltas route to reasoning
     /// rather than to the message. Tracked because a `content_block_delta` says only its index.
     thinking_blocks: std::collections::BTreeSet<u64>,
@@ -386,7 +466,11 @@ impl ClaudeProtocol {
             .and_then(Value::as_str)
             .map(str::to_owned);
 
-        let approval = if tool == "ExitPlanMode" {
+        let approval = if tool == "AskUserQuestion" {
+            ApprovalRequest::UserInput {
+                questions: claude_questions(&input),
+            }
+        } else if tool == "ExitPlanMode" {
             // Plan approval arrives as an ordinary tool permission, which is the whole reason a GUI
             // can intercept it. `plan` is the markdown; `planFilePath` is where the CLI wrote it.
             ApprovalRequest::PlanReview {
@@ -494,7 +578,12 @@ impl Protocol for ClaudeProtocol {
         // trips that must complete first. Two providers, two honest answers to the same question,
         // which is the reason `Step::Ready` is a step a provider chooses rather than something the
         // session layer infers.
-        vec![Step::Ready]
+        let mut steps = std::mem::take(&mut self.history)
+            .into_iter()
+            .map(Step::Emit)
+            .collect::<Vec<_>>();
+        steps.push(Step::Ready);
+        steps
     }
 
     fn on_line(&mut self, line: &str) -> Vec<Step> {
@@ -719,6 +808,10 @@ impl Protocol for ClaudeProtocol {
                         tokens_in: field("input_tokens"),
                         tokens_out: field("output_tokens"),
                         cached: field("cache_read_input_tokens"),
+                        context_used: field("input_tokens")
+                            .saturating_add(field("output_tokens"))
+                            .saturating_add(field("cache_read_input_tokens"))
+                            .saturating_add(field("cache_creation_input_tokens")),
                         context_window: context_window_of(&message),
                     },
                     // Claude reports real currency, where Codex reports none. Surfaced rather than
@@ -743,9 +836,46 @@ impl Protocol for ClaudeProtocol {
         }
     }
 
-    fn send_turn(&mut self, text: &str) -> Vec<Step> {
+    fn send_turn(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
         self.turn += 1;
-        vec![
+        let mut content = Vec::new();
+        if !text.is_empty() {
+            content.push(json!({ "type": "text", "text": text }));
+        }
+        for attachment in attachments {
+            if matches!(
+                attachment.mime.as_str(),
+                "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+            ) {
+                content.push(json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": attachment.mime,
+                        "data": attachment.data_base64,
+                    }
+                }));
+            } else {
+                content.push(json!({
+                    "type": "text",
+                    "text": format!("Attached file `{}` is available at `{}`.", attachment.name, attachment.path),
+                }));
+            }
+        }
+
+        let message_content = if attachments.is_empty() {
+            json!(text)
+        } else {
+            Value::Array(content)
+        };
+        let mut steps = if attachments.is_empty() {
+            Vec::new()
+        } else {
+            vec![Step::Emit(AgentEvent::Attachments {
+                attachments: attachments.to_vec(),
+            })]
+        };
+        steps.extend([
             Step::Emit(AgentEvent::UserEcho {
                 text: text.to_owned(),
             }),
@@ -758,12 +888,13 @@ impl Protocol for ClaudeProtocol {
             Step::Write(
                 json!({
                     "type": "user",
-                    "message": { "role": "user", "content": text },
+                    "message": { "role": "user", "content": message_content },
                     "parent_tool_use_id": null,
                 })
                 .to_string(),
             ),
-        ]
+        ]);
+        steps
     }
 
     fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step> {
@@ -802,6 +933,14 @@ impl Protocol for ClaudeProtocol {
                 "behavior": "deny",
                 "message": message.clone().unwrap_or_else(|| "Denied in wtm".to_owned()),
             }),
+            ApprovalAnswer::UserInput { answers, notes } => {
+                let mut updated = pending.input.clone();
+                updated["answers"] = claude_answer_map(&pending.input, answers, notes.as_deref());
+                json!({
+                    "behavior": "allow",
+                    "updatedInput": updated,
+                })
+            }
         };
 
         vec![
@@ -818,7 +957,12 @@ impl Protocol for ClaudeProtocol {
     /// this CLI version does not know comes back as a `control_response` with `subtype: "error"`,
     /// which [`Self::on_line`] already turns into a `Notice`. A rejected change therefore says so
     /// in the transcript instead of leaving the picker quietly lying about the session's state.
-    fn reconfigure(&mut self, model: Option<&str>, mode: Option<&str>) -> Vec<Step> {
+    fn reconfigure(
+        &mut self,
+        model: Option<&str>,
+        _effort: Option<&str>,
+        mode: Option<&str>,
+    ) -> Vec<Step> {
         let mut steps = Vec::new();
         if let Some(model) = model {
             steps.push(Self::control_request(&json!({
@@ -910,4 +1054,125 @@ fn context_window_of(result: &Value) -> Option<u64> {
         .as_object()?
         .values()
         .find_map(|m| m.get("contextWindow").and_then(Value::as_u64))
+}
+
+fn claude_questions(input: &Value) -> Vec<UserInputQuestion> {
+    input
+        .get("questions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, question)| {
+            let string = |key: &str| {
+                question
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            UserInputQuestion {
+                id: question
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map_or_else(|| format!("question-{index}"), str::to_owned),
+                header: string("header"),
+                question: string("question"),
+                options: question
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|option| UserInputOption {
+                        label: option
+                            .get("label")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        description: option
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    })
+                    .collect(),
+                multiple: question
+                    .get("multiSelect")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                // Claude Code always offers an Other row and a notes field.
+                allows_other: true,
+                secret: question
+                    .get("isSecret")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            }
+        })
+        .collect()
+}
+
+fn claude_answer_map(
+    input: &Value,
+    answers: &BTreeMap<String, Vec<String>>,
+    notes: Option<&str>,
+) -> Value {
+    let mut out = serde_json::Map::new();
+    let questions = input
+        .get("questions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+
+    for (index, question) in questions.iter().enumerate() {
+        let id = question
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map_or_else(|| format!("question-{index}"), str::to_owned);
+        let prompt = question
+            .get("question")
+            .and_then(Value::as_str)
+            .filter(|prompt| !prompt.is_empty())
+            .unwrap_or(&id);
+        let mut value = answers.get(&id).cloned().unwrap_or_default().join(", ");
+        if index + 1 == questions.len()
+            && let Some(notes) = notes.map(str::trim).filter(|notes| !notes.is_empty())
+        {
+            if !value.is_empty() {
+                value.push_str(". ");
+            }
+            value.push_str("Notes: ");
+            value.push_str(notes);
+        }
+        out.insert(prompt.to_owned(), Value::String(value));
+    }
+    Value::Object(out)
+}
+
+#[cfg(test)]
+mod history_tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    #[test]
+    fn resume_history_keeps_visible_messages_and_drops_tool_and_sidechain_rows() {
+        let rows = concat!(
+            "{\"type\":\"user\",\"message\":{\"content\":\"Fix the parser\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"hidden\"},{\"type\":\"text\",\"text\":\"Done.\"}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"noise\"}]}}\n",
+            "{\"type\":\"assistant\",\"isSidechain\":true,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"aside\"}]}}\n"
+        );
+        assert_eq!(
+            claude_history_from(Cursor::new(rows)),
+            vec![
+                AgentEvent::UserEcho {
+                    text: "Fix the parser".to_owned()
+                },
+                AgentEvent::Message {
+                    text: "Done.".to_owned()
+                }
+            ]
+        );
+    }
 }

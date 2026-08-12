@@ -46,6 +46,17 @@
    * is reset to `''` after every pick and the placeholder is what is always "chosen".
    */
   let linkChoice = $state('');
+  let agentChoice = $state('');
+  const startable = $derived(
+    sessions.options.filter((option) => option.available && option.offered),
+  );
+
+  // The Compose project name is an implementation detail and, in the ordinary case, just a
+  // slugged copy of the worktree title beside it. Keep genuinely useful configured badges (issue
+  // status, environment, owner) without spending top-bar space repeating the selected worktree.
+  const visibleBadges = $derived(
+    worktree.badges.filter((badge) => badge.label.trim().toLowerCase() !== 'compose'),
+  );
 
   async function pickLink(event: Event) {
     const select = event.currentTarget as HTMLSelectElement;
@@ -58,6 +69,14 @@
     } catch {
       /* The scheme is validated in Rust; nothing useful to do if the OS declines. */
     }
+  }
+
+  function pickAgent(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const provider = select.value;
+    select.value = '';
+    agentChoice = '';
+    if (provider) void sessions.openAgent(projectId, worktree.id, provider);
   }
 </script>
 
@@ -94,12 +113,32 @@
       </span>
     {/if}
     {#if worktree.isMain}<span class="c-badge c-badge--accent">main worktree</span>{/if}
-    {#each worktree.badges as badge (badge.label)}
+    {#each visibleBadges as badge (badge.label)}
       <span class="c-badge" title={badge.label}>{badge.label}: {badge.value}</span>
     {/each}
   </div>
 
   <div class="c-worktree-bar__actions">
+    {#if startable.length > 0}
+      <!-- Available even when the only pane is a shell; starting an agent never has to replace it. -->
+      <span class="o-overlay-select">
+        <span class="c-button c-button--quiet c-button--sm" aria-hidden="true">
+          New agent <Icon name="chevron-down" size={11} />
+        </span>
+        <select
+          class="o-overlay-select__native"
+          aria-label="Open an agent in this worktree"
+          bind:value={agentChoice}
+          onchange={pickAgent}
+        >
+          <option value="">New agent</option>
+          {#each startable as option (option.id)}
+            <option value={option.id}>{option.label}</option>
+          {/each}
+        </select>
+      </span>
+    {/if}
+
     {#if worktree.links.length > 0}
       <!-- A native select, so the menu needs no stacking level of its own. -->
       <span class="o-overlay-select">

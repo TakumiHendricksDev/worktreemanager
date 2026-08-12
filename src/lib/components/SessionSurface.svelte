@@ -52,6 +52,19 @@
    */
   const startable = $derived(sessions.options.filter((o) => o.available && o.offered));
 
+  function resumeLabel(record: (typeof resumable)[number]): string {
+    if (record.title?.trim()) return record.title;
+    const provider =
+      sessions.options.find((option) => option.id === record.provider)?.label ??
+      record.provider;
+    const updated = record.updated ? new Date(record.updated) : null;
+    const when =
+      updated && !Number.isNaN(updated.valueOf())
+        ? updated.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        : 'saved conversation';
+    return `${provider} · ${when}`;
+  }
+
   /*
    * Read what can be resumed, what plans are stored, and what is running, when the selection lands
    * somewhere new.
@@ -256,7 +269,7 @@
                       record,
                     )}
                 >
-                  {record.title ?? 'Untitled session'}
+                  {resumeLabel(record)}
                 </Button>
                 <span class="c-status--subtle">{record.provider}</span>
                 <button

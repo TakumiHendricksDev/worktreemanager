@@ -22,10 +22,12 @@
 // say so here.
 #![allow(clippy::unwrap_used)]
 
+use std::collections::BTreeMap;
+
 use pretty_assertions::assert_eq;
 use wtm_agent::claude::Claude;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
-use wtm_core::model::{AgentEvent, ApprovalAnswer, ApprovalRequest, ModeRisk};
+use wtm_core::model::{AgentAttachment, AgentEvent, ApprovalAnswer, ApprovalRequest, ModeRisk};
 
 fn driver() -> Box<dyn Protocol> {
     Claude.protocol(&SessionRequest {
@@ -112,6 +114,30 @@ fn a_fresh_session_id_is_minted_per_session_and_resume_uses_a_different_flag() {
         "resuming must not also claim a new id"
     );
     assert!(resumed.iter().any(|a| a == "--resume"));
+}
+
+#[test]
+fn a_side_question_forks_without_tools_or_persistence() {
+    let argv = Claude.argv(&SessionRequest {
+        fork: Some("11111111-2222-4333-8444-555555555555".to_owned()),
+        ephemeral: true,
+        ..SessionRequest::default()
+    });
+
+    let pair = |flag: &str| {
+        argv.iter()
+            .position(|a| a == flag)
+            .and_then(|i| argv.get(i + 1))
+            .cloned()
+    };
+    assert_eq!(
+        pair("--resume").as_deref(),
+        Some("11111111-2222-4333-8444-555555555555")
+    );
+    assert!(argv.iter().any(|a| a == "--fork-session"));
+    assert!(argv.iter().any(|a| a == "--no-session-persistence"));
+    assert_eq!(pair("--tools").as_deref(), Some(""));
+    assert!(!argv.iter().any(|a| a == "--session-id"));
 }
 
 #[test]
@@ -298,6 +324,68 @@ fn a_can_use_tool_request_becomes_an_approval_answered_on_the_top_level_request_
 }
 
 #[test]
+fn ask_user_question_preserves_radio_multiselect_other_and_notes() {
+    let mut d = driver();
+    let steps = d.on_line(
+        r#"{"type":"control_request","request_id":"question-1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"header":"Scope","question":"Which package?","options":[{"label":"UI","description":"Svelte app"},{"label":"Core","description":"Rust model"}],"multiSelect":false},{"header":"Checks","question":"What should run?","options":[{"label":"Tests","description":"Unit tests"},{"label":"Lint","description":"Static checks"}],"multiSelect":true}]},"tool_use_id":"toolu_question"}}"#,
+    );
+    let AgentEvent::ApprovalRequested { id, request, .. } = events(&steps)[0].clone() else {
+        panic!("expected user input");
+    };
+    let ApprovalRequest::UserInput { questions } = request else {
+        panic!("expected structured questions");
+    };
+    assert_eq!(questions[0].header, "Scope");
+    assert!(!questions[0].multiple);
+    assert!(questions[1].multiple);
+    assert!(questions[0].allows_other);
+
+    let frames = writes(&d.answer(
+        &id,
+        &ApprovalAnswer::UserInput {
+            answers: BTreeMap::from([
+                ("question-0".to_owned(), vec!["UI".to_owned()]),
+                (
+                    "question-1".to_owned(),
+                    vec!["Tests".to_owned(), "Lint".to_owned()],
+                ),
+            ]),
+            notes: Some("No browser test".to_owned()),
+        },
+    ));
+    let updated = &frames[0]["response"]["response"]["updatedInput"]["answers"];
+    assert_eq!(updated["Which package?"], "UI");
+    assert_eq!(
+        updated["What should run?"],
+        "Tests, Lint. Notes: No browser test"
+    );
+}
+
+#[test]
+fn image_attachments_are_echoed_and_sent_as_inline_content() {
+    let mut d = driver();
+    let attachment = AgentAttachment {
+        name: "screen.png".to_owned(),
+        path: "/tmp/screen.png".to_owned(),
+        mime: "image/png".to_owned(),
+        size: 3,
+        data_base64: "YWJj".to_owned(),
+    };
+    let steps = d.send_turn("Describe this", std::slice::from_ref(&attachment));
+    assert!(matches!(
+        events(&steps).first(),
+        Some(AgentEvent::Attachments { attachments }) if attachments == &vec![attachment]
+    ));
+    let frames = writes(&steps);
+    assert_eq!(frames[0]["message"]["content"][1]["type"], "image");
+    assert_eq!(
+        frames[0]["message"]["content"][1]["source"]["media_type"],
+        "image/png"
+    );
+    assert_eq!(frames[0]["message"]["content"][1]["source"]["data"], "YWJj");
+}
+
+#[test]
 fn always_this_session_passes_back_the_clis_own_suggestion() {
     // The CLI proposes what "always" should mean — a pattern rule for `Bash`, a mode change for
     // `Write`. It knows better than we do, and passing its suggestion back is what makes the button
@@ -396,7 +484,7 @@ fn a_turn_is_announced_before_the_frame_goes_out_and_reports_cost_when_it_ends()
     // send rather than inferred from the first delta, so the composer can show "working…" during
     // the seconds before any token arrives.
     let mut d = driver();
-    let sent = d.send_turn("write probe.txt");
+    let sent = d.send_turn("write probe.txt", &[]);
 
     assert_eq!(
         events(&sent),
@@ -426,6 +514,7 @@ fn a_turn_is_announced_before_the_frame_goes_out_and_reports_cost_when_it_ends()
             assert_eq!(usage.tokens_in, 26);
             assert_eq!(usage.tokens_out, 931);
             assert_eq!(usage.cached, 81276);
+            assert_eq!(usage.context_used, 92_130);
             // Nested under the model's own name, which is not known in advance.
             assert_eq!(usage.context_window, Some(200_000));
             // Real currency. Codex reports none at all, which is why the field is an `Option`
@@ -772,7 +861,7 @@ fn changing_the_model_or_the_mode_writes_control_requests_rather_than_needing_a_
     let mut d = driver();
     let _ = d.open();
 
-    let sent = writes(&d.reconfigure(Some("opus"), Some("acceptEdits")));
+    let sent = writes(&d.reconfigure(Some("opus"), Some("max"), Some("acceptEdits")));
     assert_eq!(sent.len(), 2, "one frame each, and nothing else");
 
     assert_eq!(sent[0]["type"], "control_request");
@@ -793,8 +882,9 @@ fn reconfiguring_only_one_setting_leaves_the_other_alone() {
     // the user made a moment earlier.
     let mut d = driver();
     let _ = d.open();
-    assert_eq!(writes(&d.reconfigure(None, Some("plan"))).len(), 1);
-    assert!(writes(&d.reconfigure(None, None)).is_empty());
+    assert_eq!(writes(&d.reconfigure(None, None, Some("plan"))).len(), 1);
+    assert!(writes(&d.reconfigure(None, Some("max"), None)).is_empty());
+    assert!(writes(&d.reconfigure(None, None, None)).is_empty());
 }
 
 #[test]

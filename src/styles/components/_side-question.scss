@@ -1,0 +1,74 @@
+/*
+ * A temporary answer beside a live session.
+ *
+ * It is pinned between transcript and composer because it belongs to neither: putting it in the
+ * transcript would make an explicitly ephemeral exchange look durable, while putting it inside the
+ * composer would repeat the context-card mistake of turning the text field into a dashboard.
+ */
+.c-side-question {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: min(42vh, 26rem);
+  margin: 0 var(--sp-4) var(--sp-2);
+  padding: var(--sp-3);
+  overflow-y: auto;
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.c-side-question__head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.c-side-question__head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.c-side-question__head strong {
+  font-size: var(--step--1);
+}
+
+.c-side-question__head span,
+.c-side-question__waiting {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-side-question__prompt {
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--info-line);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  white-space: pre-wrap;
+}
+
+.c-side-question__answer {
+  min-width: 0;
+  font-size: var(--step--1);
+}
+
+.c-side-question__error {
+  color: var(--danger);
+  font-size: var(--step--1);
+}
+
+.c-side-question__ask {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-side-question__ask .c-input {
+  font-size: var(--step--1);
+}

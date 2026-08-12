@@ -1371,73 +1371,126 @@ pub async fn open_agent_session(
     agent_id: String,
     options: SessionOptions,
 ) -> Reply<String> {
-    let SessionOptions {
-        model,
-        effort,
-        mode,
-        resume,
-    } = options;
     let app = Arc::clone(&app);
     blocking(move || {
-        let project = app.project(&project_id)?;
-        let worktree = app.worktree(&project, &worktree_id)?;
-
-        // Same check `open_terminal` makes, and the same reasoning: a worktree whose directory was
-        // deleted by hand is *prunable*, not absent, so it is still found here — and a CLI whose
-        // cwd is an unlinked inode misbehaves in ways much harder to diagnose than this sentence.
-        if !app.files.exists(&worktree.path) {
-            return Err(ErrorView::new(
-                "exec",
-                format!(
-                    "`{}` no longer exists on disk — the worktree may need pruning",
-                    worktree.path.display()
-                ),
-            ));
-        }
-
-        let entry = wtm_agent::entry(&agent_id).ok_or_else(|| {
-            ErrorView::new(
-                "exec",
-                format!("`{agent_id}` is not an agent this build of wtm knows how to drive"),
-            )
-        })?;
-
-        // A repository may refuse an agent. Checked here rather than only by hiding it in the
-        // launcher, because the launcher is not the only route in — a resume entry or a handoff can
-        // ask for one too, and a refusal that only exists in the UI is not a refusal.
-        if !project.offers_agent(&agent_id) {
-            return Err(ErrorView::new(
-                "config",
-                format!("this repository's `wtm.toml` does not offer `{agent_id}`"),
-            ));
-        }
-
-        let spec = project.agent_spec(&agent_id);
-        let req = session_request_for(
+        open_agent_process(
+            handle,
             &app,
-            &project,
-            &spec,
-            entry,
-            &worktree,
-            Some(SessionOptions {
-                model,
-                effort,
-                mode,
-                resume,
-            }),
-            // Nothing to inherit: this route has a picker, and it already spoke.
+            &project_id,
+            &worktree_id,
+            &agent_id,
+            options,
             None,
-        )?;
-
-        let sink: Arc<dyn wtm_agent::session::AgentSink> =
-            crate::agent_bridge::AgentEventSink::new(handle);
-        let session = app
-            .open_agent(entry, &req, &worktree, &project_id, &sink)
-            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
-
-        Ok(session.as_str().to_owned())
+        )
     })
     .await
+}
+
+/// Fork a live conversation for one ephemeral side question.
+///
+/// The provider conversation id stays behind this boundary. A webview cannot accidentally fork a
+/// stale saved id or claim another project's conversation; it names the live session it already
+/// owns and the app resolves the rest.
+#[tauri::command]
+pub async fn open_agent_side_session(
+    handle: tauri::AppHandle,
+    app: AppState<'_>,
+    parent_session: String,
+    options: SessionOptions,
+) -> Reply<String> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let source = app.agent_fork_source(&parent_session).ok_or_else(|| {
+            ErrorView::new(
+                "exec",
+                "the parent conversation is still starting, so it cannot be forked yet",
+            )
+        })?;
+        open_agent_process(
+            handle,
+            &app,
+            &source.project,
+            &source.worktree,
+            &source.provider,
+            options,
+            Some(source.provider_session),
+        )
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_agent_process(
+    handle: tauri::AppHandle,
+    app: &Arc<App>,
+    project_id: &str,
+    worktree_id: &str,
+    agent_id: &str,
+    options: SessionOptions,
+    fork: Option<String>,
+) -> Reply<String> {
+    let project = app.project(project_id)?;
+    let worktree = app.worktree(&project, worktree_id)?;
+
+    // Same check `open_terminal` makes, and the same reasoning: a worktree whose directory was
+    // deleted by hand is *prunable*, not absent, so it is still found here — and a CLI whose
+    // cwd is an unlinked inode misbehaves in ways much harder to diagnose than this sentence.
+    if !app.files.exists(&worktree.path) {
+        return Err(ErrorView::new(
+            "exec",
+            format!(
+                "`{}` no longer exists on disk — the worktree may need pruning",
+                worktree.path.display()
+            ),
+        ));
+    }
+
+    let entry = wtm_agent::entry(agent_id).ok_or_else(|| {
+        ErrorView::new(
+            "exec",
+            format!("`{agent_id}` is not an agent this build of wtm knows how to drive"),
+        )
+    })?;
+
+    // A repository may refuse an agent. Checked here rather than only by hiding it in the
+    // launcher, because the launcher is not the only route in — a resume entry or a handoff can
+    // ask for one too, and a refusal that only exists in the UI is not a refusal.
+    if !project.offers_agent(agent_id) {
+        return Err(ErrorView::new(
+            "config",
+            format!("this repository's `wtm.toml` does not offer `{agent_id}`"),
+        ));
+    }
+
+    let spec = project.agent_spec(agent_id);
+    let mut req = session_request_for(
+        app,
+        &project,
+        &spec,
+        entry,
+        &worktree,
+        Some(options),
+        // Nothing to inherit: this route has a picker, and it already spoke.
+        None,
+    )?;
+    req.fork = fork;
+    req.ephemeral = req.fork.is_some();
+    if req.ephemeral {
+        const SIDE_INSTRUCTIONS: &str = "This is an ephemeral side question. Answer only from the \
+            conversation context already available. Do not call tools or change files.";
+        req.instructions = Some(match req.instructions {
+            Some(existing) => format!("{existing}\n\n{SIDE_INSTRUCTIONS}"),
+            None => SIDE_INSTRUCTIONS.to_owned(),
+        });
+    }
+
+    let sink: Arc<dyn wtm_agent::session::AgentSink> =
+        crate::agent_bridge::AgentEventSink::new(handle);
+    let session = app
+        .open_agent(entry, &req, &worktree, project_id, &sink)
+        .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+
+    Ok(session.as_str().to_owned())
 }
 
 /// Send one turn to a session.
@@ -1446,13 +1499,121 @@ pub async fn open_agent_session(
 /// the composer is live the moment a pane opens, so that is the ordinary case on a slow start, not
 /// an edge case, and dropping it would lose the user's first prompt.
 #[tauri::command]
-pub async fn send_turn(app: AppState<'_>, session: String, text: String) -> Reply<()> {
+pub async fn send_turn(
+    app: AppState<'_>,
+    session: String,
+    text: String,
+    attachments: Vec<wtm_core::model::AgentAttachment>,
+) -> Reply<()> {
     let app = Arc::clone(&app);
     blocking(move || {
-        app.with_agent(&session, |agent| agent.send_turn(&text))
+        app.with_agent(&session, |agent| agent.send_turn(&text, &attachments))
             .map_err(|e| ErrorView::new("exec", e.to_string()))
     })
     .await
+}
+
+const MAX_AGENT_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
+
+/// Read a file the user picked or dropped and prepare it for both agent transports.
+#[tauri::command]
+pub async fn prepare_agent_attachment(path: String) -> Reply<wtm_core::model::AgentAttachment> {
+    blocking(move || attachment_from_path(std::path::Path::new(&path))).await
+}
+
+/// Persist a clipboard file long enough for Codex app-server to consume it by local path.
+#[tauri::command]
+pub async fn stage_agent_attachment(
+    name: String,
+    mime: String,
+    data_base64: String,
+) -> Reply<wtm_core::model::AgentAttachment> {
+    blocking(move || {
+        let bytes = crate::pty_bridge::base64_decode(&data_base64)
+            .ok_or_else(|| ErrorView::new("badInput", "the pasted file was not valid base64"))?;
+        if bytes.len() > MAX_AGENT_ATTACHMENT_BYTES {
+            return Err(ErrorView::new(
+                "badInput",
+                "attachments must be 20 MB or smaller",
+            ));
+        }
+        let safe_name = std::path::Path::new(&name)
+            .file_name()
+            .and_then(|part| part.to_str())
+            .filter(|part| !part.is_empty())
+            .unwrap_or("pasted-file");
+        let directory = std::env::temp_dir().join("wtm-agent-attachments");
+        std::fs::create_dir_all(&directory)
+            .map_err(|e| ErrorView::new("io", format!("create attachment directory: {e}")))?;
+        let path = directory.join(format!("{}-{safe_name}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, &bytes)
+            .map_err(|e| ErrorView::new("io", format!("stage pasted attachment: {e}")))?;
+        Ok(wtm_core::model::AgentAttachment {
+            name: safe_name.to_owned(),
+            path: path.to_string_lossy().into_owned(),
+            mime: if mime.trim().is_empty() {
+                mime_for(&path).to_owned()
+            } else {
+                mime
+            },
+            size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            data_base64,
+        })
+    })
+    .await
+}
+
+fn attachment_from_path(path: &std::path::Path) -> Reply<wtm_core::model::AgentAttachment> {
+    if !path.is_file() {
+        return Err(ErrorView::new(
+            "badInput",
+            format!("`{}` is not a file", path.display()),
+        ));
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|e| ErrorView::new("io", format!("read `{}`: {e}", path.display())))?;
+    if bytes.len() > MAX_AGENT_ATTACHMENT_BYTES {
+        return Err(ErrorView::new(
+            "badInput",
+            format!(
+                "`{}` is larger than the 20 MB attachment limit",
+                path.display()
+            ),
+        ));
+    }
+    Ok(wtm_core::model::AgentAttachment {
+        name: path
+            .file_name()
+            .and_then(|part| part.to_str())
+            .unwrap_or("attachment")
+            .to_owned(),
+        path: path.to_string_lossy().into_owned(),
+        mime: mime_for(path).to_owned(),
+        size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        data_base64: crate::pty_bridge::base64_encode(&bytes),
+    })
+}
+
+fn mime_for(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "md" | "txt" | "log" => "text/plain",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Answer an outstanding approval.
@@ -1482,25 +1643,20 @@ pub async fn answer_approval(
 /// `None` for either argument means "leave that one alone", so the picker can change one without
 /// asserting a stale value for the other.
 ///
-/// # Why effort is not a parameter
-///
-/// Because only one provider could honour it. Codex re-sends model, effort and both permission
-/// fields on every `turn/start`, so all four are free there. Claude has control requests for the
-/// model and the mode and **none** for effort, which is an argv flag read once at startup — so an
-/// `effort` parameter here would be accepted and silently ignored on the provider it matters most
-/// on. `SessionPane` marks the effort control as needing a restart instead, which is the honest
-/// version of the same information.
+/// Codex applies effort on its next turn as well. Claude has no live effort control, so the
+/// frontend does not send that argument for Claude and marks the selection for restart instead.
 #[tauri::command]
 pub async fn configure_session(
     app: AppState<'_>,
     session: String,
     model: Option<String>,
+    effort: Option<String>,
     mode: Option<String>,
 ) -> Reply<()> {
     let app = Arc::clone(&app);
     blocking(move || {
         app.with_agent(&session, |agent| {
-            agent.reconfigure(model.as_deref(), mode.as_deref())
+            agent.reconfigure(model.as_deref(), effort.as_deref(), mode.as_deref())
         })
         .map_err(|e| ErrorView::new("exec", e.to_string()))
     })
@@ -1630,6 +1786,7 @@ pub async fn list_agent_sessions(app: AppState<'_>) -> Reply<Vec<AgentSessionVie
         Ok(app
             .live_agents()
             .into_iter()
+            .filter(|facts| !facts.ephemeral)
             .map(|facts| AgentSessionView {
                 session: facts.session,
                 worktree: facts.worktree,
@@ -1867,6 +2024,8 @@ pub fn session_request_for(
             .or_else(|| spec.mode.clone())
             .or_else(|| entry.default_mode.map(str::to_owned)),
         resume,
+        fork: None,
+        ephemeral: false,
         extra_args: spec.extra_args.clone(),
         // The resolved effort, not the caller's — so a session's handoff token offers the rung it is
         // actually running at. See `handoff::Caller::effort`.

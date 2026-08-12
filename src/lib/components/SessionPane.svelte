@@ -15,15 +15,20 @@
   import { getCurrentWebview } from '@tauri-apps/api/webview';
   import { open } from '@tauri-apps/plugin-dialog';
 
+  import { commands } from '../ipc/commands';
+  import { errorMessage, type AgentAttachment } from '../ipc/types';
+  import { commandsFor } from '../agent-commands';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
   import AgentTranscript from './AgentTranscript.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import ModelPicker from './ModelPicker.svelte';
+  import SideQuestion from './SideQuestion.svelte';
   import Suggest from './Suggest.svelte';
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
+  import Dialog from './ui/Dialog.svelte';
   import Icon from './ui/Icon.svelte';
   import SessionDot from './ui/SessionDot.svelte';
 
@@ -50,6 +55,9 @@
   } = $props();
 
   let draft = $state('');
+  let attachments = $state<AgentAttachment[]>([]);
+  let contextOpen = $state(false);
+  let confirmRestart = $state(false);
   /**
    * True from submit until the turn is accepted or refused.
    *
@@ -129,6 +137,17 @@
 
   /** The oldest unanswered approval. One at a time, in arrival order. */
   const blocking = $derived(pane.approvals[0] ?? null);
+  const side = $derived(sessions.sideFor(pane.id));
+  const contextUsed = $derived(
+    pane.usage === null
+      ? 0
+      : pane.usage.contextUsed || pane.usage.tokensIn + pane.usage.cached,
+  );
+  const contextPercent = $derived(
+    pane.usage?.contextWindow
+      ? Math.min(100, Math.round((contextUsed / pane.usage.contextWindow) * 100))
+      : null,
+  );
 
   /**
    * Whether this provider's allow can carry a rewritten payload.
@@ -180,6 +199,11 @@
     if (pane.effortPending) return `Restart to apply effort ${pane.effort}`;
     return null;
   });
+
+  async function restartConfirmed() {
+    confirmRestart = false;
+    await sessions.restart(pane.id);
+  }
 
   /*
    * Follow the tail whenever the transcript changes height, for any reason.
@@ -299,7 +323,49 @@
   async function submit(event: Event) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || sending) return;
+    if ((!text && attachments.length === 0) || sending) return;
+
+    if (attachments.length === 0 && text.startsWith('/')) {
+      const [rawCommand] = text.split(/\s+/, 1);
+      const command = rawCommand?.toLowerCase();
+      if (command === '/clear' || command === '/new') {
+        if (pane.working) {
+          sessions.error = 'Stop the current turn before clearing this conversation.';
+          return;
+        }
+        sending = true;
+        await sessions.restart(pane.id);
+        sending = false;
+        draft = '';
+        contextOpen = false;
+        return;
+      }
+      if (command === '/context' || command === '/status') {
+        contextOpen = !contextOpen;
+        draft = '';
+        return;
+      }
+      if (command === '/copy') {
+        const copied = await copyLatestResponse();
+        if (copied) draft = '';
+        return;
+      }
+    }
+
+    if (text.startsWith('/')) {
+      const [rawCommand] = text.split(/\s+/, 1);
+      const command = rawCommand?.toLowerCase();
+      if (command === '/btw' || command === '/side') {
+        const question = text.slice(rawCommand?.length ?? 0).trim();
+        sending = true;
+        const outgoing = attachments;
+        const opened = await sessions.openSide(pane.id, question, outgoing);
+        sending = false;
+        if (opened && draft.trim() === text) draft = '';
+        if (opened && attachments === outgoing) attachments = [];
+        return;
+      }
+    }
 
     /*
      * The draft is held until the turn is accepted, not cleared on the way out.
@@ -309,11 +375,13 @@
      * exactly like one that had just sent successfully.
      */
     sending = true;
-    const sent = await sessions.send(pane.id, text);
+    const outgoing = attachments;
+    const sent = await sessions.send(pane.id, text, outgoing);
     sending = false;
     // Only clear what actually went out. The wait can be seconds long on a pane that is still
     // starting, and anything typed during it is the next message rather than part of this one.
     if (sent && draft.trim() === text) draft = '';
+    if (sent && attachments === outgoing) attachments = [];
   }
 
   /*
@@ -387,7 +455,7 @@
     if (query === null) return [];
     return query.kind === 'file'
       ? matchFiles(sessions.files[pane.worktreeId] ?? [], query.text)
-      : matchSkills(pane.skills, query.text);
+      : matchSkills(commandsFor(provider ?? '', pane.skills), query.text);
   });
 
   // Back to the top whenever the offered set changes. Without this, narrowing a query from ten
@@ -450,6 +518,97 @@
     composer?.focus();
   }
 
+  function addAttachment(attachment: AgentAttachment) {
+    if (attachments.some((item) => item.path === attachment.path)) return;
+    attachments = [...attachments, attachment];
+    composer?.focus();
+  }
+
+  async function attachPaths(paths: string[]) {
+    const mentions: string[] = [];
+    for (const path of paths) {
+      try {
+        addAttachment(await commands.prepareAgentAttachment(path));
+      } catch (error) {
+        // A dropped directory cannot be attached as bytes, but it is still useful as an @ mention.
+        // Other read failures remain visible globally while the path stays in the draft for the
+        // user to remove or send deliberately.
+        mentions.push(path);
+        const message = errorMessage(error);
+        if (!message.includes('is not a file')) sessions.error = message;
+      }
+    }
+    addPaths(mentions);
+  }
+
+  function bytesToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let at = 0; at < bytes.length; at += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(at, at + chunk));
+    }
+    return btoa(binary);
+  }
+
+  function formatBytes(size: number): string {
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function formatTokens(tokens: number): string {
+    if (tokens < 1000) return tokens.toLocaleString();
+    if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+    return `${(tokens / 1_000_000).toFixed(1)}m`;
+  }
+
+  async function copyLatestResponse(): Promise<boolean> {
+    let text = '';
+    for (let index = pane.events.length - 1; index >= 0; index -= 1) {
+      const event = pane.events[index];
+      if (event?.kind === 'message') {
+        text = event.text;
+        break;
+      }
+      if (event?.kind === 'message_delta') {
+        text = event.text + text;
+        continue;
+      }
+      if (text !== '') break;
+    }
+    if (text === '') {
+      sessions.error = 'There is no completed response to copy yet.';
+      return false;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      sessions.error = 'The system clipboard was unavailable.';
+      return false;
+    }
+  }
+
+  async function onPaste(event: ClipboardEvent) {
+    const files = Array.from(event.clipboardData?.files ?? []);
+    if (files.length === 0) return;
+    event.preventDefault();
+    for (const file of files) {
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        addAttachment(
+          await commands.stageAgentAttachment(
+            file.name || `pasted-${attachments.length + 1}`,
+            file.type,
+            bytesToBase64(bytes),
+          ),
+        );
+      } catch (error) {
+        sessions.error = errorMessage(error);
+      }
+    }
+  }
+
   /**
    * The `+` button: the OS picker, rooted at the worktree.
    *
@@ -476,7 +635,9 @@
       title: directory ? 'Add folders' : 'Add files',
     });
     if (picked === null) return;
-    addPaths(Array.isArray(picked) ? picked : [picked]);
+    const paths = Array.isArray(picked) ? picked : [picked];
+    if (directory) addPaths(paths);
+    else await attachPaths(paths);
   }
 
   /**
@@ -507,7 +668,7 @@
           event.payload.position.y / ratio,
         );
         if (at === null || form === null || !form.contains(at)) return;
-        addPaths(event.payload.paths);
+        void attachPaths(event.payload.paths);
       })
       .then((unlisten) => {
         // The subscription resolves asynchronously, so a pane closed in between would otherwise
@@ -600,7 +761,7 @@
     -->
     <div class="c-pane__actions">
       {#if pane.ended || pane.error}
-        <Button variant="neutral" size="sm" onclick={() => void sessions.restart(pane.id)}>
+        <Button variant="neutral" size="sm" onclick={() => (confirmRestart = true)}>
           Restart
         </Button>
       {:else if pending !== null}
@@ -608,23 +769,18 @@
           variant="neutral"
           size="sm"
           title={pending}
-          onclick={() => void sessions.restart(pane.id)}
+          onclick={() => (confirmRestart = true)}
         >
           Restart
         </Button>
       {:else}
-        <!-- No confirmation, deliberately. Close is one control to the right, deletes the pane and
-             its position as well as the transcript, and asks nothing — so a dialog on the strictly
-             lesser action would read as inconsistency rather than as care. And the transcript is not
-             the durable artefact: both CLIs keep the conversation, and `restart` refreshes the
-             resume list, so it reappears under "Pick up where you left off". -->
         <Button
           variant="quiet"
           size="sm"
           icon="sm"
           title="Restart this session — the transcript is cleared and the conversation stays resumable"
           ariaLabel="Restart session"
-          onclick={() => void sessions.restart(pane.id)}
+          onclick={() => (confirmRestart = true)}
         >
           <Icon name="restart" size={12} />
         </Button>
@@ -697,6 +853,10 @@
       />
     {/if}
 
+    {#if side}
+      <SideQuestion {side} />
+    {/if}
+
     <!--
       One card holding the message, what will run it, and the control that sends it.
 
@@ -706,6 +866,57 @@
       it is also what lets the whole thing take the focus ring as a unit.
     -->
     <div class="c-pane__foot">
+      {#if contextOpen}
+        <section class="c-context" aria-label="Session context usage">
+          <div class="c-context__head">
+            <strong>Context window</strong>
+            <span
+              >{contextPercent === null
+                ? 'Waiting for usage'
+                : `${contextPercent}% used`}</span
+            >
+          </div>
+          <div
+            class="c-context__track"
+            role="progressbar"
+            aria-label="Context window used"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={contextPercent ?? 0}
+          >
+            <span style:width="{contextPercent ?? 0}%"></span>
+          </div>
+          {#if pane.usage}
+            <dl class="c-context__facts">
+              <div>
+                <dt>In context</dt>
+                <dd>{formatTokens(contextUsed)}</dd>
+              </div>
+              <div>
+                <dt>Window</dt>
+                <dd>
+                  {pane.usage.contextWindow ? formatTokens(pane.usage.contextWindow) : '—'}
+                </dd>
+              </div>
+              <div>
+                <dt>Input</dt>
+                <dd>{formatTokens(pane.usage.tokensIn)}</dd>
+              </div>
+              <div>
+                <dt>Cached</dt>
+                <dd>{formatTokens(pane.usage.cached)}</dd>
+              </div>
+              <div>
+                <dt>Output</dt>
+                <dd>{formatTokens(pane.usage.tokensOut)}</dd>
+              </div>
+            </dl>
+          {:else}
+            <p>Usage appears after the provider reports its first token update.</p>
+          {/if}
+        </section>
+      {/if}
+
       <form class="c-composer" bind:this={form} onsubmit={(event) => void submit(event)}>
         {#if suggestions.length > 0}
           <!-- First child, so the card grows *upward* around it and the message stays where the
@@ -719,6 +930,40 @@
           />
         {/if}
 
+        {#if attachments.length > 0}
+          <div class="c-composer__attachments" aria-label="Attachments">
+            {#each attachments as attachment (attachment.path)}
+              <figure class="c-attachment">
+                {#if attachment.mime.startsWith('image/')}
+                  <img
+                    src="data:{attachment.mime};base64,{attachment.dataBase64}"
+                    alt="Preview of {attachment.name}"
+                  />
+                {:else}
+                  <span class="c-attachment__file" aria-hidden="true">
+                    <Icon name="file" size={16} />
+                  </span>
+                {/if}
+                <button
+                  type="button"
+                  aria-label="Remove {attachment.name}"
+                  title="Remove attachment"
+                  onclick={() =>
+                    (attachments = attachments.filter(
+                      (item) => item.path !== attachment.path,
+                    ))}
+                >
+                  <Icon name="close" size={10} />
+                </button>
+                <figcaption>
+                  <span title={attachment.name}>{attachment.name}</span>
+                  <small>{formatBytes(attachment.size)}</small>
+                </figcaption>
+              </figure>
+            {/each}
+          </div>
+        {/if}
+
         <!-- Deliberately NOT `.c-textarea`. That block is a bordered, filled form control, and its
              partial sorts after this one in `main.scss` — so at equal specificity it won, and the
              card ended up with a second bordered box and a resize grip inside it. The two
@@ -726,13 +971,14 @@
         <textarea
           class="c-composer__input"
           bind:this={composer}
-          placeholder="Ask {label}… — @ for files, / for skills"
+          placeholder="Ask {label}… — paste or @ files, / for commands"
           aria-label="Message {label}"
           bind:value={draft}
           oninput={noteCaret}
           onclick={noteCaret}
           onkeyup={noteCaret}
           onkeydown={onKeydown}
+          onpaste={onPaste}
           role="combobox"
           aria-expanded={suggestions.length > 0}
           aria-controls="suggest-{pane.id}"
@@ -776,6 +1022,19 @@
             </select>
           </span>
 
+          <button
+            class="c-composer__context"
+            class:is-open={contextOpen}
+            type="button"
+            aria-expanded={contextOpen}
+            title="Show context-window usage"
+            onclick={() => (contextOpen = !contextOpen)}
+          >
+            <span class="c-composer__context-ring" style:--context={contextPercent ?? 0}
+            ></span>
+            <span>Context {contextPercent === null ? '—' : `${contextPercent}%`}</span>
+          </button>
+
           <ModelPicker
             providers={groups}
             provider={provider ?? ''}
@@ -814,7 +1073,9 @@
                 variant="accent"
                 size="sm"
                 type="submit"
-                disabled={draft.trim().length === 0 || pane.ended !== null || sending}
+                disabled={(draft.trim().length === 0 && attachments.length === 0) ||
+                  pane.ended !== null ||
+                  sending}
               >
                 {sending ? 'Sending…' : 'Send'}
               </Button>
@@ -825,3 +1086,28 @@
     </div>
   {/if}
 </section>
+
+{#if confirmRestart}
+  <Dialog title="Restart session?" onclose={() => (confirmRestart = false)}>
+    {#snippet body()}
+      <p>
+        Restarting clears this pane's visible {provider === null
+          ? 'terminal scrollback'
+          : 'chat'}
+        {#if provider !== null}
+          . The provider conversation will remain available under “Pick up where you left
+          off”
+        {/if}.
+      </p>
+      {#if pane.working}
+        <p class="c-status--warn">The current turn will be stopped.</p>
+      {/if}
+      {#if pending !== null}<p class="c-note">{pending}.</p>{/if}
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="neutral" onclick={() => (confirmRestart = false)}>Cancel</Button>
+      <Button variant="danger-solid" onclick={() => void restartConfirmed()}>Restart</Button
+      >
+    {/snippet}
+  </Dialog>
+{/if}

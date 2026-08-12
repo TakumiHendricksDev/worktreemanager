@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type {
   Action,
+  AgentAttachment,
   AgentOption,
   AgentSession,
   BackgroundTask,
@@ -173,6 +174,16 @@ export const commands = {
     };
   }) => invoke<string>('open_agent_session', { options: {}, ...args }),
 
+  /** Fork a live conversation for one ephemeral `/btw` question. */
+  openAgentSideSession: (args: {
+    parentSession: string;
+    options?: {
+      model?: string | null;
+      effort?: string | null;
+      mode?: string | null;
+    };
+  }) => invoke<string>('open_agent_side_session', { options: {}, ...args }),
+
   /**
    * Conversations that can be picked up again in this worktree, newest first.
    *
@@ -200,17 +211,27 @@ export const commands = {
   agentCapability: (agentId: string) => invoke<Capability>('agent_capability', { agentId }),
 
   /** Send one turn. Queued by the provider if the handshake has not finished yet. */
-  sendTurn: (session: string, text: string) => invoke<void>('send_turn', { session, text }),
+  sendTurn: (session: string, text: string, attachments: AgentAttachment[] = []) =>
+    invoke<void>('send_turn', { session, text, attachments }),
+
+  /** Read a file explicitly picked or dropped into the composer. */
+  prepareAgentAttachment: (path: string) =>
+    invoke<AgentAttachment>('prepare_agent_attachment', { path }),
+
+  /** Stage bytes pasted from the clipboard and return the same normalized attachment shape. */
+  stageAgentAttachment: (name: string, mime: string, dataBase64: string) =>
+    invoke<AgentAttachment>('stage_agent_attachment', { name, mime, dataBase64 }),
 
   /**
-   * Change a running session's model or mode. `null` leaves one alone.
-   *
-   * Effort is deliberately not here: Claude's is an argv flag read once at startup, so accepting
-   * one would mean silently ignoring it on the provider it matters most on. The composer marks the
-   * effort control as needing a restart instead.
+   * Change a running session's model, effort or mode. `null` leaves one alone. The UI sends effort
+   * only to Codex; Claude's effort remains an explicit restart setting.
    */
-  configureSession: (session: string, model: string | null, mode: string | null) =>
-    invoke<void>('configure_session', { session, model, mode }),
+  configureSession: (
+    session: string,
+    model: string | null,
+    effort: string | null,
+    mode: string | null,
+  ) => invoke<void>('configure_session', { session, model, effort, mode }),
 
   /**
    * Every file in a worktree worth offering in the composer's `@` list.

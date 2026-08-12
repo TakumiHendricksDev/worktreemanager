@@ -126,7 +126,7 @@ fn a_turn_reaches_the_pipe_and_is_echoed_to_the_transcript() {
     let (session, fake, rec) = session();
     handshake(&fake);
 
-    session.send_turn("do the thing").expect("send");
+    session.send_turn("do the thing", &[]).expect("send");
 
     let last: serde_json::Value = serde_json::from_str(fake.written().last().unwrap()).unwrap();
     assert_eq!(last["method"], "turn/start");
@@ -180,7 +180,7 @@ fn a_sink_runs_on_the_calling_thread_so_a_caller_must_not_hold_what_it_reads() {
     {
         // Exactly what `with_agent` used to do: take the lock, then run the session underneath it.
         let _guard = rec.state.lock();
-        session.send_turn("under a held lock").expect("send");
+        session.send_turn("under a held lock", &[]).expect("send");
     }
     assert!(
         *rec.blocked.lock(),
@@ -190,7 +190,7 @@ fn a_sink_runs_on_the_calling_thread_so_a_caller_must_not_hold_what_it_reads() {
 
     // And the shape `App` uses now: look the session up, drop the guard, then run it.
     *rec.blocked.lock() = false;
-    session.send_turn("with nothing held").expect("send");
+    session.send_turn("with nothing held", &[]).expect("send");
     assert!(
         !*rec.blocked.lock(),
         "with no guard alive the sink reaches its own state, which is what makes Send work"

@@ -39,12 +39,14 @@
 // say so here.
 #![allow(clippy::unwrap_used)]
 
+use std::collections::BTreeMap;
+
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use wtm_agent::codex::Codex;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
 use wtm_core::model::{
-    AgendaStatus, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
+    AgendaStatus, AgentAttachment, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
 };
 
 /// The two frames a session sends before it can do anything, and the replies to them.
@@ -146,6 +148,23 @@ fn the_handshake_is_initialize_then_initialized_then_a_thread_carrying_the_cwd()
 }
 
 #[test]
+fn a_side_session_is_an_ephemeral_fork_not_a_prompt_named_btw() {
+    let mut driver = Codex.protocol(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        fork: Some("parent-thread".to_owned()),
+        ephemeral: true,
+        ..SessionRequest::default()
+    });
+
+    driver.open();
+    let frames = writes(&driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#));
+
+    assert_eq!(frames[1]["method"], "thread/fork");
+    assert_eq!(frames[1]["params"]["threadId"], "parent-thread");
+    assert_eq!(frames[1]["params"]["ephemeral"], true);
+}
+
+#[test]
 fn the_thread_id_is_read_from_the_nested_result_and_makes_the_session_ready() {
     let mut driver = Codex.protocol(&SessionRequest {
         cwd: "/tmp/worktree".to_owned(),
@@ -193,7 +212,7 @@ fn a_turn_sent_before_the_handshake_finishes_is_queued_and_not_lost() {
     });
     driver.open();
 
-    let early = driver.send_turn("review the plan");
+    let early = driver.send_turn("review the plan", &[]);
     assert!(
         writes(&early).is_empty(),
         "nothing can be written before there is a thread"
@@ -221,7 +240,7 @@ fn a_turn_sent_before_the_handshake_finishes_is_queued_and_not_lost() {
 #[test]
 fn a_turn_carries_the_model_and_effort_so_a_mid_session_change_needs_no_new_thread() {
     let mut driver = ready_driver();
-    let frames = writes(&driver.send_turn("go"));
+    let frames = writes(&driver.send_turn("go", &[]));
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["method"], "turn/start");
     assert_eq!(frames[0]["params"]["model"], "gpt-5.6-sol");
@@ -327,7 +346,7 @@ fn a_finished_turn_reports_its_nested_id_and_the_last_usage_seen() {
     // Usage first, because `turn/completed` has none of its own — the driver reports the last one
     // it saw, and without that cache a finished turn shows a row of zeros.
     driver.on_line(
-        r#"{"method":"thread/tokenUsage/updated","params":{"threadId":"019fd3d8-481e","turnId":"019fd3d8-4df8","tokenUsage":{"total":{"totalTokens":12545,"inputTokens":12529,"cachedInputTokens":6016,"outputTokens":16,"reasoningOutputTokens":9},"last":{"totalTokens":12545,"inputTokens":12529,"cachedInputTokens":6016,"outputTokens":16,"reasoningOutputTokens":9},"modelContextWindow":258400}}}"#,
+        r#"{"method":"thread/tokenUsage/updated","params":{"threadId":"019fd3d8-481e","turnId":"019fd3d8-4df8","tokenUsage":{"total":{"totalTokens":364000,"inputTokens":361000,"cachedInputTokens":310000,"outputTokens":3000,"reasoningOutputTokens":900},"last":{"totalTokens":12545,"inputTokens":12529,"cachedInputTokens":6016,"outputTokens":16,"reasoningOutputTokens":9},"modelContextWindow":258400}}}"#,
     );
     let completed = driver.on_line(
         r#"{"method":"turn/completed","params":{"threadId":"019fd3ce-bc97-7b33-90c2-31db4160c47d","turn":{"completedAt":1785964972,"durationMs":1715,"error":null,"id":"019fd3ce-c271-73c2-b986-156b4d998338","items":[],"itemsView":"notLoaded","startedAt":1785964970,"status":"completed"}}}"#,
@@ -336,19 +355,47 @@ fn a_finished_turn_reports_its_nested_id_and_the_last_usage_seen() {
         AgentEvent::TurnFinished {
             usage, cost_usd, ..
         } => {
-            // `params.tokenUsage.total.*` — the key is `tokenUsage`, not `usage`, and the counts
-            // are nested. Reading either level wrong gives a row of zeros, which looks like an
-            // unfinished feature rather than a bug.
+            // `last` is the current context footprint. `total` above is deliberately greater than
+            // the model window: it is lifetime billing usage and displaying it was the 100%-in-a-
+            // few-seconds bug this test protects against.
             assert_eq!(usage.tokens_in, 12529);
             assert_eq!(usage.cached, 6016);
             assert_eq!(usage.tokens_out, 16);
-            // The denominator for "how full is my context", which is why `total` is read.
+            assert_eq!(usage.context_used, 12_545);
+            // The denominator for "how full is my context".
             assert_eq!(usage.context_window, Some(258_400));
             // Codex reports no currency. A number here would have to be invented.
             assert_eq!(*cost_usd, None);
         }
         other => panic!("expected TurnFinished, got {other:?}"),
     }
+}
+
+#[test]
+fn a_resumed_thread_rehydrates_its_visible_messages() {
+    let mut driver = Codex.protocol(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        resume: Some("019fd37c-f1e4-7a22-81e7-02200fd6d127".to_owned()),
+        ..SessionRequest::default()
+    });
+    driver.open();
+    driver.on_line(r#"{"id":1,"result":{}}"#);
+    let steps = driver.on_line(
+        r#"{"id":2,"result":{"thread":{"id":"019fd37c-f1e4-7a22-81e7-02200fd6d127","turns":[{"id":"turn-1","status":"completed","items":[{"id":"u1","type":"userMessage","content":[{"type":"text","text":"Fix the parser"}]},{"id":"r1","type":"reasoning","summary":[],"content":[]},{"id":"a1","type":"agentMessage","text":"I fixed it.","phase":"final_answer"}]}]}}}"#,
+    );
+    let history = events(&steps);
+    assert!(matches!(history[0], AgentEvent::SessionReady { .. }));
+    assert_eq!(
+        history[1..],
+        [
+            &AgentEvent::UserEcho {
+                text: "Fix the parser".to_owned()
+            },
+            &AgentEvent::Message {
+                text: "I fixed it.".to_owned()
+            }
+        ]
+    );
 }
 
 #[test]
@@ -568,6 +615,64 @@ fn allow_for_session_uses_the_servers_own_verb() {
 
     let frames = writes(&driver.answer(&id, &ApprovalAnswer::AllowForSession));
     assert_eq!(frames[0]["result"]["decision"], "acceptForSession");
+}
+
+#[test]
+fn request_user_input_becomes_choices_and_replies_with_the_schema_answer_map() {
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":42,"method":"item/tool/requestUserInput","params":{"threadId":"t","turnId":"turn","itemId":"item","isBlocking":true,"questions":[{"id":"scope","header":"Scope","question":"Which packages?","options":[{"label":"UI","description":"Frontend only"},{"label":"Core","description":"Rust crates"}]},{"id":"tests","header":"Tests","question":"Which checks?","options":[{"label":"Fast","description":"Focused tests"}],"multiSelect":true}]}}"#,
+    );
+    let AgentEvent::ApprovalRequested { id, request, .. } = events(&steps)[0].clone() else {
+        panic!("expected a user-input request");
+    };
+    let ApprovalRequest::UserInput { questions } = request else {
+        panic!("expected structured questions");
+    };
+    assert_eq!(questions.len(), 2);
+    assert_eq!(questions[0].id, "scope");
+    assert_eq!(questions[0].options[0].label, "UI");
+    assert!(questions[1].multiple);
+
+    let frames = writes(&driver.answer(
+        &id,
+        &ApprovalAnswer::UserInput {
+            answers: BTreeMap::from([
+                ("scope".to_owned(), vec!["UI".to_owned()]),
+                (
+                    "tests".to_owned(),
+                    vec!["Fast".to_owned(), "Core too".to_owned()],
+                ),
+            ]),
+            notes: Some("Keep the API stable".to_owned()),
+        },
+    ));
+    assert_eq!(frames[0]["id"], 42);
+    assert_eq!(frames[0]["result"]["answers"]["scope"]["answers"][0], "UI");
+    assert_eq!(
+        frames[0]["result"]["answers"]["tests"]["answers"][2],
+        "Notes: Keep the API stable"
+    );
+}
+
+#[test]
+fn image_attachments_are_visible_and_sent_as_local_images() {
+    let mut driver = ready_driver();
+    let attachment = AgentAttachment {
+        name: "screen.png".to_owned(),
+        path: "/tmp/screen.png".to_owned(),
+        mime: "image/png".to_owned(),
+        size: 3,
+        data_base64: "YWJj".to_owned(),
+    };
+    let steps = driver.send_turn("What is wrong here?", std::slice::from_ref(&attachment));
+    assert!(matches!(
+        events(&steps).first(),
+        Some(AgentEvent::Attachments { attachments }) if attachments == &vec![attachment]
+    ));
+    let frames = writes(&steps);
+    assert_eq!(frames[0]["params"]["input"][1]["type"], "localImage");
+    assert_eq!(frames[0]["params"]["input"][1]["path"], "/tmp/screen.png");
 }
 
 #[test]
@@ -922,7 +1027,7 @@ fn each_mode_preset_expands_to_both_protocol_axes() {
         );
 
         driver.on_line(r#"{"id":2,"result":{"thread":{"id":"t","cwd":"/tmp/worktree"}}}"#);
-        let turn = writes(&driver.send_turn("go"));
+        let turn = writes(&driver.send_turn("go", &[]));
         let params = &turn[0]["params"];
         assert_eq!(params["approvalPolicy"], approval, "{mode} turn approval");
         // The object form, and the assertion that would have caught the bug that shipped: a plain
@@ -963,7 +1068,7 @@ fn a_turn_start_the_server_rejects_is_surfaced_rather_than_looking_like_silence(
     // pane shows a usage row of zeros with nothing above it. This asserts the error reaches the
     // transcript, so the next protocol mistake reads as a failure instead of as a quiet agent.
     let mut driver = ready_driver();
-    driver.send_turn("go");
+    driver.send_turn("go", &[]);
 
     let steps = driver.on_line(
         r#"{"id":3,"error":{"code":-32602,"message":"invalid type: string \"workspace-write\", expected internally tagged enum SandboxPolicy"}}"#,
@@ -980,12 +1085,13 @@ fn a_turn_re_sends_the_mode_which_is_why_this_provider_needs_no_restart() {
     // it re-reads these off every `turn/start` — so `reconfigure` writes nothing and the change
     // rides the next turn instead.
     let mut driver = ready_driver();
-    driver.reconfigure(Some("gpt-5.6-luna"), Some("full-access"));
+    driver.reconfigure(Some("gpt-5.6-luna"), Some("max"), Some("full-access"));
 
-    let frames = writes(&driver.send_turn("go"));
+    let frames = writes(&driver.send_turn("go", &[]));
     let params = &frames[0]["params"];
     assert_eq!(frames[0]["method"], "turn/start");
     assert_eq!(params["model"], "gpt-5.6-luna");
+    assert_eq!(params["effort"], "max");
     assert_eq!(params["approvalPolicy"], "never");
     // `{"type":"dangerFullAccess"}`, not the `"danger-full-access"` string `thread/start` takes.
     // This line asserted the string until a real session found it: the server rejected every turn
@@ -1005,7 +1111,7 @@ fn reconfiguring_codex_writes_nothing_by_itself() {
     let mut driver = ready_driver();
     assert!(
         driver
-            .reconfigure(Some("gpt-5.5"), Some("read-only"))
+            .reconfigure(Some("gpt-5.5"), Some("high"), Some("read-only"))
             .is_empty()
     );
 }

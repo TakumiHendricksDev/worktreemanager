@@ -47,6 +47,7 @@ export type IconName =
   | 'chevron-right'
   | 'check'
   | 'close'
+  | 'file'
   | 'grip'
   | 'star'
   | 'star-outline'
@@ -83,6 +84,7 @@ export const icons: Record<IconName, IconSpec> = {
   'chevron-right': { stroke: 'M6.25 4 L10.25 8 L6.25 12' },
   check: { stroke: 'M3.5 8.25 L6.5 11.25 L12.5 4.75' },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
+  file: { stroke: 'M4 1.75 H9.25 L12 4.5 V14.25 H4 Z M9.25 1.75 V4.5 H12' },
   /*
    * Three bars, not six dots.
    *

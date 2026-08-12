@@ -16,7 +16,7 @@
    * streaming transcript is every few milliseconds. The array index is not stable — a bounded log
    * drops from the front — so a row's key is its kind plus the id or ordinal it was built from.
    */
-  import type { AgendaStep, AgentEvent, AgentUsage } from '../ipc/types';
+  import type { AgendaStep, AgentAttachment, AgentEvent, AgentUsage } from '../ipc/types';
   import Markdown from './Markdown.svelte';
 
   const { events }: { events: AgentEvent[] } = $props();
@@ -30,6 +30,7 @@
    */
   type Row =
     | { key: string; kind: 'user'; text: string }
+    | { key: string; kind: 'attachments'; attachments: AgentAttachment[] }
     | { key: string; kind: 'assistant'; text: string }
     | { key: string; kind: 'thinking'; text: string }
     | { key: string; kind: 'command'; command: string; output: string; exit: number | null }
@@ -81,6 +82,14 @@
 
     events.forEach((event, index) => {
       switch (event.kind) {
+        case 'attachments':
+          out.push({
+            key: `h${index}`,
+            kind: 'attachments',
+            attachments: event.attachments,
+          });
+          break;
+
         case 'user_echo':
           out.push({ key: `u${index}`, kind: 'user', text: event.text });
           break;
@@ -508,12 +517,39 @@
       return { text, cls: '' } as const;
     });
   }
+
+  function formatBytes(size: number): string {
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
 </script>
 
 <div class="c-transcript">
   {#each rows as row (row.key)}
     {#if row.kind === 'user'}
       <p class="c-transcript__user">{row.text}</p>
+    {:else if row.kind === 'attachments'}
+      <div class="c-transcript__attachments" aria-label="User attachments">
+        {#each row.attachments as attachment (attachment.path)}
+          <figure class="c-transcript__attachment">
+            {#if attachment.mime.startsWith('image/')}
+              <img
+                src="data:{attachment.mime};base64,{attachment.dataBase64}"
+                alt="{attachment.name} attachment"
+              />
+            {:else}
+              <span class="c-transcript__attachment-file"
+                >{attachment.name.split('.').at(-1)}</span
+              >
+            {/if}
+            <figcaption>
+              <span>{attachment.name}</span>
+              <small>{formatBytes(attachment.size)}</small>
+            </figcaption>
+          </figure>
+        {/each}
+      </div>
     {:else if row.kind === 'assistant'}
       <!-- The one place arbitrary document structure appears. Rendered as elements rather than a
            string of HTML, so nothing a model writes can become markup — see `markdown.ts`. -->

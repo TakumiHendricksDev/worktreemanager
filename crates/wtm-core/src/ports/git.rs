@@ -74,6 +74,11 @@ pub trait Git: Send + Sync {
 
     fn branches(&self, repo_root: &Path, filter: BranchFilter) -> Result<Vec<BranchRef>, GitError>;
 
+    /// Configured remote names. A slash in a ref is not enough to identify one: local branch names
+    /// routinely contain slashes (`epic/thing-api`), so callers must compare the prefix with this
+    /// list before treating it as `remote/ref`.
+    fn remotes(&self, repo_root: &Path) -> Result<Vec<String>, GitError>;
+
     /// Resolve a revision to a commit. `Ok(None)` when the ref simply does not
     /// exist — that is an expected state during planning, not an error.
     fn rev_parse(&self, repo_root: &Path, rev: &str) -> Result<Option<CommitId>, GitError>;
@@ -171,6 +176,9 @@ mod tests {
             unused!()
         }
         fn branches(&self, _: &Path, _: BranchFilter) -> Result<Vec<BranchRef>, GitError> {
+            unused!()
+        }
+        fn remotes(&self, _: &Path) -> Result<Vec<String>, GitError> {
             unused!()
         }
         fn rev_parse(&self, _: &Path, _: &str) -> Result<Option<CommitId>, GitError> {

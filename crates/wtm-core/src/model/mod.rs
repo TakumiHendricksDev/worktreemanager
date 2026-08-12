@@ -23,8 +23,9 @@ pub mod value;
 pub mod worktree;
 
 pub use agent::{
-    AgendaStatus, AgendaStep, AgentCapability, AgentEvent, AgentMode, AgentModel, AgentSkill,
-    ApprovalAnswer, ApprovalRequest, Effort, EffortOption, ModeRisk, NoticeLevel, Usage,
+    AgendaStatus, AgendaStep, AgentAttachment, AgentCapability, AgentEvent, AgentMode, AgentModel,
+    AgentSkill, ApprovalAnswer, ApprovalRequest, Effort, EffortOption, ModeRisk, NoticeLevel,
+    Usage, UserInputOption, UserInputQuestion,
 };
 pub use naming::{RESERVED_PREFIXES, TokenScope, TokenSet, namespace_of, shadows_reserved_prefix};
 pub use plan::{

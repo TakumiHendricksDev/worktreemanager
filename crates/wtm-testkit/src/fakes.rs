@@ -354,6 +354,7 @@ pub fn normalize(path: &Path) -> PathBuf {
 #[derive(Debug, Default)]
 pub struct FakeGit {
     worktrees: Mutex<Vec<Worktree>>,
+    remotes: Mutex<Vec<String>>,
     local_branches: Mutex<Vec<BranchRef>>,
     remote_branches: Mutex<Vec<BranchRef>>,
     revs: Mutex<BTreeMap<String, CommitId>>,
@@ -361,6 +362,7 @@ pub struct FakeGit {
     /// Names of mutating operations, in order.
     mutations: Mutex<Vec<String>>,
     fail_add: Mutex<Option<String>>,
+    merged: Mutex<Option<bool>>,
 }
 
 impl FakeGit {
@@ -387,6 +389,7 @@ impl FakeGit {
             prunable: None,
         });
         git.local_branches.lock().push(BranchRef::new(branch));
+        git.remotes.lock().push("origin".to_owned());
         git
     }
 
@@ -406,6 +409,12 @@ impl FakeGit {
     #[must_use]
     pub fn with_remote_branches(self, branches: &[&str]) -> Self {
         *self.remote_branches.lock() = branches.iter().map(|b| BranchRef::new(*b)).collect();
+        self
+    }
+
+    #[must_use]
+    pub fn with_remotes(self, remotes: &[&str]) -> Self {
+        *self.remotes.lock() = remotes.iter().map(|remote| (*remote).to_owned()).collect();
         self
     }
 
@@ -445,6 +454,12 @@ impl FakeGit {
     #[must_use]
     pub fn failing_add(self, message: &str) -> Self {
         *self.fail_add.lock() = Some(message.to_owned());
+        self
+    }
+
+    #[must_use]
+    pub fn with_merged(self, merged: bool) -> Self {
+        *self.merged.lock() = Some(merged);
         self
     }
 
@@ -506,6 +521,10 @@ impl Git for FakeGit {
             }
         }
         Ok(out)
+    }
+
+    fn remotes(&self, _repo_root: &Path) -> Result<Vec<String>, GitError> {
+        Ok(self.remotes.lock().clone())
     }
 
     fn rev_parse(&self, _repo_root: &Path, rev: &str) -> Result<Option<CommitId>, GitError> {
@@ -599,7 +618,7 @@ impl Git for FakeGit {
         _branch: &BranchRef,
         _base: &str,
     ) -> Result<bool, GitError> {
-        Ok(true)
+        Ok(self.merged.lock().unwrap_or(true))
     }
 }
 

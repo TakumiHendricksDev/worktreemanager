@@ -348,3 +348,69 @@
   color: var(--fg-subtle);
   font-variant-numeric: tabular-nums;
 }
+/* User-supplied images and files stay visible in the transcript rather than collapsing into a
+   generated @path. The path is still sent to providers that consume one; this is the human view. */
+.c-transcript__attachments {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0;
+}
+
+.c-transcript__attachment {
+  display: grid;
+  grid-template-columns: auto minmax(5rem, 10rem);
+  align-items: center;
+  max-width: 16rem;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+}
+
+.c-transcript__attachment img,
+.c-transcript__attachment-file {
+  width: 4rem;
+  height: 4rem;
+}
+
+.c-transcript__attachment img {
+  display: block;
+  object-fit: cover;
+}
+
+.c-transcript__attachment-file {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: var(--sp-1);
+  background: var(--bg-code);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  text-transform: uppercase;
+}
+
+.c-transcript__attachment figcaption {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: var(--sp-2);
+  font-size: var(--step--2);
+}
+
+.c-transcript__attachment figcaption span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-transcript__attachment figcaption small {
+  color: var(--fg-subtle);
+}
+
+.c-transcript__user:empty {
+  display: none;
+}

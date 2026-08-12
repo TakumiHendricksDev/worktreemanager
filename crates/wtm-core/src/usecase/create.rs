@@ -32,7 +32,7 @@ use serde_json_path::JsonPath;
 
 use crate::error::{FieldProblem, WtmError};
 use crate::model::{
-    BranchChoice, BranchPlan, BranchScope, CreateOutcome, CreatePlan, DirBase,
+    BranchChoice, BranchPlan, BranchRef, BranchScope, CreateOutcome, CreatePlan, DirBase,
     ExistingBranchBehavior, ExitOutcome, FieldValue, FormValues, LookupErrorPolicy, LookupFormat,
     LookupSpec, PlanPreview, PlanWarning, PreflightItem, Project, SessionId, TrackMode,
     TrackModeSpec, Worktree,
@@ -115,6 +115,27 @@ impl std::fmt::Debug for CreatePipeline {
 struct Planned {
     preview: PlanPreview,
     add: AddOptions,
+    fetch: Option<(String, String)>,
+}
+
+/// Resolve `remote/ref` only when the prefix names a configured remote.
+///
+/// Local wins deliberately. A repository can have both a remote named `epic` and a local branch
+/// named `epic/thing-api`; selecting the branch the picker showed must not turn into a network
+/// operation merely because its first path component also has another meaning.
+fn fetch_target(
+    base_ref: &str,
+    local: &[BranchRef],
+    remotes: &[String],
+) -> Option<(String, String)> {
+    if local.iter().any(|branch| branch.as_str() == base_ref) {
+        return None;
+    }
+    let (remote, branch) = base_ref.split_once('/')?;
+    remotes
+        .iter()
+        .any(|candidate| candidate == remote)
+        .then(|| (remote.to_owned(), branch.to_owned()))
 }
 
 impl CreatePipeline {
@@ -167,6 +188,7 @@ impl CreatePipeline {
         let base_ref = values.effective_str(&project.create.base_field);
         let local = self.git.branches(&project.root, BranchFilter::Local)?;
         let remote = self.git.branches(&project.root, BranchFilter::Remote)?;
+        let remotes = self.git.remotes(&project.root)?;
         let worktrees = self.git.list_worktrees(&project.root)?;
         let base_commit = self.git.rev_parse(&project.root, &base_ref)?;
 
@@ -222,12 +244,17 @@ impl CreatePipeline {
         insert_planned_worktree(&mut setup_ctx, &directory, branch_plan.branch());
         let (setup_argv, setup_cwd) = self.render_setup(project, &setup_ctx, &values)?;
 
+        let fetch = project
+            .create
+            .fetch_base
+            .then(|| fetch_target(&base_ref, &local, &remotes))
+            .flatten();
         let plan = CreatePlan {
             branch_plan: branch_plan.clone(),
             directory: directory.clone(),
             base_ref: base_ref.clone(),
             base_commit: base_commit.clone(),
-            will_fetch: project.create.fetch_base && base_ref.contains('/'),
+            will_fetch: fetch.is_some(),
             git_argv,
             setup_argv: setup_argv.clone(),
             setup_cwd: setup_cwd.clone(),
@@ -248,6 +275,7 @@ impl CreatePipeline {
                 naming_fields: self.naming_fields(project),
             },
             add,
+            fetch,
         })
     }
 
@@ -333,18 +361,16 @@ impl CreatePipeline {
         }
 
         // ── 7. fetch ──
-        if planned.preview.plan.will_fetch {
+        if let Some((remote, branch)) = &planned.fetch {
             progress.stage("fetch", "Fetching the base branch", 7, STAGES);
             cancel.check()?;
-            if let Some((remote, branch)) = planned.preview.plan.base_ref.split_once('/') {
-                // Non-fatal on purpose: working from a slightly stale base beats refusing to
-                // work offline. The review screen already showed the cached commit.
-                if let Err(err) = self.git.fetch(&project.root, remote, branch) {
-                    progress.warn(
-                        "fetch_failed",
-                        &format!("Could not fetch {remote}/{branch}; using the cached ref. {err}"),
-                    );
-                }
+            // Non-fatal on purpose: working from a slightly stale base beats refusing to
+            // work offline. The review screen already showed the cached commit.
+            if let Err(err) = self.git.fetch(&project.root, remote, branch) {
+                progress.warn(
+                    "fetch_failed",
+                    &format!("Could not fetch {remote}/{branch}; using the cached ref. {err}"),
+                );
             }
         }
 

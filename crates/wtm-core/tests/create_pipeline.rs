@@ -475,6 +475,42 @@ fn a_new_branch_does_not_track_its_base() {
 }
 
 #[test]
+fn a_local_branch_with_a_slash_is_not_mistaken_for_a_remote() {
+    let h = harness(
+        FakeGit::with_main(REPO, "main")
+            .with_local_branches(&["epic/thing-api"])
+            .with_rev("epic/thing-api", "abc"),
+        FakeFileStore::new(),
+    );
+    let req = request(project(), &[("name", "Thing"), ("base", "epic/thing-api")]);
+
+    let preview = h
+        .pipeline
+        .preview(&req, &NullProgress, &CancelToken::new())
+        .expect("the local slash branch should plan cleanly");
+    assert!(
+        !preview.plan.will_fetch,
+        "`epic` is a branch prefix, not a configured git remote"
+    );
+
+    h.pipeline
+        .execute(
+            &req,
+            &NullProgress,
+            Arc::new(NullPtySink),
+            &CancelToken::new(),
+        )
+        .expect("creating from the local branch should succeed");
+    assert!(
+        h.git
+            .mutations()
+            .iter()
+            .all(|mutation| !mutation.starts_with("fetch ")),
+        "no fetch should target the branch's first path component"
+    );
+}
+
+#[test]
 fn a_failed_worktree_add_reports_git_own_message() {
     let h = harness(
         FakeGit::with_main(REPO, "main")

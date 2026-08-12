@@ -401,7 +401,19 @@ export interface AgentUsage {
   tokensIn: number;
   tokensOut: number;
   cached: number;
+  /** Best available numerator for the session's context-window meter. */
+  contextUsed: number;
   contextWindow: number | null;
+}
+
+export interface AgentAttachment {
+  name: string;
+  /** Absolute local path. Pasted files are staged under the OS temporary directory. */
+  path: string;
+  mime: string;
+  size: number;
+  /** Used for image previews and Claude's inline image input. */
+  dataBase64: string;
 }
 
 export type AgendaStatus = 'pending' | 'in_progress' | 'completed';
@@ -411,13 +423,29 @@ export interface AgendaStep {
   status: AgendaStatus;
 }
 
+export interface UserInputOption {
+  label: string;
+  description: string | null;
+}
+
+export interface UserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: UserInputOption[];
+  multiple: boolean;
+  allowsOther: boolean;
+  secret: boolean;
+}
+
 /** Something a session needs a human to decide before it can continue. */
 export type ApprovalRequest =
   | { kind: 'command'; command: string; cwd: string | null; reason: string | null }
   | { kind: 'file_change'; unified_diff: string; reason: string | null }
   | { kind: 'permissions'; summary: string; items: string[] }
   | { kind: 'plan_review'; markdown: string; path: string | null }
-  | { kind: 'tool_input'; tool: string; prompt: string };
+  | { kind: 'tool_input'; tool: string; prompt: string }
+  | { kind: 'user_input'; questions: UserInputQuestion[] };
 
 /**
  * One thing that happened in an agent session.
@@ -446,6 +474,7 @@ export type AgentEvent =
   | { kind: 'skills_listed'; skills: AgentSkill[] }
   | { kind: 'turn_started'; turn: string }
   | { kind: 'turn_finished'; turn: string; usage: AgentUsage; costUsd: number | null }
+  | { kind: 'attachments'; attachments: AgentAttachment[] }
   | { kind: 'user_echo'; text: string }
   | { kind: 'message_delta'; text: string }
   | { kind: 'message'; text: string }
@@ -464,6 +493,7 @@ export type AgentEvent =
       tokensIn: number;
       tokensOut: number;
       cached: number;
+      contextUsed: number;
       contextWindow: number | null;
     }
   | { kind: 'notice'; level: 'info' | 'warn'; message: string }
@@ -481,7 +511,8 @@ export type ApprovalAnswer =
   | { kind: 'allow' }
   | { kind: 'allow_for_session' }
   | { kind: 'allow_with_edits'; input: unknown }
-  | { kind: 'deny'; message: string | null };
+  | { kind: 'deny'; message: string | null }
+  | { kind: 'user_input'; answers: Record<string, string[]>; notes: string | null };
 
 /** Emitted as `agent:event`. */
 export interface AgentEventEnvelope {

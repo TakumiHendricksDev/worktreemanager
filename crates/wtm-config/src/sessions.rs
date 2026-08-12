@@ -141,7 +141,17 @@ impl SessionStore {
     /// Keyed on `(provider, provider_session)` rather than appended, because a session is written to
     /// on every turn — appending would put the same conversation in the list a hundred times and push
     /// everything else past [`KEEP`].
-    pub fn remember(&mut self, record: SessionRecord) {
+    pub fn remember(&mut self, mut record: SessionRecord) {
+        // A resume handshake knows the model and timestamp but not the human label. Keep the title
+        // already learned from the first prompt instead of replacing it with `None` every time the
+        // same durable conversation is opened again.
+        if let Some(existing) = self.sessions.iter().find(|existing| {
+            existing.provider == record.provider
+                && existing.provider_session == record.provider_session
+        }) && record.title.is_none()
+        {
+            record.title.clone_from(&existing.title);
+        }
         self.sessions.retain(|existing| {
             existing.provider != record.provider
                 || existing.provider_session != record.provider_session
@@ -208,6 +218,17 @@ mod tests {
             store.sessions[0].title.as_deref(),
             Some("do the other thing")
         );
+    }
+
+    #[test]
+    fn a_resume_handshake_does_not_erase_the_existing_title() {
+        let mut store = SessionStore::default();
+        store.remember(record("claude", "abc", "/w/a"));
+        let mut resumed = record("claude", "abc", "/w/a");
+        resumed.title = None;
+        store.remember(resumed);
+
+        assert_eq!(store.sessions[0].title.as_deref(), Some("do the thing"));
     }
 
     #[test]

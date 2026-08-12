@@ -30,6 +30,8 @@
 //! [`TurnFinished`](AgentEvent::TurnFinished) has one — but pricing Codex's tokens ourselves to
 //! fill it in would put a number on screen that goes stale silently.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// How hard a provider was asked to think.
@@ -65,7 +67,52 @@ pub struct Usage {
     /// Cache reads, where the provider reports them. Shown because on a long session it is
     /// most of the input and its absence makes the totals look alarming.
     pub cached: u64,
+    /// Best available estimate of how many tokens currently occupy the model's context.
+    ///
+    /// This is deliberately separate from `tokens_in`: Codex reports `totalTokens` directly,
+    /// while Claude's effective input is split across fresh, cache-read and cache-created tokens.
+    /// The UI needs one numerator for the context-window meter and should not have to know which
+    /// provider produced it.
+    pub context_used: u64,
     pub context_window: Option<u64>,
+}
+
+/// One selectable answer in a provider-initiated question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputOption {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+/// One question in a provider-initiated request for user input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputQuestion {
+    /// Stable within the request and used as the key in the answer map.
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub options: Vec<UserInputOption>,
+    pub multiple: bool,
+    pub allows_other: bool,
+    pub secret: bool,
+}
+
+/// A file attached to a user turn.
+///
+/// `data_base64` is kept because Claude's streaming input consumes inline image bytes, while
+/// `path` is kept because Codex app-server consumes local images by path. Normalizing both here
+/// lets the frontend use one attachment model without forcing either provider through the other's
+/// less reliable route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachment {
+    pub name: String,
+    pub path: String,
+    pub mime: String,
+    pub size: u64,
+    pub data_base64: String,
 }
 
 /// Something the session needs a human to decide before it can continue.
@@ -106,6 +153,12 @@ pub enum ApprovalRequest {
     },
     /// A tool wants a value from the user.
     ToolInput { tool: String, prompt: String },
+    /// The agent is asking one or more structured questions.
+    ///
+    /// This is not a permission request. It shares the pinned-card transport because both pause a
+    /// turn for a human response, but the UI renders radio buttons, checkboxes and notes rather
+    /// than Allow/Deny controls.
+    UserInput { questions: Vec<UserInputQuestion> },
 }
 
 /// What the user answered.
@@ -127,6 +180,11 @@ pub enum ApprovalAnswer {
     },
     Deny {
         message: Option<String>,
+    },
+    /// Answers to a structured user-input request, keyed by [`UserInputQuestion::id`].
+    UserInput {
+        answers: BTreeMap<String, Vec<String>>,
+        notes: Option<String>,
     },
 }
 
@@ -188,6 +246,10 @@ pub enum AgentEvent {
     /// message.
     UserEcho {
         text: String,
+    },
+    /// Files sent with the following [`UserEcho`](AgentEvent::UserEcho).
+    Attachments {
+        attachments: Vec<AgentAttachment>,
     },
     MessageDelta {
         text: String,

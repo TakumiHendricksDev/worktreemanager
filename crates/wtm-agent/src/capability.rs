@@ -168,7 +168,7 @@ pub fn claude_capability() -> AgentCapability {
             mode(
                 "auto",
                 "Auto",
-                "Decide which actions are safe and only ask about the rest",
+                "Decide which tool permissions need approval; clarification questions are separate",
                 ModeRisk::Elevated,
                 false,
             ),
@@ -232,7 +232,7 @@ pub fn codex_modes() -> Vec<AgentMode> {
         mode(
             "auto",
             "Auto",
-            "Edit and run inside the worktree without asking; ask to leave it",
+            "Edit and run inside the worktree automatically; ask only to leave it. Clarification questions are separate",
             ModeRisk::Elevated,
             true,
         ),

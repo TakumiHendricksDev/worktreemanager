@@ -43,7 +43,8 @@ pub struct RemoveRequest {
     pub ambient: Context,
     /// Delete the branch as well. The GUI form of the shell's `confirm()` prompt.
     pub delete_branch: bool,
-    /// Force past a dirty working tree, and force the branch delete.
+    /// Force past a dirty working tree. Checking `delete_branch` is itself the explicit decision
+    /// to delete that branch after the unmerged warning has been shown.
     pub force: bool,
     /// Preflight ids the user acknowledged.
     pub acknowledged: Vec<String>,
@@ -315,7 +316,7 @@ impl RemovePipeline {
         if req.delete_branch {
             progress.stage("branch", "Deleting the branch", total, total);
             if let Some(branch) = req.worktree.branch() {
-                // Use `-D`, not `-d`, when *our* check says the branch is safe.
+                // Use `-D`, not `-d`, after the user explicitly checked branch deletion.
                 //
                 // This is not laziness: `git branch -d` refuses unless the branch is merged
                 // into **HEAD**, while the question the user was actually asked — and the one
@@ -326,24 +327,13 @@ impl RemovePipeline {
                 //
                 // So: run our own merge check against the base, warn if it fails (already done
                 // in `preflight`), and then honour the user's decision.
-                let base = project
-                    .field(&project.create.base_field)
-                    .and_then(|f| f.default.as_ref())
-                    .map_or_else(|| "HEAD".to_owned(), crate::model::FieldDefault::as_string);
-                let merged_into_base = self
-                    .git
-                    .is_merged(&project.root, branch, &base)
-                    .unwrap_or(false);
-
-                match self
-                    .git
-                    .delete_branch(&project.root, branch, req.force || merged_into_base)
-                {
+                match self.git.delete_branch(&project.root, branch, true) {
                     Ok(()) => branch_deleted = true,
                     Err(err) => warnings.push(PlanWarning::new(
                         "branch_delete_failed",
                         format!(
-                            "The worktree was removed, but `{branch}` could not be deleted: {err}.                              Delete it with `git branch -D {branch}` once you are sure."
+                            "The worktree was removed, but `{branch}` could not be deleted: {err}. \
+                             Delete it with `git branch -D {branch}` once you are sure."
                         ),
                     )),
                 }

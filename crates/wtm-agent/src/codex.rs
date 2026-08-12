@@ -34,8 +34,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 use wtm_core::model::{
-    AgendaStatus, AgendaStep, AgentEvent, AgentSkill, ApprovalAnswer, ApprovalRequest, NoticeLevel,
-    Usage,
+    AgendaStatus, AgendaStep, AgentAttachment, AgentEvent, AgentSkill, ApprovalAnswer,
+    ApprovalRequest, NoticeLevel, Usage, UserInputOption, UserInputQuestion,
 };
 
 use crate::provider::{McpServer, Protocol, Provider, ProviderId, SessionRequest, Step};
@@ -176,7 +176,7 @@ struct CodexProtocol {
     /// Without this, typing into a pane the instant it opens loses the message: the composer is
     /// live before `thread/start` has come back. Queuing is invisible when the handshake is fast
     /// and is the difference between a lost first prompt and a slightly late one when it is not.
-    queued: Vec<String>,
+    queued: Vec<(String, Vec<AgentAttachment>)>,
     /// Server-initiated requests awaiting a user answer, keyed by the id the frontend hands back.
     pending: BTreeMap<String, Pending>,
     /// The most recent token counts.
@@ -190,50 +190,74 @@ struct CodexProtocol {
 struct Pending {
     /// The JSON-RPC id to reply on. The reply *must* carry this and nothing else identifies it.
     rpc_id: Value,
+    kind: PendingKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingKind {
+    Approval,
+    UserInput,
 }
 
 impl CodexProtocol {
     /// Turn a server-initiated request into an approval card, or into a `Raw` row.
     ///
-    /// The three approval methods are the ones a user can act on. Everything else that arrives as
-    /// a request — an MCP elicitation, a tool asking for input — is surfaced as `Raw` for now
-    /// rather than silently ignored, and it stays in `pending` so `abandon` can decline it. A
-    /// request that is neither answered nor declined leaves the server blocked forever.
+    /// Approval and user-input methods are the ones a person can act on. Everything else that
+    /// arrives as a request is surfaced as `Raw` rather than silently ignored, and it stays in
+    /// `pending` so `abandon` can still reply. A request left unanswered blocks the server forever.
     fn on_server_request(&mut self, rpc_id: i64, method: &str, params: &Value) -> Vec<Step> {
         // Our own id for the card. The JSON-RPC id is unique within a session and is what the
         // reply has to carry, so using it as the key means `answer` needs no second lookup.
         let id = rpc_id.to_string();
         let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_owned);
 
-        let request = match method {
+        let (request, kind) = match method {
             "item/commandExecution/requestApproval" | "execCommandApproval" => {
-                ApprovalRequest::Command {
-                    // `command` is nullable in the schema even for a command approval, so an
-                    // absent one becomes a visible placeholder rather than an empty card.
-                    command: text("command").unwrap_or_else(|| "(command not reported)".to_owned()),
-                    cwd: text("cwd"),
-                    reason: text("reason"),
-                }
+                (
+                    ApprovalRequest::Command {
+                        // `command` is nullable in the schema even for a command approval, so an
+                        // absent one becomes a visible placeholder rather than an empty card.
+                        command: text("command")
+                            .unwrap_or_else(|| "(command not reported)".to_owned()),
+                        cwd: text("cwd"),
+                        reason: text("reason"),
+                    },
+                    PendingKind::Approval,
+                )
             }
             "item/fileChange/requestApproval" | "applyPatchApproval" => {
-                ApprovalRequest::FileChange {
-                    // The diff arrives with the `item/fileChange/*` stream rather than in the
-                    // approval params, so this card names what is being asked and the patch row
-                    // above it shows the change.
-                    unified_diff: text("patch").or_else(|| text("diff")).unwrap_or_default(),
-                    reason: text("reason").or_else(|| text("grantRoot")),
-                }
+                (
+                    ApprovalRequest::FileChange {
+                        // The diff arrives with the `item/fileChange/*` stream rather than in the
+                        // approval params, so this card names what is being asked and the patch row
+                        // above it shows the change.
+                        unified_diff: text("patch").or_else(|| text("diff")).unwrap_or_default(),
+                        reason: text("reason").or_else(|| text("grantRoot")),
+                    },
+                    PendingKind::Approval,
+                )
             }
-            "item/permissions/requestApproval" => ApprovalRequest::Permissions {
-                summary: text("reason")
-                    .unwrap_or_else(|| "The session is asking for extra permissions".to_owned()),
-                items: permission_items(params),
-            },
+            "item/permissions/requestApproval" => (
+                ApprovalRequest::Permissions {
+                    summary: text("reason").unwrap_or_else(|| {
+                        "The session is asking for extra permissions".to_owned()
+                    }),
+                    items: permission_items(params),
+                },
+                PendingKind::Approval,
+            ),
+            "item/tool/requestUserInput" => (
+                ApprovalRequest::UserInput {
+                    questions: codex_questions(params),
+                },
+                PendingKind::UserInput,
+            ),
             _ => {
                 self.pending.insert(
                     id.clone(),
                     Pending {
                         rpc_id: json!(rpc_id),
+                        kind: PendingKind::Approval,
                     },
                 );
                 return vec![Step::Emit(AgentEvent::Raw {
@@ -248,13 +272,15 @@ impl CodexProtocol {
             id.clone(),
             Pending {
                 rpc_id: json!(rpc_id),
+                kind,
             },
         );
         vec![Step::Emit(AgentEvent::ApprovalRequested {
             id,
-            // Always blocking: the server does not continue the turn until it has a reply, so a
-            // card the user can scroll past would stall the session with no explanation.
-            blocking: true,
+            blocking: params
+                .get("isBlocking")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
             request,
         })]
     }
@@ -292,7 +318,7 @@ impl CodexProtocol {
         )
     }
 
-    /// The frame that opens a thread — `thread/resume` when resuming, `thread/start` otherwise.
+    /// The frame that opens a thread — fork, resume, or start, in that order.
     ///
     /// One function for both because every parameter except the thread id is shared, and the
     /// two drifting apart is how a resumed session would quietly lose its sandbox setting.
@@ -322,7 +348,11 @@ impl CodexProtocol {
             params["developerInstructions"] = json!(instructions);
         }
 
-        let method = if let Some(resume) = self.req.resume.clone() {
+        let method = if let Some(fork) = self.req.fork.clone() {
+            params["threadId"] = json!(fork);
+            params["ephemeral"] = json!(self.req.ephemeral);
+            "thread/fork"
+        } else if let Some(resume) = self.req.resume.clone() {
             params["threadId"] = json!(resume);
             "thread/resume"
         } else {
@@ -334,11 +364,25 @@ impl CodexProtocol {
         step
     }
 
-    fn turn_frame(&mut self, text: &str) -> Option<Step> {
+    fn turn_frame(&mut self, text: &str, attachments: &[AgentAttachment]) -> Option<Step> {
         let thread = self.thread_id.clone()?;
+        let mut input = Vec::new();
+        if !text.is_empty() {
+            input.push(json!({ "type": "text", "text": text }));
+        }
+        for attachment in attachments {
+            if attachment.mime.starts_with("image/") {
+                input.push(json!({ "type": "localImage", "path": attachment.path }));
+            } else {
+                input.push(json!({
+                    "type": "text",
+                    "text": format!("Attached file `{}` is available at `{}`.", attachment.name, attachment.path),
+                }));
+            }
+        }
         let mut params = json!({
             "threadId": thread,
-            "input": [{ "type": "text", "text": text }],
+            "input": input,
         });
         // Sent per turn rather than only at thread open because the server treats both as
         // "this turn and subsequent ones", so a mid-session model change needs no new thread.
@@ -401,16 +445,24 @@ impl CodexProtocol {
             self.thread_id = Some(thread.clone());
             self.phase = Phase::Ready;
 
-            let mut steps = vec![
-                Step::Emit(AgentEvent::SessionReady {
-                    provider_session_id: thread,
-                    model: self.req.model.clone(),
-                    effort: self.req.effort.clone(),
-                    mode: self.req.mode.clone(),
-                    tools: Vec::new(),
-                }),
-                Step::Ready,
-            ];
+            let mut steps = vec![Step::Emit(AgentEvent::SessionReady {
+                provider_session_id: thread,
+                model: self.req.model.clone(),
+                effort: self.req.effort.clone(),
+                mode: self.req.mode.clone(),
+                tools: Vec::new(),
+            })];
+
+            // `thread/resume` is the one open response whose `thread.turns` is populated. Repaint
+            // the durable conversation before announcing readiness so a resumed pane is the
+            // conversation the user picked rather than an empty composer attached to it.
+            // A fork deliberately does not inherit the transcript: `/btw` is a one-answer overlay.
+            if self.req.resume.is_some() && self.req.fork.is_none() {
+                steps.extend(history_from_thread(
+                    result.and_then(|reply| reply.get("thread")),
+                ));
+            }
+            steps.push(Step::Ready);
 
             // Asked for after the session is usable, never before it. Skills are a composer
             // convenience and nobody is blocked on them, so gating `Ready` behind this reply would
@@ -422,8 +474,8 @@ impl CodexProtocol {
             self.skills_id = Some(id);
             steps.push(step);
 
-            for text in std::mem::take(&mut self.queued) {
-                if let Some(step) = self.turn_frame(&text) {
+            for (text, attachments) in std::mem::take(&mut self.queued) {
+                if let Some(step) = self.turn_frame(&text, &attachments) {
                     steps.push(step);
                 }
             }
@@ -491,6 +543,10 @@ impl CodexProtocol {
                 self.usage = usage_from(Some(params));
                 AgentEvent::Usage(self.usage)
             }
+            "thread/compacted" => AgentEvent::Notice {
+                level: NoticeLevel::Info,
+                message: "Context compacted.".to_owned(),
+            },
             "turn/plan/updated" => AgentEvent::AgendaUpdated {
                 explanation: params
                     .get("explanation")
@@ -711,21 +767,37 @@ impl Protocol for CodexProtocol {
         }
     }
 
-    fn send_turn(&mut self, text: &str) -> Vec<Step> {
+    fn send_turn(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
         if self.phase == Phase::Ready {
-            let mut steps = vec![Step::Emit(AgentEvent::UserEcho {
+            let mut steps = attachment_steps(attachments);
+            steps.push(Step::Emit(AgentEvent::UserEcho {
                 text: text.to_owned(),
-            })];
-            steps.extend(self.turn_frame(text));
+            }));
+            if attachments.is_empty()
+                && text.trim_start().starts_with("/compact")
+                && let Some(thread) = self.thread_id.clone()
+            {
+                let (_, step) =
+                    self.request("thread/compact/start", &json!({ "threadId": thread }));
+                steps.push(Step::Emit(AgentEvent::Notice {
+                    level: NoticeLevel::Info,
+                    message: "Compacting context…".to_owned(),
+                }));
+                steps.push(step);
+                return steps;
+            }
+            steps.extend(self.turn_frame(text, attachments));
             return steps;
         }
 
         // Queued, and echoed anyway. The message is visibly in the transcript even though the
         // handshake has not finished, which is the difference between "slow" and "broken".
-        self.queued.push(text.to_owned());
-        vec![Step::Emit(AgentEvent::UserEcho {
+        self.queued.push((text.to_owned(), attachments.to_vec()));
+        let mut steps = attachment_steps(attachments);
+        steps.push(Step::Emit(AgentEvent::UserEcho {
             text: text.to_owned(),
-        })]
+        }));
+        steps
     }
 
     /// Change the model or the mode on a running thread.
@@ -739,9 +811,17 @@ impl Protocol for CodexProtocol {
     /// while a turn is already running does not affect that turn. It affects the next one. There is
     /// no protocol method to re-approve a turn already in flight, and inventing one by interrupting
     /// and resubmitting would throw away work the user did not ask to discard.
-    fn reconfigure(&mut self, model: Option<&str>, mode: Option<&str>) -> Vec<Step> {
+    fn reconfigure(
+        &mut self,
+        model: Option<&str>,
+        effort: Option<&str>,
+        mode: Option<&str>,
+    ) -> Vec<Step> {
         if let Some(model) = model {
             self.req.model = Some(model.to_owned());
+        }
+        if let Some(effort) = effort {
+            self.req.effort = Some(effort.to_owned());
         }
         if let Some(mode) = mode {
             self.req.mode = Some(mode.to_owned());
@@ -756,6 +836,32 @@ impl Protocol for CodexProtocol {
         let Some(pending) = self.pending.remove(id) else {
             return Vec::new();
         };
+
+        if pending.kind == PendingKind::UserInput {
+            let ApprovalAnswer::UserInput { answers, notes } = answer else {
+                self.pending.insert(id.to_owned(), pending);
+                return vec![Step::Emit(AgentEvent::Failed {
+                    message: "This question needs answers, not a permission decision.".to_owned(),
+                })];
+            };
+            let mut answers = answers.clone();
+            append_notes(&mut answers, notes.as_deref());
+            let answers = answers
+                .into_iter()
+                .map(|(key, answers)| (key, json!({ "answers": answers })))
+                .collect::<serde_json::Map<_, _>>();
+            return vec![
+                Step::Write(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": pending.rpc_id,
+                        "result": { "answers": answers },
+                    })
+                    .to_string(),
+                ),
+                Step::Emit(AgentEvent::ApprovalResolved { id: id.to_owned() }),
+            ];
+        }
 
         let decision = match answer {
             ApprovalAnswer::Allow => json!("accept"),
@@ -775,6 +881,12 @@ impl Protocol for CodexProtocol {
                 return vec![Step::Emit(AgentEvent::Failed {
                     message: "Codex cannot run an edited command — allow it as-is, or deny it."
                         .to_owned(),
+                })];
+            }
+            ApprovalAnswer::UserInput { .. } => {
+                self.pending.insert(id.to_owned(), pending);
+                return vec![Step::Emit(AgentEvent::Failed {
+                    message: "This is a permission request, not a question.".to_owned(),
                 })];
             }
         };
@@ -815,14 +927,20 @@ impl Protocol for CodexProtocol {
             .into_iter()
             .flat_map(|(id, entry)| {
                 [
-                    Step::Write(
-                        json!({
+                    Step::Write(match entry.kind {
+                        PendingKind::Approval => json!({
                             "jsonrpc": "2.0",
                             "id": entry.rpc_id,
                             "result": { "decision": "decline" },
                         })
                         .to_string(),
-                    ),
+                        PendingKind::UserInput => json!({
+                            "jsonrpc": "2.0",
+                            "id": entry.rpc_id,
+                            "result": { "answers": {} },
+                        })
+                        .to_string(),
+                    }),
                     Step::Emit(AgentEvent::ApprovalResolved { id }),
                 ]
             })
@@ -845,20 +963,136 @@ impl Protocol for CodexProtocol {
 /// UI is a token row of zeros on every turn — wrong in a way that looks like a feature that has not
 /// been finished rather than a bug.
 ///
-/// **`total`, not `last`.** The row is drawn once per turn, so either would fit, and the cumulative
-/// one is the more useful number: against `modelContextWindow` it answers "how full is my context",
-/// which is the question that actually changes what a user does next.
+/// **`last`, not `total`.** `total` is lifetime billing usage and can exceed the model's context
+/// window after only a few tool rounds. `last` is the latest server-computed prompt footprint, which
+/// is the numerator that can truthfully be compared with `modelContextWindow`.
 fn usage_from(params: Option<&Value>) -> Usage {
     let Some(usage) = params.and_then(|p| p.get("tokenUsage")) else {
         return Usage::default();
     };
-    let total = usage.get("total").unwrap_or(usage);
-    let field = |key: &str| total.get(key).and_then(Value::as_u64).unwrap_or_default();
+    let current = usage.get("last").unwrap_or(usage);
+    let field = |key: &str| current.get(key).and_then(Value::as_u64).unwrap_or_default();
     Usage {
         tokens_in: field("inputTokens"),
         tokens_out: field("outputTokens"),
         cached: field("cachedInputTokens"),
+        context_used: field("totalTokens"),
         context_window: usage.get("modelContextWindow").and_then(Value::as_u64),
+    }
+}
+
+/// Visible user and assistant messages from a resumed app-server thread.
+fn history_from_thread(thread: Option<&Value>) -> Vec<Step> {
+    thread
+        .and_then(|thread| thread.get("turns"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|turn| turn.get("items").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+            Some("userMessage") => {
+                let text = item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!text.is_empty()).then_some(Step::Emit(AgentEvent::UserEcho { text }))
+            }
+            Some("agentMessage") => item
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(|text| {
+                    Step::Emit(AgentEvent::Message {
+                        text: text.to_owned(),
+                    })
+                }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn codex_questions(params: &Value) -> Vec<UserInputQuestion> {
+    params
+        .get("questions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, question)| {
+            let string = |key: &str| {
+                question
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let options = question
+                .get("options")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|option| UserInputOption {
+                    label: option
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    description: option
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                })
+                .collect();
+            UserInputQuestion {
+                id: question
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map_or_else(|| format!("question-{index}"), str::to_owned),
+                header: string("header"),
+                question: string("question"),
+                options,
+                // Codex's current schema does not expose multi-select; keep the normalized field
+                // so a protocol addition does not require a new UI shape.
+                multiple: question
+                    .get("multiSelect")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                allows_other: question
+                    .get("isOther")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                secret: question
+                    .get("isSecret")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            }
+        })
+        .collect()
+}
+
+fn append_notes(answers: &mut BTreeMap<String, Vec<String>>, notes: Option<&str>) {
+    let Some(notes) = notes.map(str::trim).filter(|notes| !notes.is_empty()) else {
+        return;
+    };
+    if let Some((_, values)) = answers.iter_mut().next_back() {
+        values.push(format!("Notes: {notes}"));
+    }
+}
+
+fn attachment_steps(attachments: &[AgentAttachment]) -> Vec<Step> {
+    if attachments.is_empty() {
+        Vec::new()
+    } else {
+        vec![Step::Emit(AgentEvent::Attachments {
+            attachments: attachments.to_vec(),
+        })]
     }
 }
 
