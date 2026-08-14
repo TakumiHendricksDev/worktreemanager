@@ -25,9 +25,14 @@ if [ -n "$(staged '*.rs')" ]; then
     fi
 fi
 
-# ── Frontend: format check.
+# ── Frontend: format check. Same PATH caveat as cargo above, and worth the same two
+# ── lines: `bun x` exits non-zero whether prettier found a problem or bun was never
+# ── found, and reporting the second as the first sends you to run `just fmt` — which
+# ── fixes nothing, prints the same failure, and does not mention bun.
 if [ -n "$(staged '*.ts' '*.svelte' '*.css' '*.scss')" ] && [ -d node_modules ]; then
-    if ! bun x prettier --check $(staged '*.ts' '*.svelte' '*.css' '*.scss' | tr '\n' ' ') >/dev/null 2>&1; then
+    if ! command -v bun >/dev/null 2>&1; then
+        note "bun not on PATH — cannot check formatting (add ~/.bun/bin, or use --no-verify)"
+    elif ! bun x prettier --check $(staged '*.ts' '*.svelte' '*.css' '*.scss' | tr '\n' ' ') >/dev/null 2>&1; then
         note "Frontend formatting — run 'just fmt'"
     fi
 fi
