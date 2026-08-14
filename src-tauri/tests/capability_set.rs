@@ -11,7 +11,8 @@
 //! is a moving target defined in someone else's repository, so granting one means the app's real
 //! privileges can grow on a `cargo update` with no diff in this tree to review. Named permissions
 //! cannot do that. `dialog:allow-open` rather than `dialog:default` was the first instance of the
-//! rule and the notification entries are the second; this makes it a lint rather than a habit.
+//! rule, and the since-removed notification entries were the second; this makes it a lint rather
+//! than a habit.
 //!
 //! The two exceptions are Tauri's own `core:*`, which are not a plugin and whose contents are the
 //! framework version already pinned in `Cargo.lock`.
@@ -57,20 +58,18 @@ fn no_plugin_default_permission_set_is_granted() {
 }
 
 #[test]
-fn the_notification_permissions_are_named_individually() {
-    // The three the notification feature uses, and no more. All outbound: `notify` posts a title and
-    // a body this app composed, and the other two ask the OS about its own consent.
+fn the_webview_holds_no_notification_permission_at_all() {
+    // Notifications went native (see `notifier.rs` and `wtm-notify`): the webview posts through
+    // this app's own `post_notification` command so the payload can carry a navigation target,
+    // and the permission calls go through commands for the same reason. The plugin is still a
+    // Rust-side posting fallback, but nothing in the webview may address it — a grant here
+    // would widen the surface back for an API nothing uses.
     let granted = permissions();
-    for wanted in [
-        "notification:allow-is-permission-granted",
-        "notification:allow-request-permission",
-        "notification:allow-notify",
-    ] {
-        assert!(
-            granted.iter().any(|p| p == wanted),
-            "`{wanted}` is missing, so notifications will fail at runtime rather than at build time"
-        );
-    }
+    assert!(
+        !granted.iter().any(|p| p.starts_with("notification:")),
+        "a `notification:*` grant reappeared; the webview reaches notifications only through \
+         `post_notification` and friends, so this can only be surface with no caller"
+    );
 }
 
 #[test]

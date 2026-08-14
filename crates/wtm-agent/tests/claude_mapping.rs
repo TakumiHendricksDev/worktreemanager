@@ -620,9 +620,13 @@ fn the_compiled_capability_is_honest_about_being_compiled() {
 
     // Aliases rather than dated ids: each resolves to the current model of its tier, so this list
     // ages far better than `claude-opus-4-5-20251101` would. The *labels* carry a version and the
-    // ids do not, which is the trade the capability's own docs explain.
+    // ids do not, which is the trade the capability's own docs explain. `claude-opus-4-8` is the
+    // one deliberate exception — no alias reaches the previous generation, so offering it at all
+    // means pinning it.
     let ids: Vec<&str> = capability.models.iter().map(|m| m.id.as_str()).collect();
     assert!(ids.contains(&"opus") && ids.contains(&"sonnet") && ids.contains(&"haiku"));
+    assert!(ids.contains(&"fable") && ids.contains(&"opusplan"));
+    assert!(ids.contains(&"claude-opus-4-8"));
 
     // The rungs, the same for every model — the opposite of the other provider, where the ladder is
     // per model. The first five are `--help`'s own list; `ultracode` is last because the CLI's
@@ -640,6 +644,72 @@ fn the_compiled_capability_is_honest_about_being_compiled() {
             "`ultra` is Codex's rung. Claude's is `ultracode` — two names, two things"
         );
     }
+}
+
+#[test]
+fn opusplan_implies_plan_mode_and_no_other_model_implies_any() {
+    // The CLI's own resolver uses Opus for `opusplan` only while `permissionMode == "plan"` and
+    // Sonnet otherwise, so the model without the mode is a label that lies. Every other model
+    // means the same thing in every mode, and an implication there would override the user's
+    // `~/.claude/settings.json` for no reason.
+    for model in &wtm_agent::claude_capability().models {
+        let expected = if model.id == "opusplan" {
+            Some("plan")
+        } else {
+            None
+        };
+        assert_eq!(
+            model.implied_mode.as_deref(),
+            expected,
+            "{} carries the wrong mode implication",
+            model.id
+        );
+    }
+}
+
+#[test]
+fn an_implied_mode_is_always_one_the_provider_also_offers() {
+    // The implication is applied by the same paths that apply a picked mode, so a spelling the
+    // mode table does not contain would be sent to the CLI as `--permission-mode` and rejected
+    // at spawn. This is the test that catches a `"Plan"` for a `"plan"`.
+    let capability = wtm_agent::claude_capability();
+    for model in &capability.models {
+        if let Some(implied) = &model.implied_mode {
+            assert!(
+                capability.modes.iter().any(|m| &m.id == implied),
+                "{} implies `{implied}`, which is not a mode this provider offers",
+                model.id
+            );
+        }
+    }
+}
+
+#[test]
+fn the_implied_mode_lookup_answers_only_for_the_provider_that_compiled_it() {
+    // The lookup is keyed by provider because it reads a compiled table, and Claude's table says
+    // nothing about what a Codex model id means. A lookup that answered for any provider would
+    // flip a Codex pane into a mode its protocol spells differently.
+    assert_eq!(
+        wtm_agent::implied_mode("claude", "opusplan").as_deref(),
+        Some("plan")
+    );
+    assert_eq!(wtm_agent::implied_mode("claude", "opus"), None);
+    assert_eq!(wtm_agent::implied_mode("codex", "opusplan"), None);
+}
+
+#[test]
+fn a_full_model_id_reaches_the_cli_verbatim() {
+    // The table's Opus 4.8 entry is a pinned id rather than an alias, and it only works because
+    // `--model` passes through untranslated. A mapping layer added later would need to know that.
+    let argv = Claude.argv(&SessionRequest {
+        model: Some("claude-opus-4-8".to_owned()),
+        ..SessionRequest::default()
+    });
+    let value = argv
+        .iter()
+        .position(|a| a == "--model")
+        .and_then(|i| argv.get(i + 1));
+    assert_eq!(value.map(String::as_str), Some("claude-opus-4-8"));
 }
 
 #[test]

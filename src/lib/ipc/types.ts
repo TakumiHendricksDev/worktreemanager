@@ -307,6 +307,11 @@ export interface AgentModel {
   label: string;
   description: string | null;
   isDefault: boolean;
+  /**
+   * The permission mode this model's semantics assume, or null. A seed the pickers apply on
+   * selection, never a lock — `opusplan` is Opus only while the session is in plan mode.
+   */
+  impliedMode: string | null;
   defaultEffort: string | null;
   efforts: EffortOption[];
 }
@@ -513,6 +518,20 @@ export type ApprovalAnswer =
   | { kind: 'allow_with_edits'; input: unknown }
   | { kind: 'deny'; message: string | null }
   | { kind: 'user_input'; answers: Record<string, string[]>; notes: string | null };
+
+/**
+ * Emitted as `notification:clicked` — the user clicked a macOS notification.
+ *
+ * Mirrors `ClickPayload` in `wtm-notify`, whose round-trip test pins this exact shape.
+ * `paneId` is process-local and best-effort: the notification can outlive the pane it was
+ * about, so `App.svelte` navigates on (project, worktree) and focuses the pane only if it
+ * still exists.
+ */
+export interface NotificationClick {
+  projectId: string;
+  worktreeId: string;
+  paneId: string;
+}
 
 /** Emitted as `agent:event`. */
 export interface AgentEventEnvelope {

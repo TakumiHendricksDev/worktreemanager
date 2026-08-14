@@ -2484,6 +2484,8 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
+ "bitflags 2.13.1",
+ "block2",
  "objc2",
  "objc2-foundation",
 ]
@@ -5410,6 +5412,7 @@ dependencies = [
  "wtm-core",
  "wtm-exec",
  "wtm-git",
+ "wtm-notify",
  "wtm-render",
  "wtm-testkit",
 ]
@@ -5483,6 +5486,19 @@ dependencies = [
  "wtm-core",
  "wtm-exec",
  "wtm-testkit",
+]
+
+[[package]]
+name = "wtm-notify"
+version = "0.6.0"
+dependencies = [
+ "block2",
+ "objc2",
+ "objc2-foundation",
+ "objc2-user-notifications",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

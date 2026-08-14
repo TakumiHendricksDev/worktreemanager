@@ -37,6 +37,13 @@ const ALLOWED: &[(&str, &str)] = &[
         "`OPENER` — the OS's hand-this-to-the-default-handler front end. `open` on macOS, \
          `xdg-open` elsewhere; there is no portable name and no runtime way to choose.",
     ),
+    (
+        "crates/wtm-notify/src/lib.rs",
+        "`UNUserNotificationCenter` — the framework does not exist off macOS, so the other \
+         arm cannot compile. The facade keeps both arms building on both runners and this is \
+         the only file that branches; the no-op arm's Center is uninhabited, which is the \
+         type-level proof the branch is total.",
+    ),
 ];
 
 /// Directories whose Rust is not production code.

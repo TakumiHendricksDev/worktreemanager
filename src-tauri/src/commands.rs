@@ -553,6 +553,62 @@ pub async fn open_in(
     .await
 }
 
+// ────────────────────────────── notifications ──────────────────────────────
+
+/// Post a notification whose click navigates back to the pane it is about.
+///
+/// The decision to post at all is the webview's — it knows the selection and the window focus,
+/// and Rust does not; see `attention.svelte.ts`. This side attaches the payload the click needs
+/// and reports the one failure worth acting on: the OS refusing delivery.
+#[tauri::command]
+pub async fn post_notification(
+    handle: tauri::AppHandle,
+    title: String,
+    body: String,
+    project_id: String,
+    worktree_id: String,
+    pane_id: String,
+) -> Reply<()> {
+    blocking(move || {
+        use tauri::Manager;
+        let notifier = handle.state::<Arc<crate::notifier::Notifier>>();
+        notifier.post(
+            &handle,
+            &title,
+            &body,
+            &wtm_notify::ClickPayload {
+                project_id,
+                worktree_id,
+                pane_id,
+            },
+        )
+    })
+    .await
+}
+
+/// What the OS says about delivering notifications: `granted`, `denied` or `prompt`.
+#[tauri::command]
+pub async fn notification_permission(handle: tauri::AppHandle) -> Reply<String> {
+    blocking(move || {
+        use tauri::Manager;
+        let notifier = handle.state::<Arc<crate::notifier::Notifier>>();
+        Ok(notifier.permission().to_owned())
+    })
+    .await
+}
+
+/// Ask the OS for notification permission. Blocks until the user answers the prompt, which is
+/// why it goes through `blocking()` like everything else that waits.
+#[tauri::command]
+pub async fn request_notification_permission(handle: tauri::AppHandle) -> Reply<bool> {
+    blocking(move || {
+        use tauri::Manager;
+        let notifier = handle.state::<Arc<crate::notifier::Notifier>>();
+        Ok(notifier.request_permission())
+    })
+    .await
+}
+
 /// The actions a project offers on a worktree.
 #[tauri::command]
 pub async fn list_actions(app: AppState<'_>, project_id: String) -> Reply<Vec<ActionView>> {
@@ -2008,12 +2064,26 @@ pub fn session_request_for(
         .or_else(|| inherited.map(str::to_owned))
         .or_else(|| entry.default_effort.map(str::to_owned));
 
+    // The caller's choice wins, then the repository's, then the provider's own. Three
+    // layers rather than two because a picker change must not be overridden by config, and
+    // a repo's default must not be overridden by a compiled one.
+    let model = model.or_else(|| spec.model.clone());
+
+    // A model can imply a mode — see `AgentModel::implied_mode`. Between the explicit layers
+    // and the compiled default, so a picker or a repo that says otherwise wins: the coupling
+    // is an assist, not a lock. Skipped on resume, where the conversation may already be past
+    // its plan and re-entering plan mode would rewrite a state the CLI owns.
+    let implied = if resume.is_none() {
+        model
+            .as_deref()
+            .and_then(|m| wtm_agent::implied_mode(entry.id, m))
+    } else {
+        None
+    };
+
     Ok(wtm_agent::SessionRequest {
         cwd: worktree.path.to_string_lossy().into_owned(),
-        // The caller's choice wins, then the repository's, then the provider's own. Three
-        // layers rather than two because a picker change must not be overridden by config, and
-        // a repo's default must not be overridden by a compiled one.
-        model: model.or_else(|| spec.model.clone()),
+        model,
         // Ask before running anything, unless something asked for otherwise. A worktree is
         // disposable and git is the undo, so a permissive default is defensible — but it is a
         // decision the user should make deliberately rather than discover, and the safe
@@ -2022,6 +2092,7 @@ pub fn session_request_for(
         // `ProviderEntry::default_mode`.
         mode: mode
             .or_else(|| spec.mode.clone())
+            .or(implied)
             .or_else(|| entry.default_mode.map(str::to_owned)),
         resume,
         fork: None,

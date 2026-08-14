@@ -623,6 +623,7 @@ mod tests {
         let model = &json["models"][0];
         assert!(model.get("isDefault").is_some(), "{model:?}");
         assert!(model.get("defaultEffort").is_some(), "{model:?}");
+        assert!(model.get("impliedMode").is_some(), "{model:?}");
 
         let mode = &json["modes"][0];
         assert!(mode.get("isDefault").is_some(), "{mode:?}");

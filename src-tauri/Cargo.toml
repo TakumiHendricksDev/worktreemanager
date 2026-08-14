@@ -36,16 +36,18 @@ tauri      = { version = "2", features = ["macos-private-api"] }
 # typed one goes through, so the picker is a convenience over the text field, not a way around it.
 tauri-plugin-dialog = "2"
 
-# Notifications, for a session that needs an answer while the window is in the background. The second
-# capability granted beyond this app's own commands, and it is outbound only: `notify` posts a title
-# and a body this app composed, and the two permission calls ask the OS about its own consent. It
-# reads nothing, and none of it is reachable until the user turns notifications on — a preference that
-# starts unset.
+# Notifications, for a session that needs an answer while the window is in the background — but
+# only as the *fallback* poster. The primary path is `wtm-notify`, whose native center carries a
+# navigation payload a click delivers back; this plugin covers the places that center cannot
+# exist (Linux, and unbundled dev runs, where `UNUserNotificationCenter` refuses a process with
+# no bundle id). Its JS API is unused and its capability grants are gone — the webview reaches
+# notifications only through this app's own `post_notification` command.
 #
 # A dependency rather than four lines of DOM because the webview's own `Notification` API does not
 # exist in WKWebView, which is the engine every Mac build runs on.
 tauri-plugin-notification = "2"
 wtm-core   = { workspace = true }
+wtm-notify = { workspace = true }
 wtm-config = { workspace = true }
 wtm-exec   = { workspace = true }
 wtm-agent  = { workspace = true }

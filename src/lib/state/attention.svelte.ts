@@ -28,12 +28,6 @@
  * by arriving at the worktree it is about. Nothing here runs unless an event lands or the user acts.
  */
 
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from '@tauri-apps/plugin-notification';
-
 import { commands } from '../ipc/commands';
 import { workspace } from './workspace.svelte';
 
@@ -60,13 +54,21 @@ const MAX_TOASTS = 4;
 /** The pane an announcement is about. Structural, so neither store imports the other's types. */
 export interface Announceable {
   id: string;
+  /** The pane's project — a toast can outlive the selection, so its target names both halves. */
+  projectId: string;
   worktreeId: string;
   /** The provider id, or null for a shell. */
   provider: string | null;
 }
 
-/** What happened, in the vocabulary the copy below is written against. */
-export type Announcement = 'approval' | 'finished' | 'failed';
+/**
+ * What happened, in the vocabulary the copy below is written against.
+ *
+ * A question and a plan review are approvals on the wire, but "waiting on an approval" is the
+ * wrong sentence for either — a question is not a permission gate, and saying the same thing
+ * about all three meant the notification never told you which one you were coming back to.
+ */
+export type Announcement = 'approval' | 'question' | 'plan' | 'finished' | 'failed';
 
 /** A toast's kind. `ask` is the one-time opt-in card, which has no pane behind it. */
 export type ToastKind = 'attention' | 'done' | 'failed' | 'ask';
@@ -75,7 +77,7 @@ export interface Toast {
   id: number;
   kind: ToastKind;
   /** Where clicking it goes. Null for the opt-in card. */
-  target: { worktreeId: string; paneId: string } | null;
+  target: { projectId: string; worktreeId: string; paneId: string } | null;
   title: string;
   detail: string;
 }
@@ -135,6 +137,28 @@ class Attention {
     } catch {
       /* Deliberately silent. A preference that cannot be read leaves the app asking, which is the
          same state a fresh install is in and the only honest default. */
+    }
+
+    // An `on` preference is a promise the OS may no longer be keeping. Checked once here so a
+    // denial shows up in Settings immediately rather than on the first missed notification.
+    // `prompt` is the upgrader case: the pre-native path never asked the OS at all, so `on`
+    // can coexist with an unasked permission — re-asking is repeating a question the user
+    // already answered in Settings, not a launch-time prompt about a hypothetical, which is
+    // why it does not violate the earned-opt-in rule `askIfEarned` documents.
+    if (this.pref === 'on') {
+      void commands
+        .notificationPermission()
+        .then((state) => {
+          if (state === 'denied') this.blocked = true;
+          if (state === 'prompt') {
+            void commands.requestNotificationPermission().then((granted) => {
+              this.blocked = !granted;
+            });
+          }
+        })
+        .catch(() => {
+          /* Silent: the first post will surface a refusal through `blocked` anyway. */
+        });
     }
 
     return () => {
@@ -197,8 +221,9 @@ class Attention {
   /** Turn notifications on, asking the OS if it has not been asked. */
   async enable(): Promise<void> {
     try {
-      const granted =
-        (await isPermissionGranted()) || (await requestPermission()) === 'granted';
+      // One call rather than a check-then-ask pair: asking when already granted answers true
+      // without a prompt, so the distinction bought nothing.
+      const granted = await commands.requestNotificationPermission();
       // Refused at the OS level. Stored as `off` rather than left as `ask`, because the question has
       // now been answered — by the system rather than by the user, which `blocked` is what says.
       this.pref = granted ? 'on' : 'off';
@@ -259,6 +284,12 @@ class Attention {
     if (what === 'approval') {
       return { title: `${where} needs you`, detail: `${who} is waiting on an approval.` };
     }
+    if (what === 'question') {
+      return { title: `${where} needs you`, detail: `${who} is asking you a question.` };
+    }
+    if (what === 'plan') {
+      return { title: `${where} needs you`, detail: `${who} has a plan ready to review.` };
+    }
     if (what === 'failed') {
       return { title: where, detail: `${who} stopped with an error.` };
     }
@@ -267,26 +298,32 @@ class Attention {
 
   private notify(what: Announcement, pane: Announceable): void {
     const { title, detail } = this.words(what, pane);
-    try {
-      // Fire and forget. A notification that fails to post is not worth a banner over the thing it
-      // was reporting, and `blocked` already covers the case where none of them will ever arrive.
-      //
-      // Clicking one activates wtm and does nothing more — it does not select the worktree. Doing
-      // that needs the plugin's action-listener machinery and per-OS action registration; the
-      // sidebar dot is what says where to go once you are back.
-      sendNotification({ title, body: detail });
-    } catch {
-      this.blocked = true;
-    }
+    // Fire and forget, as ever — but through Rust, which owns the click: the pane's address
+    // rides the notification and comes back on `notification:clicked`, where `App.svelte`
+    // turns it into a navigation. A rejected post means the OS is refusing delivery, which is
+    // exactly the fact `blocked` exists to report.
+    void commands
+      .postNotification({
+        title,
+        body: detail,
+        projectId: pane.projectId,
+        worktreeId: pane.worktreeId,
+        paneId: pane.id,
+      })
+      .catch(() => {
+        this.blocked = true;
+      });
   }
 
   private toast(what: Announcement, pane: Announceable): void {
     const { title, detail } = this.words(what, pane);
+    // A question and a plan are still the pane-blocked state `attention` styling expresses;
+    // only the words differ, which is what sharing `words()` is for.
     const kind: ToastKind =
-      what === 'approval' ? 'attention' : what === 'failed' ? 'failed' : 'done';
+      what === 'failed' ? 'failed' : what === 'finished' ? 'done' : 'attention';
     this.push({
       kind,
-      target: { worktreeId: pane.worktreeId, paneId: pane.id },
+      target: { projectId: pane.projectId, worktreeId: pane.worktreeId, paneId: pane.id },
       title,
       detail,
     });

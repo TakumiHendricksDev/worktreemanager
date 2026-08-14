@@ -112,22 +112,39 @@ pub fn claude_capability() -> AgentCapability {
         label: label.to_owned(),
         description: Some(description.to_owned()),
         is_default,
+        implied_mode: None,
         default_effort: Some(PREFERRED_EFFORT.to_owned()),
         efforts: efforts(),
     };
 
     AgentCapability {
         // Aliases first, deliberately: each resolves to the current model of its tier, so this list
-        // stays true across releases in a way a list of dated ids would not.
+        // stays true across releases in a way a list of dated ids would not. Opus 4.8 is the one
+        // pinned id, and the exception is the point: no alias reaches it — `opus` now means the
+        // current tier — so offering the previous generation at all means naming it. Hand-remove
+        // when the CLI drops the id.
         models: vec![
             model("opus", "Opus 5", "The most capable tier", true),
             model("sonnet", "Sonnet 5", "Balanced capability and speed", false),
             model("haiku", "Haiku 4.5", "Fastest and cheapest", false),
             model("fable", "Fable 5", "The newest tier", false),
+            AgentModel {
+                // The one model whose meaning includes a mode: the CLI resolves `opusplan` to
+                // Opus only while `permissionMode == "plan"` and to Sonnet otherwise — read off
+                // 2.1.231's own model resolver. Without the implication, picking it in an
+                // accept-edits pane is Sonnet for everything, and the label would be a lie.
+                implied_mode: Some("plan".to_owned()),
+                ..model(
+                    "opusplan",
+                    "Opus 5 (plan) / Sonnet 5",
+                    "Opus while planning, Sonnet to execute; picking it switches the pane to Plan mode",
+                    false,
+                )
+            },
             model(
-                "opusplan",
-                "Opus 5 (plan) / Sonnet 5",
-                "Opus while planning, Sonnet to execute",
+                "claude-opus-4-8",
+                "Opus 4.8",
+                "The previous Opus generation",
                 false,
             ),
         ],
@@ -189,6 +206,23 @@ pub fn claude_capability() -> AgentCapability {
         ],
         models_are_live: false,
     }
+}
+
+/// The mode `model` only makes sense in, when it has one — in the provider's own spelling.
+///
+/// Compiled tables only: Codex advertises no such coupling, and asking it would cost a process.
+/// The callers are the two places a mode is decided — the spawn path's resolution layering and
+/// the picker's model change — which reach the same table by different routes and must agree.
+#[must_use]
+pub fn implied_mode(provider: &str, model: &str) -> Option<String> {
+    if provider != crate::claude::ID {
+        return None;
+    }
+    claude_capability()
+        .models
+        .into_iter()
+        .find(|m| m.id == model)
+        .and_then(|m| m.implied_mode)
 }
 
 /// One entry of a mode table, so the six literals below read as data rather than as six structs.

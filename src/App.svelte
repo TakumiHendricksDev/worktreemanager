@@ -27,7 +27,7 @@
   import Icon from './lib/components/ui/Icon.svelte';
   import Logo from './lib/components/ui/Logo.svelte';
   import { commands } from './lib/ipc/commands';
-  import { errorMessage } from './lib/ipc/types';
+  import { errorMessage, type NotificationClick } from './lib/ipc/types';
   import { attention } from './lib/state/attention.svelte';
   import { sessions } from './lib/state/sessions.svelte';
   import { theme } from './lib/state/theme.svelte';
@@ -62,6 +62,36 @@
   let offSessions: (() => void) | null = null;
   /** The focus/blur listeners behind the notification gate. Same contract as `offSessions`. */
   let offAttention: (() => void) | null = null;
+
+  /**
+   * The one navigation recipe. Notification clicks and toast clicks both land here, because
+   * both name the same kind of target and both need `mainView`, which lives in this file —
+   * a click that selected a worktree while the create pane owned the screen would look like
+   * it had done nothing.
+   *
+   * Order matters: `selectProject` is awaited because it refreshes the worktree list and
+   * resets the selection, so the `select` after it is the one that sticks. The pane focus is
+   * best-effort — pane ids are process-local, so a notification can outlive its pane. The
+   * durable half of the address is (project, worktree); a stale pane means arrive, don't
+   * focus.
+   */
+  async function goTo(target: NotificationClick): Promise<void> {
+    // A click can arrive before init finishes — the notification is what relaunched the app.
+    // There is nothing to navigate yet, and boot lands on the last active project on its own;
+    // the click still brought the window to the front, which is all it ever did before.
+    if (!booted) return;
+    if (target.projectId !== workspace.activeProjectId) {
+      await workspace.selectProject(target.projectId);
+    }
+    workspace.select(target.worktreeId);
+    mainView = 'worktree';
+    const alive = sessions.panes.some(
+      (p) => p.id === target.paneId && p.worktreeId === target.worktreeId,
+    );
+    if (alive) sessions.focus(target.worktreeId, target.paneId);
+    // Arriving is what clears the worktree's dots and toasts, exactly as ⌘-Tabbing back does.
+    sessions.markSeen(target.worktreeId);
+  }
 
   onMount(() => {
     void (async () => {
@@ -111,6 +141,16 @@
      * listener is unconditional because a platform with no menu simply never fires it.
      */
     const unlistenSettings = listen('wtm:settings', () => (showSettings = true));
+
+    /*
+     * A macOS notification was clicked. The payload is the pane's address, attached by
+     * `notifier.rs` when the notification was posted — see `wtm-notify` for the round trip.
+     * Unconditional for the same reason as the settings listener: a platform whose
+     * notifications cannot carry a click simply never fires it.
+     */
+    const unlistenClicks = listen<NotificationClick>('notification:clicked', (event) => {
+      void goTo(event.payload);
+    });
 
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
@@ -176,6 +216,7 @@
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
       void unlistenSettings.then((off) => off());
+      void unlistenClicks.then((off) => off());
       offSessions?.();
       offAttention?.();
     };
@@ -437,5 +478,5 @@
     `onselectworktree` for the same reason `Sidebar` takes one: clicking a toast selects a worktree, and
     doing that while the create pane owns the screen would look like nothing happened.
   -->
-  <Toasts onselectworktree={() => (mainView = 'worktree')} />
+  <Toasts onnavigate={(target) => void goTo(target)} />
 </div>

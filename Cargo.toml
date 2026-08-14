@@ -7,6 +7,7 @@ members = [
   "crates/wtm-exec",
   "crates/wtm-agent",
   "crates/wtm-render",
+  "crates/wtm-notify",
   "crates/wtm-testkit",
   "src-tauri",
 ]
@@ -39,6 +40,7 @@ wtm-git     = { path = "crates/wtm-git" }
 wtm-exec    = { path = "crates/wtm-exec" }
 wtm-agent   = { path = "crates/wtm-agent" }
 wtm-render  = { path = "crates/wtm-render" }
+wtm-notify  = { path = "crates/wtm-notify" }
 wtm-testkit = { path = "crates/wtm-testkit" }
 wtm-app     = { path = "src-tauri" }
 
@@ -64,10 +66,34 @@ time            = { version = "0.3", features = ["formatting", "parsing", "local
 # `nix`, not `libc`, specifically so `unsafe_code = "forbid"` can stay. Killing a
 # process *group* is mandatory here (the real tree is script → shell → docker), and
 # `libc::killpg` is an unsafe extern call. nix wraps exactly these syscalls in a
-# safe, well-maintained API, so this repo contains no `unsafe` at all.
+# safe, well-maintained API — so the only `unsafe` in this repo is the fenced
+# objc2 FFI in `wtm-notify`, which carries its own lints table saying why.
 nix             = { version = "0.31", features = ["signal", "process", "user"] }
 uuid            = { version = "1", features = ["v4", "serde"] }
 tracing         = "0.1"
+
+# external — macOS notification FFI, used by `wtm-notify` alone. Already in the
+# lockfile via Tauri's own mobile unions, so these pins add no version churn.
+objc2                    = "0.6"
+objc2-foundation         = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSBundle",
+  "NSError",
+  "NSObject",
+  "NSString",
+] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "UNUserNotificationCenter",
+  "UNNotification",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationSettings",
+  "UNNotificationTrigger",
+] }
+block2                   = "0.6"
 
 # dev
 tempfile          = "3"

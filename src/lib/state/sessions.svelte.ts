@@ -41,7 +41,7 @@ import {
   type SpawnedSession,
 } from '../ipc/types';
 import { statusOf, worse, type PaneStatus } from '../status';
-import { attention, type Announceable } from './attention.svelte';
+import { attention, type Announceable, type Announcement } from './attention.svelte';
 import {
   insert,
   move,
@@ -568,9 +568,20 @@ class Sessions {
       }
     }
 
+    // A model can imply a mode (`opusplan` is Opus only in Plan mode — see the capability
+    // table). Only on a genuine model change on the running provider, so a mode picked
+    // afterwards wins and a pending cross-provider swap keeps describing the process that
+    // exists. An assist, not a lock: nothing is forced back when the model changes away.
+    const implied =
+      !swapping && pane.model !== next.model
+        ? (this.capabilities[next.provider]?.models.find((m) => m.id === next.model)
+            ?.impliedMode ?? null)
+        : null;
+    const mode = implied ?? next.mode;
+
     const modelChanged = pane.model !== next.model;
     const effortChanged = pane.effort !== next.effort;
-    const modeChanged = pane.mode !== next.mode;
+    const modeChanged = pane.mode !== mode;
     // Sticky once set: a pane whose effort is already pending must not un-mark itself because a
     // later change happened to land back on the value the session was started with.
     if (effortChanged && pane.session !== null && running !== 'codex')
@@ -582,7 +593,7 @@ class Sessions {
 
     pane.model = next.model;
     pane.effort = next.effort;
-    pane.mode = next.mode;
+    pane.mode = mode;
 
     // Nothing to say to a session that does not exist yet — `openAgentSession` will carry these
     // as spawn arguments instead.
@@ -603,7 +614,7 @@ class Sessions {
         pane.session,
         modelChanged ? next.model : null,
         liveEffortChanged ? next.effort : null,
-        modeChanged ? next.mode : null,
+        modeChanged ? mode : null,
       )
       .catch((e: unknown) => {
         this.error = errorMessage(e);
@@ -761,6 +772,13 @@ class Sessions {
         // gave, and the provider has written its own copy either way.
         this.error = errorMessage(e);
       }
+    }
+    // An approved plan takes the CLI out of plan mode, and it announces nothing when it goes —
+    // `permission_mode_changed` is telemetry, not a stream event. The landing mode depends on
+    // `updatedPermissions` this side never sees, so the only honest pill is the "session hasn't
+    // said" sentinel, not a stale "Plan" and never a guess.
+    if (pane && request.kind === 'plan_review' && answer.kind !== 'deny') {
+      pane.mode = null;
     }
     await this.answer(paneId, requestId, answer);
   }
@@ -1412,7 +1430,10 @@ class Sessions {
 
     if (event.kind === 'approval_requested') {
       pane.approvals = [...pane.approvals, { id: event.id, request: event.request }];
-      if (pane.sideOf === null && attention.announce('approval', announceable(pane))) {
+      if (
+        pane.sideOf === null &&
+        attention.announce(announcementFor(event.request), announceable(pane))
+      ) {
         pane.unseen = true;
       }
     } else if (event.kind === 'approval_resolved') {
@@ -1487,9 +1508,28 @@ function facts(pane: Pane): Parameters<typeof statusOf>[0] {
 function announceable(pane: Pane): Announceable {
   return {
     id: pane.id,
+    projectId: pane.projectId,
     worktreeId: pane.worktreeId,
     provider: pane.kind.kind === 'agent' ? pane.kind.provider : null,
   };
+}
+
+/**
+ * Which announcement an approval is.
+ *
+ * A question is not a permission gate, and saying "waiting on an approval" about
+ * `AskUserQuestion` made every notification read the same. `tool_input` stays an approval
+ * deliberately: it is the "unknown tool wants to run" fallback, an allow/deny card.
+ */
+function announcementFor(request: ApprovalRequest): Announcement {
+  switch (request.kind) {
+    case 'user_input':
+      return 'question';
+    case 'plan_review':
+      return 'plan';
+    default:
+      return 'approval';
+  }
 }
 
 export const sessions = new Sessions();

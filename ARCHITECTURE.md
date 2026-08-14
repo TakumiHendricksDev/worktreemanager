@@ -414,6 +414,12 @@ Rejected, with reasons recorded in `.cargo/config.toml` so they don't get re-add
 the individual opt-outs win), and a hand-picked set of restriction lints — not the whole restriction
 group, which is a menu rather than a policy.
 
+`wtm-notify` is the one crate that does not write `[lints] workspace = true`, and the reason is
+mechanical rather than a matter of taste: `forbid` cannot be relaxed at a use site, so a crate that
+must contain `unsafe` at all has to restate the table with `unsafe_code = "deny"`. Confining the
+objc2 FFI to one crate is what keeps that the only place a reviewer has to look for it, and the
+duplicated table is the cost of the confinement rather than an exemption from it.
+
 The interesting one is `clippy.toml`'s `disallowed-methods`, which enforces architecture:
 `std::process::Command::new` is banned everywhere so every spawn goes through the single wrapper in
 `wtm-exec` that guarantees a timeout, a resolved PATH, a sanitized environment, and a tracing span;

@@ -322,6 +322,29 @@ export const commands = {
   /** Opens an http/https URL. The scheme is validated in Rust — see `open_url`. */
   openUrl: (url: string) => invoke<void>('open_url', { url }),
 
+  // ── notifications ──
+  /**
+   * Post a macOS notification whose click navigates back to the pane it is about.
+   *
+   * Through Rust rather than the notification plugin's JS API, because the plugin cannot
+   * carry a payload a click delivers back — see `notifier.rs`. Rejects when the OS is
+   * refusing delivery, which is the signal `attention.blocked` keys off.
+   */
+  postNotification: (args: {
+    title: string;
+    body: string;
+    projectId: string;
+    worktreeId: string;
+    paneId: string;
+  }) => invoke<void>('post_notification', args),
+
+  /** What the OS says about delivering notifications. */
+  notificationPermission: () =>
+    invoke<'granted' | 'denied' | 'prompt'>('notification_permission'),
+
+  /** Ask the OS for permission. Resolves when the user answers the prompt. */
+  requestNotificationPermission: () => invoke<boolean>('request_notification_permission'),
+
   // ── open in ──
   /**
    * Every tool wtm can open a worktree in, resolved against this machine.

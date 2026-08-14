@@ -12,6 +12,7 @@ pub mod bridge;
 pub mod commands;
 pub mod display;
 pub mod handoff;
+pub mod notifier;
 pub mod openers;
 pub mod pty_bridge;
 pub mod view;
@@ -141,14 +142,14 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app)
         .plugin(platform_plugin())
-        // Unlike `platform_plugin` above, these declare commands, so they *do* need entries in
-        // `capabilities/default.json` — `dialog:allow-open` and the three `notification:allow-*`,
-        // and nothing else. Both files argue for their own narrowness; read that description before
-        // adding a third.
+        // Unlike `platform_plugin` above, this declares commands, so it *does* need an entry in
+        // `capabilities/default.json` — `dialog:allow-open`, and nothing else. Both files argue
+        // for their own narrowness; read that description before adding a second.
         .plugin(tauri_plugin_dialog::init())
-        // No `#[cfg]`: it compiles on Linux and no-ops where there is no notification daemon, which
-        // is what keeps the platform-specific code confined to the two files `tests/platform_seams.rs`
-        // caps it at.
+        // No capability entry, deliberately: since notifications went native (see `notifier`),
+        // the webview never talks to this plugin — it is the Rust-side *fallback* for posting
+        // where `wtm-notify` has no notification center to attach to (Linux, and unbundled dev
+        // runs). No `#[cfg]`: it compiles everywhere and no-ops where there is no daemon.
         .plugin(tauri_plugin_notification::init())
         .setup(|handle| {
             // A runtime check rather than `#[cfg]`, the same way `platform_plugin` reads
@@ -173,6 +174,11 @@ pub fn run() {
                 let app = Arc::clone(&*handle.state::<Arc<App>>());
                 bridge::listen(handle.handle().clone(), app);
             }
+
+            // The notification center, for the same reason: a click has to be emitted at the
+            // window, so attaching needs an `AppHandle`. Where there is no center to attach to
+            // (Linux, unbundled dev runs), `notifier` falls back to the plugin above.
+            notifier::install(handle.handle());
             Ok(())
         })
         .on_menu_event(|handle, event| {
@@ -233,6 +239,9 @@ pub fn run() {
             commands::open_url,
             commands::list_openers,
             commands::open_in,
+            commands::post_notification,
+            commands::notification_permission,
+            commands::request_notification_permission,
         ])
         // `build` then `run`, rather than `Builder::run`. The shorthand is exactly
         // `build(context)?.run(|_, _| {})` — an empty event callback — and this app now needs

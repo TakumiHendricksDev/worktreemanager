@@ -370,6 +370,13 @@ pub struct AgentModel {
     pub label: String,
     pub description: Option<String>,
     pub is_default: bool,
+    /// The permission mode this model's semantics assume, in the provider's own spelling.
+    ///
+    /// Set only where a model is *defined by* a mode — Claude's `opusplan` is Opus only while
+    /// the session is in plan mode and Sonnet everywhere else, so offering it without the mode
+    /// silently offers Sonnet. A seed the pickers apply on selection, never a lock: an explicit
+    /// mode choice always wins.
+    pub implied_mode: Option<String>,
     pub default_effort: Option<Effort>,
     pub efforts: Vec<EffortOption>,
 }

@@ -60,7 +60,11 @@ a `Clock` port so they are testable at a fixed instant.
 `unwrap()` on every lock.
 
 **`unsafe` is `forbid`den**, workspace-wide. This is why the project depends on `nix` rather
-than `libc`.
+than `libc`. One crate sits outside the workspace table for a mechanical reason: `forbid`
+cannot be relaxed by the crate it applies to, so `wtm-notify` — which exists to fence the
+objc2 FFI a click-navigating macOS notification needs — restates that table verbatim with
+`unsafe_code = "deny"`. Its `Cargo.toml` header names the safe wrappers that were rejected and
+why. A second such crate is an open-an-issue-first change.
 
 **`wtm-core` must compile for `wasm32-unknown-unknown`.** That is not because anyone runs it
 in a browser; it is a mechanical proof that the domain has no operating-system dependency. If

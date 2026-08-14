@@ -4,32 +4,31 @@
    *
    * # Why this is not in `ui/`
    *
-   * Because it is wired to two stores and calls into both. `ui/` holds components that take props and
-   * render, which is what lets them be reused without their call sites having to agree about state —
-   * this one selects a worktree and focuses a pane, so it knows about the app.
+   * Because it is wired to a store and to the app's own navigation. `ui/` holds components that
+   * take props and render, which is what lets them be reused without their call sites having to
+   * agree about state — this one dismisses toasts and asks the shell to go somewhere.
    *
-   * It is also the reason the store does not do it. `attention` may import `workspace` but not
-   * `sessions`, or the chain `sessions → attention` becomes a cycle; a *component* may import both,
-   * so the one place that needs to touch each keeps the arrow one-way.
+   * Navigation itself is a prop rather than done here, deliberately: `App.svelte` owns
+   * `mainView` and its `goTo` recipe is shared with macOS notification clicks, which name the
+   * same kind of target. Two routes to the same place must be the same code, or they drift —
+   * this component used to select the worktree itself and never switched projects, which is
+   * exactly the bug the shared recipe closed.
    */
   import { attention, type Toast } from '../state/attention.svelte';
-  import { sessions } from '../state/sessions.svelte';
-  import { workspace } from '../state/workspace.svelte';
   import type { PaneStatus } from '../status';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
   import SessionDot from './ui/SessionDot.svelte';
 
   const {
-    onselectworktree,
+    onnavigate,
   }: {
-    /**
-     * Bring the worktree view to the front.
-     *
-     * `mainView` lives in `App.svelte`, and a toast that selected a worktree while the create pane
-     * owned the screen would look like it had done nothing. Same reason `Sidebar` takes one.
-     */
-    onselectworktree?: () => void;
+    /** Take the user to a toast's target — project, worktree, view and pane. */
+    onnavigate?: (target: {
+      projectId: string;
+      worktreeId: string;
+      paneId: string;
+    }) => void;
   } = $props();
 
   /** Which dot a card shows. `ask` has no session behind it and renders none. */
@@ -41,9 +40,7 @@
 
   function go(toast: Toast) {
     if (!toast.target) return;
-    workspace.select(toast.target.worktreeId);
-    onselectworktree?.();
-    sessions.focus(toast.target.worktreeId, toast.target.paneId);
+    onnavigate?.(toast.target);
     // Dismissed explicitly as well as by `markSeen`, because arriving at the worktree is what clears
     // the rest of its cards and this one has already been acted on.
     attention.dismiss(toast.id);

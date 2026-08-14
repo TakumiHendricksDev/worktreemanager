@@ -175,7 +175,8 @@
         : (model?.defaultEffort ?? model?.efforts[0]?.effort ?? ''),
       // Untouched. `restart` is what drops a mode that does not cross, because it is the thing that
       // knows the swap actually happened — cancelling it here would also cancel it for a swap the
-      // user then retracts.
+      // user then retracts. The one exception — a model that implies a mode, like `opusplan` —
+      // lives in `sessions.configure()`, which sees every route to a model change, not just this one.
       mode,
     });
   }

@@ -1298,6 +1298,8 @@ pub fn parse_models(reply: &Value) -> Vec<wtm_core::model::AgentModel> {
                 id,
                 description: text("description"),
                 is_default: m.get("isDefault").and_then(Value::as_bool) == Some(true),
+                // `model/list` advertises no mode coupling, so no Codex model implies one.
+                implied_mode: None,
                 default_effort: text("defaultReasoningEffort"),
                 efforts: m
                     .get("supportedReasoningEfforts")
