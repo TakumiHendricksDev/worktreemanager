@@ -745,6 +745,22 @@ mod tests {
         assert_eq!(skills["skills"][0]["description"], "Review a diff");
         assert_eq!(skills["skills"][0]["scope"], "repo");
 
+        // A two-word payload field, which is where a missing `rename_all` on a *variant* actually
+        // shows: this one is read by the limit banner, and `resets_at` reaching the frontend under
+        // that spelling would leave the banner permanently unable to say when the limit lifts —
+        // silently, because the field is optional and `undefined` is a legitimate value for it.
+        let limit = serde_json::to_value(AgentEvent::LimitReached {
+            message: "usage limit reached".to_owned(),
+            resets_at: Some(1_755_590_400),
+        })
+        .unwrap();
+        assert_eq!(limit["kind"], "limit_reached");
+        assert_eq!(limit["resetsAt"], 1_755_590_400_u64);
+        assert!(
+            limit.get("resets_at").is_none(),
+            "the snake_case spelling must not reach the frontend, got {limit:?}"
+        );
+
         let raw = serde_json::to_value(AgentEvent::Raw {
             provider: "codex".to_owned(),
             event: "item/mcpToolCall/progress".to_owned(),
@@ -817,9 +833,10 @@ pub struct SetupResultView {
 /// and a contract type that shadows the terminal emulator is a fifteen-minute mystery waiting
 /// to happen.
 ///
-/// `worktree` is the worktree id, which is an absolute path, so the dock keys its panes by the
-/// same string the sidebar does. No `argv`: a dock shell is always the login shell, so the
-/// field would be a constant the frontend never reads.
+/// One row per *shell*, not per worktree — a worktree may have several, so `session` is the
+/// identifying field and `worktree` says where it is, exactly as [`AgentSessionView`] does. No
+/// `argv`: a dock shell is always the login shell, so the field would be a constant the frontend
+/// never reads.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalSessionView {

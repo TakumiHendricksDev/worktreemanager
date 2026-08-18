@@ -107,11 +107,11 @@
     {#if worktree.dirty || worktree.untracked > 0 || worktree.staged > 0}
       <span class="c-status--warn">modified</span>
     {/if}
-    {#if worktree.ahead > 0 || worktree.behind > 0}
-      <span class="c-status--info c-worktree-bar__diverge">
-        ↑{worktree.ahead}↓{worktree.behind}
-      </span>
-    {/if}
+    <!-- The `↑N↓N` divergence counter was here and is gone for the same reason it left
+         `WorktreeTab`: it is a measurement presented as a status, and this header is the one place
+         where the Inspector — which reports ahead, behind, staged and unstaged properly — is a
+         single click away. -->
+
     {#if worktree.isMain}<span class="c-badge c-badge--accent">main worktree</span>{/if}
     {#each visibleBadges as badge (badge.label)}
       <span class="c-badge" title={badge.label}>{badge.label}: {badge.value}</span>
@@ -168,11 +168,14 @@
       Details
     </Button>
 
+    <!-- Goes through the same call ⌘J does, because the tooltip names that shortcut. A button that
+         spawned a fresh login shell per click while the shortcut beside it focused an existing one
+         would leak a shell for every ⌘J-habituated click. -->
     <Button
       variant="quiet"
       size="sm"
       title="Open a shell in this worktree ({SHELL_SHORTCUT})"
-      onclick={() => void sessions.openShell(projectId, worktree.id)}
+      onclick={() => void sessions.focusOrOpenShell(projectId, worktree.id)}
     >
       <Icon name="terminal" size={13} /> Shell
     </Button>

@@ -7,10 +7,14 @@
  *
  * # Speaker is never colour alone
  *
- * A user's turn and the agent's reply are told apart by an indented rule and a weight, not by hue.
+ * A user's turn and the agent's reply are told apart by *side and shape* — the user's own words sit
+ * right, in a bordered bubble, and everything the session produced runs full width on the left.
  * `settings/_semantic.scss` states the rule and gives the reason: a palette's accent may sit next
  * to a status role, and two colours 45° apart can be near-identical in luminance. The same applies
  * to the agenda's step states, which carry the status as a word beside the class.
+ *
+ * Position is the strongest channel available here and it costs no hue at all, which is why the
+ * bubble stays a plain elevated surface rather than becoming an accent-tinted one.
  */
 
 /*
@@ -30,12 +34,28 @@
   max-width: 82ch;
 }
 
-/* The user's own turn. Indented behind a rule so a scan down the transcript finds the questions
-   without reading them — the one navigation aid a flat log has. */
+/*
+ * The user's own turn: right-hand side, in a bubble.
+ *
+ * The job is the same one the old left rule did — let a scan down a long transcript find the
+ * questions without reading them, which is the only navigation aid a flat log has — and a side of
+ * its own does it better than an indent did, because the eye can follow one edge instead of
+ * checking each row's left margin.
+ *
+ * `max-width` is narrower than the column's measure on purpose. A bubble that reaches the full
+ * width stops reading as one turn and starts reading as the page, and short prompts are the common
+ * case: the shape only says "this is yours" while there is visible gutter beside it. The text
+ * inside stays left-aligned — right-*ragged* prose is measurably slower to read, so this moves the
+ * box, never the words.
+ */
 .c-transcript__user {
-  border-left: 2px solid var(--border-strong);
-  padding-left: var(--sp-3);
-  color: var(--fg-muted);
+  align-self: flex-end;
+  max-width: min(56ch, 88%);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  color: var(--fg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   /* The prose rows' share of the spacing. See the block comment on `.c-transcript`. */

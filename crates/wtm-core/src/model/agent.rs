@@ -338,6 +338,31 @@ pub enum AgentEvent {
     Failed {
         message: String,
     },
+    /// This session cannot continue because a usage or rate limit is exhausted.
+    ///
+    /// # Why this is not a `Failed`
+    ///
+    /// Because the two have different remedies, and the remedy is what the UI has to offer. A
+    /// failure is news: read it, fix it, try again. A limit is a fork in the road — the work is
+    /// unblocked by continuing it *somewhere else*, and wtm is in the unusual position of having
+    /// the other provider already installed and a pane free to put it in. Offering "continue on
+    /// Codex" against an ordinary error would be nonsense, so the distinction has to survive as
+    /// far as the frontend rather than being a string match at the far end.
+    ///
+    /// Both providers report this by more than one route and none of them is documented, which is
+    /// why detection is best-effort and lives in the provider modules. See `wtm_agent::limits`.
+    #[serde(rename_all = "camelCase")]
+    LimitReached {
+        /// The provider's own sentence, shown verbatim. It names the plan and the window, which no
+        /// wording invented here could.
+        message: String,
+        /// Unix seconds at which the provider says the limit lifts, when it says at all.
+        ///
+        /// Absolute rather than a duration because the frontend renders a clock time and must not
+        /// hold a countdown: timers and polling are banned there, and a duration would go stale
+        /// the moment the window lost focus.
+        resets_at: Option<u64>,
+    },
     /// An event this build does not recognise. See the module docs — this is deliberate.
     Raw {
         provider: String,

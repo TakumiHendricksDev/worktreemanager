@@ -942,7 +942,7 @@ pub async fn remove_worktree(
             force,
             acknowledged,
         )?;
-        // End the worktree's dock shell before teardown runs.
+        // End every dock shell in the worktree before teardown runs.
         //
         // Two reasons, and the second is the one that bites. A shell sitting in a directory
         // that is about to be deleted keeps running with an unlinked cwd, which is confusing
@@ -950,7 +950,12 @@ pub async fn remove_worktree(
         // writing into `node_modules` is exactly the untracked churn that makes
         // `git worktree remove` refuse, so a removal that ought to work fails for a reason
         // nothing in the dialog mentions.
-        app.close_shell(&worktree_id);
+        //
+        // All of them, not one: a worktree can hold several, and the odds that the one running a
+        // dev server is the one left behind are exactly as bad as they sound.
+        for session in app.shells_in(&worktree_id) {
+            app.close_shell(&session);
+        }
 
         // And every agent session, for the same reason with more force. An agent mid-turn is
         // *writing* into the directory git is about to refuse to delete, and unlike a shell it may
@@ -1202,21 +1207,23 @@ fn usable_geometry(rows: u16, cols: u16) -> (u16, u16) {
     )
 }
 
-/// Open — or re-attach to — the long-lived interactive shell for one worktree.
+/// Open a long-lived interactive shell in one worktree.
 ///
 /// # Why this is not `run_action`
 ///
 /// [`run_action`] resolves a project-declared `[[action]]` by id, and this has to work in any
 /// repository, including one with no `wtm.toml` at all. Generalising would mean either
 /// synthesising a fake action or making `action_id` optional — a no-config special case
-/// inside the path whose entire contract is "run what the project declared". The deadline and
-/// the reuse semantics differ too. Three divergences is two functions.
+/// inside the path whose entire contract is "run what the project declared". The deadline
+/// differs too. Two divergences is two functions.
 ///
-/// # Idempotent by worktree
+/// # Every call opens a shell
 ///
-/// A second call while the shell is running returns the same session rather than a second
-/// login shell in the same directory. That covers the double click, and it covers re-attaching
-/// after a webview reload — see [`list_terminals`].
+/// This used to return the running session for a worktree that already had one. It no longer
+/// does: a worktree can hold several shells, so asking twice gets two, exactly as
+/// [`open_agent_session`] does. Re-attaching after a webview reload is [`list_terminals`]' job,
+/// and the frontend is what decides whether ⌘J should focus an existing shell or open another —
+/// that is a question about panes, which this layer knows nothing about.
 ///
 /// # Why guards are *not* checked here
 ///
@@ -1283,7 +1290,7 @@ pub async fn open_terminal(
     .await
 }
 
-/// Which worktrees already have a live dock shell.
+/// Every live dock shell, one row each.
 ///
 /// The re-attach path, and the reason it has to exist in Rust: a webview reload throws away
 /// the frontend's pane-to-session map while the shells keep running in process sessions of
@@ -1303,29 +1310,30 @@ pub async fn list_terminals(app: AppState<'_>) -> Reply<Vec<TerminalSessionView>
         Ok(app
             .live_shells()
             .into_iter()
-            .map(|(worktree, (project, session))| TerminalSessionView {
-                session: session.as_str().to_owned(),
-                worktree,
-                project,
+            .map(|shell| TerminalSessionView {
+                session: shell.session,
+                worktree: shell.worktree,
+                project: shell.project,
             })
             .collect())
     })
     .await
 }
 
-/// Kill a worktree's dock shell and forget it.
+/// Kill one dock shell and forget it.
 ///
 /// The dock's Kill control, and the first half of its Restart control — restart is this
 /// followed by [`open_terminal`], with no wait in between. See `App::close_shell` for why
 /// forgetting the entry is what removes the race.
 ///
-/// Takes only the worktree id: there is no config or git to consult, so requiring a project id
-/// would be ceremony, and the id is a key this app itself put in the map.
+/// Takes the session id rather than the worktree, because a worktree may have several shells and
+/// closing the wrong one would kill somebody's dev server. There is no config or git to consult,
+/// so no project id is needed either; the id is one this app itself put in the map.
 #[tauri::command]
-pub async fn close_terminal(app: AppState<'_>, worktree_id: String) -> Reply<()> {
+pub async fn close_terminal(app: AppState<'_>, session: String) -> Reply<()> {
     let app = Arc::clone(&app);
     blocking(move || {
-        app.close_shell(&worktree_id);
+        app.close_shell(&session);
         Ok(())
     })
     .await

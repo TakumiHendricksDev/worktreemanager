@@ -121,6 +121,13 @@
   padding: var(--sp-2);
 }
 
+/* Geometry only: the limit banner sits between the scroller and the composer, and `.c-banner` is
+   full-bleed by design, so all this contributes is the gutter the two neighbours have. */
+.c-pane__limit {
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+
 .c-pane__empty {
   color: var(--fg-muted);
   font-size: var(--step--1);

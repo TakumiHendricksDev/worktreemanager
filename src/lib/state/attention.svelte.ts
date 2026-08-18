@@ -68,7 +68,8 @@ export interface Announceable {
  * wrong sentence for either — a question is not a permission gate, and saying the same thing
  * about all three meant the notification never told you which one you were coming back to.
  */
-export type Announcement = 'approval' | 'question' | 'plan' | 'finished' | 'failed';
+export type Announcement =
+  'approval' | 'question' | 'plan' | 'finished' | 'failed' | 'limit';
 
 /** A toast's kind. `ask` is the one-time opt-in card, which has no pane behind it. */
 export type ToastKind = 'attention' | 'done' | 'failed' | 'ask';
@@ -292,6 +293,15 @@ class Attention {
     }
     if (what === 'failed') {
       return { title: where, detail: `${who} stopped with an error.` };
+    }
+    if (what === 'limit') {
+      // "needs you" rather than the bare worktree title, unlike `failed`: there is a decision
+      // waiting in the pane, and this is the one kind of stop the user can do something about
+      // immediately.
+      return {
+        title: `${where} needs you`,
+        detail: `${who} is out of usage — you can continue on another agent.`,
+      };
     }
     return { title: where, detail: `${who} finished a turn.` };
   }

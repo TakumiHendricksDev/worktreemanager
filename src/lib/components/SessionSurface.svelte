@@ -21,8 +21,10 @@
    */
   import { onMount, untrack } from 'svelte';
 
+  import type { Brief } from '../ipc/types';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import PlanViewer from './PlanViewer.svelte';
   import SessionTree from './SessionTree.svelte';
   import Button from './ui/Button.svelte';
 
@@ -51,6 +53,15 @@
    * clicked. Two flags rather than one because the two refusals have different fixes.
    */
   const startable = $derived(sessions.options.filter((o) => o.available && o.offered));
+
+  /**
+   * The stored plan being read, if any.
+   *
+   * The `Brief` itself rather than its id, so the dialog survives the list refreshing underneath
+   * it — `sessions.briefs` is replaced wholesale by `refreshBriefs`, and an id would resolve to
+   * `undefined` mid-read and close the dialog for no visible reason.
+   */
+  let reading = $state<Brief | null>(null);
 
   function resumeLabel(record: (typeof resumable)[number]): string {
     if (record.title?.trim()) return record.title;
@@ -167,11 +178,13 @@
       if (!project || !worktree) return;
 
       if (event.key === 'j') {
-        // Still "open a shell here", which is what it has always meant — now expressed as adding a
-        // `shell` pane rather than toggling a drawer.
+        // "Get me to a terminal here", which is what it has always meant. With more than one shell
+        // open, repeating it walks between them — see `focusOrOpenShell`. Opening a *second* shell
+        // is the pane's own Split control, deliberately: a shortcut that spawned a login shell on
+        // every press would be a way to hit the pane cap by holding a key down.
         event.preventDefault();
         event.stopPropagation();
-        void sessions.openShell(project, worktree);
+        void sessions.focusOrOpenShell(project, worktree);
       }
     };
 
@@ -293,9 +306,16 @@
           <ul class="o-plain-list c-surface__resume">
             {#each briefs as brief (brief.id)}
               <li class="o-row">
-                <span class="c-surface__brief" title={brief.markdown.slice(0, 400)}>
+                <!-- A button, because the whole plan used to be reachable only as a native
+                     `title=` tooltip truncated to 400 characters — which is not reading a plan, it
+                     is guessing at one. -->
+                <button
+                  class="c-surface__brief"
+                  title="Read this plan"
+                  onclick={() => (reading = brief)}
+                >
                   {brief.title}
-                </span>
+                </button>
                 <span class="c-status--subtle">{brief.provider}</span>
                 {#each startable as option (option.id)}
                   <button
@@ -378,3 +398,41 @@
     </div>
   {/if}
 </div>
+
+{#if reading}
+  <!-- Outside the `visible` gate on purpose: this surface is hidden with `display: none` while the
+       create pane owns the screen, and a modal inside a hidden subtree is a scrim over nothing. -->
+  <PlanViewer
+    title={reading.title}
+    markdown={reading.markdown}
+    provider={reading.provider}
+    created={reading.created}
+    onclose={() => (reading = null)}
+  >
+    {#snippet actions()}
+      <!-- The same hand-off the row offers, repeated here because having just read the plan is
+           exactly when you decide who should act on it. -->
+      {#each startable as option (option.id)}
+        <Button
+          variant="neutral"
+          size="sm"
+          title="Open a {option.label} session and hand it this plan"
+          onclick={() => {
+            const brief = reading;
+            reading = null;
+            if (brief) {
+              void sessions.handOff(
+                workspace.activeProjectId ?? '',
+                workspace.selected?.id ?? '',
+                option.id,
+                brief,
+              );
+            }
+          }}
+        >
+          → {option.label}
+        </Button>
+      {/each}
+    {/snippet}
+  </PlanViewer>
+{/if}

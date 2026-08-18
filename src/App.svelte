@@ -29,6 +29,7 @@
   import { commands } from './lib/ipc/commands';
   import { errorMessage, type NotificationClick } from './lib/ipc/types';
   import { attention } from './lib/state/attention.svelte';
+  import { composerPrefs } from './lib/state/composer.svelte';
   import { sessions } from './lib/state/sessions.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { workspace } from './lib/state/workspace.svelte';
@@ -96,6 +97,11 @@
   onMount(() => {
     void (async () => {
       await theme.init();
+
+      // Before `sessions.init` for the same reason `attention.init` is: a composer can be typed
+      // into the moment a pane mounts, and reading this late would send the first Enter of the
+      // session under the default rather than the chosen behaviour.
+      await composerPrefs.init();
 
       const stored = await commands.getPref('ui.sidebar_width').catch(() => null);
       const parsed = stored ? Number.parseInt(stored, 10) : NaN;

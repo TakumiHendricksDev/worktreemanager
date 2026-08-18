@@ -295,6 +295,15 @@ struct ClaudeProtocol {
     /// not be silenced by an earlier one that did. See [`Self::on_assistant`].
     streamed: bool,
     turn: u64,
+    /// The prompt footprint of the most recent request, for the context meter.
+    ///
+    /// Cached because `result.usage` is the wrong number for it: the CLI sums usage over *every*
+    /// API round trip in a turn, so with prompt caching the conversation is re-counted once per
+    /// tool call and a fifteen-call turn reports several times the window. `message_start` is the
+    /// only place a single request's own prompt size appears. This is the same `last`-not-`total`
+    /// distinction [`crate::codex`] documents, and Claude's wire format hides the choice rather
+    /// than offering it.
+    context_used: u64,
 }
 
 impl ClaudeProtocol {
@@ -354,8 +363,44 @@ impl ClaudeProtocol {
                     _ => Vec::new(),
                 }
             }
-            // Frame boundaries with nothing in them for a reader. `message_start` carries a usage
-            // snapshot, but the authoritative one is on `result`.
+            /*
+             * The one place a single request's own prompt size is reported.
+             *
+             * Output tokens are deliberately excluded: this is the *prompt* footprint, and an
+             * assistant message that has just been generated is counted again inside the next
+             * request's `cache_read` — adding it here counts it twice, on top of a `result` sum
+             * that already counts every round trip. See [`ClaudeProtocol::context_used`].
+             *
+             * Emitted rather than only cached, so the meter moves during a long turn instead of
+             * jumping when it ends.
+             */
+            "message_start" => {
+                let usage = event.get("message").and_then(|m| m.get("usage"));
+                let field = |key: &str| {
+                    usage
+                        .and_then(|u| u.get(key))
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default()
+                };
+                let footprint = field("input_tokens")
+                    .saturating_add(field("cache_read_input_tokens"))
+                    .saturating_add(field("cache_creation_input_tokens"));
+                if footprint == 0 {
+                    return Vec::new();
+                }
+                self.context_used = footprint;
+                vec![Step::Emit(AgentEvent::Usage(Usage {
+                    tokens_in: field("input_tokens"),
+                    tokens_out: field("output_tokens"),
+                    cached: field("cache_read_input_tokens"),
+                    context_used: footprint,
+                    // Absent here: `contextWindow` is reported only on `result`. The frontend keeps
+                    // the last non-null window it was told, so a mid-turn update still has a
+                    // denominator after the first finished turn.
+                    context_window: None,
+                }))]
+            }
+            // Frame boundaries with nothing in them for a reader.
             _ => Vec::new(),
         }
     }
@@ -792,26 +837,29 @@ impl Protocol for ClaudeProtocol {
                  * reads above the row that closes it.
                  */
                 if message.get("is_error").and_then(Value::as_bool) == Some(true) {
-                    steps.push(Step::Emit(AgentEvent::Failed {
-                        message: message
-                            .get("result")
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or("the turn failed and the CLI gave no reason")
-                            .to_owned(),
-                    }));
+                    let reason = message
+                        .get("result")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("the turn failed and the CLI gave no reason");
+                    // A limit is a different event from a failure because it has a different
+                    // remedy — see `AgentEvent::LimitReached`. This is the route a real exhaustion
+                    // arrives by; `rate_limit_event` below is the structured one, whose
+                    // limit-reached shape nobody has captured.
+                    steps.push(Step::Emit(limit_or_failure(reason)));
                 }
 
                 steps.push(Step::Emit(AgentEvent::TurnFinished {
                     turn: self.turn_label(),
                     usage: Usage {
+                        // Cumulative over the turn, which is what a cost row wants: these three
+                        // are what was billed.
                         tokens_in: field("input_tokens"),
                         tokens_out: field("output_tokens"),
                         cached: field("cache_read_input_tokens"),
-                        context_used: field("input_tokens")
-                            .saturating_add(field("output_tokens"))
-                            .saturating_add(field("cache_read_input_tokens"))
-                            .saturating_add(field("cache_creation_input_tokens")),
+                        // *Not* cumulative, and not derived from the fields above. See
+                        // [`ClaudeProtocol::context_used`] for why summing them is wrong.
+                        context_used: self.context_used,
                         context_window: context_window_of(&message),
                     },
                     // Claude reports real currency, where Codex reports none. Surfaced rather than
@@ -820,14 +868,46 @@ impl Protocol for ClaudeProtocol {
                 }));
                 steps
             }
-            "rate_limit_event" => Vec::new(),
-            "error" => vec![Step::Emit(AgentEvent::Failed {
-                message: message
+            /*
+             * The CLI's own rate-limit telemetry, which is mostly reassurance.
+             *
+             * Silent for the statuses that mean "fine", which is every payload anyone has on record
+             * — this arm drew nothing at all before, and for `allowed` it still must: a warning
+             * every few turns saying the limit has *not* been reached is how a session teaches its
+             * reader to ignore the row that eventually matters.
+             *
+             * Anything else is taken at its word. Best-effort by admission: the field names below
+             * are the ones the allowed payload uses, and a throttled one may spell them
+             * differently, in which case the `result` arm above still catches the real exhaustion.
+             */
+            "rate_limit_event" => {
+                let info = message.get("rate_limit_info").unwrap_or(&Value::Null);
+                let status = info
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("allowed");
+                if matches!(status, "allowed" | "allowed_warning") {
+                    return Vec::new();
+                }
+                vec![Step::Emit(AgentEvent::LimitReached {
+                    message: info
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("Claude has reached its usage limit.")
+                        .to_owned(),
+                    resets_at: info
+                        .get("resetsAt")
+                        .or_else(|| info.get("resets_at"))
+                        .and_then(Value::as_u64),
+                })]
+            }
+            "error" => vec![Step::Emit(limit_or_failure(
+                message
                     .get("message")
                     .and_then(Value::as_str)
-                    .unwrap_or("the CLI reported an error")
-                    .to_owned(),
-            })],
+                    .unwrap_or("the CLI reported an error"),
+            ))],
             other => vec![Step::Emit(AgentEvent::Raw {
                 provider: ID.to_owned(),
                 event: other.to_owned(),
@@ -1043,17 +1123,51 @@ fn file_change_preview(tool: &str, input: &Value) -> String {
     }
 }
 
-/// The model's context window, from `result.modelUsage.<model>.contextWindow`.
+/// `reason` as a limit if it names one, otherwise as an ordinary failure.
 ///
-/// Nested under the model name, which is not known in advance — so the first entry is taken. A
-/// single turn only ever uses one model unless a fallback fired, and in that case either answer is
-/// as true as the other.
+/// One helper for both of the arms that produce a failure, so the two cannot drift into disagreeing
+/// about what counts — which would present as "the same exhaustion offers a hand-off on Tuesday and
+/// not on Wednesday", depending on which of the CLI's two error shapes it arrived in.
+fn limit_or_failure(reason: &str) -> AgentEvent {
+    match crate::limits::classify(reason) {
+        Some(signal) => AgentEvent::LimitReached {
+            message: reason.to_owned(),
+            resets_at: signal.resets_at,
+        },
+        None => AgentEvent::Failed {
+            message: reason.to_owned(),
+        },
+    }
+}
+
+/// The main model's context window, from `result.modelUsage.<model>.contextWindow`.
+///
+/// # Why the busiest entry rather than the first
+///
+/// Nested under the model name, which is not known in advance, and there is routinely more than
+/// one: the CLI bills a small background model for titles and side work in the same turn. Taking
+/// "the first" was doubly wrong — `serde_json`'s `Map` is a `BTreeMap` here (no `preserve_order`
+/// feature in this tree), so iteration is *alphabetical by model id*, and `claude-haiku-…` sorts
+/// ahead of both `claude-opus-…` and `claude-sonnet-…`. A million-token session was being measured
+/// against the background model's 200k window and read five times too high.
+///
+/// The model that read the most input is the one whose window the conversation actually has to fit
+/// in, so that is the entry to trust.
 fn context_window_of(result: &Value) -> Option<u64> {
     result
         .get("modelUsage")?
         .as_object()?
         .values()
-        .find_map(|m| m.get("contextWindow").and_then(Value::as_u64))
+        .filter_map(|m| {
+            let window = m.get("contextWindow").and_then(Value::as_u64)?;
+            let input = m
+                .get("inputTokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            Some((input, window))
+        })
+        .max_by_key(|&(input, _)| input)
+        .map(|(_, window)| window)
 }
 
 fn claude_questions(input: &Value) -> Vec<UserInputQuestion> {

@@ -18,6 +18,7 @@
   import { commands } from '../ipc/commands';
   import { errorMessage, type AgentAttachment } from '../ipc/types';
   import { commandsFor } from '../agent-commands';
+  import { composerPrefs } from '../state/composer.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
@@ -27,6 +28,7 @@
   import SideQuestion from './SideQuestion.svelte';
   import Suggest from './Suggest.svelte';
   import Terminal from './Terminal.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import Dialog from './ui/Dialog.svelte';
   import Icon from './ui/Icon.svelte';
@@ -138,16 +140,31 @@
   /** The oldest unanswered approval. One at a time, in arrival order. */
   const blocking = $derived(pane.approvals[0] ?? null);
   const side = $derived(sessions.sideFor(pane.id));
-  const contextUsed = $derived(
-    pane.usage === null
-      ? 0
-      : pane.usage.contextUsed || pane.usage.tokensIn + pane.usage.cached,
-  );
-  const contextPercent = $derived(
-    pane.usage?.contextWindow
-      ? Math.min(100, Math.round((contextUsed / pane.usage.contextWindow) * 100))
-      : null,
-  );
+  /*
+   * The provider's own figure, with no arithmetic on this side.
+   *
+   * There used to be a `tokensIn + cached` fallback for a zero `contextUsed`, and it was wrong for
+   * whichever provider it was not written for: Claude reports those two disjointly, Codex's
+   * `inputTokens` already contains `cachedInputTokens`, so the sum double counted there. A provider
+   * that has not reported a footprint yet is a thing to say, not a thing to estimate.
+   */
+  const contextUsed = $derived(pane.usage?.contextUsed ?? 0);
+
+  /**
+   * How full the window is, or `null` when that cannot be said truthfully.
+   *
+   * `null` rather than a clamp, and the distinction is the whole reason this reads correctly now.
+   * A ratio over 100% does not mean "completely full"; it means the numerator and the denominator
+   * are not measuring the same thing — which is exactly what was happening, and clamping turned an
+   * obviously-broken 340% into a believable "100%" that sat there for the life of the session. An
+   * em dash is falsifiable; a plausible wrong number is not.
+   */
+  const contextPercent = $derived.by(() => {
+    const window = pane.usage?.contextWindow ?? 0;
+    if (window <= 0 || contextUsed <= 0) return null;
+    const percent = Math.round((contextUsed / window) * 100);
+    return percent > 100 ? null : percent;
+  });
 
   /**
    * Whether this provider's allow can carry a rewritten payload.
@@ -178,6 +195,34 @@
         capability: sessions.capabilities[o.id] ?? null,
       })),
   );
+
+  /**
+   * Where a limited conversation could carry on: another agent, installed and offered here.
+   *
+   * Gated on both flags for the same reason the model menu is — `available` alone would offer a
+   * hand-off whose spawn `open_agent_session` refuses on `offers_agent`, turning "continue on Codex"
+   * into a config error. Null leaves the banner explaining the limit with nothing to click, which is
+   * the honest outcome on a machine with one agent installed.
+   */
+  const continuation = $derived(
+    sessions.options.find((o) => o.id !== provider && o.available && o.offered) ?? null,
+  );
+
+  /**
+   * When the limit lifts, as a clock time, or null if the provider did not say.
+   *
+   * A fixed string, not a countdown: timers are banned on this side, and a wall-clock time is the
+   * more useful form anyway — "resets around 3:05 PM" survives the window losing focus, where
+   * "in 43 minutes" is wrong as soon as you look away.
+   */
+  const resetsAt = $derived.by(() => {
+    const seconds = pane.limit?.resetsAt ?? null;
+    if (seconds === null) return null;
+    // Seconds on the wire, milliseconds in `Date`.
+    return new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(
+      seconds * 1000,
+    );
+  });
 
   /**
    * What a restart would apply, as a sentence — or null when it would apply nothing.
@@ -385,21 +430,45 @@
   }
 
   /*
-   * ⌘⏎ sends; a bare Enter inserts a newline.
+   * ⌘⏎ always sends. Whether a *bare* Enter also sends is `composerPrefs.sendKey`.
    *
-   * That way round because an agent prompt is routinely several lines — a stack trace, a diff, a list
-   * of files — and a composer where Enter submits makes pasting one an accident.
+   * The default is still ⌘⏎-only, because an agent prompt is routinely several lines — a stack
+   * trace, a diff, a list of files — and a composer where Enter submits makes pasting one an
+   * accident. But that is an argument about what a particular person pastes, not a universal one,
+   * so it is a setting; `state/composer.svelte.ts` carries the full reasoning.
    *
-   * The typeahead borrows Enter, Tab, the arrows and Escape, but **only while it is open** — which
-   * is why every branch here is guarded on `query !== null` rather than on a mode flag. A composer
-   * that swallowed Enter because a menu was open a moment ago is the failure this shape avoids.
+   * Three orderings matter here, and all three are load-bearing:
+   *
+   * 1. ⌘⏎ is checked first and works in both modes, so the habit never breaks.
+   * 2. The typeahead's claim on Enter is checked *before* Enter-to-send. It borrows Enter, Tab, the
+   *    arrows and Escape, but **only while it is open** — which is why the guard is `query !== null`
+   *    rather than a mode flag. Sending on the Enter that was meant to accept `@src/main.ts` would
+   *    fire a half-written prompt.
+   * 3. Shift+Enter is the newline in Enter mode, and it must be excluded *before* the send, not
+   *    after — otherwise there is no way to write a second line at all.
    */
   function onKeydown(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       void submit(event);
       return;
     }
-    if (query === null || suggestions.length === 0) return;
+
+    const typeaheadOpen = query !== null && suggestions.length > 0;
+    if (
+      composerPrefs.sendKey === 'enter' &&
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.isComposing &&
+      !typeaheadOpen
+    ) {
+      // `isComposing` above is not decoration: an IME candidate is accepted with Enter, and
+      // sending on it would submit a half-typed Japanese or Chinese prompt mid-word.
+      void submit(event);
+      return;
+    }
+
+    if (!typeaheadOpen) return;
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
@@ -786,23 +855,30 @@
         </Button>
       {/if}
 
-      {#if provider !== null && !pane.ended && !pane.error}
+      <!-- Shells get this too, and it is how a second terminal is opened. The guard used to require
+           a provider, which was the last thing keeping a worktree to one shell once the backend
+           allowed several. Both arms pass `pane.id` as the neighbour: the pane whose button was
+           pressed, not whichever one the focus map thinks. See `Sessions.place` for why those
+           differ on macOS. -->
+      {#if !pane.ended && !pane.error}
         <Button
           variant="quiet"
           size="sm"
           icon="sm"
-          title="Split this session to the right"
-          ariaLabel="Split right"
+          title={provider === null
+            ? 'Open another shell to the right'
+            : 'Split this session to the right'}
+          ariaLabel={provider === null ? 'New shell to the right' : 'Split right'}
           onclick={() =>
-            void sessions.openAgent(
-              pane.projectId,
-              pane.worktreeId,
-              provider ?? '',
-              'right',
-              // The pane whose button was pressed, not whichever one the focus map thinks. See
-              // `Sessions.place` for why those differ on macOS.
-              pane.id,
-            )}
+            void (provider === null
+              ? sessions.openShell(pane.projectId, pane.worktreeId, 'right', pane.id)
+              : sessions.openAgent(
+                  pane.projectId,
+                  pane.worktreeId,
+                  provider,
+                  'right',
+                  pane.id,
+                ))}
         >
           <Icon name="split-right" size={13} />
         </Button>
@@ -857,6 +933,40 @@
       <SideQuestion {side} />
     {/if}
 
+    {#if pane.limit && !pane.ended}
+      <!--
+        Here rather than as a transcript row, for the reason the approval card is: the transcript
+        scrolls, and an offer that has scrolled away is an offer nobody takes. The transcript gets a
+        `notice` row for the same moment, which is the durable record — this is the decision.
+      -->
+      <div class="c-pane__limit">
+        <Banner variant="warn">
+          {pane.limit.message}{#if resetsAt}
+            — resets around {resetsAt}{/if}
+          {#snippet action()}
+            {#if continuation}
+              <Button
+                variant="neutral"
+                size="sm"
+                title="Open a {continuation.label} session here and carry this conversation into it"
+                onclick={() => void sessions.continueOn(pane.id, continuation.id)}
+              >
+                Continue on {continuation.label}
+              </Button>
+            {/if}
+            <Button
+              variant="quiet"
+              size="sm"
+              title="Hide this. The session stays out of usage."
+              onclick={() => sessions.dismissLimit(pane.id)}
+            >
+              Dismiss
+            </Button>
+          {/snippet}
+        </Banner>
+      </div>
+    {/if}
+
     <!--
       One card holding the message, what will run it, and the control that sends it.
 
@@ -870,10 +980,17 @@
         <section class="c-context" aria-label="Session context usage">
           <div class="c-context__head">
             <strong>Context window</strong>
+            <!--
+              Three states, not two. A pane with a footprint but no window to compare it against
+              can still say something true, and "Waiting for usage" would have been a lie about a
+              number that is sitting right there.
+            -->
             <span
-              >{contextPercent === null
-                ? 'Waiting for usage'
-                : `${contextPercent}% used`}</span
+              >{contextPercent !== null
+                ? `${contextPercent}% used`
+                : contextUsed > 0
+                  ? `${formatTokens(contextUsed)} in context`
+                  : 'Waiting for usage'}</span
             >
           </div>
           <div
@@ -911,6 +1028,13 @@
                 <dd>{formatTokens(pane.usage.tokensOut)}</dd>
               </div>
             </dl>
+            <!--
+              Said out loud because the two halves of this card count different things, and a reader
+              comparing them is right to be confused: the top row is the last request's prompt, the
+              bottom three are everything the turn billed across all of its round trips. They do not
+              add up to each other and are not supposed to.
+            -->
+            <p>Input, cached and output are totals for the last turn.</p>
           {:else}
             <p>Usage appears after the provider reports its first token update.</p>
           {/if}
@@ -1067,8 +1191,11 @@
               </Button>
             {:else}
               <!-- The shortcut lives here rather than in the placeholder, where it was competing
-                   with the prompt for the one line of text a user reads before typing. -->
-              <span class="c-composer__hint" aria-hidden="true">⌘↵</span>
+                   with the prompt for the one line of text a user reads before typing. It follows
+                   the setting because a hint that names the wrong key is worse than no hint. -->
+              <span class="c-composer__hint" aria-hidden="true">
+                {composerPrefs.sendKey === 'enter' ? '↵' : '⌘↵'}
+              </span>
               <Button
                 variant="accent"
                 size="sm"

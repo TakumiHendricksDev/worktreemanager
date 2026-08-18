@@ -41,6 +41,7 @@ import {
   type SpawnedSession,
 } from '../ipc/types';
 import { statusOf, worse, type PaneStatus } from '../status';
+import { transferPrompt } from '../transfer';
 import { attention, type Announceable, type Announcement } from './attention.svelte';
 import {
   insert,
@@ -235,6 +236,18 @@ export interface Pane {
   skills: AgentSkill[];
   /** Parent pane for an ephemeral `/btw` fork. Side panes are rendered as overlays, not splits. */
   sideOf: string | null;
+  /**
+   * The provider says this session is out of usage, and the offer to continue elsewhere is standing.
+   *
+   * A register outside the transcript, like `usage` and `pendingProvider`: the banner needs the
+   * *current* answer, and scanning a 20 000-event log backwards for the most recent limit on every
+   * render is the cost `working` was moved out of the transcript to avoid.
+   *
+   * Cleared four ways — a turn starting (the limit lifted, and a turn that runs is the only proof of
+   * that worth trusting), a restart, an accepted transfer, and a dismissal. Never by elapsed time:
+   * that would need a timer, and there are none on this side.
+   */
+  limit: { message: string; resetsAt: number | null } | null;
 }
 
 let nextPaneId = 0;
@@ -397,9 +410,9 @@ class Sessions {
     return this.layouts[worktreeId] ?? null;
   }
 
-  /** The worktree's shell pane, if it has one. */
-  shellIn(worktreeId: string | null): Pane | null {
-    return this.panesIn(worktreeId).find((p) => p.kind.kind === 'shell') ?? null;
+  /** The worktree's shell panes, in creation order. */
+  shellsIn(worktreeId: string | null): Pane[] {
+    return this.panesIn(worktreeId).filter((p) => p.kind.kind === 'shell');
   }
 
   /**
@@ -821,6 +834,56 @@ class Sessions {
   }
 
   /**
+   * Carry a limited session's conversation to the other provider and keep working.
+   *
+   * # Why a new pane rather than a restart
+   *
+   * `restart` is the mechanism that already changes a pane's provider, and it is the wrong one here
+   * for two reasons. It clears the transcript — which is the thing being transferred, and losing it
+   * mid-transfer would be unrecoverable — and it ends the old session, whose conversation is still
+   * resumable once the limit lifts. So the old pane is left exactly as it is, and the continuation
+   * opens beside it: two panes, one conversation, and the option of going back.
+   *
+   * The digest is built here and sent as an ordinary first turn, the same shape as `handOff`. See
+   * `../transfer` for what goes into it and what is deliberately left out.
+   */
+  async continueOn(paneId: string, provider: string): Promise<void> {
+    const source = this.paneById(paneId);
+    if (!source) return;
+
+    const kind = source.kind;
+    const fromLabel =
+      kind.kind === 'agent'
+        ? (this.options.find((o) => o.id === kind.provider)?.label ?? kind.provider)
+        : 'another agent';
+    // Read before the await: `openAgent` can evict nothing, but the pane's log keeps growing while
+    // the new session starts, and the transfer should be of the conversation as the user saw it.
+    const prompt = transferPrompt(source.events, fromLabel);
+
+    await this.openAgent(source.projectId, source.worktreeId, provider, 'right', paneId);
+    const pane = this.panesIn(source.worktreeId).at(-1);
+    // `hasRoom` refuses at the cap, in which case no pane was created and `atCapacity` is already
+    // set for the UI to explain. Bailing out leaves the offer standing, which is right: nothing has
+    // been transferred.
+    if (!pane || pane.id === paneId) return;
+
+    const sent = await this.send(pane.id, prompt);
+    // Only on a turn that was actually accepted. A failed spawn leaves the banner up, so the user
+    // can try the other provider or wait the limit out rather than being told the work moved when it
+    // did not.
+    if (sent) {
+      const live = this.paneById(paneId);
+      if (live) live.limit = null;
+    }
+  }
+
+  /** Put the limit offer away without taking it. The session stays limited; the banner goes. */
+  dismissLimit(paneId: string): void {
+    const pane = this.paneById(paneId);
+    if (pane) pane.limit = null;
+  }
+
+  /**
    * Re-probe which agents this machine has, and which this repository offers.
    *
    * Silent on failure — an auxiliary convenience. Called at startup without a project and again
@@ -889,6 +952,7 @@ class Sessions {
       pendingProvider: null,
       skills: [],
       sideOf: null,
+      limit: null,
     };
   }
 
@@ -935,24 +999,29 @@ class Sessions {
   }
 
   /**
-   * Open the worktree's shell, or focus it if it already has one.
+   * Open a shell in the worktree. Not idempotent — several in one worktree is the point.
    *
-   * Idempotent per worktree, unlike an agent session: a second `$SHELL -l` in the same directory is
-   * never what anyone means, which is also why `open_terminal` is idempotent in Rust.
+   * It used to focus an existing shell instead of opening a second one, on the grounds that a
+   * second `$SHELL -l` in one directory is never what anyone means. It routinely is: a dev server
+   * in one and `git` in another is the ordinary way to work, and having to leave the app for it
+   * was the single most-asked-about limitation of the dock. Focusing is still what ⌘J does, and
+   * that now lives in `focusOrOpenShell` where the caller can choose.
+   *
+   * `beside` names the pane the new one lands next to, as in `openAgent`.
    */
-  async openShell(projectId: string, worktreeId: string): Promise<void> {
-    const existing = this.shellIn(worktreeId);
-    if (existing) {
-      this.focus(worktreeId, existing.id);
-      return;
-    }
+  async openShell(
+    projectId: string,
+    worktreeId: string,
+    placement: Placement = 'below',
+    beside?: string,
+  ): Promise<void> {
     if (!this.hasRoom(worktreeId)) return;
 
     const pane = this.blank({ kind: 'shell' }, projectId, worktreeId);
     // Appended before the spawn is asked for: the pane mounts a terminal with a null session, which
     // is what makes the shell's first prompt unlosable. See `Terminal.svelte`.
     this.panes = [...this.panes, pane];
-    this.place(worktreeId, pane.id, 'below');
+    this.place(worktreeId, pane.id, placement, beside);
 
     try {
       const session = await commands.openTerminal({
@@ -967,6 +1036,38 @@ class Sessions {
       const live = this.paneById(pane.id);
       if (live) live.error = errorMessage(e);
     }
+  }
+
+  /**
+   * What ⌘J does: reach a shell here, opening one only if there is none.
+   *
+   * Three cases, and the third is the interesting one. With several shells open, repeating the
+   * shortcut *cycles* them rather than focusing the same one forever or opening an endless supply
+   * — which is the keyboard half of what a tab strip would give, without a stacked layout node.
+   *
+   * Cycling follows the layout's visual order rather than creation order, because the user is
+   * looking at tiles, not at a list. `panesOf` walks the tree left-to-right, top-to-bottom.
+   */
+  async focusOrOpenShell(projectId: string, worktreeId: string): Promise<void> {
+    const shells = this.shellsIn(worktreeId);
+    if (shells.length === 0) {
+      await this.openShell(projectId, worktreeId);
+      return;
+    }
+
+    const order = panesOf(this.layoutFor(worktreeId));
+    const visual = order
+      .map((id) => shells.find((pane) => pane.id === id))
+      .filter((pane): pane is Pane => pane !== undefined);
+    const ordered = visual.length === shells.length ? visual : shells;
+
+    // Only advance from a shell. Coming from an agent pane the intent is "get me to a terminal",
+    // and skipping the first one because the focus map happened to point elsewhere would read as
+    // the shortcut losing a shell.
+    const current = this.focused[worktreeId] ?? null;
+    const at = ordered.findIndex((pane) => pane.id === current);
+    const next = ordered[at === -1 ? 0 : (at + 1) % ordered.length];
+    if (next) this.focus(worktreeId, next.id);
   }
 
   /**
@@ -1220,7 +1321,7 @@ class Sessions {
 
     if (pane.session) {
       try {
-        if (pane.kind.kind === 'shell') await commands.closeTerminal(pane.worktreeId);
+        if (pane.kind.kind === 'shell') await commands.closeTerminal(pane.session);
         else await commands.closeAgentSession(pane.session);
       } catch (e) {
         this.error = errorMessage(e);
@@ -1251,7 +1352,7 @@ class Sessions {
 
     if (pane.session && pane.ended === null) {
       try {
-        if (pane.kind.kind === 'shell') await commands.closeTerminal(pane.worktreeId);
+        if (pane.kind.kind === 'shell') await commands.closeTerminal(pane.session);
         else await commands.closeAgentSession(pane.session);
       } catch {
         /* Already gone is the ordinary case here. */
@@ -1270,6 +1371,9 @@ class Sessions {
     pane.ready = false;
     pane.ended = null;
     pane.error = null;
+    // The offer belonged to a conversation that no longer exists. A restarted session may well hit
+    // the same limit on its first turn, and then it says so again.
+    pane.limit = null;
     // The whole point of the marker: the new process is spawned with the effort the picker is
     // showing, so the two now agree and the "restart to apply" hint has been satisfied.
     pane.effortPending = false;
@@ -1342,7 +1446,7 @@ class Sessions {
     for (const pane of doomed) {
       if (!pane.session) continue;
       if (pane.kind.kind === 'shell') {
-        void commands.closeTerminal(pane.worktreeId).catch(() => {});
+        void commands.closeTerminal(pane.session).catch(() => {});
       } else {
         void commands.closeAgentSession(pane.session).catch(() => {});
       }
@@ -1412,6 +1516,10 @@ class Sessions {
      */
     if (event.kind === 'turn_started') {
       pane.working = true;
+      // A turn that starts is the only trustworthy evidence a limit has lifted, and it costs nothing
+      // to read it that way — the alternative is a countdown against `resetsAt`, which needs a timer
+      // and would clear the offer while the provider was still refusing.
+      pane.limit = null;
     } else if (event.kind === 'turn_finished') {
       pane.working = false;
       if (pane.sideOf === null && attention.announce('finished', announceable(pane))) {
@@ -1424,6 +1532,12 @@ class Sessions {
     } else if (event.kind === 'failed') {
       pane.working = false;
       if (pane.sideOf === null && attention.announce('failed', announceable(pane))) {
+        pane.unseen = true;
+      }
+    } else if (event.kind === 'limit_reached') {
+      pane.working = false;
+      pane.limit = { message: event.message, resetsAt: event.resetsAt };
+      if (pane.sideOf === null && attention.announce('limit', announceable(pane))) {
         pane.unseen = true;
       }
     }
@@ -1453,10 +1567,17 @@ class Sessions {
         tokensOut: event.tokensOut,
         cached: event.cached,
         contextUsed: event.contextUsed,
-        contextWindow: event.contextWindow,
+        // The last window we were told, when this update does not carry one. Claude reports the
+        // window only when a turn ends but reports the footprint on every request, so dropping it
+        // here would blank the meter's denominator between turns — a live numerator with no
+        // denominator reads as "—", which is worse than the stale-but-correct window.
+        contextWindow: event.contextWindow ?? pane.usage?.contextWindow ?? null,
       };
     } else if (event.kind === 'turn_finished') {
-      pane.usage = event.usage;
+      pane.usage = {
+        ...event.usage,
+        contextWindow: event.usage.contextWindow ?? pane.usage?.contextWindow ?? null,
+      };
     }
 
     pane.events.push(event);

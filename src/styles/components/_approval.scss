@@ -44,9 +44,24 @@
   max-height: 14lh;
 }
 
-.c-approval__body--diff,
-.c-approval__body--plan {
+.c-approval__body--diff {
   white-space: pre-wrap;
+}
+
+/*
+ * The plan preview, which is rendered markdown rather than source.
+ *
+ * So it undoes the three things `__body` sets for a code payload — the mono face, the code
+ * background, and `pre-wrap` — because `.c-markdown` inside it owns all of that and a plan is a
+ * document, not a diff. The bounded scroller is the one part it keeps, and taller: the card must
+ * stay answerable, but fourteen lines of a plan is a keyhole. Reading it properly is the dialog.
+ */
+.c-approval__body--plan {
+  max-height: 22lh;
+  padding: var(--sp-3);
+  background: var(--bg);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
 }
 
 .c-approval__where,

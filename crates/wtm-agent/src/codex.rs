@@ -412,9 +412,10 @@ impl CodexProtocol {
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("the app server rejected a request");
-            return vec![Step::Emit(AgentEvent::Failed {
-                message: detail.to_owned(),
-            })];
+            // Classified here too, not only on the `error` notification: a `turn/start` refused
+            // because the account is out of credit is rejected as a *reply*, which is the most
+            // likely single place a Codex exhaustion actually lands.
+            return vec![Step::Emit(limit_or_failure(detail))];
         }
 
         if Some(id) == self.init_id {
@@ -578,13 +579,34 @@ impl CodexProtocol {
                         .to_owned(),
                 }
             }
-            "error" => AgentEvent::Failed {
-                message: params
+            "error" => limit_or_failure(
+                params
                     .get("message")
                     .and_then(Value::as_str)
-                    .unwrap_or("the app server reported an error")
-                    .to_owned(),
-            },
+                    .unwrap_or("the app server reported an error"),
+            ),
+            /*
+             * The account's rate-limit windows, which arrive routinely and mean nothing until one
+             * is full.
+             *
+             * Was in the silent list below, and for every payload on record it still is: the
+             * captured one carries `params: {}`, and a notification that fires on a schedule must
+             * not draw a row for saying "you have plenty left".
+             *
+             * `usedPercent` at or over 100 is the signal. Codex states the reset as a *duration*
+             * (`resetsInSeconds`), which cannot become a timestamp here — a `Protocol` is a pure
+             * state machine with no clock, which is what makes it testable from recorded lines —
+             * so it goes into the sentence instead, where being approximate is honest.
+             */
+            "account/rateLimits/updated" => {
+                let Some(exhausted) = exhausted_window(params) else {
+                    return Vec::new();
+                };
+                AgentEvent::LimitReached {
+                    message: exhausted,
+                    resets_at: None,
+                }
+            }
             // Recognised, and deliberately not shown. These are lifecycle chatter with nothing in
             // them for a reader, and a real turn emitted eleven of them — six
             // `mcpServer/startupStatus/updated` alone — so `Raw`-ing them buries the reply in
@@ -598,7 +620,6 @@ impl CodexProtocol {
             | "mcpServer/startupStatus/updated"
             | "remoteControl/status/changed"
             | "account/updated"
-            | "account/rateLimits/updated"
             | "serverRequest/resolved" => return Vec::new(),
             // Everything else — and there are around seventy notification methods — becomes a
             // collapsed row. Deliberate: see the `agent` model's docs on why this is the design
@@ -979,6 +1000,60 @@ fn usage_from(params: Option<&Value>) -> Usage {
         context_used: field("totalTokens"),
         context_window: usage.get("modelContextWindow").and_then(Value::as_u64),
     }
+}
+
+/// `reason` as a limit if it names one, otherwise as an ordinary failure.
+///
+/// The twin of `claude::limit_or_failure`, duplicated rather than shared because each provider
+/// module owns its own mapping and the shared half — deciding what counts as a limit — is what
+/// `crate::limits` is. Four lines is the right amount of duplication to keep the two modules
+/// independent.
+fn limit_or_failure(reason: &str) -> AgentEvent {
+    match crate::limits::classify(reason) {
+        Some(signal) => AgentEvent::LimitReached {
+            message: reason.to_owned(),
+            resets_at: signal.resets_at,
+        },
+        None => AgentEvent::Failed {
+            message: reason.to_owned(),
+        },
+    }
+}
+
+/// A sentence about the first rate-limit window that is full, or `None` while there is room.
+///
+/// ```text
+/// params.rateLimits.primary   = { usedPercent, windowMinutes, resetsInSeconds }
+/// params.rateLimits.secondary = { … the same, for the longer window … }
+/// ```
+///
+/// The window *names* are what Codex calls them and mean nothing to a reader, so the sentence is
+/// built from the numbers instead. Both windows are checked because either can be the binding one:
+/// the short window fills during a burst of tool calls, the long one over a working day.
+fn exhausted_window(params: &Value) -> Option<String> {
+    let limits = params.get("rateLimits")?.as_object()?;
+    let full = limits.values().find(|window| {
+        window
+            .get("usedPercent")
+            .and_then(Value::as_f64)
+            .is_some_and(|used| used >= 100.0)
+    })?;
+
+    // Minutes rather than seconds: this is rendered as prose, and "resets in about 210 minutes" is
+    // read at a glance where "12600 seconds" has to be divided first. Rounded up, so the sentence
+    // never says the limit is back before it is.
+    let wait = full
+        .get("resetsInSeconds")
+        .and_then(Value::as_u64)
+        .map(|seconds| seconds.div_ceil(60));
+
+    Some(match wait {
+        Some(minutes) if minutes > 0 => format!(
+            "Codex has used its whole rate-limit window — it resets in about {minutes} minute{}.",
+            if minutes == 1 { "" } else { "s" }
+        ),
+        _ => "Codex has used its whole rate-limit window.".to_owned(),
+    })
 }
 
 /// Visible user and assistant messages from a resumed app-server thread.

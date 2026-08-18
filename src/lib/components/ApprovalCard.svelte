@@ -19,6 +19,8 @@
    * broken — `canEdit` is the prop that says which.
    */
   import type { ApprovalAnswer, ApprovalRequest } from '../ipc/types';
+  import Markdown from './Markdown.svelte';
+  import PlanViewer from './PlanViewer.svelte';
   import Button from './ui/Button.svelte';
 
   const {
@@ -56,6 +58,16 @@
   let other = $state<Record<string, string>>({});
   let otherSelected = $state<Record<string, boolean>>({});
   let notes = $state('');
+
+  /*
+   * The card shows the plan; the dialog is for reading it properly.
+   *
+   * Both, rather than one or the other. The card has to stay answerable without a click — its
+   * Allow must be reachable, which is why the body is a bounded scroller — but a plan is routinely
+   * longer than that box, and "approve this plan" is not a decision anyone should make through a
+   * fourteen-line window.
+   */
+  let reading = $state(false);
 
   const questionsKey = $derived(
     request.kind === 'user_input'
@@ -151,7 +163,11 @@
     {/if}
     <p class="c-approval__where">{request.summary}</p>
   {:else if request.kind === 'plan_review'}
-    <pre class="c-approval__body c-approval__body--plan">{request.markdown}</pre>
+    <!-- Through the renderer, like every other markdown in the app. As literal source this was the
+         only document in the transcript showing its own `##` and `**` as punctuation. -->
+    <div class="c-approval__body c-approval__body--plan">
+      <Markdown source={request.markdown} />
+    </div>
   {:else if request.kind === 'tool_input'}
     <p class="c-approval__where">{request.prompt}</p>
   {:else}
@@ -261,6 +277,13 @@
         Submit answer
       </Button>
     {:else}
+      {#if request.kind === 'plan_review'}
+        <!-- First, ahead of Allow. Reading the plan is the step this card is asking you to take,
+             and putting it after the approve button implies the reverse order. -->
+        <Button variant="neutral" size="sm" onclick={() => (reading = true)}>
+          Read the plan
+        </Button>
+      {/if}
       <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}
         >Allow</Button
       >
@@ -297,3 +320,40 @@
     {/if}
   </div>
 </div>
+
+{#if reading && request.kind === 'plan_review'}
+  <!--
+    Answerable from inside the reader, because otherwise the flow is: open, read, close, then find
+    the card again and remember what you decided. The dialog's own Close is what leaves it
+    unanswered, which is the third option and needs no button of its own.
+  -->
+  <PlanViewer
+    title="Proposed plan"
+    markdown={request.markdown}
+    path={request.path}
+    onclose={() => (reading = false)}
+  >
+    {#snippet actions()}
+      <Button
+        variant="accent"
+        size="sm"
+        onclick={() => {
+          reading = false;
+          onanswer({ kind: 'allow' });
+        }}
+      >
+        Approve
+      </Button>
+      <Button
+        variant="danger-outline"
+        size="sm"
+        onclick={() => {
+          reading = false;
+          onanswer({ kind: 'deny', message: null });
+        }}
+      >
+        Deny
+      </Button>
+    {/snippet}
+  </PlanViewer>
+{/if}

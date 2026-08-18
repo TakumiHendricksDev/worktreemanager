@@ -57,14 +57,6 @@
   text-overflow: ellipsis;
 }
 
-/* Monospace, because arrows and digits in a monospace face are metrically correct by construction —
-   the one case where a text glyph beats an icon, as `icons.ts` records for the sidebar's flag row. */
-.c-worktree-bar__diverge {
-  font-family: var(--font-mono);
-  font-size: var(--step--2);
-  white-space: nowrap;
-}
-
 .c-worktree-bar__actions {
   flex: 0 0 auto;
   display: flex;

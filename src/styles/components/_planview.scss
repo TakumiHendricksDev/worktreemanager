@@ -1,0 +1,39 @@
+/*
+ * A plan, given a reading surface.
+ *
+ * Components layer, and almost nothing in it — that is the point. `.c-markdown` already owns every
+ * typographic decision a document needs, so this block's whole job is the *measure* and the footer,
+ * and it deliberately does not restate a single type rule.
+ *
+ * # Why a measure and not the dialog's full width
+ *
+ * `.c-dialog--wide` is sized for the settings panels and the schema form, which are controls in a
+ * grid. A plan is prose, and prose set to that width is the one thing that makes a long document
+ * genuinely hard to read. The same 82ch argument `_transcript.scss` makes, one step tighter,
+ * because a dialog has no pane chrome to share the line with.
+ */
+
+.c-planview {
+  /* Centred rather than left-aligned in the wide panel: an off-centre column of prose in an
+     otherwise symmetrical modal reads as a layout bug. */
+  max-width: 74ch;
+  margin-inline: auto;
+}
+
+/*
+ * Provenance, under the plan rather than over it.
+ *
+ * Which agent wrote it and when are things you check *after* reading, if at all — above the first
+ * heading they would be the first thing read, and a plan's own title is already in the dialog head.
+ */
+.c-planview__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  max-width: 74ch;
+  margin: var(--sp-4) auto 0;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}

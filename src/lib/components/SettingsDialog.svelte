@@ -29,6 +29,7 @@
   import { commands } from '../ipc/commands';
   import { errorMessage, type Doctor } from '../ipc/types';
   import { attention } from '../state/attention.svelte';
+  import { composerPrefs, type SendKey } from '../state/composer.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
@@ -47,6 +48,24 @@
     { value: 'system', label: 'Follow the system' },
     { value: 'light', label: 'Light' },
     { value: 'dark', label: 'Dark' },
+  ];
+
+  /*
+   * Each option names *both* keys, because the interesting half of this choice is what happens to
+   * the other one. "Enter sends" without "Shift+Enter for a newline" reads like losing the ability
+   * to write a second line, which is the thing that makes people not touch the setting.
+   */
+  const SEND_KEYS: { value: SendKey; label: string; help: string }[] = [
+    {
+      value: 'mod-enter',
+      label: '⌘ Enter sends',
+      help: 'Enter starts a new line. Safer for pasting stack traces and diffs.',
+    },
+    {
+      value: 'enter',
+      label: 'Enter sends',
+      help: 'Shift+Enter starts a new line. ⌘ Enter still sends too.',
+    },
   ];
 
   let doctor = $state<Doctor | null>(null);
@@ -219,6 +238,25 @@
       </div>
     {:else if section === 'general'}
       <div class="o-stack o-stack--loose c-settings__panel">
+        <div class="o-stack">
+          <h3 class="c-section-heading">Send a message with</h3>
+          {#each SEND_KEYS as option (option.value)}
+            <Choice
+              type="radio"
+              name="wtm-send-key"
+              checked={composerPrefs.sendKey === option.value}
+              onchange={() => void composerPrefs.setSendKey(option.value)}
+            >
+              {option.label}
+            </Choice>
+          {/each}
+          <!-- The selected option's consequence rather than a static sentence, because what this
+               setting really decides is which key gets you a newline. -->
+          <p class="c-field__help">
+            {SEND_KEYS.find((o) => o.value === composerPrefs.sendKey)?.help}
+          </p>
+        </div>
+
         <Field
           id="settings-opener"
           label="Open worktrees in"

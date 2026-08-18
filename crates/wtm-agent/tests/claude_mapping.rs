@@ -276,6 +276,87 @@ fn thinking_token_counters_draw_nothing() {
 }
 
 #[test]
+fn a_rate_limit_event_that_is_not_allowed_reports_the_limit_and_when_it_resets() {
+    /*
+     * The structured route to a limit, and the *unverified* one.
+     *
+     * Everything about this payload past `status` is a guess: the only `rate_limit_event` anyone has
+     * captured says `"allowed"` (see the test above, which pins the silence that matters more), so
+     * the field names below are extrapolated from that shape. If a throttled payload turns out to
+     * spell them differently this arm quietly does nothing, and the `result` arm — which is where a
+     * real exhaustion has always shown up — still catches it. That is the reason there are two
+     * detectors rather than one.
+     */
+    let mut d = driver();
+    let steps = d.on_line(
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","message":"You have reached your usage limit for Opus.","resetsAt":1755590400},"uuid":"u","session_id":"s"}"#,
+    );
+    match events(&steps).first().expect("a LimitReached") {
+        AgentEvent::LimitReached { message, resets_at } => {
+            assert_eq!(message, "You have reached your usage limit for Opus.");
+            assert_eq!(*resets_at, Some(1_755_590_400));
+        }
+        other => panic!("expected LimitReached, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_failed_result_naming_a_usage_limit_becomes_limit_reached_rather_than_a_plain_failure() {
+    // The route a real exhaustion arrives by, and the reason the distinction exists at all: the UI
+    // offers to carry the conversation to the other agent on this event and must not offer it on an
+    // ordinary failure.
+    let mut d = driver();
+    d.send_turn("keep going", &[]);
+    let steps = d.on_line(
+        r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"Claude AI usage limit reached|1755590400","usage":{"input_tokens":3,"output_tokens":0}}"#,
+    );
+
+    let produced = events(&steps);
+    match produced.first().expect("a LimitReached") {
+        AgentEvent::LimitReached { message, resets_at } => {
+            assert!(message.contains("usage limit reached"));
+            assert_eq!(*resets_at, Some(1_755_590_400));
+        }
+        other => panic!("expected LimitReached, got {other:?}"),
+    }
+    // Before the row that closes the turn, for the same reason `Failed` is: the limit is *why* the
+    // turn ended, so it reads above the finish rather than under it.
+    assert!(matches!(
+        produced.get(1),
+        Some(AgentEvent::TurnFinished { .. })
+    ));
+}
+
+#[test]
+fn an_ordinary_failed_result_is_still_a_plain_failure() {
+    // The other half of the pair above. An expired OAuth session is the failure whose silent
+    // handling this arm was originally written for, and it must not start offering a hand-off —
+    // moving the conversation to Codex would not fix anybody's credentials.
+    let mut d = driver();
+    let steps = d.on_line(
+        r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","result":"Failed to authenticate: OAuth session expired","usage":{"input_tokens":0,"output_tokens":0}}"#,
+    );
+    assert!(matches!(
+        events(&steps).first(),
+        Some(AgentEvent::Failed { .. })
+    ));
+}
+
+#[test]
+fn an_error_line_naming_a_rate_limit_becomes_limit_reached() {
+    // The CLI's other error shape. Classified through the same helper as the `result` arm so the two
+    // cannot disagree about what counts as a limit.
+    let mut d = driver();
+    let steps = d.on_line(
+        r#"{"type":"error","message":"stream error: request failed with status 429","session_id":"s"}"#,
+    );
+    assert!(matches!(
+        events(&steps).first(),
+        Some(AgentEvent::LimitReached { .. })
+    ));
+}
+
+#[test]
 fn a_can_use_tool_request_becomes_an_approval_answered_on_the_top_level_request_id() {
     // The correlation id is at the top level, not inside `request` — unlike every other id on this
     // transport. Replying with the wrong one leaves the CLI blocked forever.
@@ -501,6 +582,12 @@ fn a_turn_is_announced_before_the_frame_goes_out_and_reports_cost_when_it_ends()
     assert_eq!(frames[0]["type"], "user");
     assert_eq!(frames[0]["message"]["content"], "write probe.txt");
 
+    // One request's own prompt footprint, which is what the meter needs. `result` reports no such
+    // number, so this is where it comes from.
+    d.on_line(
+        r#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":26,"cache_creation_input_tokens":1200,"cache_read_input_tokens":34000,"output_tokens":3}}},"session_id":"s"}"#,
+    );
+
     let finished = d.on_line(
         r#"{"type":"result","subtype":"success","is_error":false,"duration_api_ms":13243,"num_turns":3,"stop_reason":"end_turn","session_id":"s","total_cost_usd":0.0332116,"usage":{"input_tokens":26,"cache_creation_input_tokens":9897,"cache_read_input_tokens":81276,"output_tokens":931},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":560,"outputTokens":946,"contextWindow":200000,"maxOutputTokens":32000}}}"#,
     );
@@ -511,16 +598,113 @@ fn a_turn_is_announced_before_the_frame_goes_out_and_reports_cost_when_it_ends()
             cost_usd,
         } => {
             assert_eq!(turn, "1", "the same turn the send announced");
+            // Cumulative over the turn's three round trips: what was billed.
             assert_eq!(usage.tokens_in, 26);
             assert_eq!(usage.tokens_out, 931);
             assert_eq!(usage.cached, 81276);
-            assert_eq!(usage.context_used, 92_130);
+            // *Not* those three added up. `26 + 931 + 81276 + 9897` is what this used to report,
+            // and it is a sum over every round trip of a turn against a window one request has to
+            // fit in — which is how a 200k session read as 100% full.
+            assert_eq!(
+                usage.context_used, 35_226,
+                "the last request's prompt, not the turn's billing total"
+            );
             // Nested under the model's own name, which is not known in advance.
             assert_eq!(usage.context_window, Some(200_000));
             // Real currency. Codex reports none at all, which is why the field is an `Option`
             // rather than a number this app computes.
             assert_eq!(*cost_usd, Some(0.033_211_6));
         }
+        other => panic!("expected TurnFinished, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_context_meter_reads_the_latest_request_footprint_not_the_turns_cumulative_usage() {
+    /*
+     * The regression test for a meter that sat at 100%.
+     *
+     * A turn makes one API request per tool round trip, and the CLI's `result.usage` adds them all
+     * up. With prompt caching every one of those requests re-reads the whole conversation, so the
+     * sum grows without bound while the actual prompt barely moves — three modest requests below
+     * total 141k against a 200k window, and the real footprint of the last one is 47k.
+     *
+     * Both numbers are wanted, which is why they are different fields: the sum is what was billed,
+     * the footprint is what the window contains.
+     */
+    let mut d = driver();
+    d.send_turn("refactor the parser", &[]);
+
+    for footprint in [30_000, 39_000, 47_000] {
+        let line = format!(
+            r#"{{"type":"stream_event","event":{{"type":"message_start","message":{{"usage":{{"input_tokens":10,"cache_read_input_tokens":{},"output_tokens":1}}}}}},"session_id":"s"}}"#,
+            footprint - 10
+        );
+        d.on_line(&line);
+    }
+
+    let finished = d.on_line(
+        r#"{"type":"result","subtype":"success","is_error":false,"session_id":"s","usage":{"input_tokens":30,"cache_read_input_tokens":115970,"cache_creation_input_tokens":25000,"output_tokens":3},"modelUsage":{"claude-sonnet-4-5":{"inputTokens":30,"contextWindow":200000}}}"#,
+    );
+    match events(&finished).first().expect("TurnFinished") {
+        AgentEvent::TurnFinished { usage, .. } => {
+            assert_eq!(usage.context_used, 47_000, "the last request's prompt");
+            assert!(
+                usage.context_used < usage.context_window.expect("a window"),
+                "a single request cannot exceed the window it was accepted against"
+            );
+        }
+        other => panic!("expected TurnFinished, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_message_start_snapshot_emits_a_live_usage_event_mid_turn() {
+    // Claude reports usage only when a turn ends, so the meter used to show the previous turn's
+    // number for the whole of a long one. `message_start` arrives per request, which is often
+    // enough to watch the context fill as tool calls accumulate.
+    let mut d = driver();
+    let steps = d.on_line(
+        r#"{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":12,"cache_read_input_tokens":8000,"cache_creation_input_tokens":500,"output_tokens":2}}},"session_id":"s"}"#,
+    );
+    match events(&steps).first().expect("a Usage event") {
+        AgentEvent::Usage(usage) => {
+            assert_eq!(usage.context_used, 8_512);
+            assert_eq!(
+                usage.context_window, None,
+                "only `result` reports the window; the frontend keeps the last one it was told"
+            );
+        }
+        other => panic!("expected Usage, got {other:?}"),
+    }
+
+    // A frame with no usage in it must stay silent rather than reporting a footprint of zero,
+    // which would blank a meter that had a true reading a moment earlier.
+    let empty = d.on_line(
+        r#"{"type":"stream_event","event":{"type":"message_start","message":{}},"session_id":"s"}"#,
+    );
+    assert!(events(&empty).is_empty(), "nothing to report, so nothing");
+}
+
+#[test]
+fn the_context_window_comes_from_the_model_that_did_the_work_not_the_alphabetically_first_one() {
+    /*
+     * `modelUsage` is keyed by model id and routinely holds more than one entry: the CLI bills a
+     * small background model for side work in the same turn. This used to take whichever came
+     * first, and `serde_json::Map` is a `BTreeMap` in this dependency tree, so "first" meant
+     * *alphabetically* — `claude-haiku-…` ahead of `claude-sonnet-…`. A session with a million-token
+     * window was measured against the background model's 200k and read five times too high.
+     */
+    let mut d = driver();
+    let finished = d.on_line(
+        r#"{"type":"result","subtype":"success","is_error":false,"session_id":"s","usage":{"input_tokens":5,"output_tokens":5},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":900,"contextWindow":200000},"claude-sonnet-4-5":{"inputTokens":420000,"contextWindow":1000000}}}"#,
+    );
+    match events(&finished).first().expect("TurnFinished") {
+        AgentEvent::TurnFinished { usage, .. } => assert_eq!(
+            usage.context_window,
+            Some(1_000_000),
+            "the model that read 420k of input, not the one that read 900"
+        ),
         other => panic!("expected TurnFinished, got {other:?}"),
     }
 }

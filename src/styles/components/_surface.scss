@@ -68,11 +68,25 @@
 
 /* A plan's or a task's label. Truncated rather than wrapped: these are rows in a list, and a
    two-line entry among one-line entries reads as a different kind of thing. */
+/* A button since the plan became readable — so it resets the control appearance a `<button>` brings
+   and keeps the truncation the row needs. Underlined on hover rather than styled as a link at rest:
+   in a row that already carries three text actions, a fourth permanently-blue string would read as
+   one more of them rather than as the row's subject. */
 .c-surface__brief {
   min-width: 0;
   max-width: 52ch;
   overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg);
+  cursor: pointer;
+}
+
+.c-surface__brief:hover {
+  text-decoration: underline;
 }

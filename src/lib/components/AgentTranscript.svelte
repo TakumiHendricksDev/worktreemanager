@@ -210,6 +210,19 @@
           });
           break;
 
+        // A row *as well as* the banner, and at `warn` rather than `error`. The banner is the offer
+        // and disappears once it is taken or dismissed; this is the record of the moment, so a
+        // transcript read tomorrow still explains why the conversation stops here and picks up in
+        // another pane. Warn because nothing broke — the session ran out of a quota.
+        case 'limit_reached':
+          out.push({
+            key: `l${index}`,
+            kind: 'notice',
+            level: 'warn',
+            text: event.message,
+          });
+          break;
+
         case 'turn_finished':
           out.push({
             key: `g${index}`,

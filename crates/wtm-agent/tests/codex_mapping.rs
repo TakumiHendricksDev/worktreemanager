@@ -875,6 +875,68 @@ fn lifecycle_chatter_draws_nothing_while_an_unknown_method_still_does() {
 }
 
 #[test]
+fn a_rate_limits_update_with_an_exhausted_window_reports_limit_reached() {
+    // `account/rateLimits/updated` used to be in the silent list outright. It still is for every
+    // payload that has room left — see the test below — but a window at 100% is the one thing this
+    // notification can say that a reader needs.
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":100.0,"windowMinutes":300,"resetsInSeconds":12600},"secondary":{"usedPercent":41.2,"windowMinutes":10080,"resetsInSeconds":400000}}}}"#,
+    );
+    match events(&steps).first().expect("a LimitReached") {
+        AgentEvent::LimitReached { message, resets_at } => {
+            assert!(
+                message.contains("210 minute"),
+                "the wait belongs in the sentence, got {message:?}"
+            );
+            assert_eq!(
+                *resets_at, None,
+                "Codex states a duration, and a protocol has no clock to turn it into an instant"
+            );
+        }
+        other => panic!("expected LimitReached, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_rate_limits_update_below_the_ceiling_still_draws_nothing() {
+    // This notification fires on a schedule. A row every few minutes reporting how much quota is
+    // *left* is how a transcript teaches its reader to skip the one that eventually matters.
+    let mut driver = ready_driver();
+    for quiet in [
+        r#"{"method":"account/rateLimits/updated","params":{}}"#,
+        r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{}}}"#,
+        r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":99.4,"resetsInSeconds":60}}}}"#,
+    ] {
+        assert!(
+            driver.on_line(quiet).is_empty(),
+            "{quiet} should draw nothing"
+        );
+    }
+}
+
+#[test]
+fn an_error_notification_naming_a_usage_limit_becomes_limit_reached_rather_than_a_plain_failure() {
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"method":"error","params":{"message":"You have exceeded your quota for this billing period."}}"#,
+    );
+    assert!(matches!(
+        events(&steps).first(),
+        Some(AgentEvent::LimitReached { .. })
+    ));
+
+    // And the other half: an ordinary server error stays a failure, because carrying the
+    // conversation to Claude would not fix it.
+    let ordinary =
+        driver.on_line(r#"{"method":"error","params":{"message":"sandbox denied write to /etc"}}"#);
+    assert!(matches!(
+        events(&ordinary).first(),
+        Some(AgentEvent::Failed { .. })
+    ));
+}
+
+#[test]
 fn the_model_list_reply_yields_per_model_effort_ladders() {
     // The fact the whole capability query exists for: the ladders differ *within* one provider.
     // Captured from a real `model/list` — `gpt-5.6-sol` reaches `ultra`, `gpt-5.5` stops at `xhigh`.

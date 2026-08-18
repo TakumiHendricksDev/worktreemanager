@@ -503,6 +503,14 @@ export type AgentEvent =
     }
   | { kind: 'notice'; level: 'info' | 'warn'; message: string }
   | { kind: 'failed'; message: string }
+  /**
+   * Out of tokens. Separate from `failed` because the remedy differs — see the Rust variant's
+   * docs and `SessionPane`'s limit banner, which offers to continue on the other provider.
+   *
+   * `resetsAt` is Unix *seconds*, not milliseconds: it crosses the wire as the provider stated it.
+   * Multiply before handing it to `Date`.
+   */
+  | { kind: 'limit_reached'; message: string; resetsAt: number | null }
   | { kind: 'raw'; provider: string; event: string; payload: unknown };
 
 /**

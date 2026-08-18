@@ -485,7 +485,7 @@ zero-height pane tells a live shell its window is 2×1. `display: none` survives
 computed height reads `auto` and the addon's own `isNaN` check catches it — luck, not design, and not
 something a dragged height is covered by.
 
-**Which session is the dock's shell is tracked in `src-tauri`, not in the domain.** `PtyHost::spawn`
+**Which sessions are dock shells is tracked in `src-tauri`, not in the domain.** `PtyHost::spawn`
 already records a worktree per session, but actions and the setup stage tag theirs with the same worktree
 id — so a lookup by worktree alone would hand the dock a running build to type into. The index lives in
 `App` rather than as a session *kind* on the port, for the same reason the palette list is assembled
@@ -493,10 +493,30 @@ there: "which session is the UI's terminal" is a frontend concept `wtm-core` has
 it out means the domain still compiles for `wasm32`. Liveness is never read from that index — every
 lookup intersects with what the pty host reports as running.
 
-**Shells are capped at six and the cap refuses rather than evicting.** §3 sizes the pty design for "a
-handful of terminals": one OS thread each in Rust, and one `pty:output` subscription each on this side, so
-Tauri serialises every chunk once per mounted pane. Evicting the least-recently-viewed shell would be the
-usual answer and is the wrong one here — that shell may be running a dev server.
+It is keyed by **session**, like the agent map beside it, and that was not always true. A worktree used
+to have exactly one shell, enforced by a reuse check inside `open_shell` that returned the running
+session instead of spawning. The argument for it — two login shells in one directory share a history
+file — turned out to be much smaller than the thing it forbade, which is the ordinary way people work: a
+dev server in one shell and `git` in another. So `open_shell` is now as non-idempotent as `open_agent`,
+and "should this focus an existing shell or open another?" moved to the frontend, where panes are a
+concept: `sessions.focusOrOpenShell` is what ⌘J goes through, and repeating the shortcut cycles the
+worktree's shells. `close_terminal` takes a session id for the same reason — closing "the worktree's
+shell" would have been a coin flip over somebody's dev server.
+
+**A tab strip was considered and rejected for now.** Tabs are a *stack* — one pane visible, N mounted
+and hidden — which is a new `Layout` node kind and a third arm in every operation in
+`layout.svelte.ts`: `tilesOf`, `handlesOf`, `insert`, `move`, `remove`, plus a new drop target and the
+`aria-selected` semantics `_tabs.scss` insists on. That module is pure tree algebra with no test runner
+behind it (see the counterweight in §8a), so the change is all risk and no new capability: several
+shells side by side already tile, drag, resize and keep their scrollback. The backend re-keying above is
+the part that had to happen either way, so a stack node stays available as a purely-frontend follow-up.
+
+**Panes are capped at four per worktree and eight in total, and the cap refuses rather than evicting.**
+§3 sizes the pty design for "a handful of terminals": one OS thread each in Rust, and one `pty:output`
+subscription each on this side, so Tauri serialises every chunk once per mounted pane. Evicting the
+least-recently-viewed shell would be the usual answer and is the wrong one here — that shell may be
+running a dev server. Now that shells are uncapped per worktree in Rust, these frontend caps are the
+only bound, which is where a bound belongs: it is a statement about how many panes fit on a screen.
 
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 

@@ -32,9 +32,6 @@
     onfavorite: () => void;
   } = $props();
 
-  // Only surface divergence that exists — a row of zeroes is noise.
-  const diverged = $derived(worktree.ahead > 0 || worktree.behind > 0);
-
   /**
    * The tone for a session status in this row.
    *
@@ -88,7 +85,18 @@
       </span>
     </span>
 
-    {#if status || worktree.dirty || worktree.untracked > 0 || diverged || worktree.prunable}
+    <!--
+      No commit counters here, deliberately.
+
+      This row used to carry `+N` untracked and `↑N↓N` ahead/behind alongside the two states below.
+      They were dropped because a scannable list is the wrong place for them: the numbers change
+      constantly, they are read as a status when they are really a measurement, and nobody picks a
+      worktree from the sidebar on the strength of being two commits ahead. What survives is the two
+      facts that change a decision — there is uncommitted work here, or this entry is broken — plus
+      whatever a session in it needs. `Inspector` still reports the full staged/unstaged breakdown,
+      which is a panel you open on purpose.
+    -->
+    {#if status || worktree.dirty || worktree.prunable}
       <span class="c-worktree-tab__line c-worktree-tab__flags">
         {#if status}
           <!--
@@ -109,19 +117,6 @@
           <span class="c-status--warn" title="Tracked files are modified"
             >●&nbsp;modified</span
           >
-        {/if}
-        {#if worktree.untracked > 0}
-          <span class="c-status--subtle" title="{worktree.untracked} untracked file(s)">
-            +{worktree.untracked}
-          </span>
-        {/if}
-        {#if diverged}
-          <span
-            class="c-status--info"
-            title="{worktree.ahead} ahead, {worktree.behind} behind"
-          >
-            {#if worktree.ahead > 0}↑{worktree.ahead}{/if}{#if worktree.behind > 0}↓{worktree.behind}{/if}
-          </span>
         {/if}
         {#if worktree.prunable}
           <span class="c-status--danger" title={worktree.prunable}>stale</span>
