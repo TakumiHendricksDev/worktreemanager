@@ -28,7 +28,7 @@
  * codebase that catches a class name which does not exist.
  */
 export type PaneStatus =
-  'failed' | 'ended' | 'attention' | 'working' | 'starting' | 'done' | 'idle';
+  'failed' | 'ended' | 'attention' | 'working' | 'starting' | 'done' | 'idle' | 'detached';
 
 /** The fields a status is computed from. `Pane` satisfies this structurally. */
 export interface StatusFacts {
@@ -42,6 +42,8 @@ export interface StatusFacts {
   working: boolean;
   /** Something finished while this pane's worktree was not on screen. */
   unseen: boolean;
+  /** Restored from the last run with no process behind it, and offering to fill itself. */
+  detached: boolean;
 }
 
 /**
@@ -58,6 +60,9 @@ export function statusOf(p: StatusFacts): PaneStatus {
   if (p.error !== null) return 'failed';
   if (p.ended !== null) return 'ended';
   if (p.approvals.length > 0) return 'attention';
+  // Before `starting`, which is what a detached pane would otherwise report forever: it is an agent
+  // pane that is not ready, and nothing is on its way to make it ready.
+  if (p.detached) return 'detached';
   if (p.agent && !p.ready) return 'starting';
   if (p.working) return 'working';
   if (p.unseen) return 'done';
@@ -79,6 +84,7 @@ export const STATUS_WORD: Record<PaneStatus, string> = {
   starting: 'starting…',
   done: 'done',
   idle: '',
+  detached: 'not running',
 };
 
 /**
@@ -96,6 +102,7 @@ export const STATUS_NAME: Record<PaneStatus, string> = {
   starting: 'starting',
   done: 'finished, not seen yet',
   idle: 'idle',
+  detached: 'restored, not running yet',
 };
 
 /**
@@ -125,6 +132,9 @@ const RANK: Record<PaneStatus, number> = {
   working: 3,
   ended: 2,
   starting: 1,
+  // Level with `idle`, and never actually folded: `inRail` keeps a detached pane out of the rail,
+  // so a worktree whose panes are all restored shows no dot rather than a quiet one.
+  detached: 0,
   idle: 0,
 };
 

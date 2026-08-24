@@ -134,6 +134,23 @@
   });
 
   /*
+   * Fill in a restored worktree's shells the first time it is looked at.
+   *
+   * Here rather than in `sessions.init` so a launch with six remembered worktrees spawns nothing
+   * until one of them is opened — the same judgement `sessions.rs` makes about not forking a CLI
+   * per remembered conversation, applied to the one session kind that has nothing to resume.
+   *
+   * `untrack` for the reason the effect above gives: the body reads and writes `panes`, and it is
+   * synchronous, which is what makes the wrapper work here and not at the async call sites.
+   */
+  $effect(() => {
+    const worktree = workspace.selectedWorktreeId;
+    const project = workspace.activeProjectId;
+    if (!worktree || !project || !visible) return;
+    untrack(() => void sessions.materialise(project, worktree));
+  });
+
+  /*
    * Re-read the background roster on window focus.
    *
    * There is no event when a background agent finishes, so this is the same trigger `workspace` uses

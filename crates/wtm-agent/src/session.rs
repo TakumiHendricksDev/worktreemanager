@@ -93,7 +93,20 @@ impl AgentSession {
 
         // The handshake, applied after the sink exists so a reply cannot arrive before there is
         // anywhere to route it.
-        let steps = driver.lock().open();
+        let mut steps = driver.lock().open();
+
+        // The composer's `/` list, from disk, ahead of anything the CLI says about itself.
+        //
+        // Emitted here rather than from the protocol because it is not protocol: no frame was sent
+        // and no reply is being read. It is emitted *first* so a pane that has never been spoken to
+        // still has a menu — Claude Code sends nothing at all until it receives a turn, which is
+        // exactly when somebody wants to type a skill name. Whatever the session reports later
+        // replaces this wholesale, and `commandsFor` keeps the descriptions only this can supply.
+        let seeded = provider.seed_skills(req);
+        if !seeded.is_empty() {
+            steps.insert(0, Step::Emit(AgentEvent::SkillsListed { skills: seeded }));
+        }
+
         apply(&session, &host, events, steps);
 
         Ok(Self {

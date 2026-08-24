@@ -9,8 +9,13 @@
 //!
 //! So this is a resume list, not a session list. The distinction matters at launch: wtm shows what
 //! *can* be resumed and re-establishes on demand rather than respawning a fleet of CLIs nobody asked
-//! for. That is the same judgement the terminal dock made when it decided its open/closed state must
-//! not persist — a dock that reopened itself would come back empty or fork a shell unbidden.
+//! for.
+//!
+//! What that argument never covered is the *arrangement*. The frontend does remember which panes a
+//! worktree had and how they were split, because a layout is not a process: it costs nothing to put
+//! back, and losing it on every quit was a real complaint. A restored agent pane comes back holding
+//! a place and offering to resume — it does not resume itself, which is this file's rule intact.
+//! See `sessions.svelte.ts`'s `restore`.
 //!
 //! # Why a separate file
 //!

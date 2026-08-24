@@ -77,6 +77,15 @@ impl Provider for Codex {
     fn protocol(&self, req: &SessionRequest) -> Box<dyn Protocol> {
         Box::new(CodexProtocol::new(req.clone()))
     }
+
+    fn seed_skills(&self, req: &SessionRequest) -> Vec<AgentSkill> {
+        crate::skills::codex(
+            std::path::Path::new(&req.cwd),
+            std::env::var_os("HOME")
+                .as_deref()
+                .map(std::path::Path::new),
+        )
+    }
 }
 
 /// Whether a name can be a TOML bare key, and therefore a safe `-c` path segment.
@@ -405,9 +414,35 @@ impl CodexProtocol {
         Some(step)
     }
 
+    /// Ask the app server what this worktree can be asked to do by name.
+    ///
+    /// `cwds`, plural, which is the parameter the shipped server actually reads — checked against
+    /// the binary rather than inferred, because a wrong key here would answer with the default
+    /// scopes and look like a repository with no skills in it.
+    ///
+    /// `forceReload` on a refresh only: the first ask wants whatever the server already has, and a
+    /// refresh is triggered precisely because something on disk changed.
+    fn ask_for_skills(&mut self, reload: bool) -> Step {
+        let (id, step) = self.request(
+            "skills/list",
+            &json!({ "cwds": [self.req.cwd], "forceReload": reload }),
+        );
+        self.skills_id = Some(id);
+        step
+    }
+
     /// A reply to one of our requests.
     fn on_reply(&mut self, id: i64, message: &Value) -> Vec<Step> {
         if let Some(error) = message.get("error") {
+            // A refused `skills/list` is not a failed session. It is a composer convenience nobody
+            // is blocked on, and an app server too old to know the method answers with an error —
+            // which used to put a red "failed" row in a transcript whose session was working
+            // perfectly, and leave `skills_id` set so the next reply with that id was misread.
+            if Some(id) == self.skills_id {
+                self.skills_id = None;
+                return Vec::new();
+            }
+
             let detail = error
                 .get("message")
                 .and_then(Value::as_str)
@@ -471,9 +506,7 @@ impl CodexProtocol {
             //
             // Scoped to this worktree: the method takes `cwds` and resolves repo-scoped skills
             // against each, so a session in one worktree must not offer another's.
-            let (id, step) = self.request("skills/list", &json!({ "cwds": [self.req.cwd] }));
-            self.skills_id = Some(id);
-            steps.push(step);
+            steps.push(self.ask_for_skills(false));
 
             for (text, attachments) in std::mem::take(&mut self.queued) {
                 if let Some(step) = self.turn_frame(&text, &attachments) {
@@ -555,6 +588,11 @@ impl CodexProtocol {
                     .map(str::to_owned),
                 steps: agenda_from(params.get("plan")),
             },
+            // The server watches the skill directories itself, so a skill added or edited while a
+            // session is open reaches the composer without a restart. Re-asked rather than parsed
+            // from the notification: it reports *that* something changed, and the list is what the
+            // menu needs.
+            "skills/changed" => return vec![self.ask_for_skills(true)],
             "item/started" | "item/completed" => return Self::on_item(method, params),
             "item/commandExecution/outputDelta" => AgentEvent::CommandOutput {
                 id: text("itemId"),
@@ -653,74 +691,21 @@ impl CodexProtocol {
             .to_owned();
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
 
-        // camelCase, and this is where the mapping was wrong. The `ThreadItem` schema spells
-        // every type this way — `agentMessage`, `commandExecution`, `fileChange` — while
-        // `codex exec --json` emits the *same items* in snake_case. The first fixtures here came
-        // from an `exec` capture, so every test passed against a spelling the app server never
-        // sends, and a real turn showed `item/started:agentMessage` falling through to `Raw`.
-        //
-        // Only camelCase is accepted: this adapter talks to the app server and nothing else, and
-        // accepting both would be pretending otherwise.
-        let event = match (item_type, started) {
-            ("agentMessage", false) => AgentEvent::Message {
-                text: item
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-            },
-
-            ("commandExecution", true) => AgentEvent::CommandStarted {
-                id,
-                command: item
-                    .get("command")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                cwd: item.get("cwd").and_then(Value::as_str).map(str::to_owned),
-            },
-            ("commandExecution", false) => AgentEvent::CommandFinished {
-                id,
-                // `exitCode` first. A command item has not been observed on this transport yet —
-                // it needs a writable sandbox — so the camelCase spelling is inferred from the
-                // `ThreadItem` convention the rest of this function was just corrected to, and
-                // the snake_case fallback is what an `exec --json` capture showed. When a real
-                // one is seen, delete the loser.
-                exit_code: item
-                    .get("exitCode")
-                    .or_else(|| item.get("exit_code"))
-                    .and_then(Value::as_i64)
-                    .and_then(|c| i32::try_from(c).ok()),
-            },
-            ("fileChange", false) => AgentEvent::Patch {
-                id,
-                unified_diff: item
-                    .get("diff")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-            },
-            ("mcpToolCall" | "webSearch" | "dynamicToolCall", true) => AgentEvent::ToolStarted {
-                title: item.get("title").and_then(Value::as_str).map(str::to_owned),
-                id,
-                name: item_type.to_owned(),
-            },
-            ("mcpToolCall" | "webSearch" | "dynamicToolCall", false) => AgentEvent::ToolFinished {
-                id,
-                ok: item
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .is_none_or(|s| s != "failed"),
-                output: item
-                    .get("output")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            },
+        let event = match item_event(item, item_type, &id, started) {
+            Some(event) => event,
             // All three already arrived another way, so emitting the item as well would
             // duplicate it: a streaming message would get an empty bubble ahead of it, reasoning
             // arrives as deltas, and a `userMessage` is the echo the composer already showed.
-            ("agentMessage", true) | ("reasoning" | "userMessage", _) => return Vec::new(),
-            _ => AgentEvent::Raw {
+            // A resumed thread has had none of those, which is why `history_item` does not skip
+            // them.
+            None if matches!(
+                (item_type, started),
+                ("agentMessage", true) | ("reasoning" | "userMessage", _)
+            ) =>
+            {
+                return Vec::new();
+            }
+            None => AgentEvent::Raw {
                 provider: ID.to_owned(),
                 event: format!("{method}:{item_type}"),
                 payload: item.clone(),
@@ -1056,7 +1041,13 @@ fn exhausted_window(params: &Value) -> Option<String> {
     })
 }
 
-/// Visible user and assistant messages from a resumed app-server thread.
+/// The whole of a resumed app-server thread, not just its prose.
+///
+/// A stored item is a *finished* one, so the paired kinds — a command, a tool call — are replayed as
+/// both of their edges in order, which is exactly the sequence the frontend folds back into one
+/// card. `reasoning` and `userMessage` are emitted here and skipped on the live path, because live
+/// they arrive as deltas and as the composer's own echo respectively, and a resumed thread has had
+/// neither.
 fn history_from_thread(thread: Option<&Value>) -> Vec<Step> {
     thread
         .and_then(|thread| thread.get("turns"))
@@ -1065,31 +1056,96 @@ fn history_from_thread(thread: Option<&Value>) -> Vec<Step> {
         .flatten()
         .filter_map(|turn| turn.get("items").and_then(Value::as_array))
         .flatten()
-        .filter_map(|item| match item.get("type").and_then(Value::as_str) {
-            Some("userMessage") => {
-                let text = item
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .flat_map(history_item)
+        .map(Step::Emit)
+        .collect()
+}
+
+/// One stored thread item as the events a live turn would have produced for it.
+fn history_item(item: &Value) -> Vec<AgentEvent> {
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    match item_type {
+        "userMessage" => {
+            let text = item
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![AgentEvent::UserEcho { text }]
+            }
+        }
+        // Two spellings because the item carries a summary when one was generated and the raw
+        // chain when it was not, and which of them a stored turn holds depends on the model.
+        "reasoning" => {
+            let text = reasoning_text(item);
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![AgentEvent::ReasoningDelta { text }]
+            }
+        }
+        _ => {
+            let mut out = Vec::new();
+            out.extend(item_event(item, item_type, &id, true));
+            out.extend(item_event(item, item_type, &id, false));
+            // A command's output is one stored blob rather than the delta stream a live turn saw.
+            // Inserted between the two edges so the card it lands in is already open.
+            if item_type == "commandExecution"
+                && out.len() == 2
+                && let Some(chunk) = item
+                    .get("aggregatedOutput")
+                    .or_else(|| item.get("output"))
+                    .and_then(Value::as_str)
+                    .filter(|chunk| !chunk.is_empty())
+            {
+                out.insert(
+                    1,
+                    AgentEvent::CommandOutput {
+                        id,
+                        chunk: chunk.to_owned(),
+                    },
+                );
+            }
+            out
+        }
+    }
+}
+
+/// A stored `reasoning` item's text, whichever of the two shapes it is in.
+fn reasoning_text(item: &Value) -> String {
+    for key in ["text", "summary", "content"] {
+        match item.get(key) {
+            Some(Value::String(text)) if !text.is_empty() => return text.clone(),
+            Some(Value::Array(parts)) => {
+                let joined = parts
+                    .iter()
+                    .filter_map(|part| {
+                        part.as_str()
+                            .or_else(|| part.get("text").and_then(Value::as_str))
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
-                (!text.is_empty()).then_some(Step::Emit(AgentEvent::UserEcho { text }))
+                if !joined.is_empty() {
+                    return joined;
+                }
             }
-            Some("agentMessage") => item
-                .get("text")
-                .and_then(Value::as_str)
-                .filter(|text| !text.is_empty())
-                .map(|text| {
-                    Step::Emit(AgentEvent::Message {
-                        text: text.to_owned(),
-                    })
-                }),
-            _ => None,
-        })
-        .collect()
+            _ => {}
+        }
+    }
+    String::new()
 }
 
 fn codex_questions(params: &Value) -> Vec<UserInputQuestion> {
@@ -1289,6 +1345,71 @@ fn expand_mode(mode: &str) -> (&'static str, &'static str, Value) {
 /// `shortDescription` first, because the schema says the long `description` is the model-facing
 /// prompt and the short one is the human-facing label. Falling back to the long one is still better
 /// than a bare name in a two-column list.
+/// One `ThreadItem` as the event it is, or `None` when this type has nothing to say at this edge.
+///
+/// Shared by the live `item/started` / `item/completed` notifications and by the replay of a resumed
+/// thread's stored items, which is the only way the two stay in step. Before it was shared, a
+/// resumed Codex pane rendered prose and nothing else while a live one rendered command cards,
+/// diffs and tool rows — the same conversation looking like two different things.
+///
+/// camelCase throughout, and this is where the mapping was once wrong. The `ThreadItem` schema
+/// spells every type this way — `agentMessage`, `commandExecution`, `fileChange` — while
+/// `codex exec --json` emits the *same items* in `snake_case`. The first fixtures here came from an
+/// `exec` capture, so every test passed against a spelling the app server never sends. Only
+/// camelCase is accepted: this adapter talks to the app server and nothing else, and accepting both
+/// would be pretending otherwise.
+fn item_event(item: &Value, item_type: &str, id: &str, started: bool) -> Option<AgentEvent> {
+    let text = |key: &str| {
+        item.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    Some(match (item_type, started) {
+        ("agentMessage", false) => AgentEvent::Message { text: text("text") },
+
+        ("commandExecution", true) => AgentEvent::CommandStarted {
+            id: id.to_owned(),
+            command: text("command"),
+            cwd: item.get("cwd").and_then(Value::as_str).map(str::to_owned),
+        },
+        ("commandExecution", false) => AgentEvent::CommandFinished {
+            id: id.to_owned(),
+            // `exitCode` first. A command item has not been observed on this transport yet — it
+            // needs a writable sandbox — so the camelCase spelling is inferred from the
+            // `ThreadItem` convention, and the `snake_case` fallback is what an `exec --json`
+            // capture showed. When a real one is seen, delete the loser.
+            exit_code: item
+                .get("exitCode")
+                .or_else(|| item.get("exit_code"))
+                .and_then(Value::as_i64)
+                .and_then(|c| i32::try_from(c).ok()),
+        },
+        ("fileChange", false) => AgentEvent::Patch {
+            id: id.to_owned(),
+            unified_diff: text("diff"),
+        },
+        ("mcpToolCall" | "webSearch" | "dynamicToolCall", true) => AgentEvent::ToolStarted {
+            title: item.get("title").and_then(Value::as_str).map(str::to_owned),
+            id: id.to_owned(),
+            name: item_type.to_owned(),
+        },
+        ("mcpToolCall" | "webSearch" | "dynamicToolCall", false) => AgentEvent::ToolFinished {
+            id: id.to_owned(),
+            ok: item
+                .get("status")
+                .and_then(Value::as_str)
+                .is_none_or(|s| s != "failed"),
+            output: item
+                .get("output")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        },
+        _ => return None,
+    })
+}
+
 fn parse_skills(reply: &Value) -> Vec<AgentSkill> {
     let Some(groups) = reply
         .get("result")

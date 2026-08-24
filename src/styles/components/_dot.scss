@@ -40,8 +40,11 @@
   vertical-align: baseline;
 }
 
+/* Hollow like `idle`, because that is what it is: a pane holding a place, doing nothing. It never
+   reaches the sidebar rail — see `inRail` — so this only ever draws in the pane's own header. */
 .c-dot--idle,
-.c-dot--ended {
+.c-dot--ended,
+.c-dot--detached {
   color: var(--fg-subtle);
   background: transparent;
 }

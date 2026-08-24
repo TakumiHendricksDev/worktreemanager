@@ -29,10 +29,21 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  /* A measure, because this is prose. Long lines are the single biggest thing that makes a
-     transcript unreadable, and the pane can be as wide as the window. */
-  max-width: 82ch;
 }
+
+/*
+ * There is deliberately no measure here, and that is a trade rather than an oversight.
+ *
+ * This used to cap at `82ch`, on the usual grounds that long lines are the single biggest thing
+ * that makes prose unreadable. What that reasoning missed is what a transcript actually is: mostly
+ * diffs, command output, file paths and collapsed tool rows, none of which are prose and all of
+ * which wrap badly in a narrow column — and the cost was a pane left half empty on a wide window,
+ * with the code that needed the room the thing being squeezed.
+ *
+ * The reply text pays for it on a very wide display. The splitter is the answer available to
+ * someone who wants a measure back: a pane narrowed to half the window gives one, and it applies to
+ * a session at a time rather than to every session at once.
+ */
 
 /*
  * The user's own turn: right-hand side, in a bubble.
@@ -42,11 +53,11 @@
  * its own does it better than an indent did, because the eye can follow one edge instead of
  * checking each row's left margin.
  *
- * `max-width` is narrower than the column's measure on purpose. A bubble that reaches the full
- * width stops reading as one turn and starts reading as the page, and short prompts are the common
- * case: the shape only says "this is yours" while there is visible gutter beside it. The text
- * inside stays left-aligned — right-*ragged* prose is measurably slower to read, so this moves the
- * box, never the words.
+ * `max-width` is on the bubble even though the column above it has none, and that is the point: a
+ * bubble that reaches the full width stops reading as one turn and starts reading as the page, and
+ * short prompts are the common case — the shape only says "this is yours" while there is visible
+ * gutter beside it. The text inside stays left-aligned; right-*ragged* prose is measurably slower
+ * to read, so this moves the box, never the words.
  */
 .c-transcript__user {
   align-self: flex-end;

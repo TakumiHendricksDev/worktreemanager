@@ -28,6 +28,7 @@ import type {
   Registered,
   Resumable,
   RemoveOutcome,
+  SeqEvent,
   SetupResult,
   TerminalSession,
   Worktree,
@@ -300,6 +301,9 @@ export const commands = {
    * and without this they are unreachable until the app quits. It does not restore a transcript.
    */
   listAgentSessions: () => invoke<AgentSession[]>('list_agent_sessions'),
+
+  /** Everything a live session has already said, so a re-attached pane is not blank. */
+  agentReplay: (session: string) => invoke<SeqEvent[]>('agent_replay', { session }),
 
   /** End a session and forget it. */
   closeAgentSession: (session: string) => invoke<void>('close_agent_session', { session }),

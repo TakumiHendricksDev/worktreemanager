@@ -511,6 +511,23 @@ behind it (see the counterweight in §8a), so the change is all risk and no new 
 shells side by side already tile, drag, resize and keep their scrollback. The backend re-keying above is
 the part that had to happen either way, so a stack node stays available as a purely-frontend follow-up.
 
+**The arrangement persists across a quit; the sessions do not.** `sessions.toml` calls itself a
+resume list rather than a session list, and the reason holds — re-establishing every conversation on
+launch would fork a CLI per pane for conversations you may be done with. That argument was quietly
+doing double duty, though: it was also why the *split tree* was thrown away, and a layout is not a
+process. So each worktree's tree, pane order and focus are remembered in `localStorage` beside
+`wtm.worktrees.*`, and a restored pane comes back **detached** — in its place, holding nothing,
+offering to fill itself. A shell fills itself when the worktree is first looked at, because a login
+shell has nothing to resume and nothing to decide; an agent waits to be asked, because resuming picks
+a conversation. Launch still spawns nothing.
+
+The related fix is that a *reload* used to lose the transcript of sessions that were still running:
+the events had been emitted to a window that no longer existed. `App` now keeps a bounded per-session
+ring of what it emitted, numbered, and `agent_replay` hands it back — in memory only, which is why
+the no-transcript rule in `wtm-config::sessions` is untouched. The number is what makes re-attaching
+race-free: the window subscribes before it asks for the buffer, so an event can arrive twice, and a
+counter the emitter owns is the one thing both sides can compare.
+
 **Panes are capped at four per worktree and eight in total, and the cap refuses rather than evicting.**
 §3 sizes the pty design for "a handful of terminals": one OS thread each in Rust, and one `pty:output`
 subscription each on this side, so Tauri serialises every chunk once per mounted pane. Evicting the

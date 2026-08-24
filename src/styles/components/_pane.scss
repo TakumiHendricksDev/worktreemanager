@@ -12,13 +12,67 @@
  * container and pushes the composer off the bottom.
  */
 
+/*
+ * A row, not a column, because the plan panel is a sibling of the whole session rather than
+ * something inside its body. `c-pane__main` is the column the pane always was.
+ *
+ * The panel has to sit beside the *composer* as well as the transcript — the decision it belongs to
+ * is on the card at the bottom, and a document that covers the thing it is asking you to decide is
+ * the modal this replaced.
+ */
 .c-pane {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.c-pane__main {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--bg);
+}
+
+/*
+ * The plan, beside the session.
+ *
+ * A share of the pane rather than a fixed width, so it stays usable in a tile that is already half
+ * a window — and capped, so a maximised pane does not give a document a 90ch measure. There is no
+ * splitter: `tools/_splitter.scss` drives the *layout tree*, and this is one pane's internal
+ * arrangement, which the tree has no node for.
+ */
+.c-pane__aside {
+  flex: 0 0 clamp(18rem, 42%, 34rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.c-pane__aside-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+}
+
+/* `min-height: 0` for the reason the body's has it: the plan is content, and without it a long one
+   grows the panel past the pane instead of scrolling inside it. */
+.c-pane__aside-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3);
 }
 
 /*
@@ -126,6 +180,15 @@
 .c-pane__limit {
   flex: 0 0 auto;
   padding: 0 var(--sp-3) var(--sp-2);
+}
+
+/* A restored pane with nothing running in it yet. Centred rather than top-aligned because there is
+   no transcript above it for the eye to start from — the offer is the whole content. */
+.c-pane__body--offer {
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  text-align: center;
 }
 
 .c-pane__empty {

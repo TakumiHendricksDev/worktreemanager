@@ -248,9 +248,121 @@ export interface Pane {
    * that would need a timer, and there are none on this side.
    */
   limit: { message: string; resetsAt: number | null } | null;
+  /**
+   * The last event sequence this pane drew from the backend's replay buffer, or `null` when it
+   * never repainted from one.
+   *
+   * Only `adopt` sets it. It exists because the frontend subscribes to `agent:event` *before* it
+   * asks for the buffer, so an event emitted in between arrives twice — once live, once in the
+   * snapshot — and comparing the emitter's own counter is the only way to tell that apart from a
+   * session legitimately repeating a delta.
+   */
+  replayedThrough: number | null;
+  /**
+   * The id the *provider* knows this conversation by, once it has said.
+   *
+   * Distinct from `session`, which is this app's own handle and means nothing after a quit. This is
+   * what a restored pane resumes with, and what a reload matches a live session against.
+   */
+  providerSession: string | null;
+  /**
+   * This pane was restored from the last run and has no process behind it.
+   *
+   * A pane rather than a row in a list, because the whole point is that the *arrangement* comes
+   * back: a detached pane holds its place in the split tree so the surface looks the way it was
+   * left, and offers to fill itself. Nothing spawns until the user asks or, for a shell, until the
+   * worktree is looked at — see `materialise`.
+   */
+  detached: boolean;
 }
 
 let nextPaneId = 0;
+
+/** How many of these panes have a process behind them, or are on their way to one. */
+function running(panes: readonly Pane[]): number {
+  return panes.filter((pane) => !pane.detached).length;
+}
+
+/**
+ * Where a worktree's surface is remembered between runs, keyed by worktree id.
+ *
+ * `localStorage`, like `wtm.worktrees.*` and `wtm.lastProject` beside it and for the same reason:
+ * this is machine-local window state that only this window writes, and putting it in
+ * `~/.config/wtm/` would invite copying a surface full of absolute paths to another machine along
+ * with the preferences people do sync.
+ */
+const SURFACE_PREFIX = 'wtm.panes.';
+
+/** One pane as it survives a quit: enough to put it back and offer to fill it. */
+interface StoredPane {
+  id: string;
+  projectId: string;
+  kind: SessionKind;
+  /**
+   * This app's own session handle.
+   *
+   * Meaningless after a quit — the process is gone — and load-bearing after a *reload*, where the
+   * same backend is still running it. Matching on it is what lets a reload put a live session back
+   * in the pane it was in rather than appending a new one.
+   */
+  session: string | null;
+  /** What a restored agent pane resumes. Null for a shell, which has nothing to resume. */
+  providerSession: string | null;
+  /**
+   * What the pane was last set to, so a resumed conversation comes back on the model it was on.
+   *
+   * No title beside them: `list_resumable` already carries one for every provider session and is
+   * refreshed whenever a worktree is selected, so storing a second copy here would be a label that
+   * could disagree with the list it sits next to.
+   */
+  model: string | null;
+  effort: string | null;
+}
+
+/** A worktree's whole surface: the tree, what filled it, and where focus was. */
+interface StoredSurface {
+  layout: Layout | null;
+  focused: string | null;
+  panes: StoredPane[];
+}
+
+function readSurface(worktreeId: string): StoredSurface | null {
+  try {
+    const raw = localStorage.getItem(SURFACE_PREFIX + worktreeId);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    // Shape-checked rather than trusted: this is the one input to the store that a previous
+    // version of this app wrote, and a surface restored from a stale shape would put panes in the
+    // tree that nothing can render.
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const surface = parsed as StoredSurface;
+    if (!Array.isArray(surface.panes)) return null;
+    return surface;
+  } catch {
+    /* Corrupt or unavailable. A forgotten surface is a worse morning than a wrong one is. */
+    return null;
+  }
+}
+
+function writeSurface(worktreeId: string, surface: StoredSurface): void {
+  try {
+    if (surface.panes.length === 0) localStorage.removeItem(SURFACE_PREFIX + worktreeId);
+    else localStorage.setItem(SURFACE_PREFIX + worktreeId, JSON.stringify(surface));
+  } catch {
+    /* Quota or private mode. Persistence is a convenience, never a requirement. */
+  }
+}
+
+/** Every worktree with a remembered surface. */
+function storedWorktrees(): string[] {
+  try {
+    return Object.keys(localStorage)
+      .filter((key) => key.startsWith(SURFACE_PREFIX))
+      .map((key) => key.slice(SURFACE_PREFIX.length));
+  } catch {
+    return [];
+  }
+}
 
 class Sessions {
   panes = $state<Pane[]>([]);
@@ -331,7 +443,10 @@ class Sessions {
   /** Sessions that reported ready before their pane knew its id. */
   private readonly readyAhead = new Set<string>();
   /** Events that arrived before their pane knew its id, oldest first. */
-  private readonly eventsAhead = new Map<string, AgentEvent[]>();
+  private readonly eventsAhead = new Map<
+    string,
+    { event: AgentEvent; seq: number | null }[]
+  >();
 
   /**
    * The one status each worktree's sidebar row shows, keyed by worktree id. Absent means no dot.
@@ -418,13 +533,14 @@ class Sessions {
   /**
    * Subscribe to every session event stream, and adopt what outlived a reload.
    *
-   * Adopting matters even though an adopted pane comes back with an empty transcript: Rust buffers
-   * nothing, so there is no history to restore. What it prevents is a session running with nothing
-   * able to reach it — without this, a reload during `just dev` leaks a CLI and a shell per pane.
+   * Two things depend on this. The obvious one is that without it a reload leaks a CLI and a shell
+   * per pane, because the session keeps running with nothing able to reach it. The other is the
+   * transcript: Rust buffers each session's events for exactly this, so an adopted pane comes back
+   * showing what it showed before rather than blank. See `agent_replay`.
    */
   async init(): Promise<UnlistenFn> {
     const offAgent = await listen<AgentEventEnvelope>('agent:event', (e) => {
-      this.record(e.payload.session, e.payload.event);
+      this.record(e.payload.session, e.payload.event, e.payload.seq);
     });
     const offAgentExit = await listen<AgentExit>('agent:exit', (e) => {
       this.noteExit(e.payload.session, e.payload.summary);
@@ -454,15 +570,22 @@ class Sessions {
       void this.loadCapability(option.id);
     }
 
+    // Before adopting, so a live session can land in the pane it was in rather than being appended
+    // beside an empty copy of itself.
+    this.restore();
+
     for (const shell of shells) {
-      this.adopt({ kind: 'shell' }, shell.project, shell.worktree, shell.session);
+      await this.adopt({ kind: 'shell' }, shell.project, shell.worktree, shell.session);
     }
+    // Sequentially, not `Promise.all`: each one fetches a transcript and then places a pane, and
+    // `place` reads the tree it is about to rewrite. Interleaving them would race the layout.
     for (const agent of agents) {
-      this.adopt(
+      await this.adopt(
         { kind: 'agent', provider: agent.provider },
         agent.project,
         agent.worktree,
         agent.session,
+        agent.providerSession,
       );
     }
 
@@ -904,28 +1027,206 @@ class Sessions {
     }
   }
 
-  /** Put an already-running session back on screen. */
-  private adopt(
+  /**
+   * Put every remembered surface back, as panes with nothing behind them yet.
+   *
+   * # Why the arrangement is restored and the sessions are not
+   *
+   * `wtm_config::sessions` calls its file a resume list rather than a session list, and the reason
+   * still holds: re-establishing every conversation on launch would fork a CLI per pane for
+   * conversations the user may be finished with. What that argument never covered is the
+   * *arrangement*. A split you spent a minute building is not a process, costs nothing to put back,
+   * and losing it on every quit — or on an update, which is a quit — was the complaint.
+   *
+   * So the tree comes back with its panes in it, and each pane offers to fill itself. A shell fills
+   * itself when the worktree is looked at, because a login shell has nothing to resume and nothing
+   * to decide; an agent waits to be asked, because resuming picks a conversation.
+   */
+  private restore(): void {
+    const panes: Pane[] = [];
+    const layouts: Record<string, Layout | null> = {};
+    const focused: Record<string, string | null> = {};
+
+    for (const worktreeId of storedWorktrees()) {
+      const surface = readSurface(worktreeId);
+      if (!surface) continue;
+
+      // The per-worktree cap is re-applied rather than trusted, because a stored surface may have
+      // been written by a build with different limits and the cap is a statement about how many
+      // panes fit on one screen — as true of a restored pane as of a new one.
+      //
+      // `MAX_PANES` deliberately is **not** applied here. That one bounds OS threads and event
+      // subscriptions, and a detached pane has neither; applying it across every remembered
+      // worktree would silently drop panes from whichever ones `storedWorktrees` happened to
+      // return last. It is enforced where a process is actually created instead — `materialise`
+      // and `reattach` both check `hasRoom`.
+      const kept = surface.panes.slice(0, MAX_PANES_PER_WORKTREE);
+
+      let layout = surface.layout;
+      for (const stored of surface.panes.slice(kept.length)) {
+        layout = remove(layout, stored.id);
+      }
+      if (kept.length === 0) continue;
+
+      for (const stored of kept) {
+        const pane = this.blank(stored.kind, stored.projectId, worktreeId);
+        // Its own id back, not a fresh one: the stored tree names panes by id, so minting new ones
+        // would leave every leaf pointing at nothing.
+        pane.id = stored.id;
+        pane.providerSession = stored.providerSession;
+        pane.model = stored.model;
+        pane.effort = stored.effort;
+        pane.detached = true;
+        panes.push(pane);
+      }
+      layouts[worktreeId] = layout;
+      // Only if it survived the cap. Focusing a pane that was dropped would leave the worktree with
+      // no focused pane and a split that lands in the wrong place on the next open.
+      focused[worktreeId] = kept.some((p) => p.id === surface.focused)
+        ? surface.focused
+        : null;
+    }
+
+    if (panes.length === 0) return;
+
+    // Past every id we just took back, so the next `blank` cannot mint one that collides with a
+    // restored pane and silently join two leaves of the tree.
+    nextPaneId = panes.reduce((highest, pane) => {
+      const n = Number.parseInt(pane.id.replace('pane-', ''), 10);
+      return Number.isFinite(n) ? Math.max(highest, n) : highest;
+    }, nextPaneId);
+
+    this.panes = [...this.panes, ...panes];
+    this.layouts = { ...this.layouts, ...layouts };
+    this.focused = { ...this.focused, ...focused };
+  }
+
+  /**
+   * Fill in a restored worktree's shells, once it is the one being looked at.
+   *
+   * Called from the selection effect rather than from `restore`, so a launch with six remembered
+   * worktrees spawns nothing until one of them is opened. Agents are deliberately left alone: they
+   * render an offer to resume, and which conversation to resume is a choice.
+   */
+  async materialise(projectId: string, worktreeId: string): Promise<void> {
+    const waiting = this.panesIn(worktreeId).filter(
+      (pane) => pane.detached && pane.kind.kind === 'shell',
+    );
+    for (const pane of waiting) {
+      // Checked per shell rather than once, because each one that spawns changes the answer. A
+      // refusal leaves the pane detached and sets `atCapacity`, which is the same way every other
+      // over-cap request is reported.
+      if (!this.canFill(worktreeId)) return;
+      pane.detached = false;
+      await this.fillShell(pane, projectId, worktreeId);
+    }
+  }
+
+  /**
+   * Resume the conversation a restored agent pane was left holding.
+   *
+   * In place: the pane keeps its id and its position in the tree, which is the difference between
+   * this and picking the same conversation out of the resume list, where it would open beside
+   * whatever had focus.
+   */
+  async reattach(paneId: string): Promise<void> {
+    const pane = this.paneById(paneId);
+    if (!pane?.detached || pane.kind.kind !== 'agent') return;
+    if (!this.canFill(pane.worktreeId)) return;
+    pane.detached = false;
+    pane.error = null;
+
+    try {
+      const session = await commands.openAgentSession({
+        projectId: pane.projectId,
+        worktreeId: pane.worktreeId,
+        agentId: pane.kind.provider,
+        options: {
+          model: pane.model,
+          effort: pane.effort,
+          mode: pane.mode,
+          resume: pane.providerSession,
+        },
+      });
+      const live = this.paneById(pane.id);
+      if (live) this.claimSession(live, session);
+      this.error = null;
+      void this.refreshResumable(pane.worktreeId);
+    } catch (e) {
+      const live = this.paneById(pane.id);
+      if (live) {
+        live.error = errorMessage(e);
+        // Back to offering, so a failed resume can be tried again rather than leaving a pane that
+        // is neither running nor asking for anything.
+        live.detached = true;
+      }
+    }
+  }
+
+  /**
+   * Put an already-running session back on screen, with everything it has already said.
+   *
+   * The transcript is replayed through `record` rather than assigned to `pane.events`, because the
+   * transcript is not the only thing a reload lost: whether the session is mid-turn, what it is
+   * blocked on, its usage, its skill list and its limit banner are all tracked *beside* the log and
+   * are rebuilt only by the same pass that wrote them. Assigning the array would give back a pane
+   * that reads correctly and behaves as though nothing were running.
+   */
+  private async adopt(
     kind: SessionKind,
     projectId: string,
     worktreeId: string,
     session: string,
-  ): void {
-    const pane = this.blank(kind, projectId, worktreeId);
-    // Registered before it is claimed, unlike the rest of this function's history. `claimSession`
-    // drains anything buffered for the id by handing it to `record`, and `record` finds its pane by
-    // searching `this.panes` — so claiming an unregistered pane would quietly re-buffer instead of
-    // delivering. Looking the pane back up is also what gets the `$state` proxy rather than the raw
-    // object, which is why every other caller here does the same.
-    this.panes = [...this.panes, pane];
+    providerSession?: string,
+  ): Promise<void> {
+    // A reload restores the surface first, so this session probably already has a pane waiting for
+    // it. Matched on wtm's own session id before the provider's, because only the first is exact:
+    // the backend is the same process across a reload, so the handle it minted is still the handle
+    // it minted, whereas a provider id is empty until the handshake and shared with any fork.
+    const restored =
+      this.panesIn(worktreeId).find((p) => p.detached && p.session === session) ??
+      (providerSession
+        ? this.panesIn(worktreeId).find(
+            (p) => p.detached && p.providerSession === providerSession,
+          )
+        : undefined);
+
+    const pane = restored ?? this.blank(kind, projectId, worktreeId);
+    if (restored) {
+      restored.detached = false;
+      // Cleared so the claim below is not skipped as a session it already owns.
+      restored.session = null;
+    } else {
+      // Registered before it is claimed, unlike the rest of this function's history. `claimSession`
+      // drains anything buffered for the id by handing it to `record`, and `record` finds its pane
+      // by searching `this.panes` — so claiming an unregistered pane would quietly re-buffer
+      // instead of delivering. Looking the pane back up is also what gets the `$state` proxy rather
+      // than the raw object, which is why every other caller here does the same.
+      this.panes = [...this.panes, pane];
+    }
     const live = this.paneById(pane.id);
     if (live) {
+      // A shell's scrollback lives in its xterm instance and is replayed by the pty bridge, so only
+      // an agent has anything to fetch here.
+      const buffered =
+        kind.kind === 'agent' ? await commands.agentReplay(session).catch(() => []) : [];
+
+      // Assigned directly rather than through `claimSession`, which would drain the events that
+      // arrived while the fetch was in flight — and those must land *after* the snapshot, not
+      // before it. `claimSession` runs below, once `replayedThrough` can tell the two apart.
+      live.session = session;
+      for (const { seq, event } of buffered) this.record(session, event, seq);
+      live.replayedThrough = buffered.at(-1)?.seq ?? null;
+
       this.claimSession(live, session);
       // Adopted, so it is running by definition — readiness was announced before this window
       // existed and there is no second announcement coming.
       live.ready = true;
     }
-    this.place(worktreeId, pane.id, 'right');
+    // A restored pane is already in the tree, in the place the user put it. Placing it again would
+    // move it, which is the behaviour this whole path exists to stop.
+    if (!restored) this.place(worktreeId, pane.id, 'right');
+    else this.remember(worktreeId);
   }
 
   private blank(kind: SessionKind, projectId: string, worktreeId: string): Pane {
@@ -953,6 +1254,9 @@ class Sessions {
       skills: [],
       sideOf: null,
       limit: null,
+      replayedThrough: null,
+      providerSession: null,
+      detached: false,
     };
   }
 
@@ -987,13 +1291,31 @@ class Sessions {
       ),
     };
     this.focus(worktreeId, paneId);
+    this.remember(worktreeId);
   }
 
   /** Whether another pane can be opened here. Reports rather than throws, so callers can explain. */
   private hasRoom(worktreeId: string): boolean {
     const room =
       this.panesIn(worktreeId).length < MAX_PANES_PER_WORKTREE &&
-      this.panes.length < MAX_PANES;
+      running(this.panes) < MAX_PANES;
+    this.atCapacity = !room;
+    return room;
+  }
+
+  /**
+   * Whether a pane that is already on screen may be given a process.
+   *
+   * Distinct from `hasRoom` because a detached pane is already counted by it, so a worktree
+   * restored at its per-worktree limit would refuse to fill even the first of its own panes. What
+   * the two caps are *for* is what separates them: `MAX_PANES_PER_WORKTREE` bounds how many panes
+   * fit on a screen and this pane already has its place, while `MAX_PANES` bounds OS threads and
+   * event subscriptions, which is exactly what filling one adds.
+   */
+  private canFill(worktreeId: string): boolean {
+    const room =
+      running(this.panesIn(worktreeId)) < MAX_PANES_PER_WORKTREE &&
+      running(this.panes) < MAX_PANES;
     this.atCapacity = !room;
     return room;
   }
@@ -1022,7 +1344,20 @@ class Sessions {
     // is what makes the shell's first prompt unlosable. See `Terminal.svelte`.
     this.panes = [...this.panes, pane];
     this.place(worktreeId, pane.id, placement, beside);
+    await this.fillShell(pane, projectId, worktreeId);
+  }
 
+  /**
+   * Spawn a login shell for a pane that is already on screen.
+   *
+   * Split out of `openShell` for `materialise`, which needs the second half only: a restored shell
+   * pane already has its place in the tree and must keep it, so it must not go through `place`.
+   */
+  private async fillShell(
+    pane: Pane,
+    projectId: string,
+    worktreeId: string,
+  ): Promise<void> {
     try {
       const session = await commands.openTerminal({
         projectId,
@@ -1123,12 +1458,14 @@ class Sessions {
     this.focusTarget = paneId;
     this.focusEpoch += 1;
     this.seen(paneId);
+    this.remember(worktreeId);
   }
 
   /** Note focus without asking for it, so a click does not re-trigger the focus effect. */
   noteFocus(worktreeId: string, paneId: string): void {
     this.focused = { ...this.focused, [worktreeId]: paneId };
     this.seen(paneId);
+    this.remember(worktreeId);
   }
 
   /**
@@ -1174,12 +1511,14 @@ class Sessions {
     if (next === layout) return;
     this.layouts = { ...this.layouts, [worktreeId]: next };
     this.noteFocus(worktreeId, paneId);
+    this.remember(worktreeId);
   }
 
   setRatio(worktreeId: string, path: string, ratio: number): void {
     const layout = this.layoutFor(worktreeId);
     if (!layout) return;
     this.layouts = { ...this.layouts, [worktreeId]: resize(layout, path, ratio) };
+    this.remember(worktreeId);
   }
 
   /**
@@ -1343,6 +1682,7 @@ class Sessions {
       };
     }
     this.atCapacity = false;
+    this.remember(pane.worktreeId);
   }
 
   /** End the old session if it is still running, then start a fresh one in a fresh pane. */
@@ -1458,6 +1798,39 @@ class Sessions {
     for (const pane of doomed) delete layouts[pane.worktreeId];
     this.layouts = layouts;
     this.atCapacity = false;
+    // A worktree that has been removed outside the app is not coming back, so its surface goes too
+    // — otherwise the next launch restores panes for a directory that no longer exists.
+    for (const worktreeId of new Set(doomed.map((pane) => pane.worktreeId))) {
+      this.remember(worktreeId);
+    }
+  }
+
+  /**
+   * Write a worktree's surface down, so the next run puts it back.
+   *
+   * Called from every operation that changes the arrangement rather than from an effect. An effect
+   * would have to read `panes`, `layouts` and `focused` — all three of which these same operations
+   * write — and `layout.svelte.ts` and `patch` both document what reading and writing one array in
+   * one effect does here.
+   *
+   * Side panes are excluded: a `/btw` fork is a single-turn overlay that is never resumable, and
+   * restoring one would offer to continue a conversation the provider was told not to keep.
+   */
+  private remember(worktreeId: string): void {
+    const panes = this.panesIn(worktreeId).filter((pane) => pane.sideOf === null);
+    writeSurface(worktreeId, {
+      layout: this.layouts[worktreeId] ?? null,
+      focused: this.focused[worktreeId] ?? null,
+      panes: panes.map((pane) => ({
+        id: pane.id,
+        projectId: pane.projectId,
+        kind: pane.kind,
+        session: pane.session,
+        providerSession: pane.providerSession,
+        model: pane.model,
+        effort: pane.effort,
+      })),
+    });
   }
 
   /**
@@ -1476,29 +1849,34 @@ class Sessions {
     const waiting = this.eventsAhead.get(session);
     if (waiting) {
       this.eventsAhead.delete(session);
-      for (const event of waiting) this.record(session, event);
+      for (const held of waiting) this.record(session, held.event, held.seq);
     }
+    this.remember(pane.worktreeId);
   }
 
   /** Hold an event for a session no pane owns yet. Oldest dropped first, as the transcript does. */
-  private holdEvent(session: string, event: AgentEvent): void {
+  private holdEvent(session: string, event: AgentEvent, seq: number | null): void {
     const waiting = this.eventsAhead.get(session) ?? [];
-    waiting.push(event);
+    waiting.push({ event, seq });
     if (waiting.length > MAX_EARLY_EVENTS)
       waiting.splice(0, waiting.length - MAX_EARLY_EVENTS);
     this.eventsAhead.set(session, waiting);
   }
 
-  private record(session: string, event: AgentEvent): void {
+  private record(session: string, event: AgentEvent, seq: number | null = null): void {
     const pane = this.paneBySession(session);
     if (!pane) {
       // Not noise to discard: a CLI that is not logged in says so on stderr during the handshake,
       // which is exactly the window where no pane owns the id yet. `session.rs` calls a silent
       // session with no transcript the worst possible presentation of that failure, and dropping
       // these was how it happened.
-      this.holdEvent(session, event);
+      this.holdEvent(session, event, seq);
       return;
     }
+
+    // Already drawn from the replay snapshot this pane repainted with. See `Pane.replayedThrough`.
+    if (seq !== null && pane.replayedThrough !== null && seq <= pane.replayedThrough)
+      return;
 
     /*
      * Tracked outside the log as well as in it. The log is what the transcript renders; this is what
@@ -1556,11 +1934,15 @@ class Sessions {
       // Replaced, not merged: a provider that answers twice is correcting itself, and a skill
       // deleted from disk should leave the list rather than linger because it was once there.
       pane.skills = event.skills;
-    } else if (event.kind === 'session_ready' && event.mode !== null) {
+    } else if (event.kind === 'session_ready') {
+      // What a restored pane will resume with. Recorded here because this is the first moment it
+      // exists — Claude chooses it on its init line, Codex assigns it when the thread opens.
+      pane.providerSession = event.providerSessionId;
+      this.remember(pane.worktreeId);
       // The one setting wtm can learn rather than choose. Claude passes no `--permission-mode`
       // precisely so `~/.claude/settings.json` decides, so without adopting the answer the mode
       // pill would show a default the session is not in.
-      pane.mode = event.mode;
+      if (event.mode !== null) pane.mode = event.mode;
     } else if (event.kind === 'usage') {
       pane.usage = {
         tokensIn: event.tokensIn,
@@ -1617,6 +1999,7 @@ class Sessions {
 function facts(pane: Pane): Parameters<typeof statusOf>[0] {
   return {
     agent: pane.kind.kind === 'agent',
+    detached: pane.detached,
     ready: pane.ready,
     ended: pane.ended,
     error: pane.error,

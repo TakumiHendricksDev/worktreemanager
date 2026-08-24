@@ -697,10 +697,17 @@ mod tests {
             worktree: "/x/a".to_owned(),
             project: "/x".to_owned(),
             provider: "codex".to_owned(),
+            provider_session: "019fd37c".to_owned(),
         };
         assert_eq!(
             keys_of(&serde_json::to_value(&session).unwrap()),
-            ["project", "provider", "session", "worktree"]
+            [
+                "project",
+                "provider",
+                "providerSession",
+                "session",
+                "worktree"
+            ]
         );
     }
 
@@ -881,6 +888,8 @@ pub struct AgentSessionView {
     pub worktree: String,
     pub project: String,
     pub provider: String,
+    /// Empty until the provider's handshake has named the conversation.
+    pub provider_session: String,
 }
 
 /// A stored plan.
