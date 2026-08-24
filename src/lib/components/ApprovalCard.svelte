@@ -11,26 +11,42 @@
    * scrim and focus trap of a real modal, which would be wrong for something the transcript behind
    * it is the context for.
    *
-   * # Why the verbs differ by provider
+   * # Why the verbs differ by request, and where `Edit…` went
    *
-   * `AllowWithEdits` exists because Claude Code's allow can carry a replacement payload and rewrite
-   * a tool call. Codex has no such verb and refuses the answer rather than running the original
-   * unedited. So the affordance is absent where it cannot be honoured rather than present and
-   * broken — `canEdit` is the prop that says which.
+   * There was an `Edit…` button, shown for Claude because `AllowWithEdits` is a verb only Claude
+   * has: its allow can carry a replacement payload and rewrite a tool call. Nothing was ever built
+   * behind it. Clicking it sent `allow_with_edits` with an **empty** input, which the adapter turns
+   * into `{"behavior":"allow","updatedInput":{}}` — so on a plan it read as Approve, and on a
+   * command it approved the call with its arguments erased.
+   *
+   * It is gone rather than fixed here, because the fix is a payload editor and this card is not
+   * one. The verb stays in the protocol for when something can honestly offer it.
+   *
+   * # Why a plan is not offered the same verbs as a command
+   *
+   * "Always this session" grants a *class* of action — the CLI proposes the rule and the adapter
+   * passes it back. A plan is one document, approved once; there is no class of it to allow, and a
+   * button whose meaning is undefined for the thing in front of you is worse than one fewer button.
+   *
+   * And a denied plan is not a refusal, it is a revision request: the agent is going to write
+   * another one, and the only thing that makes the next one better is being told what was wrong.
+   * So `deny` carries a message here where elsewhere it carries `null`.
    */
   import type { ApprovalAnswer, ApprovalRequest } from '../ipc/types';
   import Markdown from './Markdown.svelte';
-  import PlanViewer from './PlanViewer.svelte';
   import Button from './ui/Button.svelte';
 
   const {
     request,
-    canEdit = false,
+    reading = false,
+    onread,
     onanswer,
   }: {
     request: ApprovalRequest;
-    /** True only for a provider whose allow can carry a rewritten payload. */
-    canEdit?: boolean;
+    /** True while the pane is showing the plan panel beside the transcript. */
+    reading?: boolean;
+    /** Toggle that panel. The pane owns it, so it can sit beside the card rather than over it. */
+    onread?: () => void;
     onanswer: (answer: ApprovalAnswer) => void;
   } = $props();
 
@@ -59,30 +75,35 @@
   let otherSelected = $state<Record<string, boolean>>({});
   let notes = $state('');
 
-  /*
-   * The card shows the plan; the dialog is for reading it properly.
+  /** What to send back with a plan denial, so the next plan is a revision rather than a guess. */
+  let changes = $state('');
+
+  /**
+   * What makes this a different request from the last one.
    *
-   * Both, rather than one or the other. The card has to stay answerable without a click — its
-   * Allow must be reachable, which is why the body is a bounded scroller — but a plan is routinely
-   * longer than that box, and "approve this plan" is not a decision anyone should make through a
-   * fourteen-line window.
+   * A second queued approval replaces this card without remounting the component, so anything typed
+   * into it has to be cleared or it is carried into a decision it was not written for. This used to
+   * cover `user_input` only, which meant two consecutive plan reviews shared a revision note — the
+   * text you wrote about the first plan going back as the reason you rejected the second.
    */
-  let reading = $state(false);
+  const requestKey = $derived.by(() => {
+    switch (request.kind) {
+      case 'user_input':
+        return request.questions.map((question) => question.id).join('\0');
+      case 'plan_review':
+        return `plan\0${request.path ?? ''}\0${request.markdown.length}`;
+      default:
+        return request.kind;
+    }
+  });
 
-  const questionsKey = $derived(
-    request.kind === 'user_input'
-      ? request.questions.map((question) => question.id).join('\0')
-      : '',
-  );
-
-  // A second queued question can replace this card without remounting the component. Never carry
-  // choices or notes from one provider request into the next one.
   $effect(() => {
-    void questionsKey;
+    void requestKey;
     selections = {};
     other = {};
     otherSelected = {};
     notes = '';
+    changes = '';
   });
 
   const complete = $derived.by(() => {
@@ -164,10 +185,15 @@
     <p class="c-approval__where">{request.summary}</p>
   {:else if request.kind === 'plan_review'}
     <!-- Through the renderer, like every other markdown in the app. As literal source this was the
-         only document in the transcript showing its own `##` and `**` as punctuation. -->
-    <div class="c-approval__body c-approval__body--plan">
-      <Markdown source={request.markdown} />
-    </div>
+         only document in the transcript showing its own `##` and `**` as punctuation.
+
+         Suppressed while the panel is open: the same document twice on one screen, one copy in a
+         bounded scroller, is not a second reading surface. -->
+    {#if !reading}
+      <div class="c-approval__body c-approval__body--plan">
+        <Markdown source={request.markdown} />
+      </div>
+    {/if}
   {:else if request.kind === 'tool_input'}
     <p class="c-approval__where">{request.prompt}</p>
   {:else}
@@ -271,19 +297,59 @@
     <p class="c-approval__reason">Written to <code>{request.path}</code></p>
   {/if}
 
+  {#if request.kind === 'plan_review'}
+    <!-- Optional, and unlabelled as required, because Approve must stay a one-click answer. It is
+         here rather than behind Request changes so it can be written *while* reading the plan,
+         which is when the objection actually occurs to you. -->
+    <label class="c-approval__notes">
+      <span>What should change? <small>optional</small></span>
+      <textarea
+        class="c-textarea"
+        rows="2"
+        placeholder="Sent to the agent if you request changes"
+        bind:value={changes}></textarea>
+    </label>
+  {/if}
+
   <div class="o-row c-approval__actions">
     {#if request.kind === 'user_input'}
       <Button variant="accent" size="sm" disabled={!complete} onclick={submitAnswers}>
         Submit answer
       </Button>
+    {:else if request.kind === 'plan_review'}
+      <!-- First, ahead of Approve. Reading the plan is the step this card is asking you to take,
+           and putting it after the approve button implies the reverse order. -->
+      <Button
+        variant="neutral"
+        size="sm"
+        title="Show the whole plan beside the transcript"
+        onclick={() => onread?.()}
+      >
+        {reading ? 'Hide the plan' : 'Read the plan'}
+      </Button>
+      <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}>
+        Approve
+      </Button>
+      <span class="c-approval__divider" aria-hidden="true"></span>
+      <Button
+        variant="danger-outline"
+        size="sm"
+        title="Send this back with your notes. The agent keeps planning."
+        onclick={() =>
+          onanswer({
+            kind: 'deny',
+            // A default rather than `null`, which the adapter turns into "Denied in wtm" — true of
+            // any refusal and useless to a model that is about to write another plan. This is the
+            // one denial whose whole purpose is to be read.
+            message:
+              changes.trim() === ''
+                ? 'The plan was not approved. Revise it and propose again.'
+                : changes.trim(),
+          })}
+      >
+        Request changes
+      </Button>
     {:else}
-      {#if request.kind === 'plan_review'}
-        <!-- First, ahead of Allow. Reading the plan is the step this card is asking you to take,
-             and putting it after the approve button implies the reverse order. -->
-        <Button variant="neutral" size="sm" onclick={() => (reading = true)}>
-          Read the plan
-        </Button>
-      {/if}
       <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}
         >Allow</Button
       >
@@ -295,16 +361,6 @@
       >
         Always this session
       </Button>
-      {#if canEdit}
-        <Button
-          variant="neutral"
-          size="sm"
-          title="Not available for this agent"
-          onclick={() => onanswer({ kind: 'allow_with_edits', input: {} })}
-        >
-          Edit…
-        </Button>
-      {/if}
       <!-- Past the divider, alone, matching the worktree header's treatment of Remove: a
          destructive-feeling control flush against a neutral one is how it gets clicked by
          accident. Deny is not destructive, but it does end something the user was waiting for. -->
@@ -320,40 +376,3 @@
     {/if}
   </div>
 </div>
-
-{#if reading && request.kind === 'plan_review'}
-  <!--
-    Answerable from inside the reader, because otherwise the flow is: open, read, close, then find
-    the card again and remember what you decided. The dialog's own Close is what leaves it
-    unanswered, which is the third option and needs no button of its own.
-  -->
-  <PlanViewer
-    title="Proposed plan"
-    markdown={request.markdown}
-    path={request.path}
-    onclose={() => (reading = false)}
-  >
-    {#snippet actions()}
-      <Button
-        variant="accent"
-        size="sm"
-        onclick={() => {
-          reading = false;
-          onanswer({ kind: 'allow' });
-        }}
-      >
-        Approve
-      </Button>
-      <Button
-        variant="danger-outline"
-        size="sm"
-        onclick={() => {
-          reading = false;
-          onanswer({ kind: 'deny', message: null });
-        }}
-      >
-        Deny
-      </Button>
-    {/snippet}
-  </PlanViewer>
-{/if}

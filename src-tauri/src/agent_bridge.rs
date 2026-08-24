@@ -81,6 +81,10 @@ pub fn announce_spawn(handle: &AppHandle, spawned: &SpawnedSession) {
 #[serde(rename_all = "camelCase")]
 struct AgentEventPayload<'a> {
     session: String,
+    /// This event's position in the session's stream, so a pane that repainted from the replay
+    /// buffer can tell what it has already drawn. `None` only when there is no app state to
+    /// number it — a test sink, and a session already gone from the registry.
+    seq: Option<u64>,
     event: &'a AgentEvent,
 }
 
@@ -202,8 +206,17 @@ impl AgentSink for AgentEventSink {
         self.remember(session, event);
         self.title(session, event);
 
+        // Buffered before it is emitted, and numbered by the same call, so the window can never
+        // see an event the buffer does not have. The other order would leave a hole exactly the
+        // size of a reload that landed between the two.
+        let seq = self
+            .app
+            .as_ref()
+            .and_then(|app| app.record_agent_event(session.as_str(), event));
+
         let payload = AgentEventPayload {
             session: session.as_str().to_owned(),
+            seq,
             event,
         };
         // A failed emit means the window is gone. Nothing useful to do, and it must not interrupt

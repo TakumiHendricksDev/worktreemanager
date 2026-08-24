@@ -41,7 +41,7 @@
    *
    * A record rather than interpolation, because the stylesheet is global and a tone that does not
    * exist fails silently — a typed lookup is the only thing that catches it. Only the four statuses
-   * `inRail` admits need an entry, but all seven are listed so the record stays total and a new status
+   * `inRail` admits need an entry, but every one is listed so the record stays total and a new status
    * is a compile error here rather than a missing class at runtime.
    */
   const TONE: Record<PaneStatus, string> = {
@@ -50,6 +50,7 @@
     done: 'c-status--info',
     working: 'c-status--muted',
     starting: 'c-status--subtle',
+    detached: 'c-status--subtle',
     ended: 'c-status--subtle',
     idle: 'c-status--subtle',
   };

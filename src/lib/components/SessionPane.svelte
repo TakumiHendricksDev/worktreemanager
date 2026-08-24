@@ -24,6 +24,7 @@
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
   import AgentTranscript from './AgentTranscript.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
+  import Markdown from './Markdown.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import SideQuestion from './SideQuestion.svelte';
   import Suggest from './Suggest.svelte';
@@ -59,6 +60,7 @@
   let draft = $state('');
   let attachments = $state<AgentAttachment[]>([]);
   let contextOpen = $state(false);
+  let skillsOpen = $state(false);
   let confirmRestart = $state(false);
   /**
    * True from submit until the turn is accepted or refused.
@@ -97,6 +99,21 @@
   const isFocused = $derived(sessions.focused[pane.worktreeId] === pane.id);
 
   /**
+   * What a restored pane says about the conversation it is holding a place for.
+   *
+   * The title comes from the resume list rather than from the pane, so there is one copy of it and
+   * it is the backend's. A pane whose conversation the user has since forgotten falls back to
+   * offering a fresh session, which is the honest thing to say when there is nothing to resume.
+   */
+  const offer = $derived.by(() => {
+    if (!pane.providerSession) return `This pane held a ${label} session.`;
+    const record = (sessions.resumable[pane.worktreeId] ?? []).find(
+      (r) => r.providerSession === pane.providerSession,
+    );
+    return record?.title?.trim() ? record.title : `A ${label} conversation was open here.`;
+  });
+
+  /**
    * This pane's state, as one word.
    *
    * Replaces a backward scan over `pane.events` for the nearest `turn_started`/`turn_finished`, which
@@ -119,6 +136,7 @@
     attention: 'c-status--warn',
     working: 'c-status--info',
     done: 'c-status--info',
+    detached: 'c-status--subtle',
     starting: 'c-status--subtle',
     idle: 'c-status--subtle',
   };
@@ -139,6 +157,31 @@
 
   /** The oldest unanswered approval. One at a time, in arrival order. */
   const blocking = $derived(pane.approvals[0] ?? null);
+
+  /**
+   * The plan a blocking approval is asking about, if that is what it is asking about.
+   *
+   * Derived from the approval rather than copied when the panel opens, so a plan that is superseded
+   * — the session interrupted, the approval withdrawn — takes its panel with it instead of leaving
+   * a document on screen with nothing left to decide about it.
+   */
+  const plan = $derived(blocking?.request.kind === 'plan_review' ? blocking.request : null);
+
+  /**
+   * Whether the plan panel is open, beside the transcript.
+   *
+   * Lifted out of `ApprovalCard`, which used to own it and render a modal. The panel is a sibling of
+   * the whole pane column rather than something inside the card, so the card cannot own it: a
+   * document you read to make a decision should not cover the decision, or the transcript that is
+   * the context for it.
+   */
+  let reading = $state(false);
+
+  // Nothing left to read. Without this the panel outlives the approval and its close button becomes
+  // the only way back to a full-width transcript.
+  $effect(() => {
+    if (!plan) reading = false;
+  });
   const side = $derived(sessions.sideFor(pane.id));
   /*
    * The provider's own figure, with no arithmetic on this side.
@@ -173,8 +216,6 @@
    * running the original unedited. A property of the protocol, not of the machine, which is why it
    * is keyed off the provider here — it belongs on the capability query.
    */
-  const canEdit = $derived(provider === 'claude');
-
   /**
    * Every agent that could run a turn in this pane, with what each can do.
    *
@@ -390,6 +431,20 @@
         draft = '';
         return;
       }
+      /*
+       * Answered here rather than sent, because sending it does nothing.
+       *
+       * Anthropic's own SDK documentation says commands that need an interactive terminal are
+       * excluded from a headless session's `slash_commands`, and `/skills` opens a picker — so it
+       * reached the CLI and was treated as prose. wtm already holds the list this command exists to
+       * show, from the init line, `skills/list` and the on-disk seed, so the honest thing is to
+       * render it rather than to forward a request that cannot be answered.
+       */
+      if (command === '/skills') {
+        skillsOpen = !skillsOpen;
+        draft = '';
+        return;
+      }
       if (command === '/copy') {
         const copied = await copyLatestResponse();
         if (copied) draft = '';
@@ -520,11 +575,20 @@
     return found;
   });
 
+  /**
+   * Everything this session can be asked to do by name, discovered entries first.
+   *
+   * Derived once and shared by the `/` typeahead and the `/skills` panel, so the two cannot
+   * disagree about what exists — which they would the first time one of them was given a filter the
+   * other did not have.
+   */
+  const skills = $derived(commandsFor(provider ?? '', pane.skills));
+
   const suggestions = $derived.by(() => {
     if (query === null) return [];
     return query.kind === 'file'
       ? matchFiles(sessions.files[pane.worktreeId] ?? [], query.text)
-      : matchSkills(commandsFor(provider ?? '', pane.skills), query.text);
+      : matchSkills(skills, query.text);
   });
 
   // Back to the top whenever the offered set changes. Without this, narrowing a query from ten
@@ -773,8 +837,9 @@
   onfocusin={() => sessions.noteFocus(pane.worktreeId, pane.id)}
   onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
 >
-  <header class="c-pane__head">
-    <!--
+  <div class="c-pane__main">
+    <header class="c-pane__head">
+      <!--
       First, before the title, because it is what the pane is held by — and because a handle after the
       name reads as an action on the name rather than on the pane.
 
@@ -783,21 +848,21 @@
       across the whole webview, in exchange for Finder drops carrying real paths. See the drag-drop
       effect above.
     -->
-    <button
-      class="c-pane__grip"
-      type="button"
-      aria-label="Move this session"
-      aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
-      title="Drag to move this pane, or use the arrow keys"
-      onpointerdown={onmovestart}
-      onkeydown={onmovekey}
-    >
-      <Icon name="grip" size={12} />
-    </button>
+      <button
+        class="c-pane__grip"
+        type="button"
+        aria-label="Move this session"
+        aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
+        title="Drag to move this pane, or use the arrow keys"
+        onpointerdown={onmovestart}
+        onkeydown={onmovekey}
+      >
+        <Icon name="grip" size={12} />
+      </button>
 
-    <h2 class="c-pane__title">{label}</h2>
+      <h2 class="c-pane__title">{label}</h2>
 
-    <!--
+      <!--
       One branch instead of four, and a dot beside the word.
 
       The word is what carries the state — `_semantic.scss` forbids colour alone, and here that rule
@@ -809,14 +874,14 @@
       `turn_started` and `turn_finished`, so this used to report it as "working…" while it was in fact
       doing nothing and waiting for an answer. See `statusOf`.
     -->
-    {#if status !== 'idle' && note}
-      <p class="c-pane__note {TONE[status]}">
-        <SessionDot {status} />
-        {note}
-      </p>
-    {/if}
+      {#if status !== 'idle' && note}
+        <p class="c-pane__note {TONE[status]}">
+          <SessionDot {status} />
+          {note}
+        </p>
+      {/if}
 
-    <!--
+      <!--
       Restart · Split · Close, in that order, and the order does not change with the pane's state.
 
       Restart used to appear *only* on a pane that had ended or failed, which left both "on restart"
@@ -828,146 +893,182 @@
       a labelled button when it is the thing to press. Same register the row already used for Split
       against Restart-on-ended.
     -->
-    <div class="c-pane__actions">
-      {#if pane.ended || pane.error}
-        <Button variant="neutral" size="sm" onclick={() => (confirmRestart = true)}>
-          Restart
-        </Button>
-      {:else if pending !== null}
-        <Button
-          variant="neutral"
-          size="sm"
-          title={pending}
-          onclick={() => (confirmRestart = true)}
-        >
-          Restart
-        </Button>
-      {:else}
-        <Button
-          variant="quiet"
-          size="sm"
-          icon="sm"
-          title="Restart this session — the transcript is cleared and the conversation stays resumable"
-          ariaLabel="Restart session"
-          onclick={() => (confirmRestart = true)}
-        >
-          <Icon name="restart" size={12} />
-        </Button>
-      {/if}
+      <div class="c-pane__actions">
+        {#if pane.ended || pane.error}
+          <Button variant="neutral" size="sm" onclick={() => (confirmRestart = true)}>
+            Restart
+          </Button>
+        {:else if pending !== null}
+          <Button
+            variant="neutral"
+            size="sm"
+            title={pending}
+            onclick={() => (confirmRestart = true)}
+          >
+            Restart
+          </Button>
+        {:else}
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title="Restart this session — the transcript is cleared and the conversation stays resumable"
+            ariaLabel="Restart session"
+            onclick={() => (confirmRestart = true)}
+          >
+            <Icon name="restart" size={12} />
+          </Button>
+        {/if}
 
-      <!-- Shells get this too, and it is how a second terminal is opened. The guard used to require
+        <!-- Shells get this too, and it is how a second terminal is opened. The guard used to require
            a provider, which was the last thing keeping a worktree to one shell once the backend
            allowed several. Both arms pass `pane.id` as the neighbour: the pane whose button was
            pressed, not whichever one the focus map thinks. See `Sessions.place` for why those
            differ on macOS. -->
-      {#if !pane.ended && !pane.error}
+        {#if !pane.ended && !pane.error}
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title={provider === null
+              ? 'Open another shell to the right'
+              : 'Split this session to the right'}
+            ariaLabel={provider === null ? 'New shell to the right' : 'Split right'}
+            onclick={() =>
+              void (provider === null
+                ? sessions.openShell(pane.projectId, pane.worktreeId, 'right', pane.id)
+                : sessions.openAgent(
+                    pane.projectId,
+                    pane.worktreeId,
+                    provider,
+                    'right',
+                    pane.id,
+                  ))}
+          >
+            <Icon name="split-right" size={13} />
+          </Button>
+        {/if}
+
         <Button
           variant="quiet"
           size="sm"
           icon="sm"
-          title={provider === null
-            ? 'Open another shell to the right'
-            : 'Split this session to the right'}
-          ariaLabel={provider === null ? 'New shell to the right' : 'Split right'}
-          onclick={() =>
-            void (provider === null
-              ? sessions.openShell(pane.projectId, pane.worktreeId, 'right', pane.id)
-              : sessions.openAgent(
-                  pane.projectId,
-                  pane.worktreeId,
-                  provider,
-                  'right',
-                  pane.id,
-                ))}
+          title="End this session and close the pane"
+          ariaLabel="Close session"
+          onclick={() => void sessions.close(pane.id)}
         >
-          <Icon name="split-right" size={13} />
+          <Icon name="close" size={12} />
         </Button>
+      </div>
+    </header>
+
+    {#if pane.detached && provider !== null}
+      <!--
+      Restored from the last run with nothing behind it yet.
+
+      A card in the pane rather than a row in the surface's resume list, because the pane is the
+      point: the split you built is back, and this is the one that used to hold this conversation.
+      Resuming from here keeps its position; resuming from the list would open beside whatever had
+      focus. See `sessions.reattach`.
+    -->
+      <div class="c-pane__body c-pane__body--offer">
+        <div class="o-stack">
+          <p class="c-pane__empty">{offer}</p>
+          <div class="o-row">
+            <Button
+              variant="accent"
+              size="sm"
+              title="Resume this conversation in this pane"
+              onclick={() => void sessions.reattach(pane.id)}
+            >
+              {pane.providerSession ? 'Resume' : `New ${label} session`}
+            </Button>
+            <Button
+              variant="quiet"
+              size="sm"
+              title="Close this pane without resuming"
+              onclick={() => void sessions.close(pane.id)}
+            >
+              Close
+            </Button>
+          </div>
+          {#if pane.error}
+            <Banner variant="error">{pane.error}</Banner>
+          {/if}
+        </div>
+      </div>
+    {:else if provider === null}
+      <div class="c-pane__body c-pane__body--terminal">
+        <Terminal
+          bind:this={terminal}
+          session={pane.session}
+          active={visible && !pane.ended}
+          onexit={() => {}}
+        />
+      </div>
+    {:else}
+      <div class="c-pane__body" bind:this={scroller} onscroll={onScroll}>
+        <!-- The scroller reports its own fixed height, not its content's, so the thing the
+           `ResizeObserver` has to watch is a wrapper inside it. -->
+        <div bind:this={content}>
+          {#if pane.events.length === 0 && pane.ready}
+            <p class="c-pane__empty">Ask {label} something.</p>
+          {/if}
+          <AgentTranscript events={pane.events} />
+        </div>
+      </div>
+
+      {#if blocking}
+        <!-- Above the composer and outside the scroller: the CLI does not continue the turn until this
+           is answered, so a card that could be scrolled away would stall the session silently. -->
+        <ApprovalCard
+          request={blocking.request}
+          reading={reading && plan !== null}
+          onread={() => (reading = !reading)}
+          onanswer={(answer) =>
+            void sessions.answerAndKeep(pane.id, blocking.id, answer, blocking.request)}
+        />
       {/if}
 
-      <Button
-        variant="quiet"
-        size="sm"
-        icon="sm"
-        title="End this session and close the pane"
-        ariaLabel="Close session"
-        onclick={() => void sessions.close(pane.id)}
-      >
-        <Icon name="close" size={12} />
-      </Button>
-    </div>
-  </header>
+      {#if side}
+        <SideQuestion {side} />
+      {/if}
 
-  {#if provider === null}
-    <div class="c-pane__body c-pane__body--terminal">
-      <Terminal
-        bind:this={terminal}
-        session={pane.session}
-        active={visible && !pane.ended}
-        onexit={() => {}}
-      />
-    </div>
-  {:else}
-    <div class="c-pane__body" bind:this={scroller} onscroll={onScroll}>
-      <!-- The scroller reports its own fixed height, not its content's, so the thing the
-           `ResizeObserver` has to watch is a wrapper inside it. -->
-      <div bind:this={content}>
-        {#if pane.events.length === 0 && pane.ready}
-          <p class="c-pane__empty">Ask {label} something.</p>
-        {/if}
-        <AgentTranscript events={pane.events} />
-      </div>
-    </div>
-
-    {#if blocking}
-      <!-- Above the composer and outside the scroller: the CLI does not continue the turn until this
-           is answered, so a card that could be scrolled away would stall the session silently. -->
-      <ApprovalCard
-        request={blocking.request}
-        {canEdit}
-        onanswer={(answer) =>
-          void sessions.answerAndKeep(pane.id, blocking.id, answer, blocking.request)}
-      />
-    {/if}
-
-    {#if side}
-      <SideQuestion {side} />
-    {/if}
-
-    {#if pane.limit && !pane.ended}
-      <!--
+      {#if pane.limit && !pane.ended}
+        <!--
         Here rather than as a transcript row, for the reason the approval card is: the transcript
         scrolls, and an offer that has scrolled away is an offer nobody takes. The transcript gets a
         `notice` row for the same moment, which is the durable record — this is the decision.
       -->
-      <div class="c-pane__limit">
-        <Banner variant="warn">
-          {pane.limit.message}{#if resetsAt}
-            — resets around {resetsAt}{/if}
-          {#snippet action()}
-            {#if continuation}
+        <div class="c-pane__limit">
+          <Banner variant="warn">
+            {pane.limit.message}{#if resetsAt}
+              — resets around {resetsAt}{/if}
+            {#snippet action()}
+              {#if continuation}
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  title="Open a {continuation.label} session here and carry this conversation into it"
+                  onclick={() => void sessions.continueOn(pane.id, continuation.id)}
+                >
+                  Continue on {continuation.label}
+                </Button>
+              {/if}
               <Button
-                variant="neutral"
+                variant="quiet"
                 size="sm"
-                title="Open a {continuation.label} session here and carry this conversation into it"
-                onclick={() => void sessions.continueOn(pane.id, continuation.id)}
+                title="Hide this. The session stays out of usage."
+                onclick={() => sessions.dismissLimit(pane.id)}
               >
-                Continue on {continuation.label}
+                Dismiss
               </Button>
-            {/if}
-            <Button
-              variant="quiet"
-              size="sm"
-              title="Hide this. The session stays out of usage."
-              onclick={() => sessions.dismissLimit(pane.id)}
-            >
-              Dismiss
-            </Button>
-          {/snippet}
-        </Banner>
-      </div>
-    {/if}
+            {/snippet}
+          </Banner>
+        </div>
+      {/if}
 
-    <!--
+      <!--
       One card holding the message, what will run it, and the control that sends it.
 
       These were two strips: a settings row floating above a hairline, then the form. Nothing said
@@ -975,144 +1076,178 @@
       come loose. Both desktop clients put all three inside one bordered field for that reason, and
       it is also what lets the whole thing take the focus ring as a unit.
     -->
-    <div class="c-pane__foot">
-      {#if contextOpen}
-        <section class="c-context" aria-label="Session context usage">
-          <div class="c-context__head">
-            <strong>Context window</strong>
-            <!--
+      <div class="c-pane__foot">
+        {#if skillsOpen}
+          <section class="c-context" aria-label="Skills available in this session">
+            <div class="c-context__head">
+              <strong>Skills</strong>
+              <span>{skills.length} available</span>
+            </div>
+            {#if skills.length === 0}
+              <p class="c-pane__empty">
+                Nothing discovered yet. {label} reports its own list once the session has been
+                asked something.
+              </p>
+            {:else}
+              <ul class="o-plain-list c-context__skills">
+                {#each skills as skill (skill.name)}
+                  <li class="o-row">
+                    <button
+                      class="c-row-action"
+                      title="Put /{skill.name} in the message"
+                      onclick={() => {
+                        draft = `/${skill.name} `;
+                        skillsOpen = false;
+                      }}
+                    >
+                      /{skill.name}
+                    </button>
+                    <span class="c-status--subtle">{skill.description ?? ''}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+        {/if}
+        {#if contextOpen}
+          <section class="c-context" aria-label="Session context usage">
+            <div class="c-context__head">
+              <strong>Context window</strong>
+              <!--
               Three states, not two. A pane with a footprint but no window to compare it against
               can still say something true, and "Waiting for usage" would have been a lie about a
               number that is sitting right there.
             -->
-            <span
-              >{contextPercent !== null
-                ? `${contextPercent}% used`
-                : contextUsed > 0
-                  ? `${formatTokens(contextUsed)} in context`
-                  : 'Waiting for usage'}</span
+              <span
+                >{contextPercent !== null
+                  ? `${contextPercent}% used`
+                  : contextUsed > 0
+                    ? `${formatTokens(contextUsed)} in context`
+                    : 'Waiting for usage'}</span
+              >
+            </div>
+            <div
+              class="c-context__track"
+              role="progressbar"
+              aria-label="Context window used"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={contextPercent ?? 0}
             >
-          </div>
-          <div
-            class="c-context__track"
-            role="progressbar"
-            aria-label="Context window used"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow={contextPercent ?? 0}
-          >
-            <span style:width="{contextPercent ?? 0}%"></span>
-          </div>
-          {#if pane.usage}
-            <dl class="c-context__facts">
-              <div>
-                <dt>In context</dt>
-                <dd>{formatTokens(contextUsed)}</dd>
-              </div>
-              <div>
-                <dt>Window</dt>
-                <dd>
-                  {pane.usage.contextWindow ? formatTokens(pane.usage.contextWindow) : '—'}
-                </dd>
-              </div>
-              <div>
-                <dt>Input</dt>
-                <dd>{formatTokens(pane.usage.tokensIn)}</dd>
-              </div>
-              <div>
-                <dt>Cached</dt>
-                <dd>{formatTokens(pane.usage.cached)}</dd>
-              </div>
-              <div>
-                <dt>Output</dt>
-                <dd>{formatTokens(pane.usage.tokensOut)}</dd>
-              </div>
-            </dl>
-            <!--
+              <span style:width="{contextPercent ?? 0}%"></span>
+            </div>
+            {#if pane.usage}
+              <dl class="c-context__facts">
+                <div>
+                  <dt>In context</dt>
+                  <dd>{formatTokens(contextUsed)}</dd>
+                </div>
+                <div>
+                  <dt>Window</dt>
+                  <dd>
+                    {pane.usage.contextWindow
+                      ? formatTokens(pane.usage.contextWindow)
+                      : '—'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Input</dt>
+                  <dd>{formatTokens(pane.usage.tokensIn)}</dd>
+                </div>
+                <div>
+                  <dt>Cached</dt>
+                  <dd>{formatTokens(pane.usage.cached)}</dd>
+                </div>
+                <div>
+                  <dt>Output</dt>
+                  <dd>{formatTokens(pane.usage.tokensOut)}</dd>
+                </div>
+              </dl>
+              <!--
               Said out loud because the two halves of this card count different things, and a reader
               comparing them is right to be confused: the top row is the last request's prompt, the
               bottom three are everything the turn billed across all of its round trips. They do not
               add up to each other and are not supposed to.
             -->
-            <p>Input, cached and output are totals for the last turn.</p>
-          {:else}
-            <p>Usage appears after the provider reports its first token update.</p>
-          {/if}
-        </section>
-      {/if}
+              <p>Input, cached and output are totals for the last turn.</p>
+            {:else}
+              <p>Usage appears after the provider reports its first token update.</p>
+            {/if}
+          </section>
+        {/if}
 
-      <form class="c-composer" bind:this={form} onsubmit={(event) => void submit(event)}>
-        {#if suggestions.length > 0}
-          <!-- First child, so the card grows *upward* around it and the message stays where the
+        <form class="c-composer" bind:this={form} onsubmit={(event) => void submit(event)}>
+          {#if suggestions.length > 0}
+            <!-- First child, so the card grows *upward* around it and the message stays where the
                caret already is. In the flow rather than floating: see the component's own header
                for why that is the design and not a limitation. -->
-          <Suggest
-            id="suggest-{pane.id}"
-            items={suggestions}
-            {active}
-            onpick={(value) => pick(value)}
-          />
-        {/if}
+            <Suggest
+              id="suggest-{pane.id}"
+              items={suggestions}
+              {active}
+              onpick={(value) => pick(value)}
+            />
+          {/if}
 
-        {#if attachments.length > 0}
-          <div class="c-composer__attachments" aria-label="Attachments">
-            {#each attachments as attachment (attachment.path)}
-              <figure class="c-attachment">
-                {#if attachment.mime.startsWith('image/')}
-                  <img
-                    src="data:{attachment.mime};base64,{attachment.dataBase64}"
-                    alt="Preview of {attachment.name}"
-                  />
-                {:else}
-                  <span class="c-attachment__file" aria-hidden="true">
-                    <Icon name="file" size={16} />
-                  </span>
-                {/if}
-                <button
-                  type="button"
-                  aria-label="Remove {attachment.name}"
-                  title="Remove attachment"
-                  onclick={() =>
-                    (attachments = attachments.filter(
-                      (item) => item.path !== attachment.path,
-                    ))}
-                >
-                  <Icon name="close" size={10} />
-                </button>
-                <figcaption>
-                  <span title={attachment.name}>{attachment.name}</span>
-                  <small>{formatBytes(attachment.size)}</small>
-                </figcaption>
-              </figure>
-            {/each}
-          </div>
-        {/if}
+          {#if attachments.length > 0}
+            <div class="c-composer__attachments" aria-label="Attachments">
+              {#each attachments as attachment (attachment.path)}
+                <figure class="c-attachment">
+                  {#if attachment.mime.startsWith('image/')}
+                    <img
+                      src="data:{attachment.mime};base64,{attachment.dataBase64}"
+                      alt="Preview of {attachment.name}"
+                    />
+                  {:else}
+                    <span class="c-attachment__file" aria-hidden="true">
+                      <Icon name="file" size={16} />
+                    </span>
+                  {/if}
+                  <button
+                    type="button"
+                    aria-label="Remove {attachment.name}"
+                    title="Remove attachment"
+                    onclick={() =>
+                      (attachments = attachments.filter(
+                        (item) => item.path !== attachment.path,
+                      ))}
+                  >
+                    <Icon name="close" size={10} />
+                  </button>
+                  <figcaption>
+                    <span title={attachment.name}>{attachment.name}</span>
+                    <small>{formatBytes(attachment.size)}</small>
+                  </figcaption>
+                </figure>
+              {/each}
+            </div>
+          {/if}
 
-        <!-- Deliberately NOT `.c-textarea`. That block is a bordered, filled form control, and its
+          <!-- Deliberately NOT `.c-textarea`. That block is a bordered, filled form control, and its
              partial sorts after this one in `main.scss` — so at equal specificity it won, and the
              card ended up with a second bordered box and a resize grip inside it. The two
              declarations actually wanted from it are restated in `.c-composer__input`; see there. -->
-        <textarea
-          class="c-composer__input"
-          bind:this={composer}
-          placeholder="Ask {label}… — paste or @ files, / for commands"
-          aria-label="Message {label}"
-          bind:value={draft}
-          oninput={noteCaret}
-          onclick={noteCaret}
-          onkeyup={noteCaret}
-          onkeydown={onKeydown}
-          onpaste={onPaste}
-          role="combobox"
-          aria-expanded={suggestions.length > 0}
-          aria-controls="suggest-{pane.id}"
-          aria-activedescendant={suggestions.length > 0
-            ? `suggest-${pane.id}-${active}`
-            : undefined}
-          disabled={pane.ended !== null || pane.error !== null}></textarea>
+          <textarea
+            class="c-composer__input"
+            bind:this={composer}
+            placeholder="Ask {label}… — paste or @ files, / for commands"
+            aria-label="Message {label}"
+            bind:value={draft}
+            oninput={noteCaret}
+            onclick={noteCaret}
+            onkeyup={noteCaret}
+            onkeydown={onKeydown}
+            onpaste={onPaste}
+            role="combobox"
+            aria-expanded={suggestions.length > 0}
+            aria-controls="suggest-{pane.id}"
+            aria-activedescendant={suggestions.length > 0
+              ? `suggest-${pane.id}-${active}`
+              : undefined}
+            disabled={pane.ended !== null || pane.error !== null}></textarea>
 
-        <div class="c-composer__bar">
-          <!--
+          <div class="c-composer__bar">
+            <!--
             Files first, then what will run them, then Send: the row reads left to right in the
             order a turn is assembled. Icon-only, because the pills beside it are already three
             words wide on a quarter-width pane and a `+` next to a message box is not ambiguous.
@@ -1125,54 +1260,54 @@
             `o-overlay-select` for the same reason the model pills use it: the native popup renders
             outside the stacking context, so this needs no third z-index. Fifth use of the idiom.
           -->
-          <span class="c-composer__add o-overlay-select">
-            <span class="c-composer__addmark" aria-hidden="true">
-              <Icon name="plus" size={14} />
-            </span>
-            <!-- The sentinel is selectable and does nothing rather than `disabled`, because a
+            <span class="c-composer__add o-overlay-select">
+              <span class="c-composer__addmark" aria-hidden="true">
+                <Icon name="plus" size={14} />
+              </span>
+              <!-- The sentinel is selectable and does nothing rather than `disabled`, because a
                  disabled option cannot reliably be re-selected programmatically — and this control
                  has to return to it after every use. Same note as `OpenInButton`. -->
-            <select
-              class="o-overlay-select__native"
-              aria-label="Add files or folders"
-              value=""
-              disabled={pane.ended !== null || pane.error !== null}
-              title="Add files or folders, or drop them here"
-              onchange={onAdd}
+              <select
+                class="o-overlay-select__native"
+                aria-label="Add files or folders"
+                value=""
+                disabled={pane.ended !== null || pane.error !== null}
+                title="Add files or folders, or drop them here"
+                onchange={onAdd}
+              >
+                <option value="">Add…</option>
+                <option value="files">Files…</option>
+                <option value="folders">Folders…</option>
+              </select>
+            </span>
+
+            <button
+              class="c-composer__context"
+              class:is-open={contextOpen}
+              type="button"
+              aria-expanded={contextOpen}
+              title="Show context-window usage"
+              onclick={() => (contextOpen = !contextOpen)}
             >
-              <option value="">Add…</option>
-              <option value="files">Files…</option>
-              <option value="folders">Folders…</option>
-            </select>
-          </span>
+              <span class="c-composer__context-ring" style:--context={contextPercent ?? 0}
+              ></span>
+              <span>Context {contextPercent === null ? '—' : `${contextPercent}%`}</span>
+            </button>
 
-          <button
-            class="c-composer__context"
-            class:is-open={contextOpen}
-            type="button"
-            aria-expanded={contextOpen}
-            title="Show context-window usage"
-            onclick={() => (contextOpen = !contextOpen)}
-          >
-            <span class="c-composer__context-ring" style:--context={contextPercent ?? 0}
-            ></span>
-            <span>Context {contextPercent === null ? '—' : `${contextPercent}%`}</span>
-          </button>
+            <ModelPicker
+              providers={groups}
+              provider={provider ?? ''}
+              pendingProvider={pane.pendingProvider}
+              model={pane.model}
+              effort={pane.effort}
+              mode={pane.mode}
+              effortPending={pane.effortPending}
+              disabled={pane.ended !== null || pane.error !== null}
+              onchange={(next) => sessions.configure(pane.id, next)}
+            />
 
-          <ModelPicker
-            providers={groups}
-            provider={provider ?? ''}
-            pendingProvider={pane.pendingProvider}
-            model={pane.model}
-            effort={pane.effort}
-            mode={pane.mode}
-            effortPending={pane.effortPending}
-            disabled={pane.ended !== null || pane.error !== null}
-            onchange={(next) => sessions.configure(pane.id, next)}
-          />
-
-          <div class="c-composer__send">
-            <!--
+            <div class="c-composer__send">
+              <!--
               `pane.working`, deliberately **not** `status === 'working'`.
 
               This is the one place that wants the raw field. `attention` outranks `working` in the
@@ -1181,36 +1316,70 @@
               control off the status would flip it from Stop back to Send mid-turn, offering to send a
               second message into a session that cannot take one.
             -->
-            {#if pane.working}
-              <Button
-                variant="neutral"
-                size="sm"
-                onclick={() => void sessions.interrupt(pane.id)}
-              >
-                Stop
-              </Button>
-            {:else}
-              <!-- The shortcut lives here rather than in the placeholder, where it was competing
+              {#if pane.working}
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  onclick={() => void sessions.interrupt(pane.id)}
+                >
+                  Stop
+                </Button>
+              {:else}
+                <!-- The shortcut lives here rather than in the placeholder, where it was competing
                    with the prompt for the one line of text a user reads before typing. It follows
                    the setting because a hint that names the wrong key is worse than no hint. -->
-              <span class="c-composer__hint" aria-hidden="true">
-                {composerPrefs.sendKey === 'enter' ? '↵' : '⌘↵'}
-              </span>
-              <Button
-                variant="accent"
-                size="sm"
-                type="submit"
-                disabled={(draft.trim().length === 0 && attachments.length === 0) ||
-                  pane.ended !== null ||
-                  sending}
-              >
-                {sending ? 'Sending…' : 'Send'}
-              </Button>
-            {/if}
+                <span class="c-composer__hint" aria-hidden="true">
+                  {composerPrefs.sendKey === 'enter' ? '↵' : '⌘↵'}
+                </span>
+                <Button
+                  variant="accent"
+                  size="sm"
+                  type="submit"
+                  disabled={(draft.trim().length === 0 && attachments.length === 0) ||
+                    pane.ended !== null ||
+                    sending}
+                >
+                  {sending ? 'Sending…' : 'Send'}
+                </Button>
+              {/if}
+            </div>
           </div>
+        </form>
+      </div>
+    {/if}
+  </div>
+
+  {#if reading && plan}
+    <!--
+      The plan, beside the session rather than over it.
+
+      It was a modal: a scrim, a focus trap, and the approval card it belongs to hidden behind it.
+      So reading a plan meant open, read, close, find the card again, and remember what you decided.
+      As a sibling of `c-pane__main` the document and the decision are on screen together, the
+      transcript that is the context for both stays scrollable, and Approve is one click from
+      wherever you got to in the plan.
+      -->
+    <aside class="c-pane__aside" aria-label="Proposed plan">
+      <header class="c-pane__aside-head">
+        <strong>Proposed plan</strong>
+        <Button
+          variant="quiet"
+          size="sm"
+          title="Close the plan. The card below still has the decision."
+          onclick={() => (reading = false)}
+        >
+          <Icon name="close" size={12} />
+        </Button>
+      </header>
+      <div class="c-pane__aside-body">
+        <div class="c-planview">
+          <Markdown source={plan.markdown} />
         </div>
-      </form>
-    </div>
+        {#if plan.path}
+          <p class="c-planview__meta"><code>{plan.path}</code></p>
+        {/if}
+      </div>
+    </aside>
   {/if}
 </section>
 

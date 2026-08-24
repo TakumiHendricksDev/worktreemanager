@@ -337,6 +337,14 @@
   transition: width var(--dur-fast) var(--ease);
 }
 
+/* The `/skills` list, in the same panel shell the context meter uses. Scrolls at the height a
+   repository with fifty of them would otherwise push the composer off the bottom of the pane at. */
+.c-context__skills {
+  max-height: 12em;
+  overflow-y: auto;
+  font-size: var(--step--1);
+}
+
 .c-context__facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr));

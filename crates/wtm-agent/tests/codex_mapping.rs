@@ -399,6 +399,68 @@ fn a_resumed_thread_rehydrates_its_visible_messages() {
 }
 
 #[test]
+fn a_resumed_thread_replays_its_commands_diffs_and_reasoning_and_not_only_its_prose() {
+    // The complaint this fixes: the same conversation looked like two different things before and
+    // after a restart, because a resumed thread rendered prose while a live one rendered cards.
+    let mut driver = Codex.protocol(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        resume: Some("019fd37c-f1e4-7a22-81e7-02200fd6d127".to_owned()),
+        ..SessionRequest::default()
+    });
+    driver.open();
+    driver.on_line(r#"{"id":1,"result":{}}"#);
+    let steps = driver.on_line(
+        r#"{"id":2,"result":{"thread":{"id":"019fd37c-f1e4-7a22-81e7-02200fd6d127","turns":[{"id":"turn-1","status":"completed","items":[
+            {"id":"r1","type":"reasoning","summary":[{"type":"text","text":"weighing it"}]},
+            {"id":"c1","type":"commandExecution","command":"cargo test","cwd":"/tmp/worktree","aggregatedOutput":"ok","exitCode":0},
+            {"id":"f1","type":"fileChange","diff":"--- a\n+++ b\n"},
+            {"id":"m1","type":"mcpToolCall","title":"search","status":"completed","output":"found"},
+            {"id":"a1","type":"agentMessage","text":"I fixed it.","phase":"final_answer"}
+        ]}]}}}"#,
+    );
+    let history = events(&steps);
+    assert!(matches!(history[0], AgentEvent::SessionReady { .. }));
+    assert_eq!(
+        history[1..],
+        [
+            &AgentEvent::ReasoningDelta {
+                text: "weighing it".to_owned()
+            },
+            &AgentEvent::CommandStarted {
+                id: "c1".to_owned(),
+                command: "cargo test".to_owned(),
+                cwd: Some("/tmp/worktree".to_owned()),
+            },
+            &AgentEvent::CommandOutput {
+                id: "c1".to_owned(),
+                chunk: "ok".to_owned(),
+            },
+            &AgentEvent::CommandFinished {
+                id: "c1".to_owned(),
+                exit_code: Some(0),
+            },
+            &AgentEvent::Patch {
+                id: "f1".to_owned(),
+                unified_diff: "--- a\n+++ b\n".to_owned(),
+            },
+            &AgentEvent::ToolStarted {
+                id: "m1".to_owned(),
+                name: "mcpToolCall".to_owned(),
+                title: Some("search".to_owned()),
+            },
+            &AgentEvent::ToolFinished {
+                id: "m1".to_owned(),
+                ok: true,
+                output: Some("found".to_owned()),
+            },
+            &AgentEvent::Message {
+                text: "I fixed it.".to_owned()
+            },
+        ]
+    );
+}
+
+#[test]
 fn an_unknown_notification_becomes_a_raw_row_rather_than_being_dropped_or_failing() {
     // The property the whole design rests on. Both protocols are experimental and will grow
     // event kinds in a patch release: matching exhaustively would blank the transcript on the day
@@ -1130,11 +1192,15 @@ fn a_turn_start_the_server_rejects_is_surfaced_rather_than_looking_like_silence(
     // pane shows a usage row of zeros with nothing above it. This asserts the error reaches the
     // transcript, so the next protocol mistake reads as a failure instead of as a quiet agent.
     let mut driver = ready_driver();
-    driver.send_turn("go", &[]);
+    let turn = writes(&driver.send_turn("go", &[]));
+    // The id `turn/start` actually got, rather than a literal. `ready_driver` leaves a
+    // `skills/list` outstanding, and hard-coding an id that happened to be that one instead is how
+    // this test used to pass while asserting nothing about `turn/start` at all.
+    let id = turn[0]["id"].as_i64().expect("turn/start carries an id");
 
-    let steps = driver.on_line(
-        r#"{"id":3,"error":{"code":-32602,"message":"invalid type: string \"workspace-write\", expected internally tagged enum SandboxPolicy"}}"#,
-    );
+    let steps = driver.on_line(&format!(
+        r#"{{"id":{id},"error":{{"code":-32602,"message":"invalid type: string \"workspace-write\", expected internally tagged enum SandboxPolicy"}}}}"#,
+    ));
     match events(&steps).first().expect("a Failed event") {
         AgentEvent::Failed { message } => assert!(message.contains("SandboxPolicy"), "{message}"),
         other => panic!("expected Failed, got {other:?}"),
@@ -1227,9 +1293,42 @@ fn the_skills_list_is_asked_for_after_the_session_is_usable_and_scoped_to_its_wo
 
 #[test]
 fn a_skills_reply_that_says_nothing_useful_yields_an_empty_list_rather_than_a_failure() {
-    // An older server without the method answers with an error, and this must not take the session
-    // down with it — the composer simply has no `/` list, which is the same state Claude is in
-    // before its init line arrives.
+    let mut driver = skills_driver();
+
+    let steps = driver.on_line(r#"{"id":3,"result":{"data":[]}}"#);
+    match events(&steps).first().expect("SkillsListed") {
+        AgentEvent::SkillsListed { skills } => assert!(skills.is_empty()),
+        other => panic!("expected SkillsListed, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_server_too_old_to_know_skills_list_does_not_take_the_session_down_with_it() {
+    // This is what the test above claimed to cover and did not: it fed a *success* reply, so the
+    // error path — which returned `Failed` for any rejected request, whatever it was for — was
+    // never exercised. The composer simply has no `/` list, which is the same state Claude is in
+    // before its init line arrives, and is not worth a red row in a working session's transcript.
+    let mut driver = skills_driver();
+
+    let steps = driver
+        .on_line(r#"{"id":3,"error":{"code":-32601,"message":"Method not found: skills/list"}}"#);
+    assert!(
+        events(&steps).is_empty(),
+        "a refused skills list must draw nothing: {:?}",
+        events(&steps)
+    );
+
+    // And the id must have been released, or the next reply carrying it is read as a skills list.
+    let after = driver.on_line(r#"{"id":3,"error":{"code":-32602,"message":"turn rejected"}}"#);
+    assert!(
+        matches!(events(&after).first(), Some(AgentEvent::Failed { .. })),
+        "a later error on a released id is an ordinary failure: {:?}",
+        events(&after)
+    );
+}
+
+/// A driver at the point where `skills/list` is outstanding as id 3.
+fn skills_driver() -> Box<dyn Protocol> {
     let mut driver = Codex.protocol(&SessionRequest {
         cwd: "/tmp/worktree".to_owned(),
         ..SessionRequest::default()
@@ -1237,10 +1336,5 @@ fn a_skills_reply_that_says_nothing_useful_yields_an_empty_list_rather_than_a_fa
     driver.open();
     driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#);
     driver.on_line(r#"{"id":2,"result":{"thread":{"id":"t","cwd":"/tmp/worktree"}}}"#);
-
-    let steps = driver.on_line(r#"{"id":3,"result":{"data":[]}}"#);
-    match events(&steps).first().expect("SkillsListed") {
-        AgentEvent::SkillsListed { skills } => assert!(skills.is_empty()),
-        other => panic!("expected SkillsListed, got {other:?}"),
-    }
+    driver
 }

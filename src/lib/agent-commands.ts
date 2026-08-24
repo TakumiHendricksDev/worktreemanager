@@ -183,11 +183,41 @@ const CATALOGUES: Record<string, ReadonlyArray<readonly [string, string]>> = {
   claude: CLAUDE,
 };
 
+/**
+ * Everything this session can be asked to do by name, best first.
+ *
+ * # Merged field by field, not entry by entry
+ *
+ * This used to do `merged.set(name, command)`, which replaced the whole entry. Claude reports
+ * **names only** — its init line carries a `slash_commands` array of bare strings — so the moment a
+ * session said anything, every command in both lists lost its description and the `/` menu's second
+ * column went blank. It was better documented before the provider spoke than after. A live entry
+ * still wins every field it actually has; a `null` is not an answer.
+ *
+ * # Why the order is the interesting part
+ *
+ * The built-in table is ~110 entries and the repository's own skills are the ones somebody typed
+ * `/` to reach. `suggest.ts` shows the first `LIMIT` of whatever it is handed when nothing has been
+ * typed yet, so seeding the map with built-ins meant a bare `/` listed `add-dir … cost` and never
+ * reached a single project skill — in a repository with fifty-five of them. Discovered entries
+ * therefore come first, and the built-ins follow.
+ */
 export function commandsFor(provider: string, live: readonly AgentSkill[]): AgentSkill[] {
   const merged = new Map<string, AgentSkill>();
   for (const [name, description] of CATALOGUES[provider] ?? []) {
     merged.set(name, { name, description, scope: 'built-in' });
   }
-  for (const command of live) merged.set(command.name, command);
-  return [...merged.values()];
+  for (const command of live) {
+    const known = merged.get(command.name);
+    merged.set(command.name, {
+      name: command.name,
+      description: command.description ?? known?.description ?? null,
+      scope: command.scope ?? known?.scope ?? null,
+    });
+  }
+
+  const entries = [...merged.values()];
+  const discovered = entries.filter((entry) => entry.scope !== 'built-in');
+  const builtIn = entries.filter((entry) => entry.scope === 'built-in');
+  return [...discovered, ...builtIn];
 }

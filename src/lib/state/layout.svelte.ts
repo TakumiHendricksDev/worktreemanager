@@ -27,12 +27,15 @@
  * no DOM-preserving reparent. For a shell that is scrollback Rust does not buffer and cannot resend.
  * See `tilesOf`.
  *
- * # A move does not survive a restart, for the same reason a pane does not
+ * # A move does survive a restart, and what that needed
  *
- * Leaves reference `pane-N` ids minted by a counter that restarts at zero every launch, and panes are
- * deliberately not restored — a session is *offered* for resume instead. So a persisted tree would
- * name panes that do not exist, and making it work is a session-restore feature rather than part of
- * moving one.
+ * Leaves reference `pane-N` ids minted by a counter that restarts at zero every launch, so a
+ * persisted tree used to name panes that did not exist. That was the whole obstacle, and it was a
+ * session-restore problem rather than a layout one: `sessions.restore` puts the *panes* back under
+ * their stored ids and winds the counter past them, and only then is a stored tree meaningful.
+ *
+ * Nothing in this module knows about any of that, which is the point of keeping the tree apart from
+ * the panes. A restored pane is a leaf like any other.
  */
 
 /** A node in a worktree's split tree. */

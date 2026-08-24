@@ -20,8 +20,17 @@
  * actually works.
  */
 
-/** How many rows the strip will show. More than this is a list nobody reads to the end of. */
-const LIMIT = 20;
+/**
+ * How many rows the strip will offer.
+ *
+ * Was 20, on the grounds that more is a list nobody reads to the end of. That is true of a list you
+ * *scroll*, and the strip does scroll (`_suggest.scss` caps its height and lets it overflow), so 20
+ * was not a reading limit — it was a **reachability** limit, and it was cutting a repository's own
+ * skills out of the menu entirely: with ~110 built-in commands in the catalogue, a bare `/` never
+ * got near them. The order is what makes a list readable; this only decides what is reachable at
+ * all, and it should be generous.
+ */
+const LIMIT = 50;
 
 /**
  * The longest query worth matching.
@@ -138,6 +147,9 @@ export function matchSkills(
  * closest to what was typed is the more likely target.
  */
 function rank<T>(items: readonly T[], query: string, key: (item: T) => string): T[] {
+  // Nothing typed yet, so there is nothing to score by and the caller's order stands. That order is
+  // load-bearing rather than incidental: `commandsFor` puts the session's own discovered skills
+  // ahead of the built-in catalogue precisely because this line is what a bare `/` shows.
   if (query === '') return items.slice(0, LIMIT);
 
   const hits: { item: T; score: number; length: number }[] = [];

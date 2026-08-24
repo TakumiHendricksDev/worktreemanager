@@ -1841,8 +1841,8 @@ pub async fn forget_session(
 ///
 /// The re-attach path after a webview reload, and it exists for the same reason
 /// [`list_terminals`] does: a reload throws away the frontend's pane-to-session map while the CLIs
-/// keep running, so without this they are unreachable until the app quits. It does **not** restore
-/// a transcript — nothing is buffered outside the pane that received it.
+/// keep running, so without this they are unreachable until the app quits. The transcript that goes
+/// with each one comes from [`agent_replay`].
 #[tauri::command]
 pub async fn list_agent_sessions(app: AppState<'_>) -> Reply<Vec<AgentSessionView>> {
     let app = Arc::clone(&app);
@@ -1856,10 +1856,26 @@ pub async fn list_agent_sessions(app: AppState<'_>) -> Reply<Vec<AgentSessionVie
                 worktree: facts.worktree,
                 project: facts.project,
                 provider: facts.provider,
+                provider_session: facts.provider_session,
             })
             .collect())
     })
     .await
+}
+
+/// Everything a live session has already said, so a re-attached pane is not blank.
+///
+/// The other half of [`list_agent_sessions`]. Before this existed a reload adopted a running CLI
+/// into an empty pane, which is the "my sessions changed when I refreshed the app" report: the
+/// session was fine and only the window had forgotten it.
+///
+/// Returns an empty list for a session that has gone, rather than an error. A pane asking about a
+/// session that just exited is an ordinary race, not a fault, and the `agent:exit` event is what
+/// tells it the truth.
+#[tauri::command]
+pub async fn agent_replay(app: AppState<'_>, session: String) -> Reply<Vec<crate::app::SeqEvent>> {
+    let app = Arc::clone(&app);
+    blocking(move || Ok(app.agent_replay(&session))).await
 }
 
 /// End a session and forget it.

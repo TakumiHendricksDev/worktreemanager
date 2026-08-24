@@ -10,13 +10,13 @@
 //! not in a captured preflight check, or an agent CLI the picker lists and the spawn cannot
 //! find — genuinely baffling bugs.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use wtm_config::{AppPaths, FileConfigStore, RealFileStore};
 use wtm_core::error::{ConfigError, WtmError};
-use wtm_core::model::{Project, WorkingTreeStatus, Worktree};
+use wtm_core::model::{AgentEvent, Project, WorkingTreeStatus, Worktree};
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::config::ConfigStore;
 use wtm_core::ports::exec::CommandRunner;
@@ -86,6 +86,77 @@ struct AgentEntry {
     /// [`App::agent_session`] can return an owned handle rather than a borrow, which is what lets
     /// the guard die before the caller runs anything. See that function.
     session: Arc<wtm_agent::AgentSession>,
+    /// Everything this session has already emitted, so a reload can repaint it.
+    ///
+    /// # Why the backend holds a transcript at all
+    ///
+    /// A webview reload throws away the frontend's panes while the CLIs keep running, and
+    /// `list_agent_sessions` re-attaches them. It used to re-attach them to *empty* panes: the
+    /// events had been emitted to a window that no longer existed, and nothing had kept them. A
+    /// live session with a blank transcript is the "my sessions changed after I refreshed"
+    /// complaint in its purest form.
+    ///
+    /// This is **memory only, and never written anywhere**. The rule in
+    /// `wtm_config::sessions` — no transcript — is about a second secret-bearing *file* the user
+    /// does not know exists, since agent output quotes whatever it read. A buffer that dies with
+    /// the process it belongs to is not that, and it holds exactly what the pane on screen already
+    /// holds.
+    replay: ReplayBuffer,
+}
+
+/// One buffered event and its position in the session's stream.
+///
+/// The number is what makes re-attaching race-free. The frontend subscribes to `agent:event`
+/// before it asks for the buffer, so an event can arrive twice — once live, once in the snapshot.
+/// Deduplicating on identity would be wrong (a session can legitimately emit the same delta twice)
+/// and deduplicating on arrival order would need the two paths to agree about a clock they do not
+/// share. A counter the emitter owns is the one thing both sides can compare.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeqEvent {
+    pub seq: u64,
+    pub event: AgentEvent,
+}
+
+/// How many events one session's replay buffer keeps.
+///
+/// The frontend keeps `MAX_EVENTS = 20_000` per pane and this only has to survive long enough to
+/// repaint one, so it is deliberately smaller: a reload after a very long session comes back with
+/// its recent history rather than all of it, which is the same trade the frontend already makes.
+/// Overflow drops the oldest.
+const MAX_REPLAY: usize = 8_000;
+
+/// A session's recent events, numbered.
+///
+/// A type rather than two fields on [`AgentEntry`] because the counter and the queue have one
+/// invariant between them and it is the whole point: **the number never goes backwards, including
+/// across an overflow that discards the events it counted.** Deriving the next number from the
+/// queue's length or its last entry would break the moment the front was dropped, and the failure
+/// would be a reload silently discarding live events whose sequence had been reused.
+#[derive(Debug, Default)]
+struct ReplayBuffer {
+    events: VecDeque<SeqEvent>,
+    next: u64,
+}
+
+impl ReplayBuffer {
+    /// Buffer an event and give it its number.
+    fn push(&mut self, event: &AgentEvent) -> u64 {
+        let seq = self.next;
+        self.next += 1;
+        self.events.push_back(SeqEvent {
+            seq,
+            event: event.clone(),
+        });
+        while self.events.len() > MAX_REPLAY {
+            self.events.pop_front();
+        }
+        seq
+    }
+
+    fn snapshot(&self) -> Vec<SeqEvent> {
+        self.events.iter().cloned().collect()
+    }
 }
 
 /// What the frontend needs to know about a live agent session.
@@ -99,6 +170,11 @@ pub struct AgentSessionFacts {
     pub project: String,
     pub worktree: String,
     pub provider: String,
+    /// The provider's own id for this conversation, empty until it has said.
+    ///
+    /// Reported so a window that is re-attaching can tell *which* conversation a live session is,
+    /// and put it back in the pane it was in rather than beside a restored copy of itself.
+    pub provider_session: String,
     pub ephemeral: bool,
 }
 
@@ -804,6 +880,7 @@ impl App {
                 title: None,
                 ephemeral: req.ephemeral,
                 session: Arc::new(session),
+                replay: ReplayBuffer::default(),
             },
         );
         Ok(id)
@@ -825,6 +902,7 @@ impl App {
                 project: entry.project.clone(),
                 worktree: entry.worktree.clone(),
                 provider: entry.provider.clone(),
+                provider_session: entry.provider_session.clone(),
                 ephemeral: entry.ephemeral,
             })
             .collect()
@@ -1093,6 +1171,30 @@ impl App {
         })
     }
 
+    /// Buffer an event for a session and give it its sequence number.
+    ///
+    /// Called on the reader thread for every event, before it is emitted, so the number the window
+    /// receives is the number the buffer holds. A session that is no longer in the map — one being
+    /// closed while its last events drain — gets `None` and is simply not buffered.
+    pub fn record_agent_event(&self, session: &str, event: &AgentEvent) -> Option<u64> {
+        let id = wtm_core::model::SessionId::new(session);
+        let mut agents = self.agents.lock();
+        let entry = agents.get_mut(&id)?;
+
+        Some(entry.replay.push(event))
+    }
+
+    /// Everything a session has emitted that is still buffered, oldest first.
+    #[must_use]
+    pub fn agent_replay(&self, session: &str) -> Vec<SeqEvent> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents
+            .lock()
+            .get(&id)
+            .map(|entry| entry.replay.snapshot())
+            .unwrap_or_default()
+    }
+
     /// Note the provider's own id for a running session, so `resumable` can exclude it.
     pub fn note_provider_session(&self, session: &str, provider_session: &str) {
         let id = wtm_core::model::SessionId::new(session);
@@ -1197,6 +1299,45 @@ mod tests {
                 .any(|t| t.name == "git" && t.path.is_some()),
             "git must be findable: {:?}",
             doctor.tools
+        );
+    }
+
+    fn notice(message: &str) -> AgentEvent {
+        AgentEvent::Notice {
+            level: wtm_core::model::NoticeLevel::Info,
+            message: message.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_replay_buffer_numbers_events_in_the_order_it_received_them() {
+        let mut buffer = ReplayBuffer::default();
+        assert_eq!(buffer.push(&notice("one")), 0);
+        assert_eq!(buffer.push(&notice("two")), 1);
+
+        let snapshot = buffer.snapshot();
+        assert_eq!(snapshot.iter().map(|e| e.seq).collect::<Vec<_>>(), [0, 1]);
+    }
+
+    #[test]
+    fn a_sequence_number_is_never_reused_after_the_buffer_overflows() {
+        // The invariant the type exists for. The frontend skips any live event whose number it has
+        // already drawn, so a reused number would make a reload silently discard real events —
+        // and it would only happen to the people with the longest sessions.
+        let mut buffer = ReplayBuffer::default();
+        for index in 0..MAX_REPLAY + 10 {
+            buffer.push(&notice(&index.to_string()));
+        }
+
+        let snapshot = buffer.snapshot();
+        assert_eq!(snapshot.len(), MAX_REPLAY, "the buffer stays bounded");
+        assert_eq!(
+            snapshot[0].seq, 10,
+            "the oldest events went, not their numbers"
+        );
+        assert_eq!(
+            buffer.push(&notice("next")),
+            u64::try_from(MAX_REPLAY + 10).expect("fits"),
         );
     }
 

@@ -100,34 +100,244 @@ fn claude_history(req: &SessionRequest) -> Vec<AgentEvent> {
     Vec::new()
 }
 
-fn claude_history_from(reader: impl BufRead) -> Vec<AgentEvent> {
-    reader
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-        .filter(|row| row.get("isSidechain").and_then(Value::as_bool) != Some(true))
-        .filter_map(|row| {
-            let message = row.get("message")?;
-            let text = match message.get("content")? {
-                Value::String(text) => text.clone(),
-                Value::Array(blocks) => blocks
-                    .iter()
-                    .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-                    .filter_map(|block| block.get("text").and_then(Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                _ => String::new(),
-            };
-            if text.is_empty() {
-                return None;
-            }
-            match row.get("type").and_then(Value::as_str) {
-                Some("user") => Some(AgentEvent::UserEcho { text }),
-                Some("assistant") => Some(AgentEvent::Message { text }),
+/// How many replayed events one resumed pane may contribute.
+///
+/// A real transcript measured for this change held 2,221 rows and reconstructs to a few thousand
+/// events. The frontend keeps `MAX_EVENTS` per pane and drops the **oldest** on overflow, so an
+/// unbounded replay would spend a live pane's whole budget on history and then start eating the
+/// history it just replayed. The tail is kept rather than the head for the same reason a terminal
+/// scrolls: the end of a conversation is the part you resumed to continue.
+const MAX_HISTORY_EVENTS: usize = 4_000;
+
+/// Tags Claude wraps around text it injected into its own transcript.
+///
+/// String matching, which — as [`crate::limits`] says at more length — is not a thing this codebase
+/// likes and is here because there is nothing better. These rows are ordinary `type: "user"`
+/// records with `isMeta` unset, indistinguishable from something a person typed by any field on the
+/// row; the wrapper tag is the only signal that exists. Getting it wrong is cheap in one direction
+/// and not the other, so each entry is a **whole opening tag** matched at the *start* of the text
+/// rather than anywhere in it: a message that discusses `<task-notification>` in the middle of a
+/// sentence is a real thing someone said, and dropping it would be silent data loss, while showing
+/// one extra injected row is merely noise.
+const SYNTHETIC: &[&str] = &[
+    "<local-command-caveat>",
+    "<local-command-stdout>",
+    "<task-notification>",
+    "<system-reminder>",
+];
+
+/// The two tags a slash-command invocation is spelled with, in either order.
+///
+/// Observed both ways round on the wire — `<command-name>` first from `/model`, `<command-message>`
+/// first from a skill — so this is a set, not a sequence.
+const COMMAND_TAGS: &[&str] = &["<command-name>", "<command-message>"];
+
+/// The text between `<tag>` and `</tag>`, if both are there.
+fn tag_value(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = text[start..].find(&close)? + start;
+    Some(text[start..end].trim().to_owned())
+}
+
+/// What one `type: "user"` row in the durable JSONL actually is.
+///
+/// Three of these four are things the transcript viewer used to render as a right-aligned bubble,
+/// which is the transcript claiming the user said something they never typed.
+enum UserRow {
+    /// Typed by a person.
+    Said(String),
+    /// A slash command they ran. Not a message, but not nothing either — it is why the model or the
+    /// mode changed halfway down a conversation.
+    Ran(String),
+    /// Injected by the harness: a hook, a caveat, a task notification, a skill body.
+    Injected,
+}
+
+fn classify_user(row: &Value, text: &str) -> UserRow {
+    // Set by the CLI on everything it writes into the conversation on the user's behalf: the
+    // local-command caveat, stop-hook feedback, and the body of a skill a slash command expanded.
+    // Cheaper and more reliable than the tag list below, so it goes first.
+    if row.get("isMeta").and_then(Value::as_bool) == Some(true) {
+        return UserRow::Injected;
+    }
+
+    let trimmed = text.trim_start();
+    if COMMAND_TAGS.iter().any(|tag| trimmed.starts_with(tag)) {
+        let name = tag_value(trimmed, "command-name").unwrap_or_default();
+        let args = tag_value(trimmed, "command-args").unwrap_or_default();
+        // A command whose name did not parse is still not something the user typed as prose.
+        if name.is_empty() {
+            return UserRow::Injected;
+        }
+        return UserRow::Ran(format!("{name} {args}").trim_end().to_owned());
+    }
+    if SYNTHETIC.iter().any(|tag| trimmed.starts_with(tag)) {
+        return UserRow::Injected;
+    }
+    UserRow::Said(text.to_owned())
+}
+
+/// Which already-streamed block kinds a call should emit anyway.
+///
+/// Two fields rather than one flag because the live path's answer differs between them, and a
+/// single `prose: bool` quietly made thinking follow text — see
+/// `an_assistant_messages_thinking_block_is_dropped_because_the_deltas_already_carried_it`.
+#[derive(Clone, Copy)]
+struct Prose {
+    /// Live: only when nothing streamed, because a refusal or an auth failure arrives as a whole
+    /// `assistant` message with no deltas before it and that text is the only copy of the reply.
+    text: bool,
+    /// Live: never. Thinking has no synthetic case, and re-emitting a completed chain of thought
+    /// would put the whole thing in the transcript a second time, after the answer.
+    thinking: bool,
+}
+
+/// Every visible event one `assistant` content array carries.
+///
+/// Shared by the live stream and the resume replay, which differ only in [`Prose`]: live deltas
+/// have already carried the text and thinking, while a replay has no deltas and must emit both.
+/// Sharing it is the point — two copies of the `tool_use` mapping would drift apart, and drifting
+/// apart is precisely how a resumed pane came to look nothing like a live one.
+fn assistant_events(blocks: &[Value], prose: Prose) -> Vec<AgentEvent> {
+    blocks
+        .iter()
+        .filter_map(|block| {
+            let text = |key: &str| block.get(key).and_then(Value::as_str).unwrap_or_default();
+            match block.get("type").and_then(Value::as_str) {
+                Some("text") if prose.text => {
+                    (!text("text").is_empty()).then(|| AgentEvent::Message {
+                        text: text("text").to_owned(),
+                    })
+                }
+                // `ReasoningDelta` rather than a whole-message variant because there is no such
+                // variant: the frontend folds consecutive deltas into one collapsible row, and a
+                // single delta carrying the whole block folds to exactly that.
+                Some("thinking") if prose.thinking => {
+                    (!text("thinking").is_empty()).then(|| AgentEvent::ReasoningDelta {
+                        text: text("thinking").to_owned(),
+                    })
+                }
+                Some("tool_use") => {
+                    let name = text("name").to_owned();
+                    Some(AgentEvent::ToolStarted {
+                        title: tool_title(&name, block.get("input")),
+                        id: text("id").to_owned(),
+                        name,
+                    })
+                }
                 _ => None,
             }
         })
         .collect()
+}
+
+/// Tool results out of a `user` content array.
+///
+/// On the live transport a `user` message means only this. In the durable JSONL it is one of the
+/// shapes a `user` row takes, which is why this is a function rather than the body of `on_user`.
+fn tool_results(blocks: &[Value]) -> Vec<AgentEvent> {
+    blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+        .map(|block| AgentEvent::ToolFinished {
+            ok: block.get("is_error").and_then(Value::as_bool) != Some(true),
+            output: block
+                .get("content")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            id: block
+                .get("tool_use_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        })
+        .collect()
+}
+
+/// Concatenated `text` blocks, or the whole content when it is a bare string.
+fn row_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn claude_history_from(reader: impl BufRead) -> Vec<AgentEvent> {
+    // `filter_map`, not `map_while`. `lines()` yields an `io::Result`, and one unreadable line —
+    // a stray non-UTF-8 byte is enough — used to end the iterator, silently truncating every row
+    // after it. A transcript that stops halfway is indistinguishable from a short conversation.
+    //
+    // `lines_filter_map_ok` guards against a reader that returns `Err` forever, which this one
+    // cannot: `Lines` reads to the newline *before* it validates UTF-8, so an invalid line is
+    // consumed as it fails and the next call starts after it. The iterator still terminates.
+    #[allow(clippy::lines_filter_map_ok)]
+    let mut events: Vec<AgentEvent> = reader
+        .lines()
+        .filter_map(Result::ok)
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        // A sidechain is a subagent's own conversation. It is real, but it is not this transcript.
+        .filter(|row| row.get("isSidechain").and_then(Value::as_bool) != Some(true))
+        .flat_map(|row| {
+            let Some(message) = row.get("message") else {
+                return Vec::new();
+            };
+            let Some(content) = message.get("content") else {
+                return Vec::new();
+            };
+            let blocks = content.as_array().map(Vec::as_slice).unwrap_or_default();
+
+            match row.get("type").and_then(Value::as_str) {
+                Some("assistant") => assistant_events(
+                    blocks,
+                    Prose {
+                        text: true,
+                        thinking: true,
+                    },
+                ),
+                Some("user") => {
+                    let mut out = tool_results(blocks);
+                    let text = row_text(content);
+                    if !text.is_empty() {
+                        match classify_user(&row, &text) {
+                            UserRow::Said(text) => out.push(AgentEvent::UserEcho { text }),
+                            UserRow::Ran(command) => out.push(AgentEvent::Notice {
+                                level: NoticeLevel::Info,
+                                message: command,
+                            }),
+                            UserRow::Injected => {}
+                        }
+                    }
+                    out
+                }
+                _ => Vec::new(),
+            }
+        })
+        .collect();
+
+    if events.len() > MAX_HISTORY_EVENTS {
+        let dropped = events.len() - MAX_HISTORY_EVENTS;
+        events.drain(..dropped);
+        // Said rather than done quietly: a transcript that begins mid-thought with no explanation
+        // reads as the bug this whole change is fixing.
+        events.insert(
+            0,
+            AgentEvent::Notice {
+                level: NoticeLevel::Info,
+                message: format!(
+                    "{dropped} earlier events are not shown. The full transcript is in Claude's own session store."
+                ),
+            },
+        );
+    }
+    events
 }
 
 #[derive(Debug)]
@@ -243,6 +453,13 @@ impl Provider for Claude {
             history: claude_history(req),
             ..ClaudeProtocol::default()
         })
+    }
+
+    fn seed_skills(&self, req: &SessionRequest) -> Vec<AgentSkill> {
+        crate::skills::claude(
+            Path::new(&req.cwd),
+            std::env::var_os("HOME").as_deref().map(Path::new),
+        )
     }
 }
 
@@ -425,49 +642,19 @@ impl ClaudeProtocol {
         };
 
         let streamed = std::mem::take(&mut self.streamed);
-        blocks
-            .iter()
-            .filter_map(|block| {
-                match block.get("type").and_then(Value::as_str) {
-                    // The whole message, when the deltas did not carry it. `Message` rather than
-                    // `MessageDelta`, which is what that variant exists for — a provider that only
-                    // reports complete messages.
-                    Some("text") if !streamed => {
-                        let text = block
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        (!text.is_empty()).then(|| {
-                            Step::Emit(AgentEvent::Message {
-                                text: text.to_owned(),
-                            })
-                        })
-                    }
-                    Some("tool_use") => {
-                        let id = block
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned();
-                        let name = block
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned();
-                        self.tools.insert(id.clone(), name.clone());
-                        Some(Step::Emit(AgentEvent::ToolStarted {
-                            title: tool_title(&name, block.get("input")),
-                            id,
-                            name,
-                        }))
-                    }
-                    // `text` and `thinking` that already arrived as deltas; emitting them again
-                    // would duplicate every reply. Dropped here rather than in the frontend, so a
-                    // provider that streams and a provider that does not both work unchanged.
-                    _ => None,
-                }
-            })
-            .collect()
+        let events = assistant_events(
+            blocks,
+            Prose {
+                text: !streamed,
+                thinking: false,
+            },
+        );
+        for event in &events {
+            if let AgentEvent::ToolStarted { id, name, .. } = event {
+                self.tools.insert(id.clone(), name.clone());
+            }
+        }
+        events.into_iter().map(Step::Emit).collect()
     }
 
     /// A `user` message, which on this transport means a tool result coming back.
@@ -476,26 +663,13 @@ impl ClaudeProtocol {
             return Vec::new();
         };
 
-        blocks
-            .iter()
-            .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
-            .map(|block| {
-                let id = block
-                    .get("tool_use_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                self.tools.remove(&id);
-                Step::Emit(AgentEvent::ToolFinished {
-                    ok: block.get("is_error").and_then(Value::as_bool) != Some(true),
-                    output: block
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    id,
-                })
-            })
-            .collect()
+        let events = tool_results(blocks);
+        for event in &events {
+            if let AgentEvent::ToolFinished { id, .. } = event {
+                self.tools.remove(id);
+            }
+        }
+        events.into_iter().map(Step::Emit).collect()
     }
 
     /// A `can_use_tool` control request. The one thing on this channel a user acts on.
@@ -666,17 +840,24 @@ impl Protocol for ClaudeProtocol {
                             .unwrap_or_default()
                     };
 
-                    // The CLI's own merged list of user, project, plugin and built-in commands —
-                    // `--help` calls them skills too ("--disable-slash-commands: Disable all
-                    // skills"). Names only: `init` carries no descriptions, and re-deriving them by
-                    // scanning `~/.claude/skills` would be this app re-implementing another
-                    // program's discovery rules and going stale the first time they changed.
+                    // Two arrays, and they are not the same list. `slash_commands` is everything
+                    // dispatchable by name — built-ins, bundled skills, `.claude/commands/` files
+                    // and the user's own skills — while `skills` is the user-invocable skills
+                    // alone. Both are `string[]`; neither carries a description.
+                    //
+                    // Reading the second is what lets the composer tell a repository's own skill
+                    // from a built-in, which is the whole ordering rule in `commandsFor`: with ~110
+                    // built-ins in the catalogue, a menu that cannot tell them apart buries the
+                    // fifty-five somebody actually typed `/` to reach.
+                    let own = names("skills")
+                        .into_iter()
+                        .collect::<std::collections::BTreeSet<_>>();
                     let skills = names("slash_commands")
                         .into_iter()
                         .map(|name| AgentSkill {
+                            scope: own.contains(&name).then(|| "skill".to_owned()),
                             name,
                             description: None,
-                            scope: None,
                         })
                         .collect::<Vec<_>>();
 
@@ -1270,23 +1451,152 @@ mod history_tests {
     use super::*;
 
     #[test]
-    fn resume_history_keeps_visible_messages_and_drops_tool_and_sidechain_rows() {
+    fn a_resumed_transcript_replays_tools_and_thinking_the_way_a_live_one_shows_them() {
+        // The whole point of the replay: before this, everything but the two prose rows was
+        // dropped, so the same conversation looked completely different after a restart.
         let rows = concat!(
             "{\"type\":\"user\",\"message\":{\"content\":\"Fix the parser\"}}\n",
-            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"hidden\"},{\"type\":\"text\",\"text\":\"Done.\"}]}}\n",
-            "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"noise\"}]}}\n",
-            "{\"type\":\"assistant\",\"isSidechain\":true,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"aside\"}]}}\n"
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"weighing it\"},{\"type\":\"text\",\"text\":\"Reading it now.\"},{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/lib.rs\"}}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"fn main() {}\"}]}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Done.\"}]}}\n"
+        );
+        let events = claude_history_from(Cursor::new(rows));
+        assert_eq!(
+            events,
+            vec![
+                AgentEvent::UserEcho {
+                    text: "Fix the parser".to_owned()
+                },
+                AgentEvent::ReasoningDelta {
+                    text: "weighing it".to_owned()
+                },
+                AgentEvent::Message {
+                    text: "Reading it now.".to_owned()
+                },
+                AgentEvent::ToolStarted {
+                    id: "t1".to_owned(),
+                    name: "Read".to_owned(),
+                    title: tool_title("Read", Some(&json!({"file_path": "src/lib.rs"}))),
+                },
+                AgentEvent::ToolFinished {
+                    id: "t1".to_owned(),
+                    ok: true,
+                    output: Some("fn main() {}".to_owned()),
+                },
+                AgentEvent::Message {
+                    text: "Done.".to_owned()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_subagents_own_conversation_stays_out_of_the_transcript_that_spawned_it() {
+        let rows = "{\"type\":\"assistant\",\"isSidechain\":true,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"aside\"}]}}\n";
+        assert_eq!(claude_history_from(Cursor::new(rows)), Vec::new());
+    }
+
+    #[test]
+    fn rows_the_harness_injected_are_not_shown_as_things_the_user_said() {
+        // Every one of these was rendering as a right-aligned user bubble, which is the transcript
+        // claiming somebody typed a task notification. Each shape is copied from a real session.
+        let rows = concat!(
+            "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"content\":\"<local-command-caveat>Caveat: The messages below were generated by the user while running local commands.</local-command-caveat>\"}}\n",
+            "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Base directory for this skill: /repo/.claude/skills/review\"}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"<local-command-stdout>Set model to opus</local-command-stdout>\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"<task-notification>\\n<task-id>abc</task-id>\\n</task-notification>\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"<system-reminder>Plan mode is active.</system-reminder>\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"Can you finish the commit\"}}\n"
+        );
+        assert_eq!(
+            claude_history_from(Cursor::new(rows)),
+            vec![AgentEvent::UserEcho {
+                text: "Can you finish the commit".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_slash_command_comes_back_as_a_marker_rather_than_a_message() {
+        // Not a message, but not nothing either: it is why the model changed halfway down the
+        // conversation. Both tag orders appear on the wire, so both are covered.
+        let rows = concat!(
+            "{\"type\":\"user\",\"message\":{\"content\":\"<command-name>/model</command-name>\\n<command-message>model</command-message>\\n<command-args>opus</command-args>\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"<command-message>team-review</command-message>\\n<command-name>/team-review</command-name>\\n<command-args></command-args>\"}}\n"
+        );
+        assert_eq!(
+            claude_history_from(Cursor::new(rows)),
+            vec![
+                AgentEvent::Notice {
+                    level: NoticeLevel::Info,
+                    message: "/model opus".to_owned()
+                },
+                AgentEvent::Notice {
+                    level: NoticeLevel::Info,
+                    message: "/team-review".to_owned()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn prose_that_merely_mentions_an_injected_tag_is_still_something_the_user_said() {
+        // The trap the tag list is anchored for, and the same one `limits.rs` guards against: a
+        // `contains` check here would silently delete a message about wtm's own transcript
+        // handling, which is a conversation people have in this repository.
+        let rows = concat!(
+            "{\"type\":\"user\",\"message\":{\"content\":\"why does <task-notification> render as mine?\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"the <system-reminder> block should be dropped\"}}\n"
         );
         assert_eq!(
             claude_history_from(Cursor::new(rows)),
             vec![
                 AgentEvent::UserEcho {
-                    text: "Fix the parser".to_owned()
+                    text: "why does <task-notification> render as mine?".to_owned()
                 },
-                AgentEvent::Message {
-                    text: "Done.".to_owned()
-                }
+                AgentEvent::UserEcho {
+                    text: "the <system-reminder> block should be dropped".to_owned()
+                },
             ]
         );
+    }
+
+    #[test]
+    fn one_unreadable_line_does_not_truncate_every_row_after_it() {
+        // `map_while(Result::ok)` used to end the iterator here, so a single stray byte presented
+        // as a conversation that stopped halfway.
+        let rows = concat!(
+            "{\"type\":\"user\",\"message\":{\"content\":\"first\"}}\n",
+            "not json at all\n",
+            "{\"type\":\"user\",\"message\":{\"content\":\"second\"}}\n"
+        );
+        assert_eq!(
+            claude_history_from(Cursor::new(rows)),
+            vec![
+                AgentEvent::UserEcho {
+                    text: "first".to_owned()
+                },
+                AgentEvent::UserEcho {
+                    text: "second".to_owned()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_transcript_past_the_replay_ceiling_keeps_its_tail_and_says_what_it_dropped() {
+        let row = "{\"type\":\"user\",\"message\":{\"content\":\"x\"}}\n";
+        let rows = row.repeat(MAX_HISTORY_EVENTS + 5);
+        let events = claude_history_from(Cursor::new(rows));
+
+        assert_eq!(events.len(), MAX_HISTORY_EVENTS + 1);
+        assert!(matches!(
+            events.first(),
+            Some(AgentEvent::Notice {
+                level: NoticeLevel::Info,
+                ..
+            })
+        ));
+        assert!(matches!(events.last(), Some(AgentEvent::UserEcho { .. })));
     }
 }

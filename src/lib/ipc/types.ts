@@ -288,6 +288,12 @@ export interface AgentSession {
   worktree: string;
   project: string;
   provider: string;
+  /**
+   * The provider's own id for this conversation, or `""` before its handshake names one.
+   *
+   * What a re-attaching window matches a live session against, so it lands in the pane it was in.
+   */
+  providerSession: string;
 }
 
 export interface EffortOption {
@@ -518,7 +524,9 @@ export type AgentEvent =
  *
  * `allow_with_edits` is Claude Code only — its allow can carry a replacement payload and rewrite
  * the call. Codex refuses the answer rather than running the original unedited, so the UI must not
- * offer the affordance where it cannot be honoured. See `ApprovalCard`'s `canEdit`.
+ * offer the affordance where it cannot be honoured. Nothing in the UI sends it today: the button
+ * that did had no editor behind it and sent an empty payload, which read as a plain approve with
+ * the tool's arguments erased. See `ApprovalCard`.
  */
 export type ApprovalAnswer =
   | { kind: 'allow' }
@@ -544,6 +552,19 @@ export interface NotificationClick {
 /** Emitted as `agent:event`. */
 export interface AgentEventEnvelope {
   session: string;
+  /**
+   * This event's position in the session's stream.
+   *
+   * `null` when the backend had no registry entry to number it against — a session already gone.
+   * A pane that repainted from the replay buffer uses it to skip what it has already drawn.
+   */
+  seq: number | null;
+  event: AgentEvent;
+}
+
+/** One buffered event, as `agent_replay` returns it. */
+export interface SeqEvent {
+  seq: number;
   event: AgentEvent;
 }
 

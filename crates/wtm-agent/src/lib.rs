@@ -45,6 +45,7 @@ pub mod codex;
 mod limits;
 pub mod provider;
 pub mod session;
+pub mod skills;
 
 pub use capability::{carried_effort, claude_capability, codex_modes, implied_mode, prefer_effort};
 pub use catalogue::{CATALOGUE, ProviderEntry, entry};

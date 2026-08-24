@@ -229,6 +229,7 @@ pub fn run() {
             commands::answer_approval,
             commands::interrupt_turn,
             commands::list_agent_sessions,
+            commands::agent_replay,
             commands::list_resumable,
             commands::forget_session,
             commands::save_brief,
