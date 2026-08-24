@@ -1707,8 +1707,9 @@ pub async fn answer_approval(
 /// `None` for either argument means "leave that one alone", so the picker can change one without
 /// asserting a stale value for the other.
 ///
-/// Codex applies effort on its next turn as well. Claude has no live effort control, so the
-/// frontend does not send that argument for Claude and marks the selection for restart instead.
+/// Codex applies effort on its next turn and Cursor uses its advertised ACP config option. Claude
+/// has no live effort control, so the frontend does not send that argument for Claude and marks the
+/// selection for restart instead.
 #[tauri::command]
 pub async fn configure_session(
     app: AppState<'_>,
@@ -1722,7 +1723,11 @@ pub async fn configure_session(
         app.with_agent(&session, |agent| {
             agent.reconfigure(model.as_deref(), effort.as_deref(), mode.as_deref())
         })
-        .map_err(|e| ErrorView::new("exec", e.to_string()))
+        .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+        if let Some(effort) = effort.as_deref() {
+            app.handoff.update_effort(&session, effort);
+        }
+        Ok(())
     })
     .await
 }
@@ -1929,16 +1934,17 @@ pub async fn agent_capability(app: AppState<'_>, agent_id: String) -> Reply<Capa
             )
         })?;
 
-        let mut capability = if agent_id == wtm_agent::claude::ID {
-            wtm_agent::claude_capability()
-        } else {
-            let mut probed = probe_codex(&app).map_err(|e| ErrorView::new("exec", e))?;
-            // Compiled in rather than queried, and the query is only for the part that moves. There
-            // is a `permissionProfile/list` method, but it answers with the *user's named profiles*
-            // rather than with the vocabulary the protocol accepts, so it is the wrong question for
-            // a picker that has to offer the same three choices on every machine.
-            probed.modes = wtm_agent::codex_modes();
-            probed
+        let mut capability = match agent_id.as_str() {
+            wtm_agent::claude::ID => wtm_agent::claude_capability(),
+            wtm_agent::codex::ID => {
+                let mut probed = probe_codex(&app).map_err(|e| ErrorView::new("exec", e))?;
+                // Compiled in rather than queried, and the query is only for the part that moves.
+                // `permissionProfile/list` returns user profiles, not the protocol vocabulary.
+                probed.modes = wtm_agent::codex_modes();
+                probed
+            }
+            wtm_agent::cursor::ID => probe_cursor(&app).map_err(|e| ErrorView::new("exec", e))?,
+            _ => unreachable!("the catalogue lookup above accepted only known providers"),
         };
 
         // One call for both providers, deliberately: this is the seed the picker shows, and the
@@ -2038,6 +2044,119 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
         modes: Vec::new(),
         models_are_live: true,
     })
+}
+
+/// Ask Cursor's ACP session configuration for its live model, thought-level and mode selectors.
+fn probe_cursor(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, String> {
+    use wtm_core::ports::pipe::{PipeHost, PipeSink};
+
+    #[derive(Default)]
+    struct Collect {
+        lines: parking_lot::Mutex<Vec<String>>,
+    }
+    impl PipeSink for Collect {
+        fn on_line(&self, _session: &wtm_core::model::SessionId, line: &str) {
+            self.lines.lock().push(line.to_owned());
+        }
+        fn on_stderr(&self, _session: &wtm_core::model::SessionId, line: &str) {
+            tracing::debug!(line, "cursor capability probe stderr");
+        }
+        fn on_exit(
+            &self,
+            _session: &wtm_core::model::SessionId,
+            _outcome: &wtm_core::model::ExitOutcome,
+        ) {
+        }
+    }
+
+    let entry = wtm_agent::entry(wtm_agent::cursor::ID).ok_or("cursor is not in the catalogue")?;
+    let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    let request = wtm_agent::SessionRequest {
+        cwd: cwd.clone(),
+        ..wtm_agent::SessionRequest::default()
+    };
+    let inv = wtm_core::ports::exec::Invocation::new(
+        entry.provider.argv(&request),
+        std::env::temp_dir(),
+        SHELL_TIMEOUT_MS,
+    );
+    let sink = Arc::new(Collect::default());
+    let spawned = app
+        .pipe
+        .spawn(&inv, None, Arc::clone(&sink) as Arc<dyn PipeSink>)
+        .map_err(|error| error.to_string())?;
+    let deadline = app.clock.monotonic_ms() + CAPABILITY_TIMEOUT_MS;
+
+    let wait_for = |id: i64| -> Result<serde_json::Value, String> {
+        loop {
+            let found = sink.lines.lock().iter().find_map(|line| {
+                let value: serde_json::Value = serde_json::from_str(line).ok()?;
+                (value.get("id").and_then(serde_json::Value::as_i64) == Some(id)).then_some(value)
+            });
+            if let Some(reply) = found {
+                if let Some(error) = reply.get("error") {
+                    return Err(error
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Cursor rejected the capability probe")
+                        .to_owned());
+                }
+                return Ok(reply);
+            }
+            if app.clock.monotonic_ms() >= deadline {
+                return Err("Cursor did not answer its ACP capability probe".to_owned());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    };
+
+    let outcome = (|| {
+        app.pipe
+            .write_line(&spawned.session, &wtm_agent::cursor::initialize_frame(1))
+            .map_err(|error| error.to_string())?;
+        let initialized = wait_for(1)?;
+        app.pipe
+            .write_line(&spawned.session, &wtm_agent::cursor::authenticate_frame(2))
+            .map_err(|error| error.to_string())?;
+        wait_for(2)?;
+        app.pipe
+            .write_line(
+                &spawned.session,
+                &wtm_agent::cursor::new_session_frame(3, &cwd),
+            )
+            .map_err(|error| error.to_string())?;
+        let reply = wait_for(3)?;
+        let capability = wtm_agent::cursor::parse_capability(&reply);
+        if capability.models.is_empty() {
+            return Err(
+                "Cursor's ACP session advertised no models — check that `agent` is logged in"
+                    .to_owned(),
+            );
+        }
+
+        // The probe's only purpose was its selectors. Delete the empty conversation rather than
+        // leaving one in Cursor's session list every time the picker opens.
+        if initialized
+            .pointer("/result/agentCapabilities/sessionCapabilities/delete")
+            .is_some()
+            && let Some(session) = reply
+                .pointer("/result/sessionId")
+                .and_then(serde_json::Value::as_str)
+        {
+            let frame = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "session/delete",
+                "params": { "sessionId": session },
+            })
+            .to_string();
+            let _ = app.pipe.write_line(&spawned.session, &frame);
+        }
+        Ok(capability)
+    })();
+
+    let _ = app.pipe.kill(&spawned.session);
+    outcome
 }
 
 /// Everything a session needs to start, resolved from config and the caller's choices.
@@ -2168,7 +2287,9 @@ fn handoff_instructions(project: &wtm_core::model::Project, provider: &str) -> O
     Some(format!(
         "You are running inside Worktree Manager (wtm). This session is a live pane in a window the \
          user is watching, alongside the other panes for this worktree.\n\n\
-         {roster} {} available here as a handoff target through the `mcp__wtm__ask_agent` tool. When \
+         {roster} {} available here through the `mcp__wtm__ask_agent` and \
+         `mcp__wtm__spawn_agents` tools. Use `ask_agent` for one child and `spawn_agents` when the \
+         user explicitly asks for several independent reviewers or delegated tasks. When \
          the user asks you to involve another agent — \"let Codex review this\", \"pass this to \
          Codex\", \"ask Claude what it thinks\", \"get a second opinion\", \"have the other model \
          check this\" — use that tool.\n\n\
@@ -2300,6 +2421,7 @@ fn handoff_server(
         worktree: worktree.id.as_str().to_owned(),
         provider: provider.to_owned(),
         effort: effort.map(str::to_owned),
+        session: None,
     });
 
     let mut env = BTreeMap::new();

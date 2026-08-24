@@ -47,6 +47,7 @@ import {
   insert,
   move,
   panesOf,
+  replacePane,
   remove,
   resize,
   type Layout,
@@ -63,6 +64,15 @@ import {
  * unresponsive window.
  */
 const MAX_EVENTS = 20_000;
+
+/** Approximate UTF-16 bytes retained by one pane's normalized event log. */
+const MAX_EVENT_BYTES = 32 * 1024 * 1024;
+
+function eventBytes(event: AgentEvent): number {
+  // Browser strings are UTF-16. This deliberately over-counts ASCII rather than allocating a
+  // second `Uint8Array` for every streamed token merely to measure its UTF-8 representation.
+  return JSON.stringify(event).length * 2;
+}
 
 /**
  * How many panes stay alive at once, per worktree and in total.
@@ -158,6 +168,8 @@ export interface Pane {
   session: string | null;
   /** Agent transcript. Empty for a shell, whose transcript lives in its xterm instance. */
   events: AgentEvent[];
+  /** Approximate retained size, maintained with `events` so the hot path never rescans the log. */
+  eventBytes: number;
   approvals: PendingApproval[];
   /** Most recent provider-reported context totals, maintained outside the transcript log. */
   usage: AgentUsage | null;
@@ -174,6 +186,8 @@ export interface Pane {
    * survive an unpaired `turn_finished`.
    */
   working: boolean;
+  /** The most recent submitted turn completed, maintained beside `working` for child status UI. */
+  lastTurnFinished: boolean;
   /**
    * A turn finished, or a session failed, while this pane's worktree was not the selected one.
    *
@@ -236,6 +250,12 @@ export interface Pane {
   skills: AgentSkill[];
   /** Parent pane for an ephemeral `/btw` fork. Side panes are rendered as overlays, not splits. */
   sideOf: string | null;
+  /** Live parent session for a WTM-owned delegated child. */
+  parentSession: string | null;
+  /** Sibling children created by one orchestration call share this id. */
+  run: string | null;
+  /** Human-facing task label supplied by the orchestrator. */
+  agentTitle: string | null;
   /**
    * The provider says this session is out of usage, and the offer to continue elsewhere is standing.
    *
@@ -317,6 +337,9 @@ interface StoredPane {
    */
   model: string | null;
   effort: string | null;
+  parentSession?: string | null;
+  run?: string | null;
+  agentTitle?: string | null;
 }
 
 /** A worktree's whole surface: the tree, what filled it, and where focus was. */
@@ -625,11 +648,20 @@ class Sessions {
     pane.model = spawned.model;
     pane.effort = spawned.effort;
     pane.mode = spawned.mode;
+    pane.parentSession = spawned.parentSession;
+    pane.run = spawned.run;
+    pane.agentTitle = spawned.title;
     this.panes = [...this.panes, pane];
 
     const live = this.paneById(pane.id);
     if (live) this.claimSession(live, spawned.session);
-    this.place(spawned.worktree, pane.id, 'right');
+    if (spawned.parentSession === null) {
+      this.place(spawned.worktree, pane.id, 'right');
+    } else {
+      // Delegated children stay mounted but do not each consume a tile. The agent rail makes them
+      // visible immediately and swaps one into the parent's tile when selected.
+      this.remember(spawned.worktree);
+    }
     void this.loadCapability(spawned.provider);
     // It is running, so it must stop being offered as resumable — the same correction `resume` makes.
     void this.refreshResumable(spawned.worktree);
@@ -659,10 +691,10 @@ class Sessions {
   /**
    * Change what a pane uses. Model and mode take effect on the running session; effort does not.
    *
-   * The split is not arbitrary and it is not the same on both providers. Codex re-sends model,
-   * effort and both permission fields on every `turn/start`, so all of it is live there. Claude has
-   * control requests for the model and the mode and none for effort, which is an argv flag read at
-   * startup — so effort is stored, flagged, and applied by the next Restart.
+   * The split is provider capability, not UI preference. Codex re-sends effort on each turn and
+   * Cursor applies its advertised ACP config option, so both are live. Claude has control requests
+   * for model and mode but effort is an argv flag read at startup, so only Claude marks it for the
+   * next Restart.
    *
    * Optimistic: the pane shows the new value immediately and a provider that refuses the change
    * says so in the transcript as a `Notice`. The alternative — awaiting the round trip before the
@@ -718,11 +750,11 @@ class Sessions {
     const modelChanged = pane.model !== next.model;
     const effortChanged = pane.effort !== next.effort;
     const modeChanged = pane.mode !== mode;
+    const effortIsLive = running === 'codex' || running === 'cursor';
     // Sticky once set: a pane whose effort is already pending must not un-mark itself because a
     // later change happened to land back on the value the session was started with.
-    if (effortChanged && pane.session !== null && running !== 'codex')
-      pane.effortPending = true;
-    if (running === 'codex') pane.effortPending = false;
+    if (effortChanged && pane.session !== null && !effortIsLive) pane.effortPending = true;
+    if (effortIsLive) pane.effortPending = false;
     // Not sticky, unlike effort: pointing the picker back at the running agent is a retraction, and
     // there is nothing left pending once it agrees with the process again.
     pane.pendingProvider = swapping ? next.provider : null;
@@ -738,7 +770,7 @@ class Sessions {
     // use `gpt-5.6-sol` answers with a `Notice`, which lands in the transcript as a real error
     // report for a change the user never made. A pending swap is applied by Restart, not by
     // telling the wrong process about it.
-    const liveEffortChanged = running === 'codex' && effortChanged;
+    const liveEffortChanged = effortIsLive && effortChanged;
     if (
       pane.session === null ||
       swapping ||
@@ -1060,10 +1092,15 @@ class Sessions {
       // worktree would silently drop panes from whichever ones `storedWorktrees` happened to
       // return last. It is enforced where a process is actually created instead — `materialise`
       // and `reattach` both check `hasRoom`.
-      const kept = surface.panes.slice(0, MAX_PANES_PER_WORKTREE);
+      const roots = surface.panes
+        .filter((pane) => !pane.parentSession)
+        .slice(0, MAX_PANES_PER_WORKTREE);
+      const children = surface.panes.filter((pane) => pane.parentSession).slice(0, 20);
+      const kept = [...roots, ...children];
 
       let layout = surface.layout;
-      for (const stored of surface.panes.slice(kept.length)) {
+      const keptIds = new Set(kept.map((pane) => pane.id));
+      for (const stored of surface.panes.filter((pane) => !keptIds.has(pane.id))) {
         layout = remove(layout, stored.id);
       }
       if (kept.length === 0) continue;
@@ -1076,6 +1113,9 @@ class Sessions {
         pane.providerSession = stored.providerSession;
         pane.model = stored.model;
         pane.effort = stored.effort;
+        pane.parentSession = stored.parentSession ?? null;
+        pane.run = stored.run ?? null;
+        pane.agentTitle = stored.agentTitle ?? null;
         pane.detached = true;
         panes.push(pane);
       }
@@ -1238,9 +1278,11 @@ class Sessions {
       kind,
       session: null,
       events: [],
+      eventBytes: 0,
       approvals: [],
       usage: null,
       working: false,
+      lastTurnFinished: false,
       unseen: false,
       ready: false,
       ended: null,
@@ -1253,6 +1295,9 @@ class Sessions {
       pendingProvider: null,
       skills: [],
       sideOf: null,
+      parentSession: null,
+      run: null,
+      agentTitle: null,
       limit: null,
       replayedThrough: null,
       providerSession: null,
@@ -1292,6 +1337,36 @@ class Sessions {
     };
     this.focus(worktreeId, paneId);
     this.remember(worktreeId);
+  }
+
+  /** Show an already-running delegated session in the current tile or in an explicit split. */
+  showRelated(paneId: string, split = false): void {
+    const pane = this.paneById(paneId);
+    if (!pane) return;
+    const layout = this.layoutFor(pane.worktreeId);
+    if (panesOf(layout).includes(paneId)) {
+      this.focus(pane.worktreeId, paneId);
+      return;
+    }
+    if (split) {
+      this.place(pane.worktreeId, paneId, 'right');
+      return;
+    }
+
+    const parent = pane.parentSession ? this.paneBySession(pane.parentSession) : null;
+    const target =
+      this.focused[pane.worktreeId] ??
+      (parent && panesOf(layout).includes(parent.id) ? parent.id : panesOf(layout).at(0));
+    if (!target) {
+      this.place(pane.worktreeId, paneId, 'right');
+      return;
+    }
+    this.layouts = {
+      ...this.layouts,
+      [pane.worktreeId]: replacePane(layout, target, paneId),
+    };
+    this.focus(pane.worktreeId, paneId);
+    this.remember(pane.worktreeId);
   }
 
   /** Whether another pane can be opened here. Reports rather than throws, so callers can explain. */
@@ -1702,11 +1777,13 @@ class Sessions {
     pane.generation += 1;
     pane.session = null;
     pane.events = [];
+    pane.eventBytes = 0;
     pane.approvals = [];
     pane.usage = null;
     // A fresh session has no turn in flight and nothing you have not seen. Both would otherwise
     // survive the reset and describe a process that no longer exists.
     pane.working = false;
+    pane.lastTurnFinished = false;
     pane.unseen = false;
     pane.ready = false;
     pane.ended = null;
@@ -1829,6 +1906,9 @@ class Sessions {
         providerSession: pane.providerSession,
         model: pane.model,
         effort: pane.effort,
+        parentSession: pane.parentSession,
+        run: pane.run,
+        agentTitle: pane.agentTitle,
       })),
     });
   }
@@ -1894,12 +1974,14 @@ class Sessions {
      */
     if (event.kind === 'turn_started') {
       pane.working = true;
+      pane.lastTurnFinished = false;
       // A turn that starts is the only trustworthy evidence a limit has lifted, and it costs nothing
       // to read it that way — the alternative is a countdown against `resetsAt`, which needs a timer
       // and would clear the offer while the provider was still refusing.
       pane.limit = null;
     } else if (event.kind === 'turn_finished') {
       pane.working = false;
+      pane.lastTurnFinished = true;
       if (pane.sideOf === null && attention.announce('finished', announceable(pane))) {
         pane.unseen = true;
       }
@@ -1962,9 +2044,41 @@ class Sessions {
       };
     }
 
-    pane.events.push(event);
-    if (pane.events.length > MAX_EVENTS) {
-      pane.events.splice(0, pane.events.length - MAX_EVENTS);
+    let appended = true;
+    if (event.kind === 'patch') {
+      // A Codex patch update is the complete current diff, not another historical action. Replace
+      // the preceding snapshot in place so hundreds of cumulative full-file strings cannot remain
+      // in one pane. Searching backwards normally examines only the events since the last update.
+      for (let index = pane.events.length - 1; index >= 0; index -= 1) {
+        const previous = pane.events[index];
+        if (previous?.kind === 'patch' && previous.id === event.id) {
+          pane.eventBytes -= eventBytes(previous);
+          pane.events.splice(index, 1);
+          pane.events.push(event);
+          pane.eventBytes += eventBytes(event);
+          appended = false;
+          break;
+        }
+      }
+    }
+
+    if (appended) {
+      pane.events.push(event);
+      pane.eventBytes += eventBytes(event);
+    }
+
+    let remove = Math.max(0, pane.events.length - MAX_EVENTS);
+    let bytes = pane.eventBytes;
+    for (let index = 0; index < remove; index += 1) {
+      bytes -= eventBytes(pane.events[index]!);
+    }
+    while (remove < pane.events.length && bytes > MAX_EVENT_BYTES) {
+      bytes -= eventBytes(pane.events[remove]!);
+      remove += 1;
+    }
+    if (remove > 0) {
+      pane.events.splice(0, remove);
+      pane.eventBytes = Math.max(0, bytes);
     }
   }
 

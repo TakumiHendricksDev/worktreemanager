@@ -96,6 +96,33 @@ pub fn codex(cwd: &Path, home: Option<&Path>) -> Vec<AgentSkill> {
     collect(&roots)
 }
 
+/// Skills Cursor documents as compatible with its CLI.
+///
+/// Cursor's own `.cursor/skills` wins, then the shared `.agents/skills`, followed by the Claude
+/// compatibility directory. Each is only a seed; ACP's `available_commands_update` replaces it
+/// once the running CLI has the authoritative list.
+#[must_use]
+pub fn cursor(cwd: &Path, home: Option<&Path>) -> Vec<AgentSkill> {
+    let mut roots = Vec::new();
+    for base in ascend(cwd) {
+        for directory in [".cursor/skills", ".agents/skills", ".claude/skills"] {
+            roots.push(Root {
+                path: base.join(directory),
+                scope: "project",
+            });
+        }
+    }
+    if let Some(home) = home {
+        for directory in [".cursor/skills", ".agents/skills", ".claude/skills"] {
+            roots.push(Root {
+                path: home.join(directory),
+                scope: "personal",
+            });
+        }
+    }
+    collect(&roots)
+}
+
 /// `cwd` and its parents, nearest first, bounded by [`ASCEND`].
 fn ascend(cwd: &Path) -> Vec<PathBuf> {
     cwd.ancestors()
@@ -319,5 +346,27 @@ mod tests {
         let found = codex(dir.path(), None);
         assert_eq!(found.len(), 1, "only `.agents/skills`");
         assert_eq!(found[0].name, "land");
+    }
+
+    #[test]
+    fn cursor_reads_its_native_and_compatible_skill_directories() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        write(
+            &dir.path().join(".cursor/skills/native/SKILL.md"),
+            "---\nname: native\n---\n",
+        );
+        write(
+            &dir.path().join(".agents/skills/shared/SKILL.md"),
+            "---\nname: shared\n---\n",
+        );
+
+        let found = cursor(dir.path(), None);
+        assert_eq!(
+            found
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            ["native", "shared"]
+        );
     }
 }

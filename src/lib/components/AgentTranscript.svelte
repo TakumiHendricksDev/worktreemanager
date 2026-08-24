@@ -17,9 +17,22 @@
    * drops from the front — so a row's key is its kind plus the id or ordinal it was built from.
    */
   import type { AgendaStep, AgentAttachment, AgentEvent, AgentUsage } from '../ipc/types';
+  import Button from './ui/Button.svelte';
   import Markdown from './Markdown.svelte';
 
   const { events }: { events: AgentEvent[] } = $props();
+
+  /** Only the recent tail is folded and mounted until the reader asks for older activity. */
+  const EVENT_PAGE = 800;
+  let visibleEvents = $state(EVENT_PAGE);
+  const firstVisible = $derived(Math.max(0, events.length - visibleEvents));
+  const disclosures = $state<Record<string, boolean>>({});
+  const diffLimits = $state<Record<string, number>>({});
+
+  function toggle(key: string, event: Event): void {
+    const target = event.currentTarget;
+    if (target instanceof HTMLDetailsElement) disclosures[key] = target.open;
+  }
 
   /**
    * One thing to draw.
@@ -44,7 +57,7 @@
         ok: boolean | null;
         output: string | null;
       }
-    | { key: string; kind: 'patch'; diff: string }
+    | { key: string; kind: 'patch'; id: string; diff: string }
     | { key: string; kind: 'agenda'; explanation: string | null; steps: AgendaStep[] }
     | { key: string; kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
     | { key: string; kind: 'usage'; usage: AgentUsage; costUsd: number | null }
@@ -68,6 +81,7 @@
     // "the last row" — a second command can start before the first has finished.
     const commands = new Map<string, Extract<Row, { kind: 'command' }>>();
     const tools = new Map<string, Extract<Row, { kind: 'tool' }>>();
+    const patches = new Map<string, Extract<Row, { kind: 'patch' }>>();
     let agenda: Extract<Row, { kind: 'agenda' }> | null = null;
 
     /** The assistant or thinking row a delta should append to, or null when a new one is needed. */
@@ -80,7 +94,8 @@
       return last !== undefined && last.kind === 'thinking' ? last : null;
     }
 
-    events.forEach((event, index) => {
+    events.slice(firstVisible).forEach((event, visibleIndex) => {
+      const index = firstVisible + visibleIndex;
       switch (event.kind) {
         case 'attachments':
           out.push({
@@ -171,9 +186,21 @@
           break;
         }
 
-        case 'patch':
-          out.push({ key: `p${index}`, kind: 'patch', diff: event.unifiedDiff });
+        case 'patch': {
+          const previous = patches.get(event.id);
+          if (previous) previous.diff = event.unifiedDiff;
+          else {
+            const row: Extract<Row, { kind: 'patch' }> = {
+              key: `p:${event.id || index}`,
+              kind: 'patch',
+              id: event.id,
+              diff: event.unifiedDiff,
+            };
+            patches.set(event.id, row);
+            out.push(row);
+          }
           break;
+        }
 
         case 'agenda_updated':
           // Replaced rather than appended: the provider sends the whole list on every change, so
@@ -518,10 +545,17 @@
    * explicit that nothing in this app encodes state in colour alone, and a diff read by someone who
    * cannot separate red from green is exactly the case that rule exists for.
    */
-  function diffLines(
+  function diffPage(
     diff: string,
-  ): { text: string; cls: 'is-add' | 'is-del' | 'is-hunk' | 'is-meta' | '' }[] {
-    return diff.split('\n').map((text) => {
+    limit: number,
+  ): {
+    lines: { text: string; cls: 'is-add' | 'is-del' | 'is-hunk' | 'is-meta' | '' }[];
+    more: boolean;
+  } {
+    const selected = diff.split('\n', limit + 1);
+    const more = selected.length > limit;
+    if (more) selected.pop();
+    const lines = selected.map((text) => {
       if (text.startsWith('+++') || text.startsWith('---'))
         return { text, cls: 'is-meta' } as const;
       if (text.startsWith('@@')) return { text, cls: 'is-hunk' } as const;
@@ -529,6 +563,14 @@
       if (text.startsWith('-')) return { text, cls: 'is-del' } as const;
       return { text, cls: '' } as const;
     });
+    return { lines, more };
+  }
+
+  const PROMPT_PREVIEW = 320;
+
+  function promptPreview(text: string): string {
+    const line = text.replace(/\s+/g, ' ').trim();
+    return line.length > PROMPT_PREVIEW ? `${line.slice(0, PROMPT_PREVIEW - 1)}…` : line;
   }
 
   function formatBytes(size: number): string {
@@ -539,9 +581,23 @@
 </script>
 
 <div class="c-transcript">
+  {#if firstVisible > 0}
+    <div class="c-transcript__paging">
+      <Button variant="quiet" size="sm" onclick={() => (visibleEvents += EVENT_PAGE)}>
+        Show {Math.min(EVENT_PAGE, firstVisible).toLocaleString()} earlier events
+      </Button>
+    </div>
+  {/if}
   {#each rows as row (row.key)}
     {#if row.kind === 'user'}
-      <p class="c-transcript__user">{row.text}</p>
+      {#if row.text.length > PROMPT_PREVIEW}
+        <details class="c-transcript__prompt" ontoggle={(event) => toggle(row.key, event)}>
+          <summary class="c-transcript__user">{promptPreview(row.text)}</summary>
+          {#if disclosures[row.key]}<p class="c-transcript__user">{row.text}</p>{/if}
+        </details>
+      {:else}
+        <p class="c-transcript__user">{row.text}</p>
+      {/if}
     {:else if row.kind === 'attachments'}
       <div class="c-transcript__attachments" aria-label="User attachments">
         {#each row.attachments as attachment (attachment.path)}
@@ -581,9 +637,9 @@
         still collapsed by default: a whole reasoning block is useful when you want it and a wall when
         you do not.
       -->
-      <details class="c-transcript__thinking">
+      <details class="c-transcript__thinking" ontoggle={(event) => toggle(row.key, event)}>
         <summary>{firstLine(row.text)}</summary>
-        <p>{row.text}</p>
+        {#if disclosures[row.key]}<p>{row.text}</p>{/if}
       </details>
     {:else if isStep(row)}
       {@render step(row)}
@@ -599,7 +655,7 @@
         A run now ends at the next thing the model *says*, reasoning included, so these are the gaps
         between narration rather than one box per turn. See `group()`.
       -->
-      <details class="c-transcript__group">
+      <details class="c-transcript__group" ontoggle={(event) => toggle(row.key, event)}>
         <summary class="c-transcript__group-name">
           <span class="c-transcript__group-count">
             {row.steps.length}
@@ -616,17 +672,35 @@
             >
           {/if}
         </summary>
-        <div class="c-transcript__group-body">
-          {#each row.steps as member (member.key)}
-            {@render step(member)}
-          {/each}
-        </div>
+        {#if disclosures[row.key]}
+          <div class="c-transcript__group-body">
+            {#each row.steps as member (member.key)}
+              {@render step(member)}
+            {/each}
+          </div>
+        {/if}
       </details>
     {:else if row.kind === 'patch'}
-      <pre class="c-transcript__diff">{#each diffLines(row.diff) as line, i (i)}<span
-            class="c-transcript__diff-line {line.cls}"
-            >{line.text}
+      <details class="c-transcript__patch" ontoggle={(event) => toggle(row.key, event)}>
+        <summary>Code changes · {formatBytes(row.diff.length * 2)}</summary>
+        {#if disclosures[row.key]}
+          {@const page = diffPage(row.diff, diffLimits[row.key] ?? 300)}
+          <pre class="c-transcript__diff">{#each page.lines as line, i (i)}<span
+                class="c-transcript__diff-line {line.cls}"
+                >{line.text}
 </span>{/each}</pre>
+          {#if page.more}
+            <div class="c-transcript__paging">
+              <Button
+                variant="quiet"
+                size="sm"
+                onclick={() => (diffLimits[row.key] = (diffLimits[row.key] ?? 300) + 300)}
+                >Show 300 more lines</Button
+              >
+            </div>
+          {/if}
+        {/if}
+      </details>
     {:else if row.kind === 'agenda'}
       <div class="c-transcript__card">
         {#if row.explanation}<p>{row.explanation}</p>{/if}
@@ -677,22 +751,24 @@
       summary is the command with that wrapper stripped and truncated; the untouched original is the
       first thing inside, because a label you cannot verify is worse than no label.
     -->
-    <details class="c-transcript__tool">
+    <details class="c-transcript__tool" ontoggle={(event) => toggle(row.key, event)}>
       <summary class="c-transcript__tool-name">
         <code class="c-transcript__cmd">{shortCommand(row.command)}</code>
         {#if row.exit !== null && row.exit !== 0}
           <span class="c-status--danger">exit {row.exit}</span>
         {/if}
       </summary>
-      <pre class="c-transcript__out">{row.command}</pre>
-      {#if row.output}<pre class="c-transcript__out">{row.output}</pre>{/if}
+      {#if disclosures[row.key]}
+        <pre class="c-transcript__out">{row.command}</pre>
+        {#if row.output}<pre class="c-transcript__out">{row.output}</pre>{/if}
+      {/if}
     </details>
   {:else if row.kind === 'raw'}
     <!-- An event this build does not know. Shown, because dropping it would lose information with
          no trace, and collapsed, because it is usually not interesting. -->
-    <details class="c-transcript__raw">
+    <details class="c-transcript__raw" ontoggle={(event) => toggle(row.key, event)}>
       <summary>{row.provider} · {row.event}</summary>
-      <pre>{JSON.stringify(row.payload, null, 2)}</pre>
+      {#if disclosures[row.key]}<pre>{JSON.stringify(row.payload, null, 2)}</pre>{/if}
     </details>
   {:else if row.output}
     <!--
@@ -703,12 +779,12 @@
       routine, and an expanded block per occurrence is the sprawl this row exists to avoid. The word
       `failed` is what tells you to click.
     -->
-    <details class="c-transcript__tool">
+    <details class="c-transcript__tool" ontoggle={(event) => toggle(row.key, event)}>
       <summary class="c-transcript__tool-name">
         {row.title ?? row.name}
         {#if row.ok === false}<span class="c-status--danger">failed</span>{/if}
       </summary>
-      <pre class="c-transcript__out">{row.output}</pre>
+      {#if disclosures[row.key]}<pre class="c-transcript__out">{row.output}</pre>{/if}
     </details>
   {:else}
     <!-- Nothing to disclose. A `<details>` with an empty body offers a marker that does nothing,

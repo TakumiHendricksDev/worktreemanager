@@ -86,11 +86,41 @@ const HANDOFF_POLL_MS: u64 = 100;
 
 /// What the bridge asks the app to do.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Request {
     /// Which session is asking. Resolves to a project and a worktree.
     pub token: String,
     /// The agent to hand the prompt to, by catalogue id.
+    #[serde(default)]
     pub agent: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Several independent children to launch as one orchestration run.
+    #[serde(default)]
+    pub tasks: Vec<Task>,
+    /// Maximum simultaneously running children. Clamped to the task count and hard limit.
+    #[serde(default)]
+    pub concurrency: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Task {
+    #[serde(default)]
+    pub title: Option<String>,
+    pub agent: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
     pub prompt: String,
 }
 
@@ -142,19 +172,19 @@ pub struct Caller {
     pub provider: String,
     /// The effort the calling session is running at.
     ///
-    /// # Why a snapshot taken at token time is exact
+    /// # Why this starts as a snapshot
     ///
-    /// Because **no provider changes effort live.** `configure_session` has no effort parameter,
-    /// `CodexProtocol::reconfigure` deliberately mutates only model and mode, and Claude reads
-    /// `--effort` from argv once at startup — which is the whole reason the picker marks a changed
-    /// effort "on restart". So a session's spawn effort *is* its live effort for its whole life, and
-    /// a restart re-runs `session_request_for`, which mints a fresh token. The snapshot cannot go
-    /// stale without the session it describes being replaced.
+    /// The MCP environment has to exist before the provider process and session id do, so the spawn
+    /// effort is the only value available when the token is issued. Once the id exists it is bound
+    /// below, and `configure_session` updates this field when a provider changes effort live. Claude
+    /// still reads effort only at startup; its frontend deliberately sends no live effort change.
     ///
     /// This is also the only place the value is reachable from. Neither `AgentSession` nor
     /// `AgentEntry` keeps the `SessionRequest`, so asking "what effort is that pane on" from the
     /// socket thread has no answer — hence riding it on the token rather than looking it up.
     pub effort: Option<String>,
+    /// Wtm's live session id, bound immediately after the provider process starts.
+    pub session: Option<String>,
 }
 
 /// The token registry and the socket that reaches it.
@@ -183,6 +213,22 @@ impl Hub {
     /// Resolve a token, or `None` if it was never issued.
     pub fn resolve(&self, token: &str) -> Option<Caller> {
         self.tokens.lock().get(token).cloned()
+    }
+
+    /// Attach the id that did not exist yet when the MCP environment had to be constructed.
+    pub fn bind_session(&self, token: &str, session: &str) {
+        if let Some(caller) = self.tokens.lock().get_mut(token) {
+            caller.session = Some(session.to_owned());
+        }
+    }
+
+    /// Keep delegation inheritance aligned with a live effort change on the calling session.
+    pub fn update_effort(&self, session: &str, effort: &str) {
+        for caller in self.tokens.lock().values_mut() {
+            if caller.session.as_deref() == Some(session) {
+                caller.effort = Some(effort.to_owned());
+            }
+        }
     }
 
     /// Forget every token issued for a worktree.
@@ -214,12 +260,8 @@ impl Hub {
 /// pane that sat there looking hung.
 struct Capture {
     inner: Arc<dyn wtm_agent::session::AgentSink>,
-    /// Assistant messages seen so far, joined on completion.
-    ///
-    /// A list rather than one slot because a turn can produce several messages — Codex emits one per
-    /// agent message item — and keeping only the last would silently drop the body of a review whose
-    /// final paragraph happened to arrive as its own item.
-    text: parking_lot::Mutex<Vec<String>>,
+    /// Assistant text seen so far, including streaming-only providers such as Cursor ACP.
+    text: parking_lot::Mutex<String>,
     /// Fires once, when the turn finishes or the session dies.
     done: parking_lot::Mutex<Option<mpsc::Sender<Outcome>>>,
 }
@@ -259,7 +301,7 @@ impl Capture {
     }
 
     fn collected(&self) -> String {
-        self.text.lock().join("\n\n")
+        self.text.lock().clone()
     }
 }
 
@@ -269,7 +311,18 @@ impl wtm_agent::session::AgentSink for Capture {
         // session outlives the handoff by design — see `awaiting`.
         if self.awaiting() {
             match event {
-                AgentEvent::Message { text, .. } => self.text.lock().push(text.clone()),
+                AgentEvent::MessageDelta { text } => self.text.lock().push_str(text),
+                AgentEvent::Message { text } => {
+                    let mut collected = self.text.lock();
+                    // Codex can report the complete item after streaming the same text as deltas.
+                    // A whole-message-only provider still lands here with an empty accumulator.
+                    if collected.is_empty() {
+                        collected.push_str(text);
+                    } else if collected.as_str() != text && !collected.ends_with(text) {
+                        collected.push_str("\n\n");
+                        collected.push_str(text);
+                    }
+                }
                 AgentEvent::TurnFinished { .. } => self.finish(Outcome::Finished),
                 AgentEvent::Failed { message } => self.finish(Outcome::Failed(message.clone())),
                 _ => {}
@@ -301,15 +354,98 @@ impl wtm_agent::session::AgentSink for Capture {
 /// oversight: the user asked to see what the other agent did, and closing the pane the moment the
 /// caller got its answer would destroy the transcript they wanted to read.
 pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Response {
-    let Some(caller) = app.handoff.resolve(&request.token) else {
+    const MAX_TASKS: usize = 20;
+    let tasks = if request.tasks.is_empty() {
+        vec![Task {
+            title: None,
+            agent: request.agent.clone(),
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            mode: request.mode.clone(),
+            prompt: request.prompt.clone(),
+        }]
+    } else {
+        request.tasks.clone()
+    };
+    if tasks.len() > MAX_TASKS {
+        return Response::failed(format!(
+            "one orchestration run may start at most {MAX_TASKS} agents"
+        ));
+    }
+    if tasks.iter().any(|task| task.prompt.trim().is_empty()) {
+        return Response::failed("every agent task needs a non-empty prompt");
+    }
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    if tasks.len() == 1 {
+        return run_task(handle, app, &request.token, &tasks[0], &run_id);
+    }
+
+    let concurrency = request.concurrency.unwrap_or(4).clamp(1, MAX_TASKS);
+    let mut results = Vec::with_capacity(tasks.len());
+    for wave in tasks.chunks(concurrency) {
+        let mut workers = Vec::with_capacity(wave.len());
+        for task in wave.iter().cloned() {
+            let handle = handle.clone();
+            let app = Arc::clone(app);
+            let token = request.token.clone();
+            let run_id = run_id.clone();
+            workers.push(std::thread::spawn(move || {
+                let response = run_task(&handle, &app, &token, &task, &run_id);
+                (task, response)
+            }));
+        }
+        for worker in workers {
+            match worker.join() {
+                Ok(result) => results.push(result),
+                Err(_) => results.push((
+                    Task {
+                        title: Some("Agent task".to_owned()),
+                        agent: "unknown".to_owned(),
+                        model: None,
+                        effort: None,
+                        mode: None,
+                        prompt: String::new(),
+                    },
+                    Response::failed("an agent worker stopped unexpectedly"),
+                )),
+            }
+        }
+    }
+
+    let text = results
+        .into_iter()
+        .map(|(task, response)| {
+            let title = task.title.as_deref().unwrap_or(&task.agent);
+            match (response.ok, response.text, response.error) {
+                (true, Some(text), _) => format!("## {title} · {}\n\n{text}", task.agent),
+                (_, _, Some(error)) => {
+                    format!("## {title} · {}\n\nAgent failed: {error}", task.agent)
+                }
+                _ => format!("## {title} · {}\n\nNo result was returned.", task.agent),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Response::ok(text)
+}
+
+fn run_task(
+    handle: &tauri::AppHandle,
+    app: &Arc<App>,
+    token: &str,
+    task: &Task,
+    run_id: &str,
+) -> Response {
+    let Some(caller) = app.handoff.resolve(token) else {
         // Deliberately vague to the caller and specific in the log. A token that does not resolve is
         // either a session whose worktree was removed underneath it or something that should not be
         // calling at all, and the model does not need to be able to tell those apart.
-        tracing::warn!(agent = %request.agent, "a handoff arrived with an unknown token");
+        tracing::warn!(agent = %task.agent, "a handoff arrived with an unknown token");
         return Response::failed("this session is not registered for handoffs any more");
     };
 
-    let target = request.agent.trim();
+    let target = task.agent.trim();
     if target.is_empty() {
         return Response::failed("no agent was named");
     }
@@ -321,15 +457,14 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
         "starting a handoff"
     );
 
-    let opened = open_pane(handle, app, &caller, target);
+    let opened = open_pane(handle, app, &caller, target, task, run_id);
     let (session, capture, rx) = match opened {
         Ok(parts) => parts,
         Err(error) => return Response::failed(error),
     };
 
-    if let Err(error) = app.with_agent(session.as_str(), |agent| {
-        agent.send_turn(&request.prompt, &[])
-    }) {
+    if let Err(error) = app.with_agent(session.as_str(), |agent| agent.send_turn(&task.prompt, &[]))
+    {
         // The pane is left on screen rather than torn down. It carries the stderr notice explaining
         // why the CLI would not take a turn, which is the only useful artefact of a failure here.
         return Response::failed(format!(
@@ -365,6 +500,8 @@ fn open_pane(
     app: &Arc<App>,
     caller: &Caller,
     target: &str,
+    task: &Task,
+    run_id: &str,
 ) -> Result<(SessionId, Arc<Capture>, mpsc::Receiver<Outcome>), String> {
     let project = app
         .project(&caller.project)
@@ -422,7 +559,12 @@ fn open_pane(
         &spec,
         entry,
         &worktree,
-        None,
+        Some(crate::commands::SessionOptions {
+            model: task.model.clone(),
+            effort: task.effort.clone(),
+            mode: task.mode.clone(),
+            resume: None,
+        }),
         inherited.as_deref(),
     )
     .map_err(|e| e.message)?;
@@ -430,7 +572,7 @@ fn open_pane(
     let (tx, rx) = mpsc::channel();
     let capture = Arc::new(Capture {
         inner: crate::agent_bridge::AgentEventSink::new(handle.clone()),
-        text: parking_lot::Mutex::new(Vec::new()),
+        text: parking_lot::Mutex::new(String::new()),
         done: parking_lot::Mutex::new(Some(tx)),
     });
 
@@ -449,6 +591,9 @@ fn open_pane(
             model: req.model.clone(),
             effort: req.effort.clone(),
             mode: req.mode.clone(),
+            parent_session: caller.session.clone(),
+            run: Some(run_id.to_owned()),
+            title: task.title.clone(),
         },
     );
 
@@ -496,6 +641,7 @@ mod tests {
             worktree: worktree.to_owned(),
             provider: "claude".to_owned(),
             effort: Some("max".to_owned()),
+            session: None,
         }
     }
 
@@ -509,6 +655,19 @@ mod tests {
 
         let resolved = hub.resolve(&token).expect("a fresh token should resolve");
         assert_eq!(resolved.effort.as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn a_bound_tokens_effort_tracks_a_live_session_change() {
+        let hub = Hub::default();
+        let token = hub.issue(caller("wt-a"));
+        hub.bind_session(&token, "session-a");
+
+        hub.update_effort("session-a", "high");
+
+        let resolved = hub.resolve(&token).expect("the token should remain valid");
+        assert_eq!(resolved.effort.as_deref(), Some("high"));
+        assert_eq!(resolved.session.as_deref(), Some("session-a"));
     }
 
     #[test]
@@ -592,7 +751,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let capture = Capture {
             inner: Arc::clone(&inner) as Arc<dyn AgentSink>,
-            text: parking_lot::Mutex::new(Vec::new()),
+            text: parking_lot::Mutex::new(String::new()),
             done: parking_lot::Mutex::new(Some(tx)),
         };
         let session = SessionId::new("s-1");
@@ -622,6 +781,35 @@ mod tests {
             3,
             "every event must still reach the UI"
         );
+    }
+
+    #[test]
+    fn a_capture_collects_streaming_deltas_without_duplicating_the_completed_message() {
+        use wtm_agent::session::AgentSink;
+
+        let inner = Arc::new(Silent::default());
+        let (tx, _rx) = mpsc::channel();
+        let capture = Capture {
+            inner: Arc::clone(&inner) as Arc<dyn AgentSink>,
+            text: parking_lot::Mutex::new(String::new()),
+            done: parking_lot::Mutex::new(Some(tx)),
+        };
+        let session = SessionId::new("s-1");
+        capture.on_event(
+            &session,
+            &AgentEvent::MessageDelta {
+                text: "streamed ".to_owned(),
+            },
+        );
+        capture.on_event(
+            &session,
+            &AgentEvent::MessageDelta {
+                text: "answer".to_owned(),
+            },
+        );
+        capture.on_event(&session, &message("streamed answer"));
+
+        assert_eq!(capture.collected(), "streamed answer");
     }
 
     #[test]

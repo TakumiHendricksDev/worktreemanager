@@ -14,6 +14,7 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use serde_json::json;
 use wtm_core::error::ExecError;
 use wtm_core::model::{AgentAttachment, AgentEvent, ApprovalAnswer, ExitOutcome, SessionId};
 use wtm_core::ports::exec::Invocation;
@@ -305,7 +306,10 @@ fn run(
 ) -> Result<(), ExecError> {
     for step in steps {
         match step {
-            Step::Emit(event) => events.on_event(session, &event),
+            Step::Emit(mut event) => {
+                bound_transcript_event(&mut event);
+                events.on_event(session, &event);
+            }
             Step::Write(frame) => host.write_line(session, &frame)?,
             Step::Ready => events.on_ready(session),
         }
@@ -313,9 +317,74 @@ fn run(
     Ok(())
 }
 
+/// Bound display-only provider output before it reaches either transcript buffer.
+///
+/// The protocol has already built its `Step::Write` by this point, so shortening a `UserEcho`
+/// cannot shorten what the model receives. This is deliberately the shared session seam rather
+/// than three provider implementations: a fourth provider must not be able to reintroduce a
+/// multi-megabyte prompt, diff or tool result merely by forgetting a UI-specific convention.
+fn bound_transcript_event(event: &mut AgentEvent) {
+    const PROMPT_BYTES: usize = 64 * 1024;
+    const OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+
+    match event {
+        AgentEvent::UserEcho { text } => bound_text(
+            text,
+            PROMPT_BYTES,
+            "\n\n… prompt truncated in the transcript; the agent received it in full …",
+        ),
+        AgentEvent::Patch { unified_diff, .. } => bound_text(
+            unified_diff,
+            OUTPUT_BYTES,
+            "\n… diff truncated by wtm; inspect the worktree for the complete change …\n",
+        ),
+        AgentEvent::Message { text }
+        | AgentEvent::CommandOutput { chunk: text, .. }
+        | AgentEvent::Notice { message: text, .. }
+        | AgentEvent::Failed { message: text }
+        | AgentEvent::LimitReached { message: text, .. } => bound_text(
+            text,
+            OUTPUT_BYTES,
+            "\n… transcript output truncated by wtm …\n",
+        ),
+        AgentEvent::CommandStarted { command, .. } => bound_text(
+            command,
+            PROMPT_BYTES,
+            "\n… command display truncated by wtm …\n",
+        ),
+        AgentEvent::ToolFinished {
+            output: Some(output),
+            ..
+        } => bound_text(output, OUTPUT_BYTES, "\n… tool output truncated by wtm …\n"),
+        AgentEvent::Raw { payload, .. }
+            if serde_json::to_vec(payload).is_ok_and(|bytes| bytes.len() > OUTPUT_BYTES) =>
+        {
+            *payload = json!({
+                "omitted": "provider payload exceeded wtm's two MiB transcript limit"
+            });
+        }
+        // Streaming prose and reasoning arrive in small deltas. Approvals intentionally remain
+        // complete because the person deciding whether to apply a change must see the whole input.
+        _ => {}
+    }
+}
+
+fn bound_text(text: &mut String, maximum: usize, marker: &str) {
+    if text.len() <= maximum {
+        return;
+    }
+    let mut end = maximum;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push_str(marker);
+}
+
 #[cfg(test)]
 mod tests {
-    use super::strip_terminal_sequences;
+    use super::{bound_transcript_event, strip_terminal_sequences};
+    use wtm_core::model::AgentEvent;
 
     #[test]
     fn terminal_styling_is_removed_without_damaging_text() {
@@ -327,5 +396,39 @@ mod tests {
     fn terminal_string_controls_are_removed_too() {
         let line = "before \u{1b}]8;;https://example.com\u{1b}\\link\u{1b}]8;;\u{7} after";
         assert_eq!(strip_terminal_sequences(line), "before link after");
+    }
+
+    #[test]
+    fn a_long_prompt_is_shortened_only_in_the_transcript_event() {
+        let mut event = AgentEvent::UserEcho {
+            text: format!("{}é", "x".repeat(70 * 1024)),
+        };
+
+        bound_transcript_event(&mut event);
+
+        let AgentEvent::UserEcho { text } = event else {
+            panic!("the event kind must not change");
+        };
+        assert!(text.len() < 66 * 1024);
+        assert!(text.contains("agent received it in full"));
+    }
+
+    #[test]
+    fn a_large_provider_payload_becomes_a_small_diagnostic() {
+        let mut event = AgentEvent::Raw {
+            provider: "future-agent".to_owned(),
+            event: "giant-snapshot".to_owned(),
+            payload: serde_json::json!({ "body": "x".repeat(3 * 1024 * 1024) }),
+        };
+
+        bound_transcript_event(&mut event);
+
+        let AgentEvent::Raw { payload, .. } = event else {
+            panic!("the event kind must not change");
+        };
+        assert_eq!(
+            payload["omitted"],
+            "provider payload exceeded wtm's two MiB transcript limit"
+        );
     }
 }

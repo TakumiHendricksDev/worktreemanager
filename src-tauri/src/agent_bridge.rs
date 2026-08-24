@@ -66,6 +66,9 @@ pub struct SpawnedSession {
     pub model: Option<String>,
     pub effort: Option<wtm_core::model::Effort>,
     pub mode: Option<String>,
+    pub parent_session: Option<String>,
+    pub run: Option<String>,
+    pub title: Option<String>,
 }
 
 /// Tell the window to open a pane for a session that already exists.

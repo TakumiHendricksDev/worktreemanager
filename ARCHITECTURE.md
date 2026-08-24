@@ -218,7 +218,7 @@ for the whole interesting period.
 
 ---
 
-## 6b. Agent handoff: why wtm is a server
+## 6b. Agent delegation: why wtm is a server
 
 One agent asking another for a review — "have Codex look at this plan" — has two possible shapes, and
 the difference is entirely about who owns the second session.
@@ -229,7 +229,7 @@ wtm cannot see it: no pane, no streaming, no approval card. The observable resul
 spins for two minutes and returns a paragraph. For a feature whose entire point is *watching another
 agent work*, that is the wrong shape.
 
-So the second session has to be wtm's own, which means wtm has to expose a tool to the CLIs — and an
+So every delegated session has to be wtm's own, which means wtm has to expose tools to the CLIs — and an
 MCP server is a child process the *CLI* spawns, starting life outside the app. Three consequences, each
 of which is the reason for a piece of `bridge.rs` and `handoff.rs`:
 
@@ -251,12 +251,22 @@ worktree is deliberately not a parameter — it comes from who is asking, so the
 to start an agent somewhere the user is not looking. Each session is issued a token when its MCP config
 is built, and the token resolves to a worktree.
 
-Handoff is on for every session with no key to enable it, and that default is a judgement worth
+Delegation is on for every session with no key to enable it, and that default is a judgement worth
 recording. The blast radius is not new: the target comes from the compiled catalogue rather than from
 config, it runs in the caller's own worktree, it is refused unless the repository offers it, and the new
 session's approval mode is the repository's own. An agent that can already run `bash` here is not
 meaningfully constrained by being unable to open a sibling pane — and unlike a subprocess, a handoff is
 *visible*.
+
+There are two MCP tools over the same path. `ask_agent` is one child and preserves the original
+handoff behavior. `spawn_agents` accepts up to twenty self-contained tasks, each with its own provider,
+model, effort, mode and display title, plus a bounded concurrency. A run id and the caller's live
+session id travel with every announcement, so the frontend draws one compact agent rail instead of
+trying to tile twenty panes. Each child has a visible status word, can replace the current tile for
+inspection, and can be opened in an explicit split. The sessions remain ordinary, interactive agent
+sessions after their first result is returned. Children share one worktree; the tool description says
+so explicitly and steers parallel swarms toward read-only review because concurrent writers can
+conflict.
 
 **A self-describing tool is not enough, and finding that out cost a real attempt.** The tool's
 description names the phrasings people use — "let Codex review this", "second opinion" — and it still
@@ -270,7 +280,8 @@ That is not a bug in the skill, and it is not fixable by writing a better descri
 reasonable readings. The deciding fact is about the *environment* — this session is a pane in a window
 somebody is watching, so an agent reached any other way is invisible — and nothing in the session can
 know it unless wtm says so. So wtm appends it: `--append-system-prompt` on Claude,
-`developerInstructions` on Codex's `thread/start`. Both are **appends**; the neighbouring
+`developerInstructions` on Codex's `thread/start`, and a prefix on Cursor's first ACP prompt (ACP has
+no developer-instruction field). All are **appends**; the neighbouring
 `--system-prompt` and `baseInstructions` *replace* the CLI's own prompt and would discard the user's
 `CLAUDE.md` or `AGENTS.md` along with it, which is a near-identical name for an opposite behaviour and
 therefore pinned by a test rather than left to review.
@@ -281,8 +292,9 @@ The guidance names the two routes it is displacing — a skill, and a CLI throug
 One thing this exposed rather than introduced: `SessionRequest` used to carry pre-serialized
 `--mcp-config` JSON, and Codex has no such flag, so `codex.rs` ignored the field completely. A
 repository declaring MCP servers got them on one provider and silently got none on the other. Serializing
-per provider — a JSON document for Claude, `-c mcp_servers.…` overrides for Codex — is what a provider
-module is *for*, and `tests/mcp_argv.rs` is the regression test.
+per provider — a JSON document for Claude, `-c mcp_servers.…` overrides for Codex, and structured
+`mcpServers` on Cursor's ACP `session/new` — is what a provider module is *for*, and the provider
+mapping tests are the regression boundary.
 
 ---
 
@@ -526,14 +538,23 @@ the events had been emitted to a window that no longer existed. `App` now keeps 
 ring of what it emitted, numbered, and `agent_replay` hands it back — in memory only, which is why
 the no-transcript rule in `wtm-config::sessions` is untouched. The number is what makes re-attaching
 race-free: the window subscribes before it asks for the buffer, so an event can arrive twice, and a
-counter the emitter owns is the one thing both sides can compare.
+counter the emitter owns is the one thing both sides can compare. The bound is bytes as well as event
+count, and cumulative snapshots — patches, agendas, skills and usage — replace their predecessor.
+The frontend applies the same byte bound, folds only an 800-event tail until asked, lazily mounts
+disclosure bodies and paginates diff lines. Display copies of prompts stop at 64 KiB and diffs/tool
+output at 2 MiB; the complete prompt still goes to the provider and the worktree remains the source of
+truth for a larger diff.
 
-**Panes are capped at four per worktree and eight in total, and the cap refuses rather than evicting.**
+**Ordinary tiled panes are capped at four per worktree and eight in total, and the cap refuses rather
+than evicting.**
 §3 sizes the pty design for "a handful of terminals": one OS thread each in Rust, and one `pty:output`
 subscription each on this side, so Tauri serialises every chunk once per mounted pane. Evicting the
 least-recently-viewed shell would be the usual answer and is the wrong one here — that shell may be
 running a dev server. Now that shells are uncapped per worktree in Rust, these frontend caps are the
 only bound, which is where a bound belongs: it is a statement about how many panes fit on a screen.
+An explicit delegated run is the one exception: it may own up to twenty child processes because that
+count is the requested feature, but those children live behind the agent rail and consume a tile only
+when selected or explicitly split.
 
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 

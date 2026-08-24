@@ -73,6 +73,19 @@
   margin-block: var(--sp-1);
 }
 
+/* A long prompt keeps its short, recognisable opening mounted and defers the full body until the
+   reader opens it. The wrapper owns the right edge because a `<summary>` is not itself a child of
+   the transcript flexbox. */
+.c-transcript__prompt {
+  align-self: flex-end;
+  max-width: min(56ch, 88%);
+}
+
+.c-transcript__prompt > .c-transcript__user {
+  max-width: 100%;
+  cursor: pointer;
+}
+
 /*
  * The agent's reply.
  *
@@ -108,6 +121,7 @@
 .c-transcript__group,
 .c-transcript__thinking,
 .c-transcript__raw,
+.c-transcript__patch,
 .c-transcript__tool {
   font-size: var(--step--2);
   color: var(--fg-subtle);
@@ -120,6 +134,17 @@
       color: var(--fg-muted);
     }
   }
+}
+
+.c-transcript__patch summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+
+.c-transcript__paging {
+  display: flex;
+  justify-content: center;
+  padding-block: var(--sp-1);
 }
 
 /*

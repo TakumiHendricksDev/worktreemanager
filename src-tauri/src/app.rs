@@ -126,6 +126,19 @@ pub struct SeqEvent {
 /// Overflow drops the oldest.
 const MAX_REPLAY: usize = 8_000;
 
+/// How much serialized transcript data one live session may keep for repainting a webview.
+///
+/// An event count cannot bound memory when a Codex patch update contains a complete-file diff.
+/// Thirty-two MiB is enough recent prose and command output to make a reload useful while keeping
+/// one forgotten session from retaining hundreds of cumulative diff snapshots indefinitely.
+const MAX_REPLAY_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+struct BufferedEvent {
+    seq_event: SeqEvent,
+    bytes: usize,
+}
+
 /// A session's recent events, numbered.
 ///
 /// A type rather than two fields on [`AgentEntry`] because the counter and the queue have one
@@ -135,7 +148,8 @@ const MAX_REPLAY: usize = 8_000;
 /// would be a reload silently discarding live events whose sequence had been reused.
 #[derive(Debug, Default)]
 struct ReplayBuffer {
-    events: VecDeque<SeqEvent>,
+    events: VecDeque<BufferedEvent>,
+    bytes: usize,
     next: u64,
 }
 
@@ -144,18 +158,65 @@ impl ReplayBuffer {
     fn push(&mut self, event: &AgentEvent) -> u64 {
         let seq = self.next;
         self.next += 1;
-        self.events.push_back(SeqEvent {
-            seq,
-            event: event.clone(),
+
+        // Patches and other snapshots replace earlier state. Keeping every cumulative Codex diff
+        // is both misleading on replay and the source of an otherwise unbounded memory multiplier.
+        if let Some(index) = self
+            .events
+            .iter()
+            .position(|entry| replaces(&entry.seq_event.event, event))
+            && let Some(removed) = self.events.remove(index)
+        {
+            self.bytes = self.bytes.saturating_sub(removed.bytes);
+        }
+
+        let mut buffered = event.clone();
+        let mut bytes = serialized_len(&buffered);
+        if bytes > MAX_REPLAY_BYTES {
+            buffered = AgentEvent::Notice {
+                level: wtm_core::model::NoticeLevel::Warn,
+                message: "One oversized transcript event was omitted from reload history."
+                    .to_owned(),
+            };
+            bytes = serialized_len(&buffered);
+        }
+
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.events.push_back(BufferedEvent {
+            seq_event: SeqEvent {
+                seq,
+                event: buffered,
+            },
+            bytes,
         });
-        while self.events.len() > MAX_REPLAY {
-            self.events.pop_front();
+        while self.events.len() > MAX_REPLAY || self.bytes > MAX_REPLAY_BYTES {
+            if let Some(removed) = self.events.pop_front() {
+                self.bytes = self.bytes.saturating_sub(removed.bytes);
+            }
         }
         seq
     }
 
     fn snapshot(&self) -> Vec<SeqEvent> {
-        self.events.iter().cloned().collect()
+        self.events
+            .iter()
+            .map(|entry| entry.seq_event.clone())
+            .collect()
+    }
+}
+
+fn serialized_len(event: &AgentEvent) -> usize {
+    serde_json::to_vec(event).map_or(0, |bytes| bytes.len())
+}
+
+/// Whether the newer event is the complete current value of state already in the replay.
+fn replaces(previous: &AgentEvent, newer: &AgentEvent) -> bool {
+    match (previous, newer) {
+        (AgentEvent::Patch { id: left, .. }, AgentEvent::Patch { id: right, .. }) => left == right,
+        (AgentEvent::AgendaUpdated { .. }, AgentEvent::AgendaUpdated { .. })
+        | (AgentEvent::SkillsListed { .. }, AgentEvent::SkillsListed { .. })
+        | (AgentEvent::Usage(_), AgentEvent::Usage(_)) => true,
+        _ => false,
     }
 }
 
@@ -883,6 +944,13 @@ impl App {
                 replay: ReplayBuffer::default(),
             },
         );
+        if let Some(token) = req
+            .mcp
+            .get(crate::handoff::SERVER_NAME)
+            .and_then(|server| server.env.get(crate::handoff::TOKEN_ENV))
+        {
+            self.handoff.bind_session(token, id.as_str());
+        }
         Ok(id)
     }
 
@@ -1339,6 +1407,41 @@ mod tests {
             buffer.push(&notice("next")),
             u64::try_from(MAX_REPLAY + 10).expect("fits"),
         );
+    }
+
+    #[test]
+    fn a_patch_snapshot_replaces_the_previous_snapshot_with_a_new_sequence() {
+        let mut buffer = ReplayBuffer::default();
+        buffer.push(&AgentEvent::Patch {
+            id: "same-file".to_owned(),
+            unified_diff: "first".to_owned(),
+        });
+        assert_eq!(
+            buffer.push(&AgentEvent::Patch {
+                id: "same-file".to_owned(),
+                unified_diff: "latest".to_owned(),
+            }),
+            1,
+        );
+
+        let snapshot = buffer.snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].seq, 1);
+        assert!(matches!(
+            &snapshot[0].event,
+            AgentEvent::Patch { unified_diff, .. } if unified_diff == "latest"
+        ));
+    }
+
+    #[test]
+    fn replay_history_is_bounded_by_serialized_bytes() {
+        let mut buffer = ReplayBuffer::default();
+        for index in 0..40 {
+            buffer.push(&notice(&format!("{index}:{}", "x".repeat(1024 * 1024))));
+        }
+
+        assert!(buffer.bytes <= MAX_REPLAY_BYTES);
+        assert!(buffer.snapshot().len() < 40, "the oldest large events went");
     }
 
     #[test]
