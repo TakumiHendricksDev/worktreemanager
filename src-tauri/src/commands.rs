@@ -1388,7 +1388,8 @@ pub async fn list_agents(
             .iter()
             .map(|entry| {
                 let program = entry.provider.program();
-                let found = app.runner.which(program).is_some();
+                let executable = app.agent_executable(entry);
+                let found = executable.is_some();
                 let offered = project.as_ref().is_none_or(|p| p.offers_agent(entry.id));
                 AgentOptionView {
                     id: entry.id.to_owned(),
@@ -1398,7 +1399,12 @@ pub async fn list_agents(
                     offered,
                     // Not installed first, because that is the one the user can act on from here.
                     detail: if !found {
-                        Some(format!("no `{program}` on wtm's PATH"))
+                        Some(if entry.id == wtm_agent::cursor::ID {
+                            "no Cursor Agent CLI (`cursor-agent` or `agent`) on wtm's PATH or in Cursor.app"
+                                .to_owned()
+                        } else {
+                            format!("no `{program}` on wtm's PATH")
+                        })
                     } else if !offered {
                         Some(format!(
                             "this repository's `wtm.toml` does not offer `{}`",
@@ -1912,6 +1918,13 @@ pub async fn close_agent_session(app: AppState<'_>, session: String) -> Reply<()
 /// it can jump backwards.
 const CAPABILITY_TIMEOUT_MS: u64 = 6_000;
 
+/// Cursor.app's managed CLI cold-starts through its agent-worker extension before ACP answers.
+///
+/// On the machine that exposed the bundled-path bug, `initialize` alone took just under seven
+/// seconds. Cursor then has two more local handshake round trips, so sharing Codex's six-second
+/// deadline made a correctly discovered CLI look incompatible immediately afterwards.
+const CURSOR_CAPABILITY_TIMEOUT_MS: u64 = 20_000;
+
 /// What an agent can do on this machine: its models, and the effort ladder each one supports.
 ///
 /// Two providers, two honest answers. Claude Code advertises nothing — no `model/list`, and its
@@ -2047,6 +2060,13 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
 }
 
 /// Ask Cursor's ACP session configuration for its live model, thought-level and mode selectors.
+///
+/// Exposed only so an integration test can prove that machine discovery and the real ACP
+/// handshake agree on the executable. The Tauri command reaches this through `agent_capability`.
+pub fn probe_cursor_for_test(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, String> {
+    probe_cursor(app)
+}
+
 fn probe_cursor(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, String> {
     use wtm_core::ports::pipe::{PipeHost, PipeSink};
 
@@ -2073,6 +2093,9 @@ fn probe_cursor(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Stri
     let cwd = std::env::temp_dir().to_string_lossy().into_owned();
     let request = wtm_agent::SessionRequest {
         cwd: cwd.clone(),
+        executable: app
+            .agent_executable(entry)
+            .map(|path| path.to_string_lossy().into_owned()),
         ..wtm_agent::SessionRequest::default()
     };
     let inv = wtm_core::ports::exec::Invocation::new(
@@ -2085,7 +2108,7 @@ fn probe_cursor(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Stri
         .pipe
         .spawn(&inv, None, Arc::clone(&sink) as Arc<dyn PipeSink>)
         .map_err(|error| error.to_string())?;
-    let deadline = app.clock.monotonic_ms() + CAPABILITY_TIMEOUT_MS;
+    let deadline = app.clock.monotonic_ms() + CURSOR_CAPABILITY_TIMEOUT_MS;
 
     let wait_for = |id: i64| -> Result<serde_json::Value, String> {
         loop {
@@ -2129,7 +2152,7 @@ fn probe_cursor(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Stri
         let capability = wtm_agent::cursor::parse_capability(&reply);
         if capability.models.is_empty() {
             return Err(
-                "Cursor's ACP session advertised no models — check that `agent` is logged in"
+                "Cursor's ACP session advertised no models — check that the Cursor Agent CLI is logged in"
                     .to_owned(),
             );
         }
@@ -2226,6 +2249,9 @@ pub fn session_request_for(
 
     Ok(wtm_agent::SessionRequest {
         cwd: worktree.path.to_string_lossy().into_owned(),
+        // Machine discovery belongs to `App::open_agent`, immediately before spawn, so a CLI
+        // installed while this picker was open is usable without rebuilding this request.
+        executable: None,
         model,
         // Ask before running anything, unless something asked for otherwise. A worktree is
         // disposable and git is the undo, so a permissive default is defensible — but it is a

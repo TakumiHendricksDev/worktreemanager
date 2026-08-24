@@ -97,3 +97,32 @@ fn codex_reports_models_whose_effort_ladders_differ_from_each_other() {
         "one model must be marked default, or a new pane has nothing to start on"
     );
 }
+
+#[test]
+fn cursor_discovery_and_the_real_acp_handshake_use_the_same_executable() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = std::sync::Arc::new(
+        wtm_app_lib::app::App::with_paths(wtm_config::AppPaths::rooted(dir.path())).unwrap(),
+    );
+    let entry = wtm_agent::entry(wtm_agent::cursor::ID).unwrap();
+    let Some(executable) = app.agent_executable(entry) else {
+        eprintln!(
+            "skipping: neither `cursor-agent`, `agent`, nor Cursor.app's managed CLI was found"
+        );
+        return;
+    };
+    eprintln!("probing Cursor ACP through {}", executable.display());
+
+    let capability = wtm_app_lib::commands::probe_cursor_for_test(&app)
+        .expect("the discovered Cursor Agent CLI should answer its ACP handshake");
+
+    assert!(capability.models_are_live);
+    assert!(
+        !capability.models.is_empty(),
+        "Cursor must advertise at least one model, or its picker is empty"
+    );
+    assert!(
+        !capability.modes.is_empty(),
+        "Cursor must advertise at least one mode, or its mode picker is empty"
+    );
+}
