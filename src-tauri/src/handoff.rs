@@ -564,6 +564,15 @@ fn open_pane(
             effort: task.effort.clone(),
             mode: task.mode.clone(),
             resume: None,
+            // Deliberately **not** carried from the caller, unlike effort just above.
+            //
+            // Effort is a statement about how hard the work is, which transfers to work handed on.
+            // Fast mode is a statement about spending: it draws usage credits at a higher rate and
+            // has its own rate limit. One delegation can open twenty children, so inheriting it
+            // would turn one pill the user pressed once into twenty sessions burning credits
+            // faster, discovered on a bill rather than in the UI. A repository can still ask for it
+            // per agent — `session_request_for` falls through to `[agent.<id>] fast`.
+            fast: None,
         }),
         inherited.as_deref(),
     )

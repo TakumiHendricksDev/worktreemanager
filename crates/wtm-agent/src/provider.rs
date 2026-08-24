@@ -66,6 +66,13 @@ pub struct SessionRequest {
     pub effort: Option<Effort>,
     /// The provider's own spelling of a permission or approval mode.
     pub mode: Option<String>,
+    /// Start this session in the provider's high-speed mode.
+    ///
+    /// Only Claude has one — see [`crate::capability`]'s `supports_fast`. `None` and `Some(false)`
+    /// are the same thing to every provider today; the option exists so the resolution layering in
+    /// the composition root can tell "the user did not choose" from "the user chose off", which is
+    /// what lets a config default be overridden back to off.
+    pub fast: Option<bool>,
     /// Appended to the argv the catalogue builds. From `[agent.<id>].extra_args`.
     pub extra_args: Vec<String>,
     /// A session to resume rather than start. The provider's own id.
@@ -160,8 +167,12 @@ pub trait Protocol: Send {
     /// other's current value.
     ///
     /// Codex can apply all three on its next turn and Cursor uses ACP's live configuration methods.
-    /// Claude can apply model and mode but must restart for effort; its implementation deliberately
-    /// ignores that argument and the UI marks it as pending instead of pretending it was applied.
+    /// Claude can apply model, mode and fast but must restart for effort; its implementation
+    /// deliberately ignores that argument and the UI marks it as pending instead of pretending it
+    /// was applied.
+    ///
+    /// `fast` is `None` for every provider whose capability does not advertise it, so an
+    /// implementation is free to ignore it entirely — the picker never offers the control there.
     ///
     /// Default: nothing. A provider that cannot change mid-session is not obliged to pretend.
     fn reconfigure(
@@ -169,6 +180,7 @@ pub trait Protocol: Send {
         _model: Option<&str>,
         _effort: Option<&str>,
         _mode: Option<&str>,
+        _fast: Option<bool>,
     ) -> Vec<Step> {
         Vec::new()
     }

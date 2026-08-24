@@ -133,7 +133,7 @@ impl AgentSession {
         run(&self.session, &self.host, &self.events, steps)
     }
 
-    /// Change the model, effort or mode without restarting. `None` leaves one alone.
+    /// Change the model, effort, mode or fast mode without restarting. `None` leaves one alone.
     ///
     /// # Errors
     ///
@@ -143,8 +143,9 @@ impl AgentSession {
         model: Option<&str>,
         effort: Option<&str>,
         mode: Option<&str>,
+        fast: Option<bool>,
     ) -> Result<(), ExecError> {
-        let steps = self.driver.lock().reconfigure(model, effort, mode);
+        let steps = self.driver.lock().reconfigure(model, effort, mode, fast);
         run(&self.session, &self.host, &self.events, steps)
     }
 

@@ -438,6 +438,19 @@ effort = "ultracode"
 # the one place wtm does invent vocabulary — `read-only`, `auto`, `full-access` — because its two
 # settings, an approval policy and a sandbox, have to move together to mean anything.
 mode   = "plan"
+# High-speed mode, off unless asked for. Commented out because it is a *spending* decision rather
+# than a capability one: it draws usage credits at a higher rate and has its own rate limit, so a
+# repository turning it on for everyone who clones is a bill somebody else pays.
+#
+# Claude only. Codex and Cursor ignore the key rather than refusing it, so a shared config can state
+# a preference without knowing which agents can honour it — their speed axis is `effort` above.
+#
+# Whether it actually engages also depends on the account: it needs a first-party Anthropic login,
+# an organization that has not switched it off, a model on that organization's allow-list, remaining
+# credits, and a rate limit that is not in cooldown. When one of those says no the session reports
+# the reason in its transcript rather than failing, and the pill in the composer stays where you
+# left it — see `fast_mode_refusal` in `claude.rs`.
+# fast = true
 
 [agent.claude.env]
 # The load-bearing line for an installed app, exactly as `[setup.env]` needs it: a GUI launch does
