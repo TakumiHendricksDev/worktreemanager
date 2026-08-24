@@ -599,6 +599,9 @@ export interface SpawnedSession {
   model: string | null;
   effort: string | null;
   mode: string | null;
+  parentSession: string | null;
+  run: string | null;
+  title: string | null;
 }
 
 /** Emitted as `wtm:progress` while a pipeline runs. */

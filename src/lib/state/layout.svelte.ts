@@ -172,6 +172,20 @@ export function panesOf(layout: Layout | null): string[] {
   return [...panesOf(layout.a), ...panesOf(layout.b)];
 }
 
+/** Replace one visible leaf without adding another tile or touching any split ratio. */
+export function replacePane(
+  layout: Layout | null,
+  from: string,
+  to: string,
+): Layout | null {
+  if (!layout || from === to || panesOf(layout).includes(to)) return layout;
+  const replace = (node: Layout): Layout => {
+    if (node.node === 'pane') return node.paneId === from ? { ...node, paneId: to } : node;
+    return { ...node, a: replace(node.a), b: replace(node.b) };
+  };
+  return replace(layout);
+}
+
 /**
  * Add `paneId` beside `beside`, or as the whole tree when there is nothing yet.
  *

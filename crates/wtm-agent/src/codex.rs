@@ -600,12 +600,13 @@ impl CodexProtocol {
             },
             "item/fileChange/patchUpdated" | "turn/diff/updated" => AgentEvent::Patch {
                 id: text("itemId"),
-                unified_diff: params
-                    .get("diff")
-                    .or_else(|| params.get("patch"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
+                unified_diff: transcript_diff(
+                    params
+                        .get("diff")
+                        .or_else(|| params.get("patch"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ),
             },
             "warning" | "guardianWarning" | "configWarning" | "deprecationNotice" => {
                 AgentEvent::Notice {
@@ -1388,7 +1389,7 @@ fn item_event(item: &Value, item_type: &str, id: &str, started: bool) -> Option<
         },
         ("fileChange", false) => AgentEvent::Patch {
             id: id.to_owned(),
-            unified_diff: text("diff"),
+            unified_diff: transcript_diff(&text("diff")),
         },
         ("mcpToolCall" | "webSearch" | "dynamicToolCall", true) => AgentEvent::ToolStarted {
             title: item.get("title").and_then(Value::as_str).map(str::to_owned),
@@ -1408,6 +1409,26 @@ fn item_event(item: &Value, item_type: &str, id: &str, started: bool) -> Option<
         },
         _ => return None,
     })
+}
+
+/// Keep one provider notification from becoming an effectively unbounded UI payload.
+///
+/// Codex sends the complete cumulative diff on every patch update. The current snapshot remains
+/// useful at a generous two MiB, while the repository itself is the authoritative place to inspect
+/// a larger change. This bound applies only to transcript progress; approval diffs stay complete.
+fn transcript_diff(diff: &str) -> String {
+    const MAX_BYTES: usize = 2 * 1024 * 1024;
+    if diff.len() <= MAX_BYTES {
+        return diff.to_owned();
+    }
+
+    let mut end = MAX_BYTES;
+    while !diff.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut clipped = diff[..end].to_owned();
+    clipped.push_str("\n… diff truncated by wtm; inspect the worktree for the complete change …\n");
+    clipped
 }
 
 fn parse_skills(reply: &Value) -> Vec<AgentSkill> {

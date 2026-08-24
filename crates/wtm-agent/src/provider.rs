@@ -153,9 +153,9 @@ pub trait Protocol: Send {
     /// `None` means "leave that one alone", so the caller can change either without knowing the
     /// other's current value.
     ///
-    /// Codex can apply all three on its next turn. Claude can apply the model and mode but must
-    /// restart for effort; its implementation deliberately ignores that argument and the UI marks
-    /// it as pending instead of pretending it was applied.
+    /// Codex can apply all three on its next turn and Cursor uses ACP's live configuration methods.
+    /// Claude can apply model and mode but must restart for effort; its implementation deliberately
+    /// ignores that argument and the UI marks it as pending instead of pretending it was applied.
     ///
     /// Default: nothing. A provider that cannot change mid-session is not obliged to pretend.
     fn reconfigure(

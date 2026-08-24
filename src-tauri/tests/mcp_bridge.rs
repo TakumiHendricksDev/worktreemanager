@@ -155,10 +155,15 @@ fn the_bridge_offers_exactly_the_agents_it_was_told_about() {
 
     let reply = bridge.call(2, "tools/list", &serde_json::json!({}));
     let tools = reply["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 1, "one tool, not a suite: {reply}");
+    assert_eq!(
+        tools.len(),
+        2,
+        "one-child handoff and parallel delegation: {reply}"
+    );
 
     let tool = &tools[0];
     assert_eq!(tool["name"], "ask_agent");
+    assert_eq!(tools[1]["name"], "spawn_agents");
 
     let choices = tool["inputSchema"]["properties"]["agent"]["enum"]
         .as_array()
@@ -166,6 +171,11 @@ fn the_bridge_offers_exactly_the_agents_it_was_told_about() {
     assert_eq!(choices.len(), 2, "both agents should be offered: {tool}");
     assert!(choices.contains(&serde_json::json!("codex")));
     assert!(choices.contains(&serde_json::json!("claude")));
+    assert_eq!(
+        tools[1]["inputSchema"]["properties"]["tasks"]["items"]["properties"]["agent"]["enum"],
+        serde_json::json!(["codex", "claude"]),
+        "parallel children must use the same closed provider roster: {reply}"
+    );
 
     // The labels belong in the prose, so a model choosing between ids knows which is which.
     let description = tool["inputSchema"]["properties"]["agent"]["description"]

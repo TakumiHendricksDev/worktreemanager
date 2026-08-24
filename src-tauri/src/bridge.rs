@@ -38,7 +38,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::app::App;
-use crate::handoff::{self, Request, Response};
+use crate::handoff::{self, Request, Response, Task};
 
 /// The argument that turns the app binary into an MCP server.
 ///
@@ -64,6 +64,7 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// The one tool.
 const TOOL: &str = "ask_agent";
+const SPAWN_TOOL: &str = "spawn_agents";
 
 /// Where the socket lives.
 pub fn socket_path() -> Result<PathBuf, String> {
@@ -313,6 +314,7 @@ fn tools(agents: &[(String, String)]) -> Value {
         agent_schema["enum"] = json!(ids);
     }
 
+    let task_agent_schema = agent_schema.clone();
     json!({
         "tools": [{
             "name": TOOL,
@@ -334,6 +336,18 @@ fn tools(agents: &[(String, String)]) -> Value {
                 "type": "object",
                 "properties": {
                     "agent": agent_schema,
+                    "model": {
+                        "type": "string",
+                        "description": "Optional provider model id. Omit to use the configured default.",
+                    },
+                    "effort": {
+                        "type": "string",
+                        "description": "Optional reasoning or thought level supported by that model.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "description": "Optional provider mode, such as agent, plan, ask, or read-only.",
+                    },
                     "prompt": {
                         "type": "string",
                         "description":
@@ -344,6 +358,51 @@ fn tools(agents: &[(String, String)]) -> Value {
                 },
                 "required": ["agent", "prompt"],
             },
+        }, {
+            "name": SPAWN_TOOL,
+            "description":
+                "Launch several independent coding-agent sessions in parallel and collect every \
+                 result. Use this for review swarms, competing analyses, or delegating distinct \
+                 subtasks. Each child opens as a visible WTM session with its own transcript and \
+                 approvals. The sessions share this worktree: prefer read-only review prompts when \
+                 several children run together, because parallel writers can conflict. Starting \
+                 many agents can incur substantial provider usage, so match the requested count and \
+                 models exactly rather than expanding the swarm on your own.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {
+                                    "type": "string",
+                                    "description": "A short label shown in the child-session tree.",
+                                },
+                                "agent": task_agent_schema,
+                                "model": { "type": "string" },
+                                "effort": { "type": "string" },
+                                "mode": { "type": "string" },
+                                "prompt": {
+                                    "type": "string",
+                                    "description": "A complete, self-contained task for this child.",
+                                },
+                            },
+                            "required": ["agent", "prompt"],
+                        },
+                    },
+                    "concurrency": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Maximum children running simultaneously. Defaults to 4.",
+                    },
+                },
+                "required": ["tasks"],
+            },
         }],
     })
 }
@@ -351,25 +410,65 @@ fn tools(agents: &[(String, String)]) -> Value {
 /// Run a `tools/call` by asking the app.
 fn call(params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    if name != TOOL {
+    if name != TOOL && name != SPAWN_TOOL {
         return tool_error(&format!("no tool named `{name}`"));
     }
 
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-    let agent = arguments
-        .get("agent")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-    let prompt = arguments
-        .get("prompt")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-
-    if prompt.trim().is_empty() {
-        return tool_error("`prompt` is required and must not be empty");
-    }
+    let (agent, prompt, model, effort, mode, tasks, concurrency) = if name == TOOL {
+        let prompt = arguments
+            .get("prompt")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        if prompt.trim().is_empty() {
+            return tool_error("`prompt` is required and must not be empty");
+        }
+        (
+            arguments
+                .get("agent")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+            prompt,
+            arguments
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            arguments
+                .get("effort")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            arguments
+                .get("mode")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            Vec::new(),
+            None,
+        )
+    } else {
+        let tasks = match arguments
+            .get("tasks")
+            .cloned()
+            .map(serde_json::from_value::<Vec<Task>>)
+        {
+            Some(Ok(tasks)) if !tasks.is_empty() => tasks,
+            Some(Err(error)) => return tool_error(&format!("`tasks` was invalid: {error}")),
+            _ => return tool_error("`tasks` is required and must not be empty"),
+        };
+        (
+            String::new(),
+            String::new(),
+            None,
+            None,
+            None,
+            tasks,
+            arguments
+                .get("concurrency")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok()),
+        )
+    };
 
     let Ok(token) = std::env::var(handoff::TOKEN_ENV) else {
         return tool_error("this bridge was started without a session token");
@@ -383,6 +482,11 @@ fn call(params: &Value) -> Value {
             token,
             agent,
             prompt,
+            model,
+            effort,
+            mode,
+            tasks,
+            concurrency,
         },
     ) {
         Ok(response) if response.ok => json!({
@@ -441,4 +545,55 @@ fn result(id: &Value, value: &Value) -> Value {
 
 fn error(id: &Value, code: i32, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tool_list_offers_one_child_and_bounded_parallel_runs() {
+        let listed = tools(&[
+            ("claude".to_owned(), "Claude Code".to_owned()),
+            ("cursor".to_owned(), "Cursor Agent".to_owned()),
+        ]);
+        let entries = listed["tools"]
+            .as_array()
+            .expect("tools/list must contain an array");
+
+        assert_eq!(entries[0]["name"], TOOL);
+        assert_eq!(entries[1]["name"], SPAWN_TOOL);
+        assert_eq!(
+            entries[1]["inputSchema"]["properties"]["tasks"]["maxItems"],
+            20
+        );
+        assert_eq!(
+            entries[1]["inputSchema"]["properties"]["tasks"]["items"]["properties"]["agent"]["enum"],
+            json!(["claude", "cursor"])
+        );
+        assert_eq!(
+            entries[1]["inputSchema"]["properties"]["concurrency"]["maximum"],
+            20
+        );
+    }
+
+    #[test]
+    fn a_parallel_task_preserves_every_per_child_override() {
+        let task: Task = serde_json::from_value(json!({
+            "title": "Cheap first pass",
+            "agent": "cursor",
+            "model": "grok-4.6-high-fast",
+            "effort": "high",
+            "mode": "ask",
+            "prompt": "Review only; do not edit."
+        }))
+        .expect("the spawn_agents schema must deserialize into the socket request");
+
+        assert_eq!(task.title.as_deref(), Some("Cheap first pass"));
+        assert_eq!(task.agent, "cursor");
+        assert_eq!(task.model.as_deref(), Some("grok-4.6-high-fast"));
+        assert_eq!(task.effort.as_deref(), Some("high"));
+        assert_eq!(task.mode.as_deref(), Some("ask"));
+        assert_eq!(task.prompt, "Review only; do not edit.");
+    }
 }

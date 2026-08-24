@@ -42,6 +42,7 @@ pub mod capability;
 pub mod catalogue;
 pub mod claude;
 pub mod codex;
+pub mod cursor;
 mod limits;
 pub mod provider;
 pub mod session;

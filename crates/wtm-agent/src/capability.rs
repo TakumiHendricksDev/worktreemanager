@@ -368,6 +368,7 @@ pub fn carried_effort(from: &str, to: &str, effort: &str) -> Option<Effort> {
 
     let accepts: Vec<Effort> = match to {
         crate::codex::ID => codex_effort_floor().into_iter().map(|e| e.effort).collect(),
+        crate::cursor::ID => LADDER.iter().map(|effort| (*effort).to_owned()).collect(),
         crate::claude::ID => claude_capability()
             .models
             .first()

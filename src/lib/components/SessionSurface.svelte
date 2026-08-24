@@ -24,6 +24,7 @@
   import type { Brief } from '../ipc/types';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import AgentTree from './AgentTree.svelte';
   import PlanViewer from './PlanViewer.svelte';
   import SessionTree from './SessionTree.svelte';
   import Button from './ui/Button.svelte';
@@ -218,6 +219,9 @@
 </script>
 
 <div class="c-surface" class:is-hidden={!visible} aria-label="Sessions">
+  {#if activeId}
+    <AgentTree worktreeId={activeId} />
+  {/if}
   {#each occupied as worktreeId (worktreeId)}
     {@const layout = sessions.layoutFor(worktreeId)}
     {#if layout}

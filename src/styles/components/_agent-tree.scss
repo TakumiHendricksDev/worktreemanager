@@ -1,0 +1,128 @@
+/* Compact navigation for WTM-owned child sessions. It is a component rather than an object because
+   status, selection and cosmetics are inseparable from this one named piece of UI. */
+.c-agent-tree {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: var(--step--2);
+}
+
+.c-agent-tree__heading {
+  flex: 0 0 auto;
+  color: var(--fg-subtle);
+  font-weight: 600;
+}
+
+.c-agent-tree__run-label,
+.c-agent-tree__state {
+  color: var(--fg-subtle);
+  text-transform: lowercase;
+}
+
+.c-agent-tree__run-label {
+  padding-inline: var(--sp-1);
+}
+
+.c-agent-tree__runs {
+  display: flex;
+  gap: var(--sp-2);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.c-agent-tree__run,
+.c-agent-tree__child,
+.c-agent-tree__item {
+  display: flex;
+  align-items: center;
+}
+
+.c-agent-tree__run {
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+}
+
+.c-agent-tree__child {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+
+.c-agent-tree__parent,
+.c-agent-tree__item,
+.c-agent-tree__split {
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.c-agent-tree__parent,
+.c-agent-tree__item {
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.c-agent-tree__parent.is-selected,
+.c-agent-tree__item.is-selected {
+  color: var(--accent);
+}
+
+.c-agent-tree__branch,
+.c-agent-tree__model {
+  color: var(--fg-subtle);
+}
+
+.c-agent-tree__label,
+.c-agent-tree__model {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-agent-tree__model {
+  max-width: 14ch;
+  font-family: var(--font-mono);
+}
+
+.c-agent-tree__split {
+  align-self: stretch;
+  padding-inline: var(--sp-1);
+  border-left: 1px solid var(--border);
+  font-size: var(--step--2);
+}
+
+.c-agent-tree__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-muted);
+}
+
+.c-agent-tree__dot.is-running {
+  border-color: var(--info);
+  background: var(--info);
+}
+
+.c-agent-tree__dot.is-waiting {
+  border-color: var(--warn);
+  background: var(--warn);
+}
+
+.c-agent-tree__dot.is-done {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.c-agent-tree__dot.is-failed {
+  border-color: var(--danger);
+  background: var(--danger);
+}

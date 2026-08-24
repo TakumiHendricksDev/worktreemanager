@@ -16,6 +16,7 @@
 
 use crate::claude::{self, Claude};
 use crate::codex::{self, Codex};
+use crate::cursor::{self, Cursor};
 use crate::provider::Provider;
 
 /// One agent, and the metadata the UI needs before a session exists.
@@ -79,6 +80,17 @@ pub const CATALOGUE: &[ProviderEntry] = &[
         default_mode: Some("auto"),
         default_effort: Some(crate::capability::PREFERRED_EFFORT),
         provider: &Codex,
+    },
+    ProviderEntry {
+        id: cursor::ID,
+        label: "Cursor Agent",
+        blurb: "Cursor CLI, over Agent Client Protocol",
+        default_mode: Some("agent"),
+        // Cursor's effort ladder moves with the selected model and is advertised live. Supplying a
+        // compiled rung before that answer could reject a model that lacks it; no value honestly
+        // means "use Cursor's current model default" until the picker or task chooses one.
+        default_effort: None,
+        provider: &Cursor,
     },
 ];
 
