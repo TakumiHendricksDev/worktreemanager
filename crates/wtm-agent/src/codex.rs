@@ -63,7 +63,9 @@ impl Provider for Codex {
 
     fn argv(&self, req: &SessionRequest) -> Vec<String> {
         let mut argv = vec![
-            self.program().to_owned(),
+            req.executable
+                .clone()
+                .unwrap_or_else(|| self.program().to_owned()),
             "app-server".to_owned(),
             // stdio is the default, but saying so is cheap and means a future change of default
             // cannot silently move this onto a socket.

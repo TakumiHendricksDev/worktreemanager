@@ -56,6 +56,12 @@ impl std::fmt::Display for ProviderId {
 pub struct SessionRequest {
     /// The worktree the session works in. Becomes `cwd`, and both CLIs honour it.
     pub cwd: String,
+    /// The executable selected by the composition root after probing this machine.
+    ///
+    /// Normally absent in pure provider tests, where [`Provider::program`] is the canonical
+    /// spelling. The app fills it before spawning so a provider with supported aliases or an
+    /// application-bundled CLI uses the exact executable the availability check found.
+    pub executable: Option<String>,
     pub model: Option<String>,
     pub effort: Option<Effort>,
     /// The provider's own spelling of a permission or approval mode.

@@ -5,6 +5,7 @@
 //! the same internal handoff tools are available here as on every other provider.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use wtm_core::model::{
@@ -16,6 +17,34 @@ use wtm_core::model::{
 use crate::provider::{Protocol, Provider, ProviderId, SessionRequest, Step};
 
 pub const ID: &str = "cursor";
+
+/// Cursor Agent executable names and app-managed locations, in preference order.
+///
+/// Cursor has shipped both `cursor-agent` and `agent`. The desktop app also installs its own
+/// `cursor-agent` below VS Code global storage without adding that directory to `PATH`; treating
+/// the app as proof that the agent is on `PATH` would still make the eventual spawn fail, so the
+/// composition root probes these exact candidates and carries the winning path in
+/// [`SessionRequest::executable`]. The Cursor-specific name wins over bare `agent` because that
+/// name is also used by unrelated CLIs.
+#[must_use]
+pub fn executable_candidates(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = vec![PathBuf::from("cursor-agent")];
+
+    if let Some(home) = home {
+        if cfg!(target_os = "macos") {
+            candidates.push(home.join(
+                "Library/Application Support/Cursor/User/globalStorage/anysphere.cursor-agent-worker/agent-cli/.local/bin/cursor-agent",
+            ));
+        } else if cfg!(target_os = "linux") {
+            candidates.push(home.join(
+                ".config/Cursor/User/globalStorage/anysphere.cursor-agent-worker/agent-cli/.local/bin/cursor-agent",
+            ));
+        }
+    }
+
+    candidates.push(PathBuf::from("agent"));
+    candidates
+}
 
 #[derive(Debug)]
 pub struct Cursor;
@@ -33,7 +62,11 @@ impl Provider for Cursor {
         // Root CLI options precede the ACP subcommand (`agent --api-key … acp`). Keeping project
         // `extra_args` there makes authentication and endpoint overrides usable without teaching
         // wtm Cursor's moving root-option vocabulary.
-        let mut argv = vec![self.program().to_owned()];
+        let mut argv = vec![
+            req.executable
+                .clone()
+                .unwrap_or_else(|| self.program().to_owned()),
+        ];
         argv.extend(req.extra_args.iter().cloned());
         argv.push("acp".to_owned());
         argv

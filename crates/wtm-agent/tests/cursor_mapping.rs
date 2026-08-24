@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
-use wtm_agent::cursor::{Cursor, parse_capability};
+use wtm_agent::cursor::{Cursor, executable_candidates, parse_capability};
 use wtm_agent::provider::{McpServer, Protocol, Provider, SessionRequest, Step};
 use wtm_core::model::{
     AgendaStatus, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
@@ -55,6 +55,36 @@ fn the_argv_puts_cursor_root_options_before_the_acp_subcommand() {
     });
 
     assert_eq!(argv, ["agent", "--api-key", "secret-from-config", "acp"]);
+}
+
+#[test]
+fn the_argv_uses_the_cursor_executable_that_machine_discovery_selected() {
+    let argv = Cursor.argv(&SessionRequest {
+        executable: Some("/Applications/Cursor Agent/cursor-agent".to_owned()),
+        ..SessionRequest::default()
+    });
+
+    assert_eq!(argv, ["/Applications/Cursor Agent/cursor-agent", "acp"]);
+}
+
+#[test]
+fn cursor_discovery_prefers_the_specific_name_and_keeps_bare_agent_as_the_last_resort() {
+    let home = std::path::Path::new("/Users/example");
+    let candidates = executable_candidates(Some(home));
+
+    assert_eq!(
+        candidates.first().unwrap(),
+        std::path::Path::new("cursor-agent")
+    );
+    assert_eq!(candidates.last().unwrap(), std::path::Path::new("agent"));
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            candidates[1],
+            home.join(
+                "Library/Application Support/Cursor/User/globalStorage/anysphere.cursor-agent-worker/agent-cli/.local/bin/cursor-agent"
+            )
+        );
+    }
 }
 
 #[test]

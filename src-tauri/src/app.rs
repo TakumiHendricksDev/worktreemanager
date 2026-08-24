@@ -627,6 +627,26 @@ impl App {
         }
     }
 
+    /// Resolve the executable that an agent availability row and its eventual spawn both use.
+    ///
+    /// Most providers have one canonical program on `PATH`. Cursor is the exception: releases
+    /// have used both `cursor-agent` and `agent`, and Cursor.app keeps a private `cursor-agent`
+    /// under its extension storage. Returning the winning path—not just a boolean—is what keeps a
+    /// grey-row fix from becoming a later "program not found" error when the pane actually opens.
+    #[must_use]
+    pub fn agent_executable(&self, entry: &'static wtm_agent::ProviderEntry) -> Option<PathBuf> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let candidates = if entry.id == wtm_agent::cursor::ID {
+            wtm_agent::cursor::executable_candidates(home.as_deref())
+        } else {
+            vec![PathBuf::from(entry.provider.program())]
+        };
+
+        candidates
+            .into_iter()
+            .find_map(|candidate| self.runner.which(candidate.to_string_lossy().as_ref()))
+    }
+
     /// The palettes the user declared in `[ui.palettes]`, validated for Settings.
     ///
     /// Reads the config file directly rather than going through `ConfigStore`, which is the
@@ -912,9 +932,18 @@ impl App {
         // new set is allocated. The pty host's only caller does the same, for the same reason.
         self.pipe.reap_finished(KEEP_FINISHED_SESSIONS);
 
+        let executable = self.agent_executable(entry).ok_or_else(|| {
+            wtm_core::error::ExecError::ProgramNotFound {
+                program: entry.provider.program().to_owned(),
+                searched: self.runner.resolved_path(),
+            }
+        })?;
+        let mut request = req.clone();
+        request.executable = Some(executable.to_string_lossy().into_owned());
+
         let session = wtm_agent::AgentSession::open(
             entry.provider,
-            req,
+            &request,
             Arc::clone(&self.pipe) as Arc<dyn wtm_core::ports::pipe::PipeHost>,
             events,
             // The same inert one-week deadline the dock's shell uses. `PipeHost` has no `wait`,

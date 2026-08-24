@@ -353,8 +353,9 @@ impl Provider for Claude {
     }
 
     fn argv(&self, req: &SessionRequest) -> Vec<String> {
+        let executable = req.executable.as_deref().unwrap_or_else(|| self.program());
         let mut argv: Vec<String> = [
-            self.program(),
+            executable,
             "-p",
             "--input-format",
             "stream-json",
