@@ -450,6 +450,38 @@
         if (copied) draft = '';
         return;
       }
+      /*
+       * Answered here rather than sent, and this one used to fail loudly.
+       *
+       * `/fast` reaching the CLI came back "Fast mode is not available in the Agent SDK", because
+       * the pill's own mechanism — the `fastMode` flag setting — *is* the opt-in that message asks
+       * for, and the command that reports it is a terminal-UI command a headless session never
+       * runs. So the honest thing is to drive the control the pane already has.
+       *
+       * The CLI's own argument grammar, so muscle memory transfers: bare toggles, `on` and `off`
+       * are explicit. An unsupported provider says so instead of silently doing nothing, since the
+       * pill is absent there and a no-op would look like a bug.
+       */
+      if (command === '/fast') {
+        const argument = text
+          .slice(rawCommand?.length ?? 0)
+          .trim()
+          .toLowerCase();
+        if (argument !== '' && argument !== 'on' && argument !== 'off') {
+          sessions.error = 'Use /fast, /fast on, or /fast off.';
+          return;
+        }
+        const wanted = argument === '' ? !pane.fast : argument === 'on';
+        // `setFast` rather than `configure`, because this caller knows about exactly one setting
+        // and inventing the other three would mark the pane "on restart" for an effort change
+        // nobody made. It reports the unsupported case rather than quietly doing nothing.
+        if (!sessions.setFast(pane.id, wanted)) {
+          sessions.error = 'This agent has no high-speed mode.';
+          return;
+        }
+        draft = '';
+        return;
+      }
     }
 
     if (text.startsWith('/')) {
@@ -1301,6 +1333,7 @@
               model={pane.model}
               effort={pane.effort}
               mode={pane.mode}
+              fast={pane.fast}
               effortPending={pane.effortPending}
               disabled={pane.ended !== null || pane.error !== null}
               onchange={(next) => sessions.configure(pane.id, next)}

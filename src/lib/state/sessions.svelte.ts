@@ -213,6 +213,16 @@ export interface Pane {
   /** The permission or approval mode, in the provider's own spelling. */
   mode: string | null;
   /**
+   * Whether this session was asked to run in the provider's high-speed mode.
+   *
+   * **What was asked for, not what is in force.** Only Claude has one, and whether it is actually
+   * on depends on the account, the organization, the model, remaining credits and a rate limit
+   * that can be in cooldown — none of which the frontend can see. The CLI reports the truth on
+   * every turn and the Rust side turns a disagreement into a transcript notice, which is why this
+   * flag is allowed to be the optimistic half of the pair.
+   */
+  fast: boolean;
+  /**
    * True when `effort` has been changed to something the running session is not using.
    *
    * The one setting of the three that cannot be applied live. Claude reads `--effort` once at
@@ -702,7 +712,13 @@ class Sessions {
    */
   configure(
     paneId: string,
-    next: { provider: string; model: string; effort: string; mode: string | null },
+    next: {
+      provider: string;
+      model: string;
+      effort: string;
+      mode: string | null;
+      fast: boolean;
+    },
   ): void {
     const pane = this.paneById(paneId);
     if (!pane) return;
@@ -730,6 +746,11 @@ class Sessions {
       if (untouched) {
         pane.model = next.model;
         pane.effort = next.effort;
+        // Only where the target can honour it. Codex and Cursor would ignore the flag rather than
+        // fail on it, so carrying it would be harmless on the wire — but it would leave a pane
+        // holding `fast: true` with no control to see or clear it, and swapping back to Claude
+        // would then restore a setting the user never chose for that session.
+        pane.fast = next.fast && this.capabilities[next.provider]?.supportsFast === true;
         pane.pendingProvider = next.provider;
         void this.restart(paneId);
         return;
@@ -750,6 +771,11 @@ class Sessions {
     const modelChanged = pane.model !== next.model;
     const effortChanged = pane.effort !== next.effort;
     const modeChanged = pane.mode !== mode;
+    // Only where the provider claims one — a pane whose capability says no fast mode can still
+    // reach here carrying `false`, and asking such a session to change a setting it does not have
+    // is the `Notice`-in-the-transcript failure the model check below already guards against.
+    const fastChanged =
+      this.capabilities[running]?.supportsFast === true && pane.fast !== next.fast;
     const effortIsLive = running === 'codex' || running === 'cursor';
     // Sticky once set: a pane whose effort is already pending must not un-mark itself because a
     // later change happened to land back on the value the session was started with.
@@ -762,6 +788,7 @@ class Sessions {
     pane.model = next.model;
     pane.effort = next.effort;
     pane.mode = mode;
+    if (fastChanged) pane.fast = next.fast;
 
     // Nothing to say to a session that does not exist yet — `openAgentSession` will carry these
     // as spawn arguments instead.
@@ -774,7 +801,7 @@ class Sessions {
     if (
       pane.session === null ||
       swapping ||
-      (!modelChanged && !liveEffortChanged && !modeChanged)
+      (!modelChanged && !liveEffortChanged && !modeChanged && !fastChanged)
     )
       return;
     void commands
@@ -783,10 +810,41 @@ class Sessions {
         modelChanged ? next.model : null,
         liveEffortChanged ? next.effort : null,
         modeChanged ? mode : null,
+        fastChanged ? next.fast : null,
       )
       .catch((e: unknown) => {
         this.error = errorMessage(e);
       });
+  }
+
+  /**
+   * Turn high-speed mode on or off, changing nothing else.
+   *
+   * Separate from `configure` rather than a call into it, because `configure` takes the picker's
+   * *whole* selection and assigns every field from it. A caller that only knows about fast — the
+   * composer's `/fast` — would have to invent values for model, effort and mode, and the honest
+   * ones are nullable: a pane whose capability has landed can still be holding `effort: null` from
+   * before it did. Passing `''` for that would register as an effort change, mark the pane "on
+   * restart", and leave a marker referring to a change nobody made.
+   *
+   * Returns false when the provider has no high-speed mode, so the caller can say so rather than
+   * appearing to succeed at nothing.
+   */
+  setFast(paneId: string, fast: boolean): boolean {
+    const pane = this.paneById(paneId);
+    if (!pane || pane.kind.kind !== 'agent') return false;
+    if (this.capabilities[pane.kind.provider]?.supportsFast !== true) return false;
+    if (pane.fast === fast) return true;
+
+    pane.fast = fast;
+    // Nothing to tell a session that does not exist yet — the spawn carries `pane.fast` instead.
+    if (pane.session === null) return true;
+    void commands
+      .configureSession(pane.session, null, null, null, fast)
+      .catch((e: unknown) => {
+        this.error = errorMessage(e);
+      });
+    return true;
   }
 
   /**
@@ -1185,6 +1243,7 @@ class Sessions {
           model: pane.model,
           effort: pane.effort,
           mode: pane.mode,
+          fast: pane.fast,
           resume: pane.providerSession,
         },
       });
@@ -1291,6 +1350,7 @@ class Sessions {
       model: null,
       effort: null,
       mode: null,
+      fast: false,
       effortPending: false,
       pendingProvider: null,
       skills: [],
@@ -1517,7 +1577,12 @@ class Sessions {
         projectId,
         worktreeId,
         agentId: provider,
-        options: { model: pane.model, effort: pane.effort, mode: pane.mode },
+        options: {
+          model: pane.model,
+          effort: pane.effort,
+          mode: pane.mode,
+          fast: pane.fast,
+        },
       });
       const live = this.paneById(pane.id);
       if (live) this.claimSession(live, session);
@@ -1670,12 +1735,22 @@ class Sessions {
     side.model = parent.model;
     side.effort = parent.effort;
     side.mode = parent.mode;
+    // Inherited, unlike the delegation path in `handoff.rs`, and the difference is fan-out: a `/btw`
+    // is one short turn on the conversation the user is already looking at, where one handoff can
+    // open twenty children. Matching the parent is what keeps the side answer comparable to the
+    // ones above it.
+    side.fast = parent.fast;
     this.panes = [...this.panes, side];
 
     try {
       const session = await commands.openAgentSideSession({
         parentSession: parent.session,
-        options: { model: side.model, effort: side.effort, mode: side.mode },
+        options: {
+          model: side.model,
+          effort: side.effort,
+          mode: side.mode,
+          fast: side.fast,
+        },
       });
       const live = this.paneById(side.id);
       if (!live) {
@@ -1831,7 +1906,12 @@ class Sessions {
               projectId: pane.projectId,
               worktreeId: pane.worktreeId,
               agentId: pane.kind.provider,
-              options: { model: pane.model, effort: pane.effort, mode: pane.mode },
+              options: {
+                model: pane.model,
+                effort: pane.effort,
+                mode: pane.mode,
+                fast: pane.fast,
+              },
             });
       this.claimSession(pane, session);
     } catch (e) {

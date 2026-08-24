@@ -367,6 +367,14 @@ export interface Capability {
    * says which, because a stale list being the CLI's fault and being ours are different problems.
    */
   modelsAreLive: boolean;
+  /**
+   * True where this provider has a high-speed mode, so the picker can offer the control.
+   *
+   * Claude has one; Codex and Cursor do not, because their speed axis *is* the effort ladder on
+   * every model. Gating on this rather than on a provider-id test, so the pill appears where the
+   * word means something and the check does not have to be repeated per provider.
+   */
+  supportsFast: boolean;
 }
 
 /**

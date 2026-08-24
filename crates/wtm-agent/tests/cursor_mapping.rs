@@ -193,7 +193,7 @@ fn live_reconfiguration_uses_the_config_ids_cursor_advertised() {
         ..SessionRequest::default()
     });
 
-    let frames = writes(&driver.reconfigure(Some("grok-4.6"), Some("xhigh"), Some("plan")));
+    let frames = writes(&driver.reconfigure(Some("grok-4.6"), Some("xhigh"), Some("plan"), None));
     assert_eq!(frames.len(), 3);
     assert_eq!(frames[0]["method"], "session/set_config_option");
     assert_eq!(frames[0]["params"]["configId"], "cursor_model");

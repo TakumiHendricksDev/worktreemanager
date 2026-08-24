@@ -1355,6 +1355,8 @@ pub struct SessionOptions {
     pub mode: Option<String>,
     /// A conversation to pick up, by the id its provider knows it by.
     pub resume: Option<String>,
+    /// Start in the provider's high-speed mode. Only Claude has one.
+    pub fast: Option<bool>,
 }
 
 /// Every agent this build can drive, and whether this machine can.
@@ -1716,6 +1718,9 @@ pub async fn answer_approval(
 /// Codex applies effort on its next turn and Cursor uses its advertised ACP config option. Claude
 /// has no live effort control, so the frontend does not send that argument for Claude and marks the
 /// selection for restart instead.
+///
+/// `fast` is Claude's alone and goes the other way: it *is* live, and the only one of these whose
+/// real value comes back from the CLI rather than being assumed applied.
 #[tauri::command]
 pub async fn configure_session(
     app: AppState<'_>,
@@ -1723,11 +1728,12 @@ pub async fn configure_session(
     model: Option<String>,
     effort: Option<String>,
     mode: Option<String>,
+    fast: Option<bool>,
 ) -> Reply<()> {
     let app = Arc::clone(&app);
     blocking(move || {
         app.with_agent(&session, |agent| {
-            agent.reconfigure(model.as_deref(), effort.as_deref(), mode.as_deref())
+            agent.reconfigure(model.as_deref(), effort.as_deref(), mode.as_deref(), fast)
         })
         .map_err(|e| ErrorView::new("exec", e.to_string()))?;
         if let Some(effort) = effort.as_deref() {
@@ -2056,6 +2062,7 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
         // table while the models beside them are live.
         modes: Vec::new(),
         models_are_live: true,
+        supports_fast: false,
     })
 }
 
@@ -2210,6 +2217,7 @@ pub fn session_request_for(
         effort,
         mode,
         resume,
+        fast,
     } = options.unwrap_or_default();
 
     /*
@@ -2272,6 +2280,10 @@ pub fn session_request_for(
         mcp: mcp_servers_for(app, project, spec, worktree, entry.id, effort.as_deref())?,
         instructions: handoff_instructions(project, entry.id),
         effort,
+        // Two layers rather than the model's three: there is no compiled default to fall back to,
+        // because a mode that spends usage credits faster is not one this build gets to opt anybody
+        // into. Absent means off, and only the user or their repository can say otherwise.
+        fast: fast.or(spec.fast),
     })
 }
 

@@ -619,6 +619,13 @@ mod tests {
         // `flags` is gone: `ultracode` became a rung on the effort ladder, and with it went the
         // last provider switch that was neither model nor effort.
         assert!(json.get("flags").is_none(), "flags should be retired");
+        // Fast mode is the switch that came *back*, and it is a named field rather than a revived
+        // `flags` bag — so the picker's control is typed on both sides of this boundary.
+        assert_eq!(json.get("supportsFast"), Some(&serde_json::json!(true)));
+        assert!(
+            json.get("supports_fast").is_none(),
+            "must not emit snake_case"
+        );
 
         let model = &json["models"][0];
         assert!(model.get("isDefault").is_some(), "{model:?}");
@@ -945,6 +952,8 @@ pub struct CapabilityView {
     /// Surfaced so the UI can say "as reported by codex" against "as of this wtm build" — which is
     /// the difference between a stale list being the CLI's fault and being ours.
     pub models_are_live: bool,
+    /// True where the provider has a high-speed mode, so the picker can offer the control.
+    pub supports_fast: bool,
 }
 
 impl From<wtm_core::model::AgentCapability> for CapabilityView {
@@ -953,6 +962,7 @@ impl From<wtm_core::model::AgentCapability> for CapabilityView {
             models: value.models,
             modes: value.modes,
             models_are_live: value.models_are_live,
+            supports_fast: value.supports_fast,
         }
     }
 }

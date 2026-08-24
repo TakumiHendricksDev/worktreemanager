@@ -177,6 +177,8 @@ export const commands = {
       model?: string | null;
       effort?: string | null;
       mode?: string | null;
+      /** Claude's high-speed mode. Ignored by a provider that has none. */
+      fast?: boolean | null;
       resume?: string | null;
     };
   }) => invoke<string>('open_agent_session', { options: {}, ...args }),
@@ -188,6 +190,8 @@ export const commands = {
       model?: string | null;
       effort?: string | null;
       mode?: string | null;
+      /** Claude's high-speed mode. Ignored by a provider that has none. */
+      fast?: boolean | null;
     };
   }) => invoke<string>('open_agent_side_session', { options: {}, ...args }),
 
@@ -230,15 +234,19 @@ export const commands = {
     invoke<AgentAttachment>('stage_agent_attachment', { name, mime, dataBase64 }),
 
   /**
-   * Change a running session's model, effort or mode. `null` leaves one alone. The UI sends effort
-   * only to Codex; Claude's effort remains an explicit restart setting.
+   * Change a running session's model, effort, mode or fast mode. `null` leaves one alone. The UI
+   * sends effort only to Codex; Claude's effort remains an explicit restart setting.
+   *
+   * `fast` is Claude's alone and goes the other way: it applies live, and whether it *took* comes
+   * back on the next turn rather than from this call. See the Rust side's `fast_mode_notice`.
    */
   configureSession: (
     session: string,
     model: string | null,
     effort: string | null,
     mode: string | null,
-  ) => invoke<void>('configure_session', { session, model, effort, mode }),
+    fast: boolean | null,
+  ) => invoke<void>('configure_session', { session, model, effort, mode, fast }),
 
   /**
    * Every file in a worktree worth offering in the composer's `@` list.

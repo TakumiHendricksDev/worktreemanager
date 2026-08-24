@@ -48,13 +48,30 @@
    * independent: Codex's `full-access` and Claude's `bypassPermissions` are both `unsandboxed`
    * without this file knowing what either word means.
    *
-   * # There are no flag checkboxes any more
+   * # The one flag control, and why the `flags` bag is still gone
    *
-   * There was one, `ultracode`, and it never did anything — no `flags` field existed on the request
-   * that reaches the CLI, so the value died here. It is now the top rung of the effort ladder,
-   * which is where the CLI's own `/effort` menu puts it, and `claude.rs` translates it into the
-   * settings key that actually turns it on. Codex's `ultra` is a different thing with a similar
-   * name — a real rung on some of its models, and it arrives in that provider's own effort list.
+   * There used to be a checkbox here, `ultracode`, and it never did anything — no `flags` field
+   * existed on the request that reaches the CLI, so the value died in this component. It is now the
+   * top rung of the effort ladder, which is where the CLI's own `/effort` menu puts it, and
+   * `claude.rs` translates it into the settings key that actually turns it on. Codex's `ultra` is a
+   * different thing with a similar name — a real rung on some of its models, arriving in that
+   * provider's own effort list.
+   *
+   * **Fast is a flag, and it is here because this time the plumbing exists.** The distinction that
+   * matters is not checkbox-versus-pill, it is whether a control has a path to the process:
+   * `SessionRequest.fast` reaches argv as a `--settings` key, `apply_flag_settings` changes it
+   * live, and `claude_mapping.rs` pins both. What is still gone is the untyped `flags` bag — this
+   * is a named boolean on the capability, so a provider without a high-speed mode cannot be sent
+   * one and the pill simply does not render there. `supportsFast`, rather than a `provider ===
+   * 'claude'` test, for the same reason the mode pill reads its risk tier from the backend.
+   *
+   * It is also the only control in this row whose true value wtm does not decide. Fast mode also
+   * depends on the account, the organization, the model's allow-list, remaining credits and a rate
+   * limit that can be in cooldown — so the pill says what was *asked for*, and the CLI reports what
+   * happened on the next turn, which `claude.rs` turns into a transcript notice. That is why there
+   * is no "on restart" style marker here: the honest report arrives in the transcript, where the
+   * reason can be spelled out, instead of as one word on a pill that has no room for "your
+   * organization has this switched off".
    */
   import type { Capability } from '../ipc/types';
   import Icon from './ui/Icon.svelte';
@@ -73,6 +90,7 @@
     model,
     effort,
     mode,
+    fast = false,
     effortPending = false,
     disabled = false,
     onchange,
@@ -87,6 +105,8 @@
     effort: string | null;
     /** The permission mode, in the provider's spelling. Null before the session reports one. */
     mode: string | null;
+    /** Whether high-speed mode was asked for. Never true where `supportsFast` is false. */
+    fast?: boolean;
     /** Effort has been changed and the running session is not using it yet. */
     effortPending?: boolean;
     disabled?: boolean;
@@ -95,6 +115,7 @@
       model: string;
       effort: string;
       mode: string | null;
+      fast: boolean;
     }) => void;
   } = $props();
 
@@ -173,6 +194,10 @@
       effort: keep
         ? currentEffort
         : (model?.defaultEffort ?? model?.efforts[0]?.effort ?? ''),
+      // Carried, not reset. Fast is a property of how the user wants this pane to run rather than
+      // of the model — and a provider that cannot honour it never receives it, because
+      // `Sessions.configure` gates on the target's own `supportsFast`.
+      fast,
       // Untouched. `restart` is what drops a mode that does not cross, because it is the thing that
       // knows the swap actually happened — cancelling it here would also cancel it for a swap the
       // user then retracts. The one exception — a model that implies a mode, like `opusplan` —
@@ -187,6 +212,7 @@
       model: selected?.id ?? '',
       effort: (event.currentTarget as HTMLSelectElement).value,
       mode,
+      fast,
     });
   }
 
@@ -197,6 +223,24 @@
       model: selected?.id ?? '',
       effort: currentEffort,
       mode: (event.currentTarget as HTMLSelectElement).value,
+      fast,
+    });
+  }
+
+  /**
+   * Toggle high-speed mode.
+   *
+   * A button rather than a `<select>`, because this is the one control in the row with two states
+   * and no vocabulary of its own — wearing the `o-overlay-select` idiom would promise a menu that
+   * has nothing in it.
+   */
+  function toggleFast() {
+    onchange({
+      provider: chosen,
+      model: selected?.id ?? '',
+      effort: currentEffort,
+      mode,
+      fast: !fast,
     });
   }
 </script>
@@ -360,6 +404,33 @@
           {/each}
         </select>
       </span>
+    {/if}
+
+    {#if capability.supportsFast}
+      <!--
+        The one control in the row that is a button rather than a menu, because it has two states
+        and no vocabulary of its own. `aria-pressed` is what makes that legible without a second
+        visible label — the word "Fast" stays put and the pressed state carries the value, where
+        the pills beside it put the value in the text.
+
+        Not disabled when the account cannot have it: whether fast mode is available depends on
+        five things this component cannot see, and greying the control out on a guess would be a
+        worse lie than letting the transcript say what happened. See the header.
+      -->
+      <button
+        type="button"
+        class="c-model-picker__flag"
+        class:is-on={fast}
+        {disabled}
+        aria-pressed={fast}
+        onclick={toggleFast}
+        title={fast
+          ? 'High-speed mode is on for this session — it draws usage credits faster and has its own rate limit'
+          : 'Run this session in high-speed mode, drawing usage credits faster'}
+      >
+        <Icon name="bolt" size={11} />
+        Fast
+      </button>
     {/if}
   {/if}
 </div>

@@ -1026,6 +1026,76 @@ fn the_ultracode_rung_becomes_a_settings_key_because_the_effort_flag_rejects_it(
 }
 
 #[test]
+fn a_fast_session_declares_the_opt_in_the_agent_sdk_requires() {
+    // The bug this exists for: `/fast` in a wtm pane answered "Fast mode is not available in the
+    // Agent SDK", because `-p --input-format stream-json` *is* the SDK entrypoint. Read off
+    // 2.1.231, the gate is `sn("flagSettings")?.fastMode === true` — and `flagSettings` is the
+    // source the CLI labels "command line arguments". So the flag below is not a convenience for
+    // starting fast: it is the declaration without which the session can never become fast, and a
+    // release that stops honouring it should fail here rather than in a pane.
+    let argv = Claude.argv(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        fast: Some(true),
+        ..SessionRequest::default()
+    });
+
+    let settings = argv
+        .iter()
+        .position(|a| a == "--settings")
+        .expect("--settings");
+    assert_eq!(argv[settings + 1], r#"{"fastMode":true}"#);
+}
+
+#[test]
+fn asking_for_no_fast_mode_is_not_the_same_as_asking_for_it_off() {
+    // `Some(false)` reaches here from a user who turned the pill off against a repository that
+    // turns it on, and the CLI's default is already off — so both cases want the same argv, and
+    // neither wants a `--settings` at all. Worth pinning because the tempting shape, writing
+    // `{"fastMode":false}` whenever the field is `Some`, would spend the one `--settings` slot on
+    // a statement of the status quo.
+    for fast in [None, Some(false)] {
+        let argv = Claude.argv(&SessionRequest {
+            cwd: "/tmp/worktree".to_owned(),
+            fast,
+            ..SessionRequest::default()
+        });
+        assert!(
+            !argv.iter().any(|a| a == "--settings"),
+            "{fast:?} should carry no overlay: {argv:?}"
+        );
+    }
+}
+
+#[test]
+fn ultracode_and_fast_mode_share_a_single_settings_object() {
+    // Two `--settings` occurrences is not a documented composition and the CLI's precedence
+    // between them is unverified, so the two keys have to merge rather than each bring a flag.
+    // This is the test that stops the obvious wrong fix — appending a second flag — from passing.
+    let argv = Claude.argv(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        effort: Some("ultracode".to_owned()),
+        fast: Some(true),
+        ..SessionRequest::default()
+    });
+
+    assert_eq!(
+        argv.iter().filter(|a| *a == "--settings").count(),
+        1,
+        "exactly one overlay flag: {argv:?}"
+    );
+    let settings = argv
+        .iter()
+        .position(|a| a == "--settings")
+        .expect("--settings");
+    let parsed: serde_json::Value = serde_json::from_str(&argv[settings + 1]).expect("valid JSON");
+    assert_eq!(parsed["ultracode"], true);
+    assert_eq!(parsed["fastMode"], true);
+    // The other half of the translation still has to happen alongside it.
+    let effort = argv.iter().position(|a| a == "--effort").expect("--effort");
+    assert_eq!(argv[effort + 1], "max");
+}
+
+#[test]
 fn an_ordinary_effort_still_passes_straight_through() {
     // The translation above must be the special case and not the rule — a plain rung reaching the
     // CLI as `--effort xhigh` with no settings overlay is what keeps a user's own `settings.json`
@@ -1115,7 +1185,7 @@ fn changing_the_model_or_the_mode_writes_control_requests_rather_than_needing_a_
     let mut d = driver();
     let _ = d.open();
 
-    let sent = writes(&d.reconfigure(Some("opus"), Some("max"), Some("acceptEdits")));
+    let sent = writes(&d.reconfigure(Some("opus"), Some("max"), Some("acceptEdits"), None));
     assert_eq!(sent.len(), 2, "one frame each, and nothing else");
 
     assert_eq!(sent[0]["type"], "control_request");
@@ -1136,9 +1206,109 @@ fn reconfiguring_only_one_setting_leaves_the_other_alone() {
     // the user made a moment earlier.
     let mut d = driver();
     let _ = d.open();
-    assert_eq!(writes(&d.reconfigure(None, None, Some("plan"))).len(), 1);
-    assert!(writes(&d.reconfigure(None, Some("max"), None)).is_empty());
-    assert!(writes(&d.reconfigure(None, None, None)).is_empty());
+    assert_eq!(
+        writes(&d.reconfigure(None, None, Some("plan"), None)).len(),
+        1
+    );
+    assert!(writes(&d.reconfigure(None, Some("max"), None, None)).is_empty());
+    assert!(writes(&d.reconfigure(None, None, None, None)).is_empty());
+}
+
+#[test]
+fn toggling_fast_mode_writes_apply_flag_settings_both_ways() {
+    // The subtype and its payload shape were read off 2.1.231 alongside `set_model`, and carry the
+    // same risk: a rename would leave the pill claiming a session state that nothing applied.
+    //
+    // Both directions, because turning it *off* mid-session is the case a "set the flag at spawn"
+    // shortcut would silently not implement.
+    let mut d = driver();
+    let _ = d.open();
+
+    let on = writes(&d.reconfigure(None, None, None, Some(true)));
+    assert_eq!(on.len(), 1, "one frame, and nothing else");
+    assert_eq!(on[0]["type"], "control_request");
+    assert_eq!(on[0]["request"]["subtype"], "apply_flag_settings");
+    assert_eq!(on[0]["request"]["settings"]["fastMode"], true);
+    assert!(on[0]["request_id"].is_string());
+
+    let off = writes(&d.reconfigure(None, None, None, Some(false)));
+    assert_eq!(off[0]["request"]["settings"]["fastMode"], false);
+}
+
+#[test]
+fn a_session_that_wanted_fast_mode_is_told_when_it_did_not_get_it() {
+    // The reason this is observed rather than assumed: whether fast mode is actually on depends on
+    // the account being first-party, the organization allowing it, the model being on its list,
+    // credits remaining, and a separate rate limit not being in cooldown. None of that is visible
+    // from here, so a pill reporting only what wtm asked for would be confidently wrong — which is
+    // exactly what happened on the first real account this was tried against, whose organization
+    // has it switched off.
+    let mut d = driver();
+    let _ = d.open();
+    let _ = d.reconfigure(None, None, None, Some(true));
+
+    let notices = |steps: &[Step]| -> Vec<String> {
+        events(steps)
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Notice { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let result = r#"{"type":"result","subtype":"success","is_error":false,"fast_mode_state":"off","fast_mode_disabled_reason":"preference","usage":{}}"#;
+    let first = notices(&d.on_line(result));
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(
+        first[0].contains("disabled by your organization"),
+        "should carry the CLI's own explanation, not just the token: {first:?}"
+    );
+
+    // Deduped, because an organization preference is a standing condition rather than news. A
+    // sentence repeated once per turn is how a useful warning becomes one nobody reads.
+    assert!(notices(&d.on_line(result)).is_empty());
+}
+
+#[test]
+fn a_session_that_never_asked_for_fast_mode_is_not_told_about_it() {
+    // Every Claude session reports `fast_mode_state`, so reporting it unconditionally would put a
+    // warning about an unused feature in front of every user who has never heard of it.
+    let mut d = driver();
+    let _ = d.open();
+    let steps = d.on_line(
+        r#"{"type":"result","subtype":"success","is_error":false,"fast_mode_state":"off","fast_mode_disabled_reason":"preference","usage":{}}"#,
+    );
+    assert!(
+        !events(&steps)
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Notice { .. }))
+    );
+}
+
+#[test]
+fn an_unrecognised_fast_mode_reason_still_says_something() {
+    // The mirrored strings in `fast_mode_refusal` are this build's copy of another program's
+    // phrasing, so they will eventually be incomplete. The requirement is that drift costs
+    // eloquence and not information: the raw token has to survive into the message.
+    let mut d = driver();
+    let _ = d.open();
+    let _ = d.reconfigure(None, None, None, Some(true));
+
+    let steps = d.on_line(
+        r#"{"type":"result","subtype":"success","is_error":false,"fast_mode_state":"off","fast_mode_disabled_reason":"penguins_migrated","usage":{}}"#,
+    );
+    let said = events(&steps)
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Notice { message, .. } => Some(message.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        said.iter().any(|m| m.contains("penguins_migrated")),
+        "an unmapped reason must still reach the user: {said:?}"
+    );
 }
 
 #[test]

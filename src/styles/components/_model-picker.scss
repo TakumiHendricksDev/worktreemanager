@@ -148,3 +148,61 @@
 .c-model-picker__note {
   font-size: var(--step--2);
 }
+
+/*
+ * The high-speed flag, and why it is a button in a row of menus.
+ *
+ * Two states and no vocabulary of its own, so there is nothing for a `<select>` to contain — the
+ * `o-overlay-select` idiom beside it would promise a menu that opens onto one item. It is a real
+ * `<button>` with `aria-pressed`, which is also what lets the label stay the fixed word "Fast"
+ * while the value lives in the pressed state. The pills to its left do the opposite, putting the
+ * value in the text, and that difference is the point: this control has a value that is not a word.
+ *
+ * # Accent, not a status hue, and not the mode pill's treatment
+ *
+ * `--accent` because "on" here is a choice the user made and is presumably pleased about, where
+ * `--warn` and `--danger` two pills away mean "you may have left this somewhere you did not
+ * intend". Fast mode costs credits faster, which is worth saying in the title attribute and in the
+ * transcript, but it is not a hazard and must not borrow the register of one — `_semantic.scss`
+ * keeps those roles separate precisely so a spend cannot be dressed as a risk.
+ *
+ * Filled when on, for the reason the mode tiers are filled: at `--step--2` against `--bg-input`,
+ * coloured text alone did not survive a glance.
+ */
+.c-model-picker__flag {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 3px var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.c-model-picker__flag:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.c-model-picker__flag:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.c-model-picker__flag.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Same treatment as a disabled trigger: still legible, because it still says what the session is
+   set to, but no longer advertising itself as something to press. */
+.c-model-picker__flag:disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}

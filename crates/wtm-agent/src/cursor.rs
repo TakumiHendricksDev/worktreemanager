@@ -710,6 +710,9 @@ impl Protocol for CursorProtocol {
         model: Option<&str>,
         effort: Option<&str>,
         mode: Option<&str>,
+        // No analogue here: this provider's speed axis is the effort ladder above, so the picker
+        // never offers the control and this is always `None`. See `AgentCapability::supports_fast`.
+        _fast: Option<bool>,
     ) -> Vec<Step> {
         if let Some(model) = model {
             self.req.model = Some(model.to_owned());
@@ -1089,6 +1092,7 @@ pub fn parse_capability(reply: &Value) -> AgentCapability {
             live_modes
         },
         models_are_live: true,
+        supports_fast: false,
     }
 }
 

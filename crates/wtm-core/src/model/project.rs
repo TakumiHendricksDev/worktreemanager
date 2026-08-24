@@ -851,6 +851,17 @@ pub struct AgentSpec {
     /// to be kept in step with two CLIs this app does not control.
     #[serde(default)]
     pub mode: Option<String>,
+    /// Start sessions in the provider's high-speed mode, where it has one.
+    ///
+    /// A `bool` rather than a free string, unlike everything above it: this is not a value from a
+    /// vocabulary the CLI owns and might extend, it is a switch that either is or is not thrown.
+    ///
+    /// Ignored by a provider whose capability does not advertise fast mode, rather than refused.
+    /// A repository is allowed to state a preference for the agents it uses without having to know
+    /// which of them can honour it — the same reasoning `enabled` uses for saying "we do not use
+    /// that here" without a guard.
+    #[serde(default)]
+    pub fast: Option<bool>,
     /// Appended to the argv the catalogue builds.
     ///
     /// Templated, like every other argv in this file, and subject to `[[guards.forbid]]` at spawn
