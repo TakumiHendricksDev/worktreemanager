@@ -56,9 +56,74 @@ const COMMAND_TOOLS: &[&str] = &["Bash", "BashOutput", "KillShell"];
 /// Tools whose approval is really "change these files".
 const FILE_TOOLS: &[&str] = &["Write", "Edit", "NotebookEdit", "MultiEdit"];
 
-/// The settings overlay that turns the `ultracode` rung on. Merged, not replacing — `--help` calls
-/// it "additional settings", so a user's own `settings.json` survives.
-const ULTRACODE_SETTINGS: &str = r#"{"ultracode":true}"#;
+/// The settings key that turns the `ultracode` rung on.
+const ULTRACODE_KEY: &str = "ultracode";
+
+/// The settings key that turns high-speed mode on.
+///
+/// # This is also the SDK opt-in, which is why it is not only a live toggle
+///
+/// `/fast` typed into a wtm pane used to answer "Fast mode is not available in the Agent SDK",
+/// and the reason is that wtm drives this CLI over `-p --input-format stream-json` — which *is*
+/// the Agent SDK entrypoint, whatever the pane looks like. Read off 2.1.231, the check is:
+///
+/// ```text
+/// let t = sn("flagSettings")?.fastMode === true;
+/// if (Rn() && pfr() && !t) return "sdk_opt_in_required";
+/// ```
+///
+/// `flagSettings` is the source the CLI itself labels "command line arguments" — `--settings`. So
+/// the gate is not a prohibition, it is an opt-in a host is expected to declare, and declaring it
+/// is what makes [`ClaudeProtocol::reconfigure`]'s live toggle legal at all. A session spawned
+/// without the overlay cannot be talked into fast mode afterwards.
+const FAST_MODE_KEY: &str = "fastMode";
+
+/// Why fast mode is off, in words, given the CLI's own `fast_mode_disabled_reason` token.
+///
+/// # Mirrored strings, and the fallback that makes drift harmless
+///
+/// These are the shipped CLI's own phrasings, read off 2.1.231, because the user has one mental
+/// model of fast mode and hearing two different explanations of the same refusal would be worse
+/// than either. That does mean a reason this build has never heard of would go unphrased — so it
+/// does not go unsaid: the token itself is passed through, the same way [`canonical_mode`] passes
+/// an unrecognised mode straight to the flag. A future release inventing a new reason degrades to
+/// a slightly terse message instead of to silence.
+fn fast_mode_refusal(reason: &str) -> String {
+    match reason {
+        "not_first_party" => "only available when using the Anthropic API directly".to_owned(),
+        "model_not_allowed" => "this model is not in your organization's allowed models".to_owned(),
+        "preference" => "disabled by your organization".to_owned(),
+        "free" => "requires a paid subscription".to_owned(),
+        "extra_usage_disabled" => "requires usage credits".to_owned(),
+        "network_error" => "unavailable due to network connectivity".to_owned(),
+        "pending" => "still checking availability".to_owned(),
+        "disabled_by_env" | "unknown" => "unavailable".to_owned(),
+        other => format!("unavailable ({other})"),
+    }
+}
+
+/// The `--settings` overlay for this request, or `None` when it needs none.
+///
+/// **One flag carrying one object.** Two `--settings` occurrences is not a documented composition
+/// and the CLI's precedence between them is unverified — and since `ultracode` and `fastMode` can
+/// now be wanted at once, "append another flag" would have been the obvious wrong answer.
+///
+/// Merged rather than replacing: `--help` calls this "additional settings", so a user's own
+/// `settings.json` survives. Key order is whatever `serde_json::Map` gives, which is stable for a
+/// given set — argv that reordered between identical launches would be noise in a trust prompt.
+fn flag_settings(req: &SessionRequest) -> Option<String> {
+    let mut settings = serde_json::Map::new();
+    if req.effort.as_deref() == Some(crate::capability::ULTRACODE) {
+        settings.insert(ULTRACODE_KEY.to_owned(), Value::Bool(true));
+    }
+    if req.fast == Some(true) {
+        settings.insert(FAST_MODE_KEY.to_owned(), Value::Bool(true));
+    }
+    if settings.is_empty() {
+        return None;
+    }
+    Some(Value::Object(settings).to_string())
+}
 
 /// The one mode this CLI spells two ways, resolved to the one the flag accepts.
 ///
@@ -402,25 +467,29 @@ impl Provider for Claude {
         // `ultracode` is the top rung of the CLI's own `/effort` ladder but the *flag* rejects it —
         // `--effort` takes `low|medium|high|xhigh|max` and nothing else. The programmatic route is
         // the `ultracode` settings key, which the CLI documents as settable "via --settings or
-        // apply_flag_settings". So the rung is translated into the pair that actually means it.
+        // apply_flag_settings", and `flag_settings` below carries it.
         //
         // `max` rather than the documented minimum of `xhigh`, because the ladder puts ultracode
         // above max and a user who picks the top rung should not quietly get less reasoning than
         // the rung below it.
         if let Some(effort) = &req.effort {
+            argv.push("--effort".to_owned());
             if effort == crate::capability::ULTRACODE {
-                argv.push("--effort".to_owned());
                 argv.push("max".to_owned());
-                argv.push("--settings".to_owned());
-                argv.push(ULTRACODE_SETTINGS.to_owned());
             } else {
-                argv.push("--effort".to_owned());
                 argv.push(effort.clone());
             }
         }
         if let Some(mode) = &req.mode {
             argv.push("--permission-mode".to_owned());
             argv.push(canonical_mode(mode).to_owned());
+        }
+        // Every flag-settings key in one place, for the reasons on `flag_settings` — and note this
+        // is not merely a default for `fast`: without the overlay at spawn the CLI refuses fast
+        // mode for the rest of the session. See `FAST_MODE_KEY`.
+        if let Some(settings) = flag_settings(req) {
+            argv.push("--settings".to_owned());
+            argv.push(settings);
         }
         // One `--mcp-config` carrying every server as JSON. The flag accepts a file path or a
         // literal object; the literal is used because the alternative is a temp file whose lifetime
@@ -452,6 +521,7 @@ impl Provider for Claude {
     fn protocol(&self, req: &SessionRequest) -> Box<dyn Protocol> {
         Box::new(ClaudeProtocol {
             history: claude_history(req),
+            fast_wanted: req.fast == Some(true),
             ..ClaudeProtocol::default()
         })
     }
@@ -522,12 +592,56 @@ struct ClaudeProtocol {
     /// distinction [`crate::codex`] documents, and Claude's wire format hides the choice rather
     /// than offering it.
     context_used: u64,
+    /// Whether fast mode has been asked for, by spawn argv or by a later toggle.
+    ///
+    /// Tracked because wanting it and having it are different facts, and only the first one is
+    /// wtm's to know. See [`fast_mode_notice`].
+    fast_wanted: bool,
+    /// The last fast-mode refusal already reported, so a standing one is said once and not per turn.
+    fast_refusal: Option<String>,
 }
 
 impl ClaudeProtocol {
     /// A stable-enough turn label. Claude reports no turn id of its own, so this counts them.
     fn turn_label(&self) -> String {
         self.turn.to_string()
+    }
+
+    /// Say so when fast mode was asked for and the CLI reports it is not on.
+    ///
+    /// The `result` message carries `fast_mode_state` and `fast_mode_disabled_reason` on every
+    /// turn, which makes this the one setting in the picker whose *actual* value is observable
+    /// rather than assumed. Worth using: whether fast mode is on depends on the account being
+    /// first-party, the organization allowing it, the model being on its list, credits remaining
+    /// and a separate rate limit not being in cooldown — so a pill that reported only what wtm
+    /// asked for would be confidently wrong for reasons wtm cannot see.
+    ///
+    /// Only when asked, because a session that never wanted it has nothing to be told. Deduped on
+    /// the reason, because the common refusals are standing conditions — an organization
+    /// preference does not change between turns — and repeating one per `result` would be a
+    /// transcript full of one sentence. Cleared when it comes on, so a refusal that returns later
+    /// is reported again.
+    fn fast_mode_notice(&mut self, message: &Value) -> Option<AgentEvent> {
+        if !self.fast_wanted {
+            return None;
+        }
+        let state = message.get("fast_mode_state").and_then(Value::as_str)?;
+        if state == "on" {
+            self.fast_refusal = None;
+            return None;
+        }
+        let reason = message
+            .get("fast_mode_disabled_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        if self.fast_refusal.as_deref() == Some(reason) {
+            return None;
+        }
+        self.fast_refusal = Some(reason.to_owned());
+        Some(AgentEvent::Notice {
+            level: NoticeLevel::Warn,
+            message: format!("Fast mode is off — {}.", fast_mode_refusal(reason)),
+        })
     }
 
     /// One `stream_event`, which wraps an Anthropic SSE event.
@@ -1031,6 +1145,12 @@ impl Protocol for ClaudeProtocol {
                     steps.push(Step::Emit(limit_or_failure(reason)));
                 }
 
+                // Before the finish for the same reason a failure is: it explains something about
+                // the turn that just ran, so it reads above the row that closes it.
+                if let Some(notice) = self.fast_mode_notice(&message) {
+                    steps.push(Step::Emit(notice));
+                }
+
                 steps.push(Step::Emit(AgentEvent::TurnFinished {
                     turn: self.turn_label(),
                     usage: Usage {
@@ -1211,19 +1331,26 @@ impl Protocol for ClaudeProtocol {
         ]
     }
 
-    /// Change the model or the permission mode without restarting.
+    /// Change the model, the permission mode or fast mode without restarting.
     ///
-    /// Two more control requests on the channel `interrupt` already uses. Both subtypes are read
+    /// Three more control requests on the channel `interrupt` already uses. Every subtype is read
     /// off the shipped CLI rather than out of documentation — like `--permission-prompt-tool` in
     /// the module header, they are real and unpublished — so the failure mode matters: a subtype
     /// this CLI version does not know comes back as a `control_response` with `subtype: "error"`,
     /// which [`Self::on_line`] already turns into a `Notice`. A rejected change therefore says so
     /// in the transcript instead of leaving the picker quietly lying about the session's state.
+    ///
+    /// `apply_flag_settings` is the one whose refusals are *expected* rather than exceptional, and
+    /// it does not report them here: fast mode also depends on the account being first-party, the
+    /// model being on the organization's allow-list, credits being available and a rate limit not
+    /// being in cooldown, none of which this process can know in advance. The CLI answers with the
+    /// truth on every turn instead — see [`Self::fast_mode_notice`].
     fn reconfigure(
         &mut self,
         model: Option<&str>,
         _effort: Option<&str>,
         mode: Option<&str>,
+        fast: Option<bool>,
     ) -> Vec<Step> {
         let mut steps = Vec::new();
         if let Some(model) = model {
@@ -1236,6 +1363,18 @@ impl Protocol for ClaudeProtocol {
             steps.push(Self::control_request(&json!({
                 "subtype": "set_permission_mode",
                 "mode": canonical_mode(mode),
+            })));
+        }
+        if let Some(fast) = fast {
+            // Recorded before the write, so the reporting in `fast_mode_notice` describes what the
+            // user last asked for even if the CLI never gets round to answering.
+            self.fast_wanted = fast;
+            self.fast_refusal = None;
+            let mut settings = serde_json::Map::new();
+            settings.insert(FAST_MODE_KEY.to_owned(), Value::Bool(fast));
+            steps.push(Self::control_request(&json!({
+                "subtype": "apply_flag_settings",
+                "settings": Value::Object(settings),
             })));
         }
         steps

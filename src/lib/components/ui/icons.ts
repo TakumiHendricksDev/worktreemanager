@@ -59,7 +59,8 @@ export type IconName =
   | 'terminal'
   | 'theme-system'
   | 'theme-light'
-  | 'theme-dark';
+  | 'theme-dark'
+  | 'bolt';
 
 export interface IconSpec {
   /** Drawn with `stroke: currentColor; fill: none`. */
@@ -83,6 +84,15 @@ export const icons: Record<IconName, IconSpec> = {
   'chevron-down': { stroke: 'M4 6.25 L8 10.25 L12 6.25' },
   'chevron-right': { stroke: 'M6.25 4 L10.25 8 L6.25 12' },
   check: { stroke: 'M3.5 8.25 L6.5 11.25 L12.5 4.75' },
+  /**
+   * A lightning bolt, filled rather than stroked.
+   *
+   * Filled because at 11px — the size the model picker's row uses — a 1.5 stroke on a shape this
+   * narrow closes its own interior and reads as a blob. The grammar's coordinate bounds still hold;
+   * it is the stroke rule that does not survive the scale, which is the same exception `star`
+   * already makes.
+   */
+  bolt: { fill: 'M9.25 1.5 L4 9 H7.25 L6.75 14.5 L12 7 H8.75 Z' },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
   file: { stroke: 'M4 1.75 H9.25 L12 4.5 V14.25 H4 Z M9.25 1.75 V4.5 H12' },
   /*

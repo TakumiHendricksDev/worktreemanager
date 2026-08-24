@@ -205,6 +205,9 @@ pub fn claude_capability() -> AgentCapability {
             ),
         ],
         models_are_live: false,
+        // The one provider that has a high-speed mode at all. See `claude::flag_settings` for how
+        // it is turned on and why the spawn-time half is not optional.
+        supports_fast: true,
     }
 }
 

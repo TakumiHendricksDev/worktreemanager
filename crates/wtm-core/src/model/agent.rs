@@ -474,4 +474,16 @@ pub struct AgentCapability {
     /// Surfaced so the UI can say "as reported by codex" versus "as of this wtm build", which
     /// is the difference between a stale list being the CLI's fault and being ours.
     pub models_are_live: bool,
+    /// True when this provider has a high-speed mode that trades usage credits for output speed.
+    ///
+    /// Claude Code has one; Codex and Cursor have no analogue, because their speed axis *is* the
+    /// effort ladder already on every model. So this gates a control rather than describing one:
+    /// the picker renders the pill only where the word means something.
+    ///
+    /// Provider-level and not per-model, even though the CLI does reject the pairing on some
+    /// models. It validates the model against an allow-list held by the account's organization,
+    /// which wtm cannot enumerate — a per-model flag here would be this build guessing at another
+    /// service's configuration and going stale silently. The refusal is observable instead: see
+    /// `wtm_agent::claude`, where the CLI reports the live state on every turn.
+    pub supports_fast: bool,
 }

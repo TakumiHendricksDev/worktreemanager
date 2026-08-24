@@ -1057,6 +1057,7 @@ fn preferring_a_rung_leaves_a_model_whose_ladder_lacks_it_on_its_own_default() {
         models: wtm_agent::codex::parse_models(&reply),
         modes: wtm_agent::codex_modes(),
         models_are_live: true,
+        supports_fast: false,
     };
     wtm_agent::prefer_effort(&mut capability);
 
@@ -1213,7 +1214,7 @@ fn a_turn_re_sends_the_mode_which_is_why_this_provider_needs_no_restart() {
     // it re-reads these off every `turn/start` — so `reconfigure` writes nothing and the change
     // rides the next turn instead.
     let mut driver = ready_driver();
-    driver.reconfigure(Some("gpt-5.6-luna"), Some("max"), Some("full-access"));
+    driver.reconfigure(Some("gpt-5.6-luna"), Some("max"), Some("full-access"), None);
 
     let frames = writes(&driver.send_turn("go", &[]));
     let params = &frames[0]["params"];
@@ -1239,7 +1240,7 @@ fn reconfiguring_codex_writes_nothing_by_itself() {
     let mut driver = ready_driver();
     assert!(
         driver
-            .reconfigure(Some("gpt-5.5"), Some("high"), Some("read-only"))
+            .reconfigure(Some("gpt-5.5"), Some("high"), Some("read-only"), None)
             .is_empty()
     );
 }
