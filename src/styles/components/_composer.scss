@@ -382,3 +382,82 @@
   font-size: var(--step--2);
   color: var(--fg-subtle);
 }
+
+/*
+ * The dictation button, and why "recording" is the loudest state in this toolbar.
+ *
+ * Every other control here is quiet until pointed at, on the rule the file header states: the
+ * composer card already has a Send button and three boxed things in a row would compete with it.
+ * A live microphone is the one exception worth making, and the reason is not emphasis but
+ * consequence — audio is leaving the machine, and a control that looks the same doing that as it
+ * does sitting idle is a control that will be left on.
+ *
+ * `--danger`, not `--accent`, and this is the one place in the app where a recording indicator's
+ * conventional red and the semantic role happen to agree. It is used for its meaning, not its hue:
+ * this is the only state in wtm with an ongoing privacy cost, which is precisely what the danger
+ * role is for. The word beside it changes too — "listening…", "transcribing…" — because
+ * `settings/_semantic.scss` forbids colour carrying a signal alone, and a red dot that means
+ * nothing to a user who cannot see red would be exactly that.
+ */
+.c-composer__mic {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 3px var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--step--2);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.c-composer__mic:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.c-composer__mic:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.c-composer__mic:disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.c-composer__mic.is-recording {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* The state in words, which is what actually carries it. See the block comment above. */
+.c-composer__mic-note {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * A pulse while recording, and no timer.
+ *
+ * ARCHITECTURE §8 bans polling outright — "no `setInterval` anywhere" — and an elapsed-seconds
+ * readout is a timer by any other name. The recording is bounded by `ui.dictate_max_seconds` on the
+ * backend, so the thing a counter would protect against is already handled where it can be
+ * enforced; what is left for the UI is saying that the microphone is open, which an animation does
+ * without a clock.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .c-composer__mic.is-recording .c-icon {
+    animation: c-composer-pulse 1.6s var(--ease) infinite;
+  }
+}
+
+@keyframes c-composer-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}

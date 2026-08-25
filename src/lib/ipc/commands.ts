@@ -9,6 +9,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type {
+  DictationStatus,
   Action,
   AgentAttachment,
   AgentOption,
@@ -247,6 +248,23 @@ export const commands = {
     mode: string | null,
     fast: boolean | null,
   ) => invoke<void>('configure_session', { session, model, effort, mode, fast }),
+
+  /** Whether dictation can be offered: SoX, curl, a secret store, and a stored key. */
+  dictationStatus: () => invoke<DictationStatus>('dictation_status'),
+
+  /**
+   * Store the transcription key. One-way — there is no command that reads it back.
+   *
+   * An empty string clears it. See `DictationStatus.keySet`, which is all the frontend ever
+   * learns about a stored key.
+   */
+  setDictationKey: (key: string) => invoke<void>('set_dictation_key', { key }),
+
+  /** Begin recording from the microphone. */
+  startDictation: () => invoke<void>('start_dictation'),
+
+  /** Stop recording and transcribe. Rejects with a human-readable reason. */
+  stopDictation: () => invoke<string>('stop_dictation'),
 
   /**
    * Every file in a worktree worth offering in the composer's `@` list.

@@ -1,0 +1,22 @@
+[package]
+name = "wtm-dictate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No `wtm-exec`, and that absence is the proof of the claim in the module docs: this crate builds
+# argv and parses replies, and cannot spawn anything. The composition root drives the processes,
+# exactly as it does for `wtm-agent`.
+#
+# No HTTP client either. See the module docs for why the one network call this application makes
+# goes through `curl` rather than through a TLS stack linked into the binary.
+[dependencies]
+wtm-core = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

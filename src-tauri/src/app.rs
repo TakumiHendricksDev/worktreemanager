@@ -312,6 +312,8 @@ pub struct App {
     /// doing it — two panes becoming ready at the same moment is the ordinary case.
     sessions_file: PathBuf,
     resume: parking_lot::Mutex<()>,
+    /// The one recording in progress, if any. See [`crate::dictate`].
+    pub dictation: crate::dictate::Dictation,
 }
 
 impl std::fmt::Debug for App {
@@ -397,6 +399,7 @@ impl App {
             os_tokens: wtm_exec::os_tokens(),
             shells: parking_lot::Mutex::new(BTreeMap::new()),
             handoff: crate::handoff::Hub::default(),
+            dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             sessions_file: sessions_file.clone(),
             resume: parking_lot::Mutex::new(()),
