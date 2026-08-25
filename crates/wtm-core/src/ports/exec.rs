@@ -24,7 +24,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::error::ExecError;
 
 /// One command to run, fully resolved — every template already rendered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written rather than derived, because [`Self::stdin`] may hold a secret and a
+/// struct that prints one is a struct that eventually prints one into a log file.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Invocation {
     /// argv. Never a shell string: no shell means no quoting bugs, and a Jira
     /// summary containing a backtick cannot become code.
@@ -34,6 +37,34 @@ pub struct Invocation {
     pub env: BTreeMap<String, String>,
     /// Hard deadline. See the module docs for why this is mandatory.
     pub timeout_ms: u64,
+    /// Text to write to the child's stdin, then close.
+    ///
+    /// # Why this exists, given the module docs above insist stdin is null
+    ///
+    /// It does not weaken that guarantee, and it is the reason the field is an `Option` rather
+    /// than a `String`. Null stdin is there so a script that prompts sees EOF instead of hanging;
+    /// writing a payload and *closing* gives EOF just as promptly. What is excluded either way is
+    /// an inherited stdin — the child never gets the parent's.
+    ///
+    /// What it is for: keeping a secret out of `argv`. Anything on a command line is visible to
+    /// every process on the machine via `ps`, so a credential belongs on a pipe — `curl --config -`
+    /// and `security -i` both exist precisely to accept one that way. The alternative considered
+    /// and rejected was a `0600` temp file, which merely moves the secret from a place everyone can
+    /// read to a place it can be forgotten.
+    pub stdin: Option<String>,
+}
+
+impl std::fmt::Debug for Invocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Invocation")
+            .field("argv", &self.argv)
+            .field("cwd", &self.cwd)
+            .field("env", &self.env)
+            .field("timeout_ms", &self.timeout_ms)
+            // Never the value. See the field.
+            .field("stdin", &self.stdin.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl Invocation {
@@ -43,6 +74,7 @@ impl Invocation {
             cwd: cwd.into(),
             env: BTreeMap::new(),
             timeout_ms,
+            stdin: None,
         }
     }
 
@@ -61,6 +93,13 @@ impl Invocation {
     #[must_use]
     pub fn with_env(mut self, env: BTreeMap<String, String>) -> Self {
         self.env = env;
+        self
+    }
+
+    /// Hand the child a payload on stdin instead of putting it in [`Self::argv`]. See the field.
+    #[must_use]
+    pub fn with_stdin(mut self, stdin: impl Into<String>) -> Self {
+        self.stdin = Some(stdin.into());
         self
     }
 }

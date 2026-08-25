@@ -356,6 +356,21 @@ export interface AgentSkill {
   scope: string | null;
 }
 
+/**
+ * Whether dictation can be offered on this machine.
+ *
+ * `keySet` is a boolean and never the key. ARCHITECTURE §6a's rule is that no *value* crosses this
+ * boundary rather than no secret, and a transcription key is a value — so it goes in through
+ * `setDictationKey` and nothing brings it back.
+ */
+export interface DictationStatus {
+  /** Everything needed is installed and a key is stored. */
+  ready: boolean;
+  keySet: boolean;
+  /** Programs that are needed and missing, so a message can name them. */
+  missing: string[];
+}
+
 /** What an agent can do on this machine. */
 export interface Capability {
   models: AgentModel[];

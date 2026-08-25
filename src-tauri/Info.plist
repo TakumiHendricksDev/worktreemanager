@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the bundle by Tauri. One key, and it is here rather than in Rust because a usage
+  description is not a platform *seam* — `src-tauri/tests/platform_seams.rs` caps `#[cfg(target_os)]`
+  at two files, and this costs nothing against that budget.
+
+  macOS attributes a child process's microphone access to the responsible application, so this is
+  what produces the prompt when SoX runs. Claude Code ships a whole helper .app for the same reason:
+  a bare CLI binary has no bundle to put this in. wtm already is one.
+
+  Known rough edge, documented in the README rather than hidden: wtm is unsigned, so the TCC grant
+  is keyed to an ad-hoc signature that changes on every rebuild — the prompt comes back after
+  `just build`.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>wtm records your voice only while you hold the dictation button in a prompt composer, and sends that recording to Deepgram to be turned into text.</string>
+</dict>
+</plist>

@@ -54,12 +54,31 @@ than a networked service. The things worth reporting:
 
 Worth stating because it narrows the surface considerably:
 
-- **No network access at all.** The CSP permits only `self` and `ipc:`, no HTTP plugin
-  capability is granted, there is no `fetch`/XHR/WebSocket in the frontend, and no HTTP client
-  crate is reachable in the dependency graph of either platform wtm builds for. No telemetry,
-  no update check. (`Cargo.lock` lists `reqwest` because a lockfile is the union of every
-  platform; `cargo tree -i reqwest --target aarch64-apple-darwin` — or the Linux target —
-  reports nothing. See ARCHITECTURE.md §6a.)
+- **No network access, with exactly one opt-in exception.** This used to be unconditional, and
+  the honest thing is to say what changed rather than to keep a sentence that has stopped being
+  true. Dictation — off by default, and inert until you turn it on and store a key — records the
+  microphone and sends that recording to `api.deepgram.com` to be transcribed. Nothing else in
+  wtm reaches the network: no telemetry, no analytics, no crash reporting, no update check.
+
+  What is unchanged, and is the reason the exception is narrow enough to describe in a bullet:
+
+  - **The webview still cannot reach the network.** The CSP permits only `self` and `ipc:`, and
+    no HTTP plugin capability is granted. The recording and the request both run in Rust behind
+    `#[tauri::command]`, so an injected script can *ask* wtm to dictate and cannot dictate, reach
+    a microphone, or choose a destination.
+  - **The destination is not configurable.** It is a `const` in `wtm-dictate`, so no config file,
+    project or preference can redirect a recording. A settable endpoint would be an exfiltration
+    primitive wearing a feature's clothes.
+  - **No HTTP client crate is reachable** in the dependency graph of either platform wtm builds
+    for. The request is made by invoking `curl`, which also means TLS verification and proxy
+    handling stay with the system rather than moving into this binary.
+  - **The audio is the only thing sent**, it is deleted as soon as it is text, and the key lives
+    in your OS keychain — it is written in from Settings and never read back out across IPC.
+
+  All four are enforced by `src-tauri/tests/network_boundary.rs`, which runs in `just check`.
+  (`Cargo.lock` lists `reqwest` because a lockfile is the union of every platform; `cargo tree -i
+  reqwest --target aarch64-apple-darwin` — or the Linux target — reports nothing. See
+  ARCHITECTURE.md §6a.)
 - **No `unsafe`.** `unsafe_code = "forbid"` workspace-wide.
 - **No shell.** Every command is an argv array handed to `execve`; there is no string that
   gets parsed by `sh`.

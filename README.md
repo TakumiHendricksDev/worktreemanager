@@ -39,6 +39,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | ✅ | Live terminal pane for setup output and ad-hoc `[[action]]`s, with input routed back so a prompt is answerable |
 | ✅ | Live Claude Code, Codex, and Cursor Agent sessions with normalized transcripts, approvals, model controls, resumable conversations, and internal MCP handoff |
 | ✅ | Claude's high-speed mode, from the composer's Fast pill or `/fast` — wtm drives the CLI over the Agent SDK protocol, so it declares the opt-in the SDK requires |
+| ✅ | Voice dictation into the prompt composer — hold or tap the mic, audio goes to Deepgram Nova-3, transcript lands in the draft unsent. Off by default; the only feature that sends anything off your machine |
 | ✅ | Cross-model delegation from one chat: one visible child or a customizable run of up to 20 child agents, with per-child model/effort/mode and navigable session status |
 | ✅ | **Open in …** — a split button that hands the worktree to your editor, a terminal, the file manager, or a fresh Claude Code session; see [below](#open-in-) |
 | 🚧 | `[remove] strategy = "command"` — the native path is the default and the one that turns the branch prompt into a checkbox |
@@ -148,6 +149,8 @@ Everything from here on is about building it yourself.
 | `just` *(optional)* | 1.50+ | only needed by projects whose config calls it |
 | `acli` *(optional)* | any | Atlassian CLI — only for Jira-backed form fields |
 | `gh`, `docker` *(optional)* | any | only if a project's config uses them |
+| `sox` *(optional)* | any | dictation only — `brew install sox`, or your distribution's package |
+| `curl` *(optional)* | any | dictation only — already present on macOS and every mainstream distribution |
 
 **macOS: full Xcode is not required.** Command Line Tools is enough for desktop Tauri.
 
@@ -486,6 +489,10 @@ If you are the first to run it, this is the list worth walking:
 | Jira fields come back empty, form still works | `acli` not authenticated or offline. Lookups are `on_error = "warn"`, so fallbacks apply and creation is never blocked. | `acli jira auth login --web` |
 | `svelte-check` errors about the TypeScript version | `typescript@7` is `latest` but `svelte-check` peers `^5 \|\| ^6` | TypeScript is pinned to `~6.0.3` in `package.json` — don't bump it to `latest` |
 | `vite build` fails with "Failed to load `transformWithEsbuild`" | Vite 8 uses Rolldown/Oxc; the esbuild minifier is now a separate install | `vite.config.ts` sets `minify: 'oxc'`. Don't change it back to `'esbuild'`. |
+| The microphone prompt comes back after every `just build` | wtm is unsigned, so macOS keys the microphone grant to an ad-hoc code signature that changes on each rebuild | Expected, and only affects builds you make yourself. Approve it again; an installed copy that you stop rebuilding keeps its grant. |
+| Dictation says it needs `rec` | SoX is not on the resolved PATH. `rec` is SoX's recording front-end and ships with it. | `brew install sox`, then reopen Settings so the check re-runs. See [the PATH problem](#the-path-problem) if it is installed and still not found. |
+| Dictation inserts nothing and says nothing was recorded | The microphone is muted or another application holds it. wtm records perfect silence happily and the service accepts it. | Check the input device in System Settings → Sound, and that no other app is recording. |
+| The transcription key is rejected | The key is for a different Deepgram project, or was pasted with surrounding whitespace | Re-paste it in Settings → Advanced. wtm trims it, but a key copied with a line break from a terminal can pick up more than whitespace. |
 | The app window opens behind another app | A bare binary launched from a shell does not activate | Use `just run`, or `open "…/Worktree Manager.app"` — a bundled app activates properly |
 | Linux: the window opens but stays blank, with `Failed to create GBM buffer … Invalid argument` on stderr | WebKitGTK's DMABUF renderer cannot allocate through the proprietary NVIDIA driver under a Wayland compositor. The webview process starts, gets no rendering surface, and paints nothing. | `WEBKIT_DISABLE_DMABUF_RENDERER=1 wtm`. To make it stick across launcher clicks too, set it in the `.desktop` entry rather than your shell profile — a GUI launch never reads `.zshrc`. |
 | Linux: `just build` fails with `failed to run linuxdeploy` after Rust compiles cleanly | linuxdeploy's bundled `strip` is too old to parse `.relr.dyn`, which Arch and other packed-relative-relocation distributions emit in every system library | `just build` passes `NO_STRIP=1` for exactly this. If you invoke `tauri build` directly, set it yourself. |
