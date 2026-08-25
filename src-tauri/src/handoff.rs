@@ -292,7 +292,7 @@ impl Hub {
         }
     }
 
-    /// A parent's children, split into the ones it may close and the count it may not.
+    /// A parent's closable subtree, and how many sessions in it are still working.
     ///
     /// The split is the whole design of `close_agents`. A child whose delegated turn has not
     /// returned is still doing the work it was asked for, and a tool that ends it would turn "tidy
@@ -300,27 +300,61 @@ impl Hub {
     /// `spawn_agents` wave cannot see the others. So unsettled children are counted and reported,
     /// never closed.
     ///
+    /// Walks descendants, not just the first generation. The frontend's `close` is already
+    /// depth-first so a child that delegated does not leave a live CLI with no parent; the tool
+    /// has to do the same or `close_agents` after a nested `ask_agent` would recreate that
+    /// orphan. A settled child with a busy descendant is kept with it: closing the child would
+    /// orphan the grandchild, and closing the grandchild would cancel work still in flight.
+    /// Closable sessions come back descendants-first, matching the UI.
+    ///
     /// What this deliberately cannot see is a child the *user* has since carried on talking to.
     /// That would need per-session turn tracking the app does not keep, and the honest thing is to
     /// say so here rather than to imply a guarantee: the tool's description tells the model to call
     /// it when it is done with a run, and a session the user has adopted is one the user can close.
     pub fn settled_children(&self, parent: &str) -> (Vec<Child>, usize) {
-        let guard = self.children.lock();
-        let Some(children) = guard.get(parent) else {
-            return (Vec::new(), 0);
-        };
-        let (settled, busy): (Vec<Child>, Vec<Child>) =
-            children.iter().cloned().partition(|c| c.settled);
-        (settled, busy.len())
+        collect_closable(&self.children.lock(), parent)
     }
 
-    /// Drop children from the parentage map once they are gone.
+    /// Drop these sessions, and anyone they parented, from the parentage map.
+    ///
+    /// Descendant keys go too. Forgetting only the named ids left `children[child] = [grandchild]`
+    /// behind after the child was closed, which is how a later walk could still name a process
+    /// that was already gone.
     pub fn forget_children(&self, sessions: &[String]) {
         let mut guard = self.children.lock();
+        let mut drop = sessions.to_vec();
+        let mut i = 0;
+        while i < drop.len() {
+            if let Some(kids) = guard.get(&drop[i]) {
+                for kid in kids {
+                    if !drop.iter().any(|session| session == &kid.session) {
+                        drop.push(kid.session.clone());
+                    }
+                }
+            }
+            i += 1;
+        }
         for children in guard.values_mut() {
-            children.retain(|child| !sessions.contains(&child.session));
+            children.retain(|child| !drop.iter().any(|session| session == &child.session));
+        }
+        for session in &drop {
+            guard.remove(session);
         }
         guard.retain(|_, children| !children.is_empty());
+    }
+
+    /// Forget a session that has ended: its token, and any parentage it still holds.
+    ///
+    /// Tokens used to live until the worktree was removed. A long-lived app then kept one UUID
+    /// and `Caller` per pane ever opened, and a close that reused a session id — which this app
+    /// does not today, but the map has no other owner — would have resolved to a dead caller.
+    /// Closing the session is the moment the token can no longer be presented, so it is the
+    /// moment it should disappear.
+    pub fn forget_session(&self, session: &str) {
+        self.tokens
+            .lock()
+            .retain(|_, caller| caller.session.as_deref() != Some(session));
+        self.forget_children(&[session.to_owned()]);
     }
 
     /// Forget every token issued for a worktree, and every child opened in it.
@@ -348,6 +382,27 @@ impl Hub {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// Closable descendants of `parent`, depth-first, and how many in the tree are still working.
+///
+/// A direct child's whole subtree is offered together or not at all — see [`Hub::settled_children`].
+fn collect_closable(children: &BTreeMap<String, Vec<Child>>, parent: &str) -> (Vec<Child>, usize) {
+    let Some(direct) = children.get(parent) else {
+        return (Vec::new(), 0);
+    };
+    let mut closable = Vec::new();
+    let mut busy = 0;
+    for child in direct {
+        let (descendants, desc_busy) = collect_closable(children, &child.session);
+        if child.settled && desc_busy == 0 {
+            closable.extend(descendants);
+            closable.push(child.clone());
+        } else {
+            busy += usize::from(!child.settled) + desc_busy;
+        }
+    }
+    (closable, busy)
 }
 
 /// Collects one turn's assistant text and reports when the turn is over.
@@ -564,10 +619,16 @@ fn run_task(
         Err(error) => return Response::failed(error),
     };
 
+    // One closure so a send that never starts is just as closable as a timeout. The first version
+    // settled only after `wait`, and a CLI that refused the prompt left a pane `close_agents`
+    // reported as "still working" forever.
+    let settle = || app.handoff.settle_child(session.as_str());
+
     if let Err(error) = app.with_agent(session.as_str(), |agent| agent.send_turn(&task.prompt, &[]))
     {
         // The pane is left on screen rather than torn down. It carries the stderr notice explaining
         // why the CLI would not take a turn, which is the only useful artefact of a failure here.
+        settle();
         return Response::failed(format!(
             "the {target} session would not take the prompt: {error}"
         ));
@@ -577,7 +638,7 @@ fn run_task(
     // leave it just as closable as a clean answer, and a child that stayed unsettled because its
     // turn failed would be one `close_agents` could never reach.
     let outcome = wait(app, &rx);
-    app.handoff.settle_child(session.as_str());
+    settle();
 
     match outcome {
         Ok(()) => {
@@ -1045,6 +1106,62 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_parent_offers_its_settled_grandchildren_too() {
+        // Frontend close is depth-first so a child that delegated does not leave a live CLI with
+        // no parent. `settled_children` used to return one generation, and `close_agents` after a
+        // nested `ask_agent` recreated that orphan.
+        let hub = Hub::default();
+        hub.record_child(Some("parent"), child("child", "wt-a"));
+        hub.record_child(Some("child"), child("grandchild", "wt-a"));
+        hub.settle_child("child");
+        hub.settle_child("grandchild");
+
+        let (settled, busy) = hub.settled_children("parent");
+        assert_eq!(busy, 0);
+        let ids: Vec<&str> = settled.iter().map(|c| c.session.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["grandchild", "child"],
+            "descendants first, matching the UI close"
+        );
+    }
+
+    #[test]
+    fn a_settled_child_with_a_busy_grandchild_is_kept_together() {
+        // Closing the child would orphan the grandchild — the failure the cascade exists to
+        // prevent — and closing the grandchild would cancel work still in flight, which
+        // `close_agents` must not do. The whole subtree waits.
+        let hub = Hub::default();
+        hub.record_child(Some("parent"), child("child", "wt-a"));
+        hub.record_child(Some("child"), child("grandchild", "wt-a"));
+        hub.settle_child("child");
+
+        let (settled, busy) = hub.settled_children("parent");
+        assert!(
+            settled.is_empty(),
+            "the child is kept until its child finishes"
+        );
+        assert_eq!(busy, 1);
+    }
+
+    #[test]
+    fn a_fully_settled_sibling_is_still_offered_when_another_subtree_is_busy() {
+        // The cascade is per direct child, not per orchestrator. One nested run still working
+        // must not pin a finished sibling that has no descendants.
+        let hub = Hub::default();
+        hub.record_child(Some("parent"), child("done", "wt-a"));
+        hub.record_child(Some("parent"), child("running", "wt-a"));
+        hub.record_child(Some("running"), child("grand", "wt-a"));
+        hub.settle_child("done");
+        hub.settle_child("running");
+
+        let (settled, busy) = hub.settled_children("parent");
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].session, "done");
+        assert_eq!(busy, 1);
+    }
+
+    #[test]
     fn a_childless_parent_is_not_an_error() {
         // A session that never delegated will still call this if it is told to tidy up, and the
         // answer is "nothing to do" rather than a tool error a model has to interpret.
@@ -1087,6 +1204,65 @@ mod tests {
         let (settled, busy) = hub.settled_children("parent");
         assert!(settled.is_empty());
         assert_eq!(busy, 0);
+    }
+
+    #[test]
+    fn forgetting_a_child_drops_the_grandchildren_it_parented() {
+        // `forget_children` used to remove the named id from every list and leave
+        // `children[child] = [grandchild]` behind. A later walk could then still name a process
+        // that `close_agent` had already ended.
+        let hub = Hub::default();
+        hub.record_child(Some("parent"), child("child", "wt-a"));
+        hub.record_child(Some("child"), child("grandchild", "wt-a"));
+        hub.settle_child("child");
+        hub.settle_child("grandchild");
+
+        hub.forget_children(&["child".to_owned()]);
+
+        let (from_parent, _) = hub.settled_children("parent");
+        let (from_child, _) = hub.settled_children("child");
+        assert!(from_parent.is_empty());
+        assert!(
+            from_child.is_empty(),
+            "the grandchild key must go with the child"
+        );
+    }
+
+    #[test]
+    fn closing_a_session_forgets_the_token_it_was_issued() {
+        // Tokens used to live until the worktree was removed — one UUID and `Caller` per pane
+        // for the life of the app. Closing the session is the moment nothing can still present
+        // that token, so it is the moment it should disappear.
+        let hub = Hub::default();
+        let token = hub.issue(caller("wt-a"));
+        hub.bind_session(&token, "session-a");
+        hub.record_child(Some("session-a"), child("child-1", "wt-a"));
+        hub.settle_child("child-1");
+
+        hub.forget_session("session-a");
+
+        assert!(hub.resolve(&token).is_none(), "its token should be gone");
+        let (settled, busy) = hub.settled_children("session-a");
+        assert!(settled.is_empty());
+        assert_eq!(busy, 0);
+        assert!(hub.is_empty());
+    }
+
+    #[test]
+    fn forgetting_one_session_leaves_its_siblings_token() {
+        let hub = Hub::default();
+        let first = hub.issue(caller("wt-a"));
+        let second = hub.issue(caller("wt-a"));
+        hub.bind_session(&first, "session-a");
+        hub.bind_session(&second, "session-b");
+
+        hub.forget_session("session-a");
+
+        assert!(hub.resolve(&first).is_none());
+        assert!(
+            hub.resolve(&second).is_some(),
+            "a sibling's token must survive"
+        );
     }
 
     #[test]

@@ -22,7 +22,11 @@
    * three are here.
    */
   import { panesOf } from '../state/layout.svelte';
-  import { sessions, type Pane } from '../state/sessions.svelte';
+  import {
+    AT_TILE_CAP,
+    MAX_PANES_PER_WORKTREE,
+    sessions,
+  } from '../state/sessions.svelte';
   import { STATUS_WORD } from '../status';
   import Button from './ui/Button.svelte';
   import Dialog from './ui/Dialog.svelte';
@@ -36,39 +40,9 @@
     onclose: () => void;
   } = $props();
 
-  const children = $derived(
-    sessions.panes.filter(
-      (pane) => pane.worktreeId === worktreeId && pane.parentSession !== null,
-    ),
-  );
   const visible = $derived(new Set(panesOf(sessions.layoutFor(worktreeId))));
-
-  type Group = { parent: Pane | null; run: string; children: Pane[] };
-  const groups = $derived.by(() => {
-    const grouped = new Map<string, Group>();
-    for (const child of children) {
-      const key = child.run ?? child.parentSession ?? child.id;
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.children.push(child);
-        continue;
-      }
-      grouped.set(key, {
-        parent: child.parentSession ? sessions.paneBySession(child.parentSession) : null,
-        run: key,
-        children: [child],
-      });
-    }
-    return [...grouped.values()];
-  });
-
-  function provider(pane: Pane): string {
-    const kind = pane.kind;
-    if (kind.kind !== 'agent') return 'Shell';
-    return (
-      sessions.options.find((option) => option.id === kind.provider)?.label ?? kind.provider
-    );
-  }
+  const groups = $derived(sessions.runsIn(worktreeId));
+  const atTileCap = $derived(visible.size >= MAX_PANES_PER_WORKTREE);
 
   /** Show it, and get out of the way — the point of the click was to read the transcript. */
   function show(paneId: string, split: boolean) {
@@ -91,7 +65,7 @@
             <span class="c-agents__run-note">
               {group.children.length}
               {group.children.length === 1 ? 'agent' : 'agents'}
-              {#if group.parent}· started by {provider(group.parent)}{/if}
+              {#if group.parent}· started by {sessions.labelOf(group.parent)}{/if}
             </span>
           </h3>
 
@@ -100,9 +74,9 @@
               {@const status = sessions.statusOfPane(child)}
               <li class="c-agents__row" class:is-selected={visible.has(child.id)}>
                 <SessionDot {status} />
-                <span class="c-agents__name">{child.agentTitle ?? provider(child)}</span>
+                <span class="c-agents__name">{child.agentTitle ?? sessions.labelOf(child)}</span>
                 <span class="c-agents__meta">
-                  {provider(child)}{#if child.model}<span class="c-agents__model"
+                  {sessions.labelOf(child)}{#if child.model}<span class="c-agents__model"
                       >{child.model}</span
                     >{/if}
                 </span>
@@ -122,8 +96,10 @@
                   <Button
                     variant="quiet"
                     size="sm"
-                    disabled={visible.has(child.id)}
-                    title="Open this session beside the others"
+                    disabled={visible.has(child.id) || atTileCap}
+                    title={atTileCap
+                      ? AT_TILE_CAP
+                      : 'Open this session beside the others'}
                     onclick={() => show(child.id, true)}
                   >
                     Split

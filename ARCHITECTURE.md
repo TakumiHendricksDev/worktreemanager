@@ -280,14 +280,17 @@ nothing published for a confused prompt to aim at a pane the user opened themsel
 delegated turn has not returned are counted and reported rather than closed, which is what makes the
 tool safe to call while part of a wave is still running — the one thing it cannot see is a child the
 *user* has since adopted, because that would need per-session turn tracking the app does not keep.
-`close_agent` emits nothing on its own, so `agent:released` is the mirror of `agent:spawned`: without
-it the window would keep panes pointing at processes that are gone.
+It walks settled descendants, not just the first generation, and keeps a settled child with a busy
+grandchild rather than orphaning one or cancelling the other. `close_agent` emits nothing on its own,
+so `agent:released` is the mirror of `agent:spawned`: without it the window would keep panes pointing
+at processes that are gone. The token that authorised the call dies with the session; it used to live
+until the worktree was removed.
 
 The obligation is stated in the appended instructions rather than only in the tool's description,
 because a description is read while a tool is being *chosen* and this one lands after the choice.
-The frontend has the matching rule: closing a pane closes its children, depth-first, since an
-orphaned child holds no tile and both routes to one — the rail and the agents dialog — are drawn
-from its parent.
+The frontend has the matching rule: closing a pane closes its children, depth-first, and its `/btw`
+side pane, since an orphaned child holds no tile and both routes to one — the rail and the agents
+dialog — are drawn from its parent.
 
 **A self-describing tool is not enough, and finding that out cost a real attempt.** The tool's
 description names the phrasings people use — "let Codex review this", "second opinion" — and it still

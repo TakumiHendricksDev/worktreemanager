@@ -115,6 +115,13 @@ struct CursorProtocol {
     model_config_id: Option<String>,
     effort_config_id: Option<String>,
     instructions_sent: bool,
+    /// Answer `session/request_permission` here, because Cursor has no Auto mode of its own.
+    ///
+    /// Its advertised modes are Agent / Plan / Ask. Sending `modeId: "auto"` is rejected, and
+    /// "Always this session" only sticks for one class of tool — the next `just check` asks
+    /// again. So Auto is a wtm policy: the picker shows it, the wire stays on `agent`, and
+    /// permission cards are answered with allow-once. Clarification questions still surface.
+    auto_approve: bool,
 }
 
 struct Pending {
@@ -136,6 +143,7 @@ enum PendingKind {
 
 impl CursorProtocol {
     fn new(req: SessionRequest) -> Self {
+        let auto_approve = req.mode.as_deref() == Some("auto");
         Self {
             req,
             phase: Phase::Initializing,
@@ -151,6 +159,7 @@ impl CursorProtocol {
             model_config_id: None,
             effort_config_id: None,
             instructions_sent: false,
+            auto_approve,
         }
     }
 
@@ -233,9 +242,10 @@ impl CursorProtocol {
         }
 
         if let Some(mode) = self.req.mode.clone() {
+            self.auto_approve = mode == "auto";
             let (_, step) = self.request(
                 "session/set_mode",
-                &json!({ "sessionId": session, "modeId": mode }),
+                &json!({ "sessionId": session, "modeId": wire_mode(&mode) }),
             );
             steps.push(step);
         }
@@ -385,22 +395,6 @@ impl CursorProtocol {
                         .unwrap_or(fallback)
                         .to_owned()
                 };
-                let tool = params.get("toolCall").unwrap_or(&Value::Null);
-                let title = tool
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Cursor wants to run a tool")
-                    .to_owned();
-                let items = options
-                    .iter()
-                    .filter_map(|option| {
-                        option
-                            .get("name")
-                            .or_else(|| option.get("optionId"))
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .collect();
                 self.pending.insert(
                     id.clone(),
                     Pending {
@@ -412,13 +406,16 @@ impl CursorProtocol {
                         },
                     },
                 );
+                // Auto answers here rather than showing a card. The option *names* must not
+                // become the card body either: those are Allow / Always / Deny, which the
+                // buttons already are, and printing them made every Grok prompt look identical.
+                if self.auto_approve {
+                    return self.answer(&id, &ApprovalAnswer::Allow);
+                }
                 vec![Step::Emit(AgentEvent::ApprovalRequested {
                     id,
                     blocking: true,
-                    request: ApprovalRequest::Permissions {
-                        summary: title,
-                        items,
-                    },
+                    request: permission_request(params),
                 })]
             }
             "cursor/ask_question" => {
@@ -722,6 +719,7 @@ impl Protocol for CursorProtocol {
         }
         if let Some(mode) = mode {
             self.req.mode = Some(mode.to_owned());
+            self.auto_approve = mode == "auto";
         }
         let Some(session) = self.session_id.clone() else {
             return Vec::new();
@@ -743,7 +741,7 @@ impl Protocol for CursorProtocol {
         if let Some(mode) = mode {
             let (_, step) = self.request(
                 "session/set_mode",
-                &json!({ "sessionId": session, "modeId": mode }),
+                &json!({ "sessionId": session, "modeId": wire_mode(mode) }),
             );
             steps.push(step);
         }
@@ -857,6 +855,71 @@ fn value_id(value: &Value) -> String {
     value
         .as_str()
         .map_or_else(|| value.to_string(), str::to_owned)
+}
+
+/// Cursor's session mode on the wire. Auto is a wtm policy, not one of its three modes.
+fn wire_mode(mode: &str) -> &str {
+    if mode == "auto" { "agent" } else { mode }
+}
+
+/// What the card should show — the tool, not the Allow / Always / Reject options.
+///
+/// Those option names used to be stuffed into `Permissions.items`, so every prompt rendered as
+/// the same three verbs plus a one-line title. The buttons already are those verbs. A shell
+/// command is a command card; everything else lists the kind and paths, never the choices.
+fn permission_request(params: &Value) -> ApprovalRequest {
+    let tool = params.get("toolCall").unwrap_or(&Value::Null);
+    let title = tool
+        .get("title")
+        .or_else(|| params.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("Cursor wants to run a tool");
+    let kind = tool.get("kind").and_then(Value::as_str);
+    let raw = tool.get("rawInput").unwrap_or(&Value::Null);
+    let command = raw
+        .get("command")
+        .or_else(|| raw.get("commandLine"))
+        .and_then(Value::as_str);
+    if command.is_some() || kind == Some("execute") {
+        return ApprovalRequest::Command {
+            command: command.unwrap_or(title).to_owned(),
+            cwd: raw
+                .get("workingDirectory")
+                .or_else(|| raw.get("cwd"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            reason: None,
+        };
+    }
+    ApprovalRequest::Permissions {
+        summary: title.to_owned(),
+        items: tool_permission_items(tool),
+    }
+}
+
+fn tool_permission_items(tool: &Value) -> Vec<String> {
+    let mut items = Vec::new();
+    if let Some(kind) = tool.get("kind").and_then(Value::as_str) {
+        items.push(kind.to_owned());
+    }
+    if let Some(content) = tool.get("content").and_then(Value::as_array) {
+        for part in content {
+            if let Some(path) = part.get("path").and_then(Value::as_str)
+                && !items.iter().any(|item| item == path)
+            {
+                items.push(path.to_owned());
+            }
+        }
+    }
+    let raw = tool.get("rawInput").unwrap_or(&Value::Null);
+    for key in ["path", "file_path", "filePath", "target"] {
+        if let Some(path) = raw.get(key).and_then(Value::as_str)
+            && !items.iter().any(|item| item == path)
+        {
+            items.push(path.to_owned());
+        }
+    }
+    items
 }
 
 fn text(value: &Value, key: &str) -> String {
@@ -1142,7 +1205,7 @@ fn parse_modes(result: &Value) -> Vec<AgentMode> {
     let current = result
         .pointer("/modes/currentModeId")
         .and_then(Value::as_str);
-    result
+    let mut modes: Vec<AgentMode> = result
         .pointer("/modes/availableModes")
         .and_then(Value::as_array)
         .into_iter()
@@ -1168,7 +1231,30 @@ fn parse_modes(result: &Value) -> Vec<AgentMode> {
                 id,
             })
         })
-        .collect()
+        .collect();
+    // Cursor does not advertise Auto. Without this the picker only offers Agent / Plan / Ask
+    // and every shell prompt comes back, which is the complaint that added the mode.
+    if !modes.is_empty() && !modes.iter().any(|mode| mode.id == "auto") {
+        let insert_at = modes
+            .iter()
+            .position(|mode| mode.id == "agent")
+            .map_or(0, |i| i + 1);
+        modes.insert(insert_at, cursor_auto_mode());
+    }
+    modes
+}
+
+fn cursor_auto_mode() -> AgentMode {
+    AgentMode {
+        id: "auto".to_owned(),
+        label: "Auto".to_owned(),
+        description: Some(
+            "Use tools without asking for each one. Clarification questions are still shown"
+                .to_owned(),
+        ),
+        is_default: false,
+        risk: ModeRisk::Elevated,
+    }
 }
 
 #[must_use]
@@ -1178,6 +1264,12 @@ pub fn cursor_modes() -> Vec<AgentMode> {
             "agent",
             "Agent",
             "Use tools and edit the worktree, asking when Cursor requires approval",
+            ModeRisk::Elevated,
+        ),
+        (
+            "auto",
+            "Auto",
+            "Use tools without asking for each one. Clarification questions are still shown",
             ModeRisk::Elevated,
         ),
         (

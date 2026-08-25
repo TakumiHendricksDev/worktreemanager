@@ -285,8 +285,10 @@ fn a_permission_request_blocks_and_replies_with_cursors_own_option_id() {
         AgentEvent::ApprovalRequested {
             id,
             blocking: true,
-            request: ApprovalRequest::Permissions { summary, .. },
-        } if id == "cursor:permission-1" && summary == "Run tests"
+            request: ApprovalRequest::Permissions { summary, items },
+        } if id == "cursor:permission-1"
+            && summary == "Run tests"
+            && !items.iter().any(|item| item.contains("Allow") || item == "Reject")
     ));
 
     let answer = driver.answer("cursor:permission-1", &ApprovalAnswer::AllowForSession);
@@ -296,6 +298,53 @@ fn a_permission_request_blocks_and_replies_with_cursors_own_option_id() {
         frame["result"]["outcome"]["optionId"],
         "remember-this-session"
     );
+}
+
+#[test]
+fn a_shell_permission_is_the_command_not_the_allow_deny_options() {
+    // The card listed option names as the grants, so every Grok prompt showed
+    // "Allow once / Allow always / Reject" and the actual command as a footnote.
+    let mut driver = opened_driver(&SessionRequest::default());
+    let request = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"toolCall":{"title":"just check","kind":"execute","rawInput":{"command":"just check"}},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"remember-this-session","name":"Always allow","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}"#,
+    );
+    assert!(matches!(
+        events(&request)[0],
+        AgentEvent::ApprovalRequested {
+            request: ApprovalRequest::Command { command, .. },
+            ..
+        } if command == "just check"
+    ));
+}
+
+#[test]
+fn auto_mode_answers_permission_prompts_without_showing_a_card() {
+    // Cursor has no Auto mode, so this is a wtm policy. The card is the thing it exists
+    // to stop; a mode that still pinned one would be Agent with a different label.
+    let mut driver = opened_driver(&SessionRequest {
+        mode: Some("auto".to_owned()),
+        ..SessionRequest::default()
+    });
+    let steps = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"toolCall":{"title":"just check","kind":"execute"},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"}]}}"#,
+    );
+    assert!(
+        events(&steps)
+            .iter()
+            .all(|event| !matches!(event, AgentEvent::ApprovalRequested { .. })),
+        "auto must not pin a card"
+    );
+    let frame = &writes(&steps)[0];
+    assert_eq!(frame["id"], "permission-1");
+    assert_eq!(frame["result"]["outcome"]["optionId"], "allow-once");
+}
+
+#[test]
+fn auto_mode_is_sent_as_agent_because_cursor_has_no_such_mode() {
+    let mut driver = opened_driver(&SessionRequest::default());
+    let frames = writes(&driver.reconfigure(None, None, Some("auto"), None));
+    assert_eq!(frames[0]["method"], "session/set_mode");
+    assert_eq!(frames[0]["params"]["modeId"], "agent");
 }
 
 #[test]
@@ -399,5 +448,14 @@ fn the_live_capability_preserves_cursor_model_effort_and_mode_labels() {
     assert_eq!(capability.models[1].default_effort.as_deref(), Some("high"));
     assert_eq!(capability.models[1].efforts[1].effort, "high");
     assert!(capability.models[1].is_default);
-    assert_eq!(capability.modes[1].id, "ask");
+    assert!(
+        capability.modes.iter().any(|mode| mode.id == "ask"),
+        "live Ask must still be offered: {:?}",
+        capability.modes
+    );
+    assert!(
+        capability.modes.iter().any(|mode| mode.id == "auto"),
+        "Auto is a wtm policy and must appear even when Cursor did not advertise it: {:?}",
+        capability.modes
+    );
 }

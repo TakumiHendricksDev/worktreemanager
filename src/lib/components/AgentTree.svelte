@@ -33,31 +33,9 @@
     onbrowse: () => void;
   } = $props();
 
-  const children = $derived(
-    sessions.panes.filter(
-      (pane) => pane.worktreeId === worktreeId && pane.parentSession !== null,
-    ),
-  );
+  const children = $derived(sessions.delegatedIn(worktreeId));
   const visible = $derived(new Set(panesOf(sessions.layoutFor(worktreeId))));
-
-  type Group = { parent: Pane | null; run: string; children: Pane[] };
-  const groups = $derived.by(() => {
-    const grouped = new Map<string, Group>();
-    for (const child of children) {
-      const key = child.run ?? child.parentSession ?? child.id;
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.children.push(child);
-        continue;
-      }
-      grouped.set(key, {
-        parent: child.parentSession ? sessions.paneBySession(child.parentSession) : null,
-        run: key,
-        children: [child],
-      });
-    }
-    return [...grouped.values()];
-  });
+  const groups = $derived(sessions.runsIn(worktreeId));
 
   /** How many runs fit before the rail stops naming them individually. */
   const MAX_RUNS = 3;
@@ -83,19 +61,11 @@
     children.filter((child) => sessions.statusOfPane(child) === 'failed').length,
   );
 
-  function provider(pane: Pane): string {
-    const kind = pane.kind;
-    if (kind.kind !== 'agent') return 'Shell';
-    return (
-      sessions.options.find((option) => option.id === kind.provider)?.label ?? kind.provider
-    );
-  }
-
   /** Everything the chip does not have room for, so hovering still answers it. */
   function detail(child: Pane): string {
     const status = STATUS_WORD[sessions.statusOfPane(child)] || 'idle';
     const model = child.model ? ` · ${child.model}` : '';
-    return `${child.agentTitle ?? provider(child)} · ${provider(child)}${model} · ${status}`;
+    return `${child.agentTitle ?? sessions.labelOf(child)} · ${sessions.labelOf(child)}${model} · ${status}`;
   }
 </script>
 
@@ -112,10 +82,10 @@
             <button
               class="c-agent-tree__parent"
               class:is-selected={visible.has(group.parent.id)}
-              title="Back to {provider(group.parent)}, the session that started this run"
+              title="Back to {sessions.labelOf(group.parent)}, the session that started this run"
               onclick={() => sessions.showRelated(group.parent?.id ?? '')}
             >
-              {provider(group.parent)}
+              {sessions.labelOf(group.parent)}
             </button>
             <span class="c-agent-tree__branch" aria-hidden="true">→</span>
           {/if}
@@ -130,7 +100,7 @@
               onclick={() => sessions.showRelated(only.id)}
             >
               <SessionDot status={sessions.statusOfPane(only)} />
-              <span class="c-agent-tree__label">{only.agentTitle ?? provider(only)}</span>
+              <span class="c-agent-tree__label">{only.agentTitle ?? sessions.labelOf(only)}</span>
             </button>
           {:else}
             <button
@@ -149,7 +119,8 @@
     </div>
     {#if blocked > 0}
       <span class="c-agent-tree__tally c-agent-tree__tally--attention">
-        {blocked} needs you
+        {blocked}
+        {blocked === 1 ? 'needs you' : 'need you'}
       </span>
     {/if}
     {#if broken > 0}

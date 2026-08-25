@@ -95,6 +95,16 @@ export const MAX_PANES = 8;
 export const AT_CAPACITY =
   'As many sessions are open as wtm keeps alive. Close one to start another — it refuses rather than ending a session that may be mid-turn.';
 
+/**
+ * What a refused *tile* says.
+ *
+ * Distinct from [`AT_CAPACITY`]: that one is about processes, and splitting a delegated child
+ * does not start one. Reusing the process sentence here would tell the user they are about to
+ * kill a session when they are only out of room on screen.
+ */
+export const AT_TILE_CAP =
+  'This worktree already has as many panes as fit on one screen. Close or merge one to split another.';
+
 /** What the shell spawns at, corrected as soon as the pane has measured itself. */
 const SPAWN_ROWS = 24;
 const SPAWN_COLS = 100;
@@ -315,6 +325,13 @@ export interface Pane {
    */
   detached: boolean;
 }
+
+/** One orchestration run, for the rail and the agents dialog. */
+export type AgentRun = {
+  parent: Pane | null;
+  run: string;
+  children: Pane[];
+};
 
 let nextPaneId = 0;
 
@@ -542,6 +559,45 @@ class Sessions {
     return this.panes.filter((pane) => pane.parentSession === session);
   }
 
+  /** Delegated children in a worktree, in announcement order. */
+  delegatedIn(worktreeId: string): Pane[] {
+    return this.panes.filter(
+      (pane) => pane.worktreeId === worktreeId && pane.parentSession !== null,
+    );
+  }
+
+  /**
+   * Group those children by run, for the rail and the agents dialog.
+   *
+   * One place rather than two copies. The key is `run`, then the parent, then the pane — the
+   * same fallback both views already used, so a child announced without a run id still sits
+   * with its siblings instead of becoming its own group of one.
+   */
+  runsIn(worktreeId: string): AgentRun[] {
+    const grouped = new Map<string, AgentRun>();
+    for (const child of this.delegatedIn(worktreeId)) {
+      const key = child.run ?? child.parentSession ?? child.id;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.children.push(child);
+        continue;
+      }
+      grouped.set(key, {
+        parent: child.parentSession ? this.paneBySession(child.parentSession) : null,
+        run: key,
+        children: [child],
+      });
+    }
+    return [...grouped.values()];
+  }
+
+  /** Catalogue label, or the raw provider id, or "Shell". */
+  labelOf(pane: Pane): string {
+    const kind = pane.kind;
+    if (kind.kind !== 'agent') return 'Shell';
+    return this.options.find((option) => option.id === kind.provider)?.label ?? kind.provider;
+  }
+
   /**
    * Give a run a name that survives its neighbours being closed.
    *
@@ -714,9 +770,35 @@ class Sessions {
    * teardown for a session id the app has already forgotten and put its error in the banner.
    */
   private dropReleased(released: string[]): void {
+    // Descendants too. Rust's `close_agents` now closes the whole settled subtree, but a
+    // grandchild the announcement missed would otherwise stay as a pane pointing at a parent
+    // that is gone — the orphan `close()` exists to prevent. Extra ids get an IPC close in
+    // case their process is still up; announced ones do not, because those processes are gone
+    // and a second teardown puts its error in the banner.
+    const closing = new Set(released);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const pane of this.panes) {
+        if (
+          pane.session !== null &&
+          pane.parentSession !== null &&
+          closing.has(pane.parentSession) &&
+          !closing.has(pane.session)
+        ) {
+          closing.add(pane.session);
+          grew = true;
+        }
+      }
+    }
     const gone = this.panes.filter(
-      (pane) => pane.session !== null && released.includes(pane.session),
+      (pane) => pane.session !== null && closing.has(pane.session),
     );
+    for (const pane of gone) {
+      if (pane.session && !released.includes(pane.session)) {
+        void commands.closeAgentSession(pane.session).catch(() => {});
+      }
+    }
     if (gone.length === 0) return;
 
     const ids = new Set(gone.map((pane) => pane.id));
@@ -1524,6 +1606,7 @@ class Sessions {
       return;
     }
     if (split) {
+      if (!this.hasTileRoom(pane.worktreeId)) return;
       this.place(pane.worktreeId, paneId, 'right');
       return;
     }
@@ -1540,6 +1623,7 @@ class Sessions {
         ? focused
         : null) ?? (parent && tiles.includes(parent.id) ? parent.id : tiles.at(0));
     if (!target) {
+      if (!this.hasTileRoom(pane.worktreeId)) return;
       this.place(pane.worktreeId, paneId, 'right');
       return;
     }
@@ -1581,6 +1665,18 @@ class Sessions {
   }
 
   /**
+   * Whether another *tile* fits. Not a process: splitting a delegated child does not start one.
+   *
+   * `hasRoom` also checks the global process cap, which would refuse a split in a window that
+   * already has eight user-opened CLIs even though this call adds none.
+   */
+  private hasTileRoom(worktreeId: string): boolean {
+    const room = panesOf(this.layoutFor(worktreeId)).length < MAX_PANES_PER_WORKTREE;
+    this.noteCapacity(room, AT_TILE_CAP);
+    return room;
+  }
+
+  /**
    * Whether a pane that is already on screen may be given a process.
    *
    * Distinct from `hasRoom` because a detached pane is already counted by it, so a worktree
@@ -1617,9 +1713,9 @@ class Sessions {
    * click did nothing at all. `error` has a banner that is always mounted; the flag stays for the
    * empty state's own copy.
    */
-  private noteCapacity(room: boolean): void {
+  private noteCapacity(room: boolean, message: string = AT_CAPACITY): void {
     this.atCapacity = !room;
-    if (!room) this.error = AT_CAPACITY;
+    if (!room) this.error = message;
   }
 
   /**
@@ -1631,7 +1727,7 @@ class Sessions {
    */
   private clearCapacity(): void {
     this.atCapacity = false;
-    if (this.error === AT_CAPACITY) this.error = null;
+    if (this.error === AT_CAPACITY || this.error === AT_TILE_CAP) this.error = null;
   }
 
   /**
@@ -1991,10 +2087,14 @@ class Sessions {
    * a process in `ps`. Closing an orchestrator is also an unambiguous statement about the work: the
    * conversation that asked for those reviews is over.
    *
-   * Depth-first, so a child that ran its own delegation takes its grandchildren too.
+   * Depth-first, so a child that ran its own delegation takes its grandchildren too. The `/btw`
+   * side pane is the same shape on a different link — `sideOf`, not `parentSession` — and without
+   * this it survived as a CLI whose overlay had unmounted with the parent.
    */
   async close(paneId: string): Promise<void> {
     const closing = this.paneById(paneId);
+    const side = this.sideFor(paneId);
+    if (side) await this.close(side.id);
     for (const child of this.childrenOf(closing?.session ?? null)) {
       await this.close(child.id);
     }

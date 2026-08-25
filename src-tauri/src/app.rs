@@ -1068,7 +1068,12 @@ impl App {
     /// Forgetting is the load-bearing half, exactly as it is in [`Self::close_shell`]: `close`
     /// returns once the group has been signalled rather than once the child is reaped, so a
     /// re-open would otherwise be handed the id of a dying session.
+    ///
+    /// The handoff token goes in the same moment, even when there is no live process: a token
+    /// that outlived its session was one UUID and `Caller` per pane until the worktree died, and
+    /// the only thing that can still present it is a CLI we just signalled to exit.
     pub fn close_agent(&self, session: &str) -> bool {
+        self.handoff.forget_session(session);
         let id = wtm_core::model::SessionId::new(session);
         let Some(entry) = self.agents.lock().remove(&id) else {
             return false;
