@@ -31,6 +31,15 @@
    * And a denied plan is not a refusal, it is a revision request: the agent is going to write
    * another one, and the only thing that makes the next one better is being told what was wrong.
    * So `deny` carries a message here where elsewhere it carries `null`.
+   *
+   * # Why a question can be declined
+   *
+   * `user_input` used to have exactly one verb, disabled until every question was answered — which
+   * assumed the reader always has an answer. Often they have a question instead, and there was
+   * nowhere to put it: the composer's Send is a Stop while the turn is in flight, so the only exit
+   * was to interrupt and lose the question. `Discuss first` is a `deny` carrying the notes field,
+   * and it is the same shape as the plan's `Request changes` for the same reason — a refusal whose
+   * whole purpose is to be read.
    */
   import type { ApprovalAnswer, ApprovalRequest } from '../ipc/types';
   import Markdown from './Markdown.svelte';
@@ -135,6 +144,25 @@
     otherSelected = { ...otherSelected, [questionId]: checked };
     if (!multiple && checked) selections = { ...selections, [questionId]: [] };
     if (!checked) other = { ...other, [questionId]: '' };
+  }
+
+  /**
+   * What goes back when the user would rather talk than choose.
+   *
+   * A default rather than `null`, for the reason `plan_review`'s denial gives: the adapter turns a
+   * null message into "Denied in wtm", which is true of any refusal and tells a model nothing about
+   * what to do next. Here the whole point is to be read — the answer to a declined question is a
+   * conversation, and a model that reads "denied" will simply ask again.
+   *
+   * The notes box carries the follow-up. It is already on screen, already cleared per request by
+   * the `requestKey` effect, and typing the question you have *while looking at* the questions you
+   * were asked is the natural motion. Empty is fine: "they want to discuss it" is itself actionable.
+   */
+  function discuss(): string {
+    const head =
+      'The user does not want to pick from these options yet — they have follow-up questions. Do not call AskUserQuestion again right now. Answer them in the conversation first, and ask again once it is settled.';
+    const extra = notes.trim();
+    return extra === '' ? head : `${head}\n\nThey said: ${extra}`;
   }
 
   function submitAnswers() {
@@ -283,7 +311,7 @@
       <textarea
         class="c-textarea"
         rows="2"
-        placeholder="Add context, constraints, or a custom response"
+        placeholder="Add context, constraints, or the question you want to ask instead"
         bind:value={notes}></textarea>
     </label>
   {/if}
@@ -316,17 +344,49 @@
       <Button variant="accent" size="sm" disabled={!complete} onclick={submitAnswers}>
         Submit answer
       </Button>
-    {:else if request.kind === 'plan_review'}
-      <!-- First, ahead of Approve. Reading the plan is the step this card is asking you to take,
-           and putting it after the approve button implies the reverse order. -->
+      <span class="c-approval__divider" aria-hidden="true"></span>
+      <!--
+        The only way out of a question, and until now there wasn't one.
+
+        This card had a single control, disabled until *every* question was answered — so two
+        questions could not be half-answered, notes could not be sent alone, and there was no
+        decline. Meanwhile the composer's Send is replaced by Stop while a turn is in flight, so
+        the one visible exit was to interrupt the turn and lose the question with it. A person who
+        has a question *about* the question was cornered.
+
+        `deny` rather than a new verb: the protocol already carries it end to end and Claude accepts
+        it for `AskUserQuestion` like any other tool, so this is a button, not a wire change. It is
+        `neutral` and not `danger-outline` — unlike the Deny beside a command, declining to choose
+        refuses nothing and destroys nothing. It just moves the conversation back into the
+        transcript, which is where a question about a question belongs.
+      -->
       <Button
         variant="neutral"
         size="sm"
-        title="Show the whole plan beside the transcript"
-        onclick={() => onread?.()}
+        title="Ask about these options instead of picking one. The agent replies in the transcript, and can ask again after."
+        onclick={() => onanswer({ kind: 'deny', message: discuss() })}
       >
-        {reading ? 'Hide the plan' : 'Read the plan'}
+        Discuss first
       </Button>
+    {:else if request.kind === 'plan_review'}
+      <!-- First, ahead of Approve. Reading the plan is the step this card is asking you to take,
+           and putting it after the approve button implies the reverse order.
+
+           Only where a panel exists to open. The pane that owns the plan supplies `onread`; a card
+           relayed into *another* pane — a delegated child's plan, shown to its orchestrator — has
+           no panel beside it, and the button would have been a control that does nothing. The
+           document is still readable, because the body below renders it inline whenever the panel
+           is closed. -->
+      {#if onread}
+        <Button
+          variant="neutral"
+          size="sm"
+          title="Show the whole plan beside the transcript"
+          onclick={() => onread?.()}
+        >
+          {reading ? 'Hide the plan' : 'Read the plan'}
+        </Button>
+      {/if}
       <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}>
         Approve
       </Button>

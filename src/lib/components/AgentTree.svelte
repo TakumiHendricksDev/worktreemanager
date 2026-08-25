@@ -1,9 +1,37 @@
 <script lang="ts">
-  /** WTM-owned delegated sessions, kept compact so a twenty-agent run still fits. */
+  /**
+   * WTM-owned delegated sessions, as one line.
+   *
+   * # Why this is a summary and not the list
+   *
+   * It was the list, and a twenty-agent run turned it into a horizontal scroll with the twentieth
+   * child three screens to the right of the first. Widening it was not available — this band sits
+   * above every pane in the worktree, so every row it gains is a row the sessions lose.
+   *
+   * So it answers the two questions that are worth interrupting the panes for — *is anything
+   * running* and *does anything need me* — and hands the rest to `AgentsDialog`. That is the same
+   * split the sidebar already makes with the Inspector, and `Inspector.svelte`'s header records
+   * why the alternative is wrong: a persistent list would be a third region competing for
+   * `min-height: 0`, and it would need a `z-index` this app does not spend.
+   *
+   * The two counts it does carry are `needs you` and `failed`, and they are here rather than only in
+   * the dialog for the reason the transcript's step group states: a summary must not be able to hide
+   * a blocked or broken member.
+   */
   import { panesOf } from '../state/layout.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
+  import { STATUS_WORD } from '../status';
+  import Button from './ui/Button.svelte';
+  import SessionDot from './ui/SessionDot.svelte';
 
-  const { worktreeId }: { worktreeId: string } = $props();
+  const {
+    worktreeId,
+    onbrowse,
+  }: {
+    worktreeId: string;
+    /** Open the full list. The rail deliberately cannot show it. */
+    onbrowse: () => void;
+  } = $props();
 
   const children = $derived(
     sessions.panes.filter(
@@ -31,6 +59,30 @@
     return [...grouped.values()];
   });
 
+  /** How many runs fit before the rail stops naming them individually. */
+  const MAX_RUNS = 3;
+  const shown = $derived(groups.slice(0, MAX_RUNS));
+  const hidden = $derived(groups.length - shown.length);
+
+  /*
+   * The same two counts as the per-run tallies, across everything, and not a duplicate of them.
+   *
+   * These were per-run at first, inside `__runs`, and that was the wrong place twice over. `__runs`
+   * clips rather than scrolls — a rail that needs a scrollbar has already failed at being
+   * glanceable — so the last run's tally is the first thing to go when three runs do not fit, which
+   * is exactly backwards: a blocked child is the one fact this band exists to carry. And a per-run
+   * count answers *which* run, which is a question the dialog is for.
+   *
+   * So: one total, outside the clipping container, beside the button that opens the list. Nothing
+   * can push it off, and it says the only thing the rail needs to say.
+   */
+  const blocked = $derived(
+    children.filter((child) => sessions.statusOfPane(child) === 'attention').length,
+  );
+  const broken = $derived(
+    children.filter((child) => sessions.statusOfPane(child) === 'failed').length,
+  );
+
   function provider(pane: Pane): string {
     const kind = pane.kind;
     if (kind.kind !== 'agent') return 'Shell';
@@ -39,19 +91,11 @@
     );
   }
 
-  function state(pane: Pane): 'queued' | 'running' | 'waiting' | 'done' | 'failed' {
-    if (pane.error || (pane.ended && !pane.ended.toLowerCase().includes('success')))
-      return 'failed';
-    if (pane.approvals.length > 0) return 'waiting';
-    if (pane.working) return 'running';
-    if (pane.ended || pane.lastTurnFinished) return 'done';
-    return 'queued';
-  }
-
-  function stateClass(
-    pane: Pane,
-  ): 'is-queued' | 'is-running' | 'is-waiting' | 'is-done' | 'is-failed' {
-    return `is-${state(pane)}`;
+  /** Everything the chip does not have room for, so hovering still answers it. */
+  function detail(child: Pane): string {
+    const status = STATUS_WORD[sessions.statusOfPane(child)] || 'idle';
+    const model = child.model ? ` · ${child.model}` : '';
+    return `${child.agentTitle ?? provider(child)} · ${provider(child)}${model} · ${status}`;
   }
 </script>
 
@@ -59,49 +103,60 @@
   <nav class="c-agent-tree" aria-label="Delegated agents">
     <span class="c-agent-tree__heading">Agents</span>
     <div class="c-agent-tree__runs">
-      {#each groups as group, runIndex (group.run)}
+      {#each shown as group (group.run)}
         <div class="c-agent-tree__run">
-          <span class="c-agent-tree__run-label">Run {runIndex + 1}</span>
+          <span class="c-agent-tree__run-label">{sessions.runLabel(group.run)}</span>
           {#if group.parent}
+            <!-- The way back into the conversation that started this. Named as such, because as a
+                 bare provider label it read as a filter rather than a destination. -->
             <button
               class="c-agent-tree__parent"
               class:is-selected={visible.has(group.parent.id)}
-              title="Show the orchestrating session"
+              title="Back to {provider(group.parent)}, the session that started this run"
               onclick={() => sessions.showRelated(group.parent?.id ?? '')}
             >
               {provider(group.parent)}
             </button>
             <span class="c-agent-tree__branch" aria-hidden="true">→</span>
           {/if}
-          {#each group.children as child (child.id)}
-            {@const childState = state(child)}
-            <span class="c-agent-tree__child">
-              <button
-                class="c-agent-tree__item"
-                class:is-selected={visible.has(child.id)}
-                title="Show {child.agentTitle ?? provider(child)}"
-                onclick={() => sessions.showRelated(child.id)}
-              >
-                <span class="c-agent-tree__dot {stateClass(child)}" aria-hidden="true"
-                ></span>
-                <span class="c-agent-tree__label"
-                  >{child.agentTitle ?? provider(child)}</span
-                >
-                {#if child.model}<span class="c-agent-tree__model">{child.model}</span>{/if}
-                <span class="c-agent-tree__state">{childState}</span>
-              </button>
-              {#if !visible.has(child.id)}
-                <button
-                  class="c-agent-tree__split"
-                  title="Open this child in a split"
-                  aria-label="Open {child.agentTitle ?? provider(child)} in a split"
-                  onclick={() => sessions.showRelated(child.id, true)}>split</button
-                >
-              {/if}
-            </span>
-          {/each}
+          {#if group.children.length === 1 && group.children[0]}
+            <!-- One child is the `ask_agent` case, and it has a name worth showing. A count of one
+                 would be strictly less information in the same space. -->
+            {@const only = group.children[0]}
+            <button
+              class="c-agent-tree__item"
+              class:is-selected={visible.has(only.id)}
+              title={detail(only)}
+              onclick={() => sessions.showRelated(only.id)}
+            >
+              <SessionDot status={sessions.statusOfPane(only)} />
+              <span class="c-agent-tree__label">{only.agentTitle ?? provider(only)}</span>
+            </button>
+          {:else}
+            <button
+              class="c-agent-tree__item"
+              title="Show all {group.children.length} agents in this run"
+              onclick={onbrowse}
+            >
+              <span class="c-agent-tree__label">{group.children.length} agents</span>
+            </button>
+          {/if}
         </div>
       {/each}
+      {#if hidden > 0}
+        <span class="c-agent-tree__run-label">+{hidden} more</span>
+      {/if}
     </div>
+    {#if blocked > 0}
+      <span class="c-agent-tree__tally c-agent-tree__tally--attention">
+        {blocked} needs you
+      </span>
+    {/if}
+    {#if broken > 0}
+      <span class="c-agent-tree__tally c-agent-tree__tally--failed">{broken} failed</span>
+    {/if}
+    <Button variant="quiet" size="sm" onclick={onbrowse}>
+      All agents ({children.length})
+    </Button>
   </nav>
 {/if}

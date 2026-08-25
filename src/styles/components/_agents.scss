@@ -1,0 +1,82 @@
+/*
+ * The delegated-agent list, inside a dialog.
+ *
+ * A grid rather than a flex row per line, and that is the whole reason this file exists: the
+ * columns have to align down the list or twenty rows read as twenty unrelated pills. `auto` for the
+ * dot, `1fr` for the name so it takes the slack and truncates, and content widths for the rest.
+ *
+ * The verbs sit in the last column rather than on hover. A row here is the *only* way to reach a
+ * child that never took a tile — before this dialog existed, closing one meant showing it first,
+ * because closing lived in a pane header the child did not have — so hiding the verbs behind a
+ * pointer would put the one route to a session somewhere a keyboard cannot go.
+ */
+.c-agents__run {
+  min-width: 0;
+}
+
+.c-agents__run-note {
+  margin-left: var(--sp-2);
+  color: var(--fg-subtle);
+  font-weight: 400;
+  /* The heading is uppercased; the count beside it is prose and should not be. */
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.c-agents__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-agents__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+
+/* The one already on screen. A left edge rather than a fill: the row is still a row, and a filled
+   background here would compete with the dot for the same job. */
+.c-agents__row.is-selected {
+  border-left: 2px solid var(--accent);
+}
+
+.c-agents__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.c-agents__meta,
+.c-agents__status {
+  color: var(--fg-subtle);
+  font-size: var(--step--1);
+}
+
+.c-agents__model {
+  margin-left: var(--sp-1);
+  font-family: var(--font-mono);
+}
+
+.c-agents__actions {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+/* One column each on a narrow window: five columns in a dialog that is already `wide` is a row
+   nobody can read, and the actions are what get squeezed out first. */
+@media (max-width: 40rem) {
+  .c-agents__row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .c-agents__actions {
+    grid-column: 1 / -1;
+  }
+}

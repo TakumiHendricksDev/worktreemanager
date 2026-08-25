@@ -84,12 +84,30 @@ const HANDOFF_TIMEOUT_MS: u64 = 600_000;
 /// How long to wait between checks while a handoff runs, in milliseconds.
 const HANDOFF_POLL_MS: u64 = 100;
 
+/// Which of the socket's jobs a request is.
+///
+/// An enum with a default rather than a second socket message type, because the two share the token
+/// — the whole authorization story — and a request that could not name a worktree must not suddenly
+/// be able to name a session either. `Delegate` is the default so a bridge from an older build,
+/// which sends no `action` at all, still means what it always meant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Action {
+    #[default]
+    Delegate,
+    /// Close the caller's own finished children.
+    CloseChildren,
+}
+
 /// What the bridge asks the app to do.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Request {
     /// Which session is asking. Resolves to a project and a worktree.
     pub token: String,
+    /// What the caller wants done. Absent means a delegation, which is what every older bridge sends.
+    #[serde(default)]
+    pub action: Action,
     /// The agent to hand the prompt to, by catalogue id.
     #[serde(default)]
     pub agent: String,
@@ -187,7 +205,20 @@ pub struct Caller {
     pub session: Option<String>,
 }
 
-/// The token registry and the socket that reaches it.
+/// One session a delegation opened, remembered so its parent can close it again.
+#[derive(Debug, Clone)]
+pub struct Child {
+    pub session: String,
+    pub worktree: String,
+    /// False until the turn this child was opened for has finished.
+    ///
+    /// The only turn state anything here can honestly claim. It is set by the handoff that opened
+    /// the child, so it says "the work I asked for is done" — not "nobody is talking to it", which
+    /// would need turn tracking the app does not keep. See [`Hub::settled_children`].
+    pub settled: bool,
+}
+
+/// The token registry, the parentage it implies, and the socket that reaches them.
 ///
 /// Owned by [`App`] and consulted from the listener thread, so it is a plain mutex-guarded map
 /// rather than anything cleverer — a handoff happens at human speed, and the lock is held only long
@@ -195,6 +226,13 @@ pub struct Caller {
 #[derive(Debug, Default)]
 pub struct Hub {
     tokens: parking_lot::Mutex<BTreeMap<String, Caller>>,
+    /// Children by parent session id.
+    ///
+    /// Kept here rather than derived from the app's session map because parentage is not a property
+    /// of a session — `AgentEntry` records a worktree, not who asked for it. The frontend has the
+    /// same fact on its panes, but a tool call arrives on the socket thread and never goes near the
+    /// webview, so the answer has to exist on this side too.
+    children: parking_lot::Mutex<BTreeMap<String, Vec<Child>>>,
 }
 
 impl Hub {
@@ -231,13 +269,73 @@ impl Hub {
         }
     }
 
-    /// Forget every token issued for a worktree.
+    /// Remember that a delegation opened this session, so its parent can close it later.
+    ///
+    /// Skipped for a parentless caller — a session whose own id was not bound yet cannot be handed
+    /// its children back, and inventing a key for it would make the first delegation of a run
+    /// unclosable while the rest were fine.
+    pub fn record_child(&self, parent: Option<&str>, child: Child) {
+        let Some(parent) = parent else { return };
+        self.children
+            .lock()
+            .entry(parent.to_owned())
+            .or_default()
+            .push(child);
+    }
+
+    /// Mark a child's delegated turn finished, so it becomes closable.
+    pub fn settle_child(&self, session: &str) {
+        for children in self.children.lock().values_mut() {
+            for child in children.iter_mut().filter(|c| c.session == session) {
+                child.settled = true;
+            }
+        }
+    }
+
+    /// A parent's children, split into the ones it may close and the count it may not.
+    ///
+    /// The split is the whole design of `close_agents`. A child whose delegated turn has not
+    /// returned is still doing the work it was asked for, and a tool that ends it would turn "tidy
+    /// up after yourself" into a way to cancel a sibling — quietly, since the caller of one
+    /// `spawn_agents` wave cannot see the others. So unsettled children are counted and reported,
+    /// never closed.
+    ///
+    /// What this deliberately cannot see is a child the *user* has since carried on talking to.
+    /// That would need per-session turn tracking the app does not keep, and the honest thing is to
+    /// say so here rather than to imply a guarantee: the tool's description tells the model to call
+    /// it when it is done with a run, and a session the user has adopted is one the user can close.
+    pub fn settled_children(&self, parent: &str) -> (Vec<Child>, usize) {
+        let guard = self.children.lock();
+        let Some(children) = guard.get(parent) else {
+            return (Vec::new(), 0);
+        };
+        let (settled, busy): (Vec<Child>, Vec<Child>) =
+            children.iter().cloned().partition(|c| c.settled);
+        (settled, busy.len())
+    }
+
+    /// Drop children from the parentage map once they are gone.
+    pub fn forget_children(&self, sessions: &[String]) {
+        let mut guard = self.children.lock();
+        for children in guard.values_mut() {
+            children.retain(|child| !sessions.contains(&child.session));
+        }
+        guard.retain(|_, children| !children.is_empty());
+    }
+
+    /// Forget every token issued for a worktree, and every child opened in it.
     ///
     /// Called when a worktree is removed, for the same reason the resume list is pruned then: every
     /// token names a path that no longer exists, so a handoff through one could only fail — and it
-    /// would fail *after* opening a pane, which is a worse way to find out.
+    /// would fail *after* opening a pane, which is a worse way to find out. The parentage map goes
+    /// with them; its sessions were killed by the same teardown.
     pub fn forget_worktree(&self, worktree: &str) {
         self.tokens.lock().retain(|_, c| c.worktree != worktree);
+        let mut children = self.children.lock();
+        for list in children.values_mut() {
+            list.retain(|child| child.worktree != worktree);
+        }
+        children.retain(|_, list| !list.is_empty());
     }
 
     /// How many tokens are outstanding. For tests.
@@ -355,6 +453,9 @@ impl wtm_agent::session::AgentSink for Capture {
 /// caller got its answer would destroy the transcript they wanted to read.
 pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Response {
     const MAX_TASKS: usize = 20;
+    if request.action == Action::CloseChildren {
+        return close_children(handle, app, &request.token);
+    }
     let tasks = if request.tasks.is_empty() {
         vec![Task {
             title: None,
@@ -472,7 +573,13 @@ fn run_task(
         ));
     }
 
-    match wait(app, &rx) {
+    // Whatever `wait` returns, the work this child was opened for is over — a timeout and a death
+    // leave it just as closable as a clean answer, and a child that stayed unsettled because its
+    // turn failed would be one `close_agents` could never reach.
+    let outcome = wait(app, &rx);
+    app.handoff.settle_child(session.as_str());
+
+    match outcome {
         Ok(()) => {
             let text = capture.collected();
             if text.trim().is_empty() {
@@ -606,7 +713,80 @@ fn open_pane(
         },
     );
 
+    // After the announcement, because both need the same two ids and the frontend is the one that
+    // cannot wait. Unsettled until the turn returns; see `Hub::settled_children`.
+    app.handoff.record_child(
+        caller.session.as_deref(),
+        Child {
+            session: session.as_str().to_owned(),
+            worktree: caller.worktree.clone(),
+            settled: false,
+        },
+    );
+
     Ok((session, capture, rx))
+}
+
+/// End the caller's own finished children.
+///
+/// # Why the caller cannot name them
+///
+/// There is no session parameter, and that is the same decision the worktree is not a parameter:
+/// the token says who is asking, and everything this tool can reach follows from that. A model is
+/// never told its children's ids — they do not appear in a tool result — so adding a parameter
+/// would mean publishing identifiers purely to let them be passed back, and every one published is
+/// something a confused or hostile prompt can aim at a pane the user opened themselves.
+///
+/// "Close the ones I started and that have finished" needs no identifiers at all.
+fn close_children(handle: &tauri::AppHandle, app: &Arc<App>, token: &str) -> Response {
+    let Some(caller) = app.handoff.resolve(token) else {
+        tracing::warn!("a close request arrived with an unknown token");
+        return Response::failed("this session is not registered for handoffs any more");
+    };
+    let Some(parent) = caller.session.as_deref() else {
+        return Response::failed("this session has not started any agents");
+    };
+
+    let (settled, busy) = app.handoff.settled_children(parent);
+    if settled.is_empty() {
+        return Response::ok(if busy == 0 {
+            "There are no delegated sessions to close.".to_owned()
+        } else {
+            format!("Nothing was closed: all {busy} delegated sessions are still working.")
+        });
+    }
+
+    let closed: Vec<String> = settled
+        .iter()
+        .map(|child| child.session.clone())
+        .inspect(|session| {
+            // `close_agent` reports whether it found a live session, and a `false` is not a failure
+            // here: a child whose CLI already exited is exactly as closed as one this ended, and
+            // the pane has to go either way.
+            app.close_agent(session);
+        })
+        .collect();
+    app.handoff.forget_children(&closed);
+    // The frontend holds a pane per child and nothing else would tell it these are gone —
+    // `close_agent` emits nothing, and an exit event arrives per session at best.
+    crate::agent_bridge::announce_released(handle, &closed);
+
+    tracing::info!(
+        parent,
+        closed = closed.len(),
+        busy,
+        "closed delegated sessions"
+    );
+    let mut text = format!(
+        "Closed {} delegated session{}.",
+        closed.len(),
+        if closed.len() == 1 { "" } else { "s" }
+    );
+    if busy > 0 {
+        use std::fmt::Write as _;
+        let _ = write!(text, " {busy} left running because they have not finished.");
+    }
+    Response::ok(text)
 }
 
 /// Block until the turn is done, the session dies, or the deadline passes.
@@ -819,6 +999,109 @@ mod tests {
         capture.on_event(&session, &message("streamed answer"));
 
         assert_eq!(capture.collected(), "streamed answer");
+    }
+
+    fn child(session: &str, worktree: &str) -> Child {
+        Child {
+            session: session.to_owned(),
+            worktree: worktree.to_owned(),
+            settled: false,
+        }
+    }
+
+    #[test]
+    fn a_parent_can_only_ever_be_handed_back_its_own_children() {
+        // The authorization story for `close_agents`, and the reason the tool has no parameters.
+        // Two orchestrators in one worktree must not be able to end each other's work, and the only
+        // thing keeping them apart is that a token resolves to exactly one session id.
+        let hub = Hub::default();
+        hub.record_child(Some("parent-a"), child("child-1", "wt-a"));
+        hub.record_child(Some("parent-b"), child("child-2", "wt-a"));
+        hub.settle_child("child-1");
+        hub.settle_child("child-2");
+
+        let (mine, _) = hub.settled_children("parent-a");
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].session, "child-1");
+
+        let (none, busy) = hub.settled_children("parent-c");
+        assert!(none.is_empty(), "an unknown parent owns nothing");
+        assert_eq!(busy, 0);
+    }
+
+    #[test]
+    fn a_child_still_working_is_counted_rather_than_offered_for_closing() {
+        // Half a wave finishing must not become a way to cancel the other half. `close_agents` is
+        // described as safe to call mid-run, and this is the property that makes that true.
+        let hub = Hub::default();
+        hub.record_child(Some("parent"), child("done", "wt-a"));
+        hub.record_child(Some("parent"), child("running", "wt-a"));
+        hub.settle_child("done");
+
+        let (settled, busy) = hub.settled_children("parent");
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].session, "done");
+        assert_eq!(busy, 1, "the unfinished child is reported, not closed");
+    }
+
+    #[test]
+    fn a_childless_parent_is_not_an_error() {
+        // A session that never delegated will still call this if it is told to tidy up, and the
+        // answer is "nothing to do" rather than a tool error a model has to interpret.
+        let hub = Hub::default();
+        let (settled, busy) = hub.settled_children("parent");
+        assert!(settled.is_empty());
+        assert_eq!(busy, 0);
+    }
+
+    #[test]
+    fn removing_a_worktree_forgets_its_children_along_with_its_tokens() {
+        // The teardown path kills those sessions, so a map that kept naming them would hand
+        // `close_agents` ids belonging to processes that are already gone — and, once ids are
+        // reused, potentially to something else entirely.
+        let hub = Hub::default();
+        hub.issue(caller("wt-a"));
+        hub.record_child(Some("parent"), child("child-a", "wt-a"));
+        hub.record_child(Some("parent"), child("child-b", "wt-b"));
+
+        hub.forget_worktree("wt-a");
+
+        let (_, _) = hub.settled_children("parent");
+        hub.settle_child("child-b");
+        let (settled, _) = hub.settled_children("parent");
+        assert_eq!(settled.len(), 1, "only the surviving worktree's child");
+        assert_eq!(settled[0].session, "child-b");
+        assert!(hub.is_empty(), "the worktree's tokens go with it");
+    }
+
+    #[test]
+    fn forgetting_the_children_that_were_closed_empties_the_parent() {
+        // Called right after `close_agent`, so a second `close_agents` in the same turn reports
+        // nothing to do rather than trying to end sessions that have already ended.
+        let hub = Hub::default();
+        hub.record_child(Some("parent"), child("child-a", "wt-a"));
+        hub.settle_child("child-a");
+
+        hub.forget_children(&["child-a".to_owned()]);
+
+        let (settled, busy) = hub.settled_children("parent");
+        assert!(settled.is_empty());
+        assert_eq!(busy, 0);
+    }
+
+    #[test]
+    fn a_caller_whose_session_id_is_not_bound_yet_records_no_children() {
+        // `record_child` is handed `caller.session`, which is `None` between the token being issued
+        // and the provider process starting. Storing those under a placeholder key would pool every
+        // unbound caller's children together, which is the one way this map could hand a parent
+        // somebody else's session.
+        let hub = Hub::default();
+        hub.record_child(None, child("orphan", "wt-a"));
+        hub.settle_child("orphan");
+
+        let (settled, busy) = hub.settled_children("");
+        assert!(settled.is_empty(), "nothing is filed under an empty parent");
+        assert_eq!(busy, 0);
     }
 
     #[test]

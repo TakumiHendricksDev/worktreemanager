@@ -85,6 +85,16 @@ function eventBytes(event: AgentEvent): number {
 export const MAX_PANES_PER_WORKTREE = 4;
 export const MAX_PANES = 8;
 
+/**
+ * What a refused pane says.
+ *
+ * A constant for two reasons: `clearCapacity` compares against it to tell this banner from any
+ * other error the store reports, and the surface's empty state says the same thing, which is one
+ * sentence too many to keep in two files.
+ */
+export const AT_CAPACITY =
+  'As many sessions are open as wtm keeps alive. Close one to start another — it refuses rather than ending a session that may be mid-turn.';
+
 /** What the shell spawns at, corrected as soon as the pane has measured itself. */
 const SPAWN_ROWS = 24;
 const SPAWN_COLS = 100;
@@ -448,6 +458,21 @@ class Sessions {
   atCapacity = $state(false);
 
   /**
+   * What to call each delegated run, by run id.
+   *
+   * The rail used to label a run by its index in the rendered list, which was fine while nothing
+   * ever removed one. Closing a run is now an ordinary thing for an orchestrator to do, and an
+   * index renumbers Run 2 into Run 1 the moment Run 1 goes — so the label would name a different
+   * batch than the one the user was just reading about.
+   *
+   * Assigned on first sight and never reclaimed: the numbers are a naming scheme, not a count, and
+   * reusing a retired one is the same bug in slower motion. Not persisted, because `restore` walks
+   * the stored panes in order and re-numbering them from one is indistinguishable from the
+   * original assignment.
+   */
+  runOrdinals = $state<Record<string, number>>({});
+
+  /**
    * Bumped whenever the user asks for a pane's focus, so the surface knows to move it.
    *
    * A counter, because two requests in a row must both be seen, and because the alternative is an
@@ -509,6 +534,52 @@ class Sessions {
   /** The status of one pane, for its own header. */
   statusOfPane(pane: Pane): PaneStatus {
     return statusOf(facts(pane));
+  }
+
+  /** Delegated children of a session, in the order they were announced. */
+  childrenOf(session: string | null): Pane[] {
+    if (session === null) return [];
+    return this.panes.filter((pane) => pane.parentSession === session);
+  }
+
+  /**
+   * Give a run a name that survives its neighbours being closed.
+   *
+   * Idempotent, so `restore` can call it per stored pane without caring how many share a run.
+   */
+  private numberRun(run: string | null): void {
+    if (run === null || run in this.runOrdinals) return;
+    const used = Object.values(this.runOrdinals);
+    this.runOrdinals = {
+      ...this.runOrdinals,
+      [run]: (used.length === 0 ? 0 : Math.max(...used)) + 1,
+    };
+  }
+
+  /** What to call a run in the rail and the dialog. */
+  runLabel(run: string): string {
+    return `Run ${this.runOrdinals[run] ?? 1}`;
+  }
+
+  /**
+   * A delegated child's pending approvals, so its orchestrator can answer them.
+   *
+   * # Why the parent answers at all
+   *
+   * Because a six-way fan-out otherwise costs six pane visits to get past six `Bash` prompts, and
+   * the panes are not even on screen — a child holds no tile until it is selected. Nothing about
+   * an approval requires its pane to be visible: it lives on `pane.approvals` and `answer` takes a
+   * pane id, so the only thing that was missing is somewhere to render it.
+   *
+   * Ordered by child and then by that child's own queue, which is announcement order twice over.
+   * Not by arrival time across the fan-out: a `PendingApproval` carries no timestamp, and adding
+   * one to sort a list that is nearly always length one would be a field maintained for a tiebreak
+   * nobody can perceive. Grouping a chatty child's prompts together is the better failure anyway.
+   */
+  delegatedApprovals(session: string | null): { pane: Pane; approval: PendingApproval }[] {
+    return this.childrenOf(session).flatMap((pane) =>
+      pane.approvals.map((approval) => ({ pane, approval })),
+    );
   }
 
   /**
@@ -589,6 +660,9 @@ class Sessions {
     const offSpawned = await listen<SpawnedSession>('agent:spawned', (e) => {
       this.adoptSpawned(e.payload);
     });
+    const offReleased = await listen<{ sessions: string[] }>('agent:released', (e) => {
+      this.dropReleased(e.payload.sessions);
+    });
 
     await this.refreshOptions();
 
@@ -628,7 +702,44 @@ class Sessions {
       offReady();
       offPtyExit();
       offSpawned();
+      offReleased();
     };
+  }
+
+  /**
+   * Drop panes for sessions Rust has already ended — the mirror of `adoptSpawned`.
+   *
+   * No IPC close, because there is nothing left to close: `close_agents` ran on the socket thread
+   * and the processes are gone by the time this fires. Calling `close` would send a second
+   * teardown for a session id the app has already forgotten and put its error in the banner.
+   */
+  private dropReleased(released: string[]): void {
+    const gone = this.panes.filter(
+      (pane) => pane.session !== null && released.includes(pane.session),
+    );
+    if (gone.length === 0) return;
+
+    const ids = new Set(gone.map((pane) => pane.id));
+    this.panes = this.panes.filter((pane) => !ids.has(pane.id));
+
+    // A released child usually holds no tile, but one that was shown or split does — and leaving a
+    // leaf pointing at a pane that no longer exists is what `remove` is for.
+    const layouts = { ...this.layouts };
+    const focused = { ...this.focused };
+    for (const pane of gone) {
+      const pruned = remove(layouts[pane.worktreeId] ?? null, pane.id);
+      layouts[pane.worktreeId] = pruned;
+      if (focused[pane.worktreeId] === pane.id) {
+        focused[pane.worktreeId] = panesOf(pruned).at(-1) ?? null;
+      }
+    }
+    this.layouts = layouts;
+    this.focused = focused;
+    for (const worktreeId of new Set(gone.map((pane) => pane.worktreeId))) {
+      this.remember(worktreeId);
+      void this.refreshResumable(worktreeId);
+    }
+    this.clearCapacity();
   }
 
   /**
@@ -661,6 +772,7 @@ class Sessions {
     pane.parentSession = spawned.parentSession;
     pane.run = spawned.run;
     pane.agentTitle = spawned.title;
+    this.numberRun(pane.run);
     this.panes = [...this.panes, pane];
 
     const live = this.paneById(pane.id);
@@ -676,7 +788,7 @@ class Sessions {
     // It is running, so it must stop being offered as resumable — the same correction `resume` makes.
     void this.refreshResumable(spawned.worktree);
     // A cap that refused a *user's* pane earlier should not keep saying so once this one appeared.
-    this.atCapacity = false;
+    this.clearCapacity();
   }
 
   /**
@@ -1174,6 +1286,9 @@ class Sessions {
         pane.parentSession = stored.parentSession ?? null;
         pane.run = stored.run ?? null;
         pane.agentTitle = stored.agentTitle ?? null;
+        // Re-numbered in stored order, which is the order they were announced in — so a restored
+        // rail reads the same as the one that was written, without the ordinals being persisted.
+        this.numberRun(pane.run);
         pane.detached = true;
         panes.push(pane);
       }
@@ -1414,9 +1529,16 @@ class Sessions {
     }
 
     const parent = pane.parentSession ? this.paneBySession(pane.parentSession) : null;
+    const tiles = panesOf(layout);
+    // Intersected with the layout rather than trusted. `focused` is written by `place` and by the
+    // arrow keys and is never validated against the tree, so it can name a pane that has since
+    // been closed — and `replacePane` rewrites nothing when its `from` is absent, returning a
+    // new-but-identical tree. The symptom was a rail item that highlighted and did nothing.
+    const focused = this.focused[pane.worktreeId];
     const target =
-      this.focused[pane.worktreeId] ??
-      (parent && panesOf(layout).includes(parent.id) ? parent.id : panesOf(layout).at(0));
+      (focused !== null && focused !== undefined && tiles.includes(focused)
+        ? focused
+        : null) ?? (parent && tiles.includes(parent.id) ? parent.id : tiles.at(0));
     if (!target) {
       this.place(pane.worktreeId, paneId, 'right');
       return;
@@ -1429,12 +1551,32 @@ class Sessions {
     this.remember(pane.worktreeId);
   }
 
-  /** Whether another pane can be opened here. Reports rather than throws, so callers can explain. */
+  /**
+   * Whether another pane can be opened here. Reports rather than throws, so callers can explain.
+   *
+   * # Why this counts tiles rather than pane records
+   *
+   * Because that is what the per-worktree cap is a statement about — how many panes fit on a
+   * screen — and the two stopped being the same thing when delegation shipped. A delegated child
+   * is a pane record with no layout node: it is deliberately not given a tile, and the agent rail
+   * is how it is reached. `panesIn` cannot see that distinction, so a `spawn_agents` run of three
+   * children in a worktree showing one session counted as four panes and refused every subsequent
+   * Shell, agent and resume in that worktree — silently, because a refusal returns rather than
+   * raising. `panesOf` counts leaves of the layout, which excludes children and `/btw` side panes
+   * for free while still counting a restored *detached* pane, which does hold a tile.
+   *
+   * The global cap keeps counting processes, because that is what *it* is a statement about — OS
+   * threads and event subscriptions. But it counts only panes the user opened: `ARCHITECTURE.md`
+   * §8 already carves out the exception that a delegated run "may own up to twenty child processes
+   * because that count is the requested feature", and that bound belongs where it is enforced, in
+   * `handoff.rs`'s `MAX_TASKS`, rather than being applied a second time here against a different
+   * budget. Without this the eighth child of one fan-out locked pane creation app-wide.
+   */
   private hasRoom(worktreeId: string): boolean {
     const room =
-      this.panesIn(worktreeId).length < MAX_PANES_PER_WORKTREE &&
-      running(this.panes) < MAX_PANES;
-    this.atCapacity = !room;
+      panesOf(this.layoutFor(worktreeId)).length < MAX_PANES_PER_WORKTREE &&
+      running(this.ownPanes()) < MAX_PANES;
+    this.noteCapacity(room);
     return room;
   }
 
@@ -1446,13 +1588,50 @@ class Sessions {
    * the two caps are *for* is what separates them: `MAX_PANES_PER_WORKTREE` bounds how many panes
    * fit on a screen and this pane already has its place, while `MAX_PANES` bounds OS threads and
    * event subscriptions, which is exactly what filling one adds.
+   *
+   * Both counts exclude delegated children for the reasons `hasRoom` records, and the per-worktree
+   * one intersects the layout with the pane list rather than reading `panesIn`: this one is asking
+   * how many tiles already have a process behind them.
    */
   private canFill(worktreeId: string): boolean {
+    const tiles = new Set(panesOf(this.layoutFor(worktreeId)));
+    const filled = this.panes.filter((pane) => tiles.has(pane.id));
     const room =
-      running(this.panesIn(worktreeId)) < MAX_PANES_PER_WORKTREE &&
-      running(this.panes) < MAX_PANES;
-    this.atCapacity = !room;
+      running(filled) < MAX_PANES_PER_WORKTREE && running(this.ownPanes()) < MAX_PANES;
+    this.noteCapacity(room);
     return room;
+  }
+
+  /** Panes the user opened. Delegated children are budgeted in `handoff.rs`; see `hasRoom`. */
+  private ownPanes(): Pane[] {
+    return this.panes.filter((pane) => pane.parentSession === null);
+  }
+
+  /**
+   * Record a cap's answer where the user can see it.
+   *
+   * The flag alone was not enough, and the way it failed is worth keeping: its one reader lived
+   * inside `SessionSurface`'s `{#if !activeLayout}` empty state — a branch that renders only when
+   * the worktree has no panes at all, which is the one situation in which you cannot be at the
+   * cap. So the explanation was unreachable in exactly the case it was written for, and a refused
+   * click did nothing at all. `error` has a banner that is always mounted; the flag stays for the
+   * empty state's own copy.
+   */
+  private noteCapacity(room: boolean): void {
+    this.atCapacity = !room;
+    if (!room) this.error = AT_CAPACITY;
+  }
+
+  /**
+   * Room appeared, so stop saying there is none.
+   *
+   * Only when the banner is still *this* message. The error slot is shared with every other
+   * failure the store reports, and closing a pane is not evidence that a failed spawn or an
+   * unreadable config has been dealt with.
+   */
+  private clearCapacity(): void {
+    this.atCapacity = false;
+    if (this.error === AT_CAPACITY) this.error = null;
   }
 
   /**
@@ -1803,8 +1982,26 @@ class Sessions {
    *
    * The only thing that discards a transcript *and the pane with it* — `restart` also clears the
    * transcript, but keeps the pane and its position, and leaves the conversation resumable.
+   *
+   * # Why this takes the delegated children with it
+   *
+   * Because nothing else can reach them once it has gone. A child holds no tile of its own, so the
+   * routes to one are the rail and the agents dialog, and both are drawn from the *parent* — an
+   * orphan is a live CLI with no control attached to it anywhere in the window, discovered later as
+   * a process in `ps`. Closing an orchestrator is also an unambiguous statement about the work: the
+   * conversation that asked for those reviews is over.
+   *
+   * Depth-first, so a child that ran its own delegation takes its grandchildren too.
    */
   async close(paneId: string): Promise<void> {
+    const closing = this.paneById(paneId);
+    for (const child of this.childrenOf(closing?.session ?? null)) {
+      await this.close(child.id);
+    }
+    await this.closeOne(paneId);
+  }
+
+  private async closeOne(paneId: string): Promise<void> {
     const pane = this.paneById(paneId);
     if (!pane) return;
 
@@ -1831,7 +2028,7 @@ class Sessions {
         [pane.worktreeId]: survivors.at(-1) ?? null,
       };
     }
-    this.atCapacity = false;
+    this.clearCapacity();
     this.remember(pane.worktreeId);
   }
 
@@ -1954,7 +2151,7 @@ class Sessions {
     const layouts = { ...this.layouts };
     for (const pane of doomed) delete layouts[pane.worktreeId];
     this.layouts = layouts;
-    this.atCapacity = false;
+    this.clearCapacity();
     // A worktree that has been removed outside the app is not coming back, so its surface goes too
     // — otherwise the next launch restores panes for a directory that no longer exists.
     for (const worktreeId of new Set(doomed.map((pane) => pane.worktreeId))) {

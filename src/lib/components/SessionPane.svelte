@@ -159,6 +159,40 @@
   /** The oldest unanswered approval. One at a time, in arrival order. */
   const blocking = $derived(pane.approvals[0] ?? null);
 
+  /** The session that delegated to this one, when it is still around to go back to. */
+  const origin = $derived.by(() => {
+    const parent = pane.parentSession ? sessions.paneBySession(pane.parentSession) : null;
+    if (!parent) return null;
+    const kind = parent.kind;
+    const label =
+      kind.kind === 'agent'
+        ? (sessions.options.find((o) => o.id === kind.provider)?.label ?? kind.provider)
+        : 'Shell';
+    return { id: parent.id, label };
+  });
+
+  /**
+   * A child's question, asked here.
+   *
+   * # Why the orchestrator answers for its children
+   *
+   * Because a six-way fan-out otherwise costs six pane visits to clear six `Bash` prompts — and the
+   * panes are not on screen to be visited: a delegated child holds no tile until it is selected, so
+   * "go and answer it" first means finding it. Nothing about an approval needed the pane to be
+   * visible; it lives on `pane.approvals` and `answer` takes a pane id. The only thing missing was
+   * somewhere to render it.
+   *
+   * # Why one at a time, and after this pane's own
+   *
+   * `ApprovalCard`'s header explains that an unanswered card is a stalled session, which is why it
+   * sits above the composer and cannot be scrolled past. Six of them stacked would bury the
+   * composer — the same failure in a new place. So this is a queue with a count, exactly as a
+   * single pane already treats its own approvals, and this pane's own question always outranks a
+   * child's: it is the one whose transcript is on screen.
+   */
+  const delegated = $derived(blocking ? [] : sessions.delegatedApprovals(pane.session));
+  const relayed = $derived(delegated[0] ?? null);
+
   /**
    * The plan a blocking approval is asking about, if that is what it is asking about.
    *
@@ -971,6 +1005,30 @@
       against Restart-on-ended.
     -->
       <div class="c-pane__actions">
+        <!--
+        The way out of a delegated child, and it is here rather than only in the rail because this
+        is where you are looking when you want it.
+
+        `showRelated` reaches a child by *replacing* the tile it was clicked from, which is what
+        keeps a twenty-agent run from tiling twenty panes — but it also means the session you came
+        from is no longer on screen anywhere. The rail did offer a way back, as a chip carrying the
+        provider's bare name, and that reads as a label rather than as a destination. It went
+        unfound.
+
+        First in the row, ahead of Restart, because it is the only one of these verbs that is
+        navigation rather than an action on the session in front of you.
+      -->
+        {#if origin}
+          <Button
+            variant="quiet"
+            size="sm"
+            title="Back to {origin.label}, the session that started this one"
+            onclick={() => sessions.showRelated(origin.id)}
+          >
+            ← {origin.label}
+          </Button>
+        {/if}
+
         {#if pane.ended || pane.error}
           <Button variant="neutral" size="sm" onclick={() => (confirmRestart = true)}>
             Restart
@@ -1105,6 +1163,41 @@
           onanswer={(answer) =>
             void sessions.answerAndKeep(pane.id, blocking.id, answer, blocking.request)}
         />
+      {/if}
+
+      {#if relayed}
+        <!-- A child's question, relayed. Captioned, because the card itself says nothing about
+             whose turn is stalled and answering the wrong agent's `rm -rf` is not a recoverable
+             misread. See `delegated` for why this is here at all. -->
+        <div class="c-pane__relayed">
+          <p class="c-pane__relayed-from">
+            <SessionDot status={sessions.statusOfPane(relayed.pane)} />
+            <strong>{relayed.pane.agentTitle ?? 'A delegated agent'}</strong> needs you
+            {#if delegated.length > 1}
+              <span class="c-pane__relayed-more">
+                · {delegated.length - 1} more waiting
+              </span>
+            {/if}
+            <Button
+              variant="link"
+              size="sm"
+              title="Open this agent's own pane"
+              onclick={() => sessions.showRelated(relayed.pane.id)}
+            >
+              Open it
+            </Button>
+          </p>
+          <ApprovalCard
+            request={relayed.approval.request}
+            onanswer={(answer) =>
+              void sessions.answerAndKeep(
+                relayed.pane.id,
+                relayed.approval.id,
+                answer,
+                relayed.approval.request,
+              )}
+          />
+        </div>
       {/if}
 
       {#if side}

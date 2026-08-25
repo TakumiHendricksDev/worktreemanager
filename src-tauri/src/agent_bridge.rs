@@ -71,12 +71,43 @@ pub struct SpawnedSession {
     pub title: Option<String>,
 }
 
+/// Event name for sessions Rust closed on its own initiative.
+///
+/// The mirror of [`AGENT_SPAWNED_EVENT`], and needed for the same reason: `close_agents` runs on the
+/// socket thread because an orchestrating agent asked, so the window never learns of it. Without
+/// this the panes would stay in the rail pointing at processes that are gone, and `agent:exit`
+/// cannot stand in — it says a session's process finished, which is also true of a child that
+/// answered and is still there to be read.
+pub const AGENT_RELEASED_EVENT: &str = "agent:released";
+
+/// Sessions whose panes should go.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleasedSessions {
+    pub sessions: Vec<String>,
+}
+
 /// Tell the window to open a pane for a session that already exists.
 pub fn announce_spawn(handle: &AppHandle, spawned: &SpawnedSession) {
     if let Err(err) = handle.emit(AGENT_SPAWNED_EVENT, spawned) {
         // The window is gone. The session keeps running and is reachable again through
         // `list_agent_sessions` if a window comes back, which is the same degradation a reload has.
         tracing::debug!(error = %err, "could not announce a spawned session");
+    }
+}
+
+/// Tell the window that these sessions are over and their panes should go.
+pub fn announce_released(handle: &AppHandle, sessions: &[String]) {
+    if sessions.is_empty() {
+        return;
+    }
+    let payload = ReleasedSessions {
+        sessions: sessions.to_vec(),
+    };
+    if let Err(err) = handle.emit(AGENT_RELEASED_EVENT, &payload) {
+        // Same degradation as a spawn nobody heard: the processes are already ended, so the worst
+        // case is a stale pane in a window that is about to be reloaded anyway.
+        tracing::debug!(error = %err, "could not announce released sessions");
     }
 }
 

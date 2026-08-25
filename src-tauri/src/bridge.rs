@@ -65,6 +65,7 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The one tool.
 const TOOL: &str = "ask_agent";
 const SPAWN_TOOL: &str = "spawn_agents";
+const CLOSE_TOOL: &str = "close_agents";
 
 /// Where the socket lives.
 pub fn socket_path() -> Result<PathBuf, String> {
@@ -403,6 +404,18 @@ fn tools(agents: &[(String, String)]) -> Value {
                 },
                 "required": ["tasks"],
             },
+        }, {
+            "name": CLOSE_TOOL,
+            "description":
+                "End the agent sessions you started here and remove their panes. Call this once you \
+                 have read a run's results and are done with it: a delegated session keeps its CLI \
+                 process and its conversation alive after it answers, so leaving them open ties up \
+                 processes and fills the user's agent list.\n\n\
+                 Takes no arguments — it closes your own children and nothing else. Sessions still \
+                 working are left alone and reported back, so it is safe to call while part of a \
+                 run is in flight. Do not call it if the user is reading a child's transcript or \
+                 has started talking to one.",
+            "inputSchema": { "type": "object", "properties": {} },
         }],
     })
 }
@@ -410,12 +423,29 @@ fn tools(agents: &[(String, String)]) -> Value {
 /// Run a `tools/call` by asking the app.
 fn call(params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    if name != TOOL && name != SPAWN_TOOL {
+    if name != TOOL && name != SPAWN_TOOL && name != CLOSE_TOOL {
         return tool_error(&format!("no tool named `{name}`"));
     }
 
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-    let (agent, prompt, model, effort, mode, tasks, concurrency) = if name == TOOL {
+    let action = if name == CLOSE_TOOL {
+        handoff::Action::CloseChildren
+    } else {
+        handoff::Action::Delegate
+    };
+    let (agent, prompt, model, effort, mode, tasks, concurrency) = if name == CLOSE_TOOL {
+        // Nothing to read: the token is the whole request. See `handoff::close_children` for why
+        // there is deliberately no session parameter to validate here.
+        (
+            String::new(),
+            String::new(),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+    } else if name == TOOL {
         let prompt = arguments
             .get("prompt")
             .and_then(Value::as_str)
@@ -480,6 +510,7 @@ fn call(params: &Value) -> Value {
         &socket,
         &Request {
             token,
+            action,
             agent,
             prompt,
             model,

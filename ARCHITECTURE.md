@@ -258,7 +258,7 @@ session's approval mode is the repository's own. An agent that can already run `
 meaningfully constrained by being unable to open a sibling pane — and unlike a subprocess, a handoff is
 *visible*.
 
-There are two MCP tools over the same path. `ask_agent` is one child and preserves the original
+There are three MCP tools over the same path. `ask_agent` is one child and preserves the original
 handoff behavior. `spawn_agents` accepts up to twenty self-contained tasks, each with its own provider,
 model, effort, mode and display title, plus a bounded concurrency. A run id and the caller's live
 session id travel with every announcement, so the frontend draws one compact agent rail instead of
@@ -267,6 +267,27 @@ inspection, and can be opened in an explicit split. The sessions remain ordinary
 sessions after their first result is returned. Children share one worktree; the tool description says
 so explicitly and steers parallel swarms toward read-only review because concurrent writers can
 conflict.
+
+`close_agents` is the third, and it exists because the second one's best property is also a leak.
+A child keeps its process and its conversation after it answers — deliberately, since the point was
+to *watch* it — so somebody has to end them, and a session that believes it made a function call
+never will. Twenty children from one call otherwise sit there holding twenty CLIs.
+
+It takes **no arguments**, which is the same decision as the worktree not being a parameter: the
+token identifies the caller, `Hub` records parentage as children are opened, and "close the ones I
+started" needs no identifiers at all. A session id never appears in a tool result, so there is
+nothing published for a confused prompt to aim at a pane the user opened themselves. Children whose
+delegated turn has not returned are counted and reported rather than closed, which is what makes the
+tool safe to call while part of a wave is still running — the one thing it cannot see is a child the
+*user* has since adopted, because that would need per-session turn tracking the app does not keep.
+`close_agent` emits nothing on its own, so `agent:released` is the mirror of `agent:spawned`: without
+it the window would keep panes pointing at processes that are gone.
+
+The obligation is stated in the appended instructions rather than only in the tool's description,
+because a description is read while a tool is being *chosen* and this one lands after the choice.
+The frontend has the matching rule: closing a pane closes its children, depth-first, since an
+orphaned child holds no tile and both routes to one — the rail and the agents dialog — are drawn
+from its parent.
 
 **A self-describing tool is not enough, and finding that out cost a real attempt.** The tool's
 description names the phrasings people use — "let Codex review this", "second opinion" — and it still
@@ -579,6 +600,31 @@ only bound, which is where a bound belongs: it is a statement about how many pan
 An explicit delegated run is the one exception: it may own up to twenty child processes because that
 count is the requested feature, but those children live behind the agent rail and consume a tile only
 when selected or explicitly split.
+
+**The per-worktree cap counts leaves of the layout, and it did not always.** It counted pane
+*records*, which were the same thing until delegation shipped — after which one `spawn_agents` run of
+three children in a worktree showing one session read as four panes, and every subsequent Shell,
+agent and resume there was refused. Silently: a refusal returns rather than raising, and the only
+copy of the explanation lived in the surface's empty state, a branch that renders when the worktree
+has no panes, which is the one situation in which you cannot be at the cap. It now sets
+`sessions.error`, which has a banner that is always mounted. The global cap still counts processes,
+because that is what *it* bounds, but only ones the user opened — a delegated run's budget is
+`MAX_TASKS` in `handoff.rs`, and applying a second one here meant the eighth child of one fan-out
+locked pane creation app-wide.
+
+**The rail summarises; the list is a dialog.** Twenty children do not fit in a band above the panes,
+and widening it spends rows the sessions need — so the rail answers the two glanceable questions, *is
+anything running* and *does anything need me*, with per-run `needs you` and `failed` counts that a
+fold is not allowed to hide, and `AgentsDialog` holds the rest with Show, Split and Close per row.
+That is the split the sidebar already makes with the Inspector, and §8's own argument against a
+persistent rail — a third region competing for `min-height: 0`, needing a `z-index` — is why the
+overflow is a dialog rather than a column.
+
+**An orchestrator can answer its children's approvals.** A six-way fan-out otherwise costs six pane
+visits to clear six prompts, in panes that are not on screen to be visited. Nothing about an approval
+needed its pane to be visible — it lives on `pane.approvals` and `answer` takes a pane id — so the
+parent renders the oldest child's card beneath its own, captioned with whose it is, one at a time.
+Stacking them would bury the composer, which is the failure the card's own header exists to prevent.
 
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 

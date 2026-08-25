@@ -157,13 +157,14 @@ fn the_bridge_offers_exactly_the_agents_it_was_told_about() {
     let tools = reply["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        2,
-        "one-child handoff and parallel delegation: {reply}"
+        3,
+        "one-child handoff, parallel delegation, and cleanup: {reply}"
     );
 
     let tool = &tools[0];
     assert_eq!(tool["name"], "ask_agent");
     assert_eq!(tools[1]["name"], "spawn_agents");
+    assert_eq!(tools[2]["name"], "close_agents");
 
     let choices = tool["inputSchema"]["properties"]["agent"]["enum"]
         .as_array()
@@ -192,6 +193,40 @@ fn the_bridge_offers_exactly_the_agents_it_was_told_about() {
             .unwrap()
             .contains(&serde_json::json!("prompt")),
         "a handoff with no prompt is not a handoff: {tool}"
+    );
+}
+
+#[test]
+fn the_cleanup_tool_takes_no_arguments_at_all() {
+    // The absence *is* the security property, so it is asserted rather than assumed.
+    //
+    // A child's session id never appears in a tool result, and the reason is the same one that
+    // keeps the worktree out of `ask_agent`: everything a delegation can reach follows from the
+    // token, so a model cannot aim one at a pane the user opened themselves. A `sessions` parameter
+    // would mean publishing those ids purely so they could be handed back, and the schema is where
+    // that would reappear first.
+    let mut bridge = Bridge::start("codex:Codex");
+    bridge.call(1, "initialize", &serde_json::json!({}));
+
+    let reply = bridge.call(2, "tools/list", &serde_json::json!({}));
+    let tool = &reply["result"]["tools"][2];
+    assert_eq!(tool["name"], "close_agents");
+    assert_eq!(
+        tool["inputSchema"]["properties"],
+        serde_json::json!({}),
+        "close_agents must expose no parameters: {tool}"
+    );
+    assert!(
+        tool["inputSchema"].get("required").is_none(),
+        "a tool with no properties cannot require one: {tool}"
+    );
+
+    // The obligation is what the description is for. A model that reads only "ends sessions" has no
+    // reason to ever call this; it has to be told that children outlive the call that made them.
+    let description = tool["description"].as_str().unwrap().to_lowercase();
+    assert!(
+        description.contains("after it answers"),
+        "the description must say children outlive their answer: {description}"
     );
 }
 
@@ -383,6 +418,55 @@ fn a_handoff_carries_the_token_and_prompt_over_the_socket_and_returns_the_answer
         reply["result"]["content"][0]["text"], "Two problems with it.",
         "the other agent's words should reach the caller verbatim: {reply}"
     );
+}
+
+#[test]
+fn closing_children_reaches_the_app_as_an_action_carrying_only_the_token() {
+    // Two properties in one round trip, and the second is the interesting one.
+    //
+    // That the action arrives is ordinary. That the request is *otherwise empty* is the wire-level
+    // statement of the same rule the schema test makes: the app is told who is asking and nothing
+    // else, so "close the children I started" is the only thing it can be asked to do. A bridge
+    // that helpfully filled in `agent` from somewhere would give the app a second input to trust.
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("h.sock");
+    let app = fake_app(
+        &socket,
+        handoff::Response::ok("Closed 3 delegated sessions.".to_owned()),
+    );
+
+    let mut bridge = Bridge::wired("codex:Codex", &socket, "token-xyz");
+    bridge.call(1, "initialize", &serde_json::json!({}));
+
+    let reply = bridge.call(
+        2,
+        "tools/call",
+        &serde_json::json!({ "name": "close_agents", "arguments": {} }),
+    );
+
+    let sent = app.join().expect("the fake app should not panic");
+    assert_eq!(sent.token, "token-xyz");
+    assert_eq!(sent.action, handoff::Action::CloseChildren);
+    assert!(sent.agent.is_empty(), "no agent is named: {sent:?}");
+    assert!(sent.prompt.is_empty(), "no prompt is sent: {sent:?}");
+    assert!(sent.tasks.is_empty(), "no tasks are sent: {sent:?}");
+
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    assert_eq!(
+        reply["result"]["content"][0]["text"],
+        "Closed 3 delegated sessions."
+    );
+}
+
+#[test]
+fn a_delegation_still_arrives_as_a_delegation_without_saying_so() {
+    // `action` defaults, and the default has to be the old behaviour. A bridge and an app are
+    // separate processes that upgrade independently — the CLI holds one open across a `cargo build`
+    // — so a request written by yesterday's bridge, with no `action` field at all, must not be read
+    // as a request to close everything.
+    let request: handoff::Request =
+        serde_json::from_str(r#"{"token":"t","agent":"codex","prompt":"Look at this."}"#).unwrap();
+    assert_eq!(request.action, handoff::Action::Delegate);
 }
 
 #[test]

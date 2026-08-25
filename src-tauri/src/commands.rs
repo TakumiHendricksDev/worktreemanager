@@ -2347,6 +2347,24 @@ pub fn session_request_for(
 ///
 /// `None` rather than a paragraph nobody can act on when the repository offers no other agent: a
 /// session told to hand off, with nothing to hand off to, would reach for the tool and be refused.
+///
+/// # Why it describes the lifecycle and not just the choice
+///
+/// The first version answered "which tool" and stopped, on the assumption that a delegation is a
+/// function call. It is not: a child keeps its process and its conversation after it answers, which
+/// is deliberate — the user asked to *watch* it, and closing the pane the moment the caller had its
+/// answer would destroy the transcript they wanted. The cost of that decision is that somebody has
+/// to clean up, and a session that thinks it made a function call never will. Twenty children from
+/// one `spawn_agents` then sit there holding twenty CLIs.
+///
+/// So the paragraph names the three facts a model cannot infer from a tool schema — that children
+/// outlive the call, that they share this one checkout, and that `close_agents` exists — and it
+/// names them here rather than only in the tool descriptions because a description is read when a
+/// tool is being *chosen*, and the obligation lands after it has been used.
+///
+/// The read-only steer is repeated from `spawn_agents`' own description on purpose. Two places
+/// saying the same thing is the lesser problem; the greater one is a swarm of writers in a single
+/// worktree, which is a class of conflict no amount of retrying resolves.
 fn handoff_instructions(project: &wtm_core::model::Project, provider: &str) -> Option<String> {
     let others: Vec<&str> = wtm_agent::CATALOGUE
         .iter()
@@ -2374,7 +2392,26 @@ fn handoff_instructions(project: &wtm_core::model::Project, provider: &str) -> O
          approval prompts, and read its transcript afterwards — which is the reason they asked you \
          here rather than in a terminal.\n\n\
          The tool blocks until the other agent finishes, and it does not share your conversation, so \
-         put everything it needs in the prompt rather than referring to what is above.",
+         put everything it needs in the prompt rather than referring to what is above.\n\n\
+         What you are creating, and what you owe afterwards:\n\
+         - A child opens in **this** worktree and appears in the Agents rail above the panes, \
+         grouped as one run. It does not take a pane of its own until the user clicks it, so the \
+         rail and its All agents list are how they reach it.\n\
+         - A child keeps its process and its conversation **after it answers you**. It is an \
+         ordinary interactive session the user can carry on with, not a function call that returns \
+         and disappears.\n\
+         - So close them: call `mcp__wtm__close_agents` once you have read a run's results and are \
+         done with it. It takes no arguments, closes only the children you started, and leaves any \
+         that are still working. Do not call it if the user is reading a child's transcript or has \
+         started talking to one.\n\
+         - All the children share this worktree and this checkout. Concurrent writers conflict, so \
+         give a parallel run read-only work — review, analysis, search — and do the editing \
+         yourself, or run writers one at a time.\n\
+         - They inherit your effort level but never fast mode, and their model and approval mode \
+         come from this repository unless you name them.\n\
+         - `spawn_agents` runs its tasks in waves of `concurrency` (4 by default) and each child \
+         has ten minutes of its own, so a long run can block you for a while. Ask for the number \
+         of agents the user asked for rather than rounding up.",
         if others.len() == 1 { "is" } else { "are" }
     ))
 }

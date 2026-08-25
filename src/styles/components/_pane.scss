@@ -196,6 +196,36 @@
   font-size: var(--step--1);
 }
 
+/*
+ * A delegated child's approval, shown in the session that delegated to it.
+ *
+ * Geometry and a caption only — the card inside is the same `.c-approval` this pane renders for its
+ * own questions, deliberately, because a decision that looks different depending on who is asking
+ * is a decision people learn to read twice.
+ *
+ * The caption is not decoration. The card says what is being asked and nothing about *who* is
+ * asking, and a fan-out is precisely the situation where six agents are asking similar things at
+ * once — approving the wrong one's command is not a recoverable misread. So the name is above the
+ * card, in the reading order, before the verbs.
+ */
+.c-pane__relayed {
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+
+.c-pane__relayed-from {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-1);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-pane__relayed-more {
+  color: var(--fg-subtle);
+}
+
 /* The composer and its settings live in `_composer.scss`. They were `.c-pane__settings` and
    `.c-pane__composer` here, two strips separated by a hairline; they are now one card, which is a
    control with its own focus behaviour rather than part of the pane's chrome. Only the gutter

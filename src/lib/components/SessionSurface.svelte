@@ -22,8 +22,9 @@
   import { onMount, untrack } from 'svelte';
 
   import type { Brief } from '../ipc/types';
-  import { sessions } from '../state/sessions.svelte';
+  import { AT_CAPACITY, sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import AgentsDialog from './AgentsDialog.svelte';
   import AgentTree from './AgentTree.svelte';
   import PlanViewer from './PlanViewer.svelte';
   import SessionTree from './SessionTree.svelte';
@@ -37,6 +38,8 @@
   } = $props();
 
   const activeId = $derived(workspace.selectedWorktreeId);
+  /** Whether the full delegated-agent list is open. The rail only summarises. */
+  let browsingAgents = $state(false);
   /** Worktrees that have any pane at all, so nothing renders an empty tree. */
   const occupied = $derived([...new Set(sessions.panes.map((p) => p.worktreeId))]);
   const activeLayout = $derived(sessions.layoutFor(activeId));
@@ -220,7 +223,7 @@
 
 <div class="c-surface" class:is-hidden={!visible} aria-label="Sessions">
   {#if activeId}
-    <AgentTree worktreeId={activeId} />
+    <AgentTree worktreeId={activeId} onbrowse={() => (browsingAgents = true)} />
   {/if}
   {#each occupied as worktreeId (worktreeId)}
     {@const layout = sessions.layoutFor(worktreeId)}
@@ -238,10 +241,10 @@
   {#if !activeLayout}
     <div class="c-surface__empty">
       {#if sessions.atCapacity}
-        <p>
-          As many sessions are open as wtm keeps alive. Close one to start another — it
-          refuses rather than ending a session that may be mid-turn.
-        </p>
+        <!-- The same sentence the banner carries. This branch is reachable only when the worktree
+             has no panes of its own while some *other* worktree holds the global cap; the banner
+             covers the far commoner case of being refused while looking at a full surface. -->
+        <p>{AT_CAPACITY}</p>
       {:else if workspace.selected && workspace.activeProjectId}
         <p>
           Start a session in <code>{workspace.selected.dirname}</code>. It runs in that
@@ -419,6 +422,12 @@
     </div>
   {/if}
 </div>
+
+<!-- Outside `.c-surface`, beside the plan viewer, because a dialog is not part of the pane
+     geometry — and unmounted when shut, which is what makes it free. -->
+{#if browsingAgents && activeId}
+  <AgentsDialog worktreeId={activeId} onclose={() => (browsingAgents = false)} />
+{/if}
 
 {#if reading}
   <!-- Outside the `visible` gate on purpose: this surface is hidden with `display: none` while the

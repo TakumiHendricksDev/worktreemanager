@@ -591,9 +591,28 @@
   {#each rows as row (row.key)}
     {#if row.kind === 'user'}
       {#if row.text.length > PROMPT_PREVIEW}
+        <!--
+          Open, the summary is a control and *not* a second copy of the opening.
+
+          It used to be both: the clipped preview stayed mounted and the full text was appended
+          under it, so the first 320 characters appeared twice — and not even alike, because
+          `promptPreview` collapses whitespace while `.c-transcript__user` is `pre-wrap`. A run-on
+          paragraph followed by the same words correctly broken reads as two different messages.
+
+          The `thinking` row below has the same shape on purpose, and the difference is length: one
+          sentence repeated as a heading is a prefix, a repeated paragraph is a duplicate.
+
+          The body stays in the `<p>` rather than moving into the `<summary>`. A drag-select that
+          ends inside a `<summary>` still fires a click, so a prompt long enough to need this is a
+          prompt that would collapse itself the moment you tried to copy it.
+        -->
         <details class="c-transcript__prompt" ontoggle={(event) => toggle(row.key, event)}>
-          <summary class="c-transcript__user">{promptPreview(row.text)}</summary>
-          {#if disclosures[row.key]}<p class="c-transcript__user">{row.text}</p>{/if}
+          {#if disclosures[row.key]}
+            <summary class="c-transcript__prompt-toggle">Show less</summary>
+            <p class="c-transcript__user">{row.text}</p>
+          {:else}
+            <summary class="c-transcript__user">{promptPreview(row.text)}</summary>
+          {/if}
         </details>
       {:else}
         <p class="c-transcript__user">{row.text}</p>

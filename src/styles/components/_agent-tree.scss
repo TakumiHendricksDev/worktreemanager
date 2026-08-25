@@ -1,5 +1,10 @@
 /* Compact navigation for WTM-owned child sessions. It is a component rather than an object because
-   status, selection and cosmetics are inseparable from this one named piece of UI. */
+   status, selection and cosmetics are inseparable from this one named piece of UI.
+
+   One line, always. This band sits above every pane in the worktree, so a row it gains is a row the
+   sessions lose — which is why the full list lives in `AgentsDialog` and this holds a summary. The
+   `overflow-x: auto` that used to be here is gone with the list it was scrolling; a rail that needs
+   a scrollbar has already failed at being glanceable. */
 .c-agent-tree {
   display: flex;
   flex: 0 0 auto;
@@ -18,25 +23,23 @@
   font-weight: 600;
 }
 
-.c-agent-tree__run-label,
-.c-agent-tree__state {
+.c-agent-tree__run-label {
+  padding-inline: var(--sp-1);
   color: var(--fg-subtle);
   text-transform: lowercase;
 }
 
-.c-agent-tree__run-label {
-  padding-inline: var(--sp-1);
-}
-
+/* Takes the slack so the button that opens the dialog stays pinned to the right edge, where the
+   eye already looks for it after the worktree header's own trailing actions. */
 .c-agent-tree__runs {
   display: flex;
+  flex: 1 1 auto;
   gap: var(--sp-2);
   min-width: 0;
-  overflow-x: auto;
+  overflow: hidden;
 }
 
 .c-agent-tree__run,
-.c-agent-tree__child,
 .c-agent-tree__item {
   display: flex;
   align-items: center;
@@ -44,28 +47,24 @@
 
 .c-agent-tree__run {
   gap: var(--sp-1);
-  flex: 0 0 auto;
-}
-
-.c-agent-tree__child {
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--bg);
-}
-
-.c-agent-tree__parent,
-.c-agent-tree__item,
-.c-agent-tree__split {
-  border: 0;
-  background: none;
-  color: var(--fg-muted);
-  cursor: pointer;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .c-agent-tree__parent,
 .c-agent-tree__item {
   gap: var(--sp-1);
   padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.c-agent-tree__item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
 }
 
 .c-agent-tree__parent.is-selected,
@@ -73,56 +72,36 @@
   color: var(--accent);
 }
 
-.c-agent-tree__branch,
-.c-agent-tree__model {
+.c-agent-tree__branch {
   color: var(--fg-subtle);
 }
 
-.c-agent-tree__label,
-.c-agent-tree__model {
+.c-agent-tree__label {
   max-width: 18ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.c-agent-tree__model {
-  max-width: 14ch;
-  font-family: var(--font-mono);
-}
-
-.c-agent-tree__split {
-  align-self: stretch;
-  padding-inline: var(--sp-1);
-  border-left: 1px solid var(--border);
-  font-size: var(--step--2);
-}
-
-.c-agent-tree__dot {
-  width: 0.55rem;
-  height: 0.55rem;
+/*
+ * The two facts a fold is not allowed to hide.
+ *
+ * Semantic roles rather than a hue apiece: these are the same states `_dot.scss` draws, so they
+ * have to read as the same states. The word is the other channel — `_semantic.scss` forbids
+ * colour carrying this on its own, and a tally is exactly the case that rule exists for.
+ */
+.c-agent-tree__tally {
   flex: 0 0 auto;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  background: var(--bg-muted);
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
 }
 
-.c-agent-tree__dot.is-running {
-  border-color: var(--info);
-  background: var(--info);
+.c-agent-tree__tally--attention {
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 
-.c-agent-tree__dot.is-waiting {
-  border-color: var(--warn);
-  background: var(--warn);
-}
-
-.c-agent-tree__dot.is-done {
-  border-color: var(--ok);
-  background: var(--ok);
-}
-
-.c-agent-tree__dot.is-failed {
-  border-color: var(--danger);
-  background: var(--danger);
+.c-agent-tree__tally--failed {
+  background: var(--danger-soft);
+  color: var(--danger);
 }

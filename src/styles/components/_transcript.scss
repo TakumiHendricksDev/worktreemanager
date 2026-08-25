@@ -86,6 +86,16 @@
   cursor: pointer;
 }
 
+/* Open, the summary stops being the message and becomes the control that puts it away — so it is
+   sized like a control. Right-aligned with the bubble it belongs to, and quiet enough not to read
+   as part of what the user wrote. */
+.c-transcript__prompt-toggle {
+  cursor: pointer;
+  text-align: right;
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+}
+
 /*
  * The agent's reply.
  *
