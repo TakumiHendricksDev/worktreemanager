@@ -60,7 +60,8 @@ export type IconName =
   | 'theme-system'
   | 'theme-light'
   | 'theme-dark'
-  | 'bolt';
+  | 'bolt'
+  | 'mic';
 
 export interface IconSpec {
   /** Drawn with `stroke: currentColor; fill: none`. */
@@ -93,6 +94,18 @@ export const icons: Record<IconName, IconSpec> = {
    * already makes.
    */
   bolt: { fill: 'M9.25 1.5 L4 9 H7.25 L6.75 14.5 L12 7 H8.75 Z' },
+  /**
+   * A microphone: a stroked capsule, its cradle, and the stand.
+   *
+   * Stroked rather than filled, unlike `bolt` — at 14px the capsule is wide enough for a 1.5
+   * stroke to leave an interior, and a filled mic reads as a "recording" state before anything is
+   * recording. The state is carried by the button's own fill instead.
+   */
+  mic: {
+    stroke:
+      'M8 2.25 A1.75 1.75 0 0 1 9.75 4 V7.5 A1.75 1.75 0 0 1 6.25 7.5 V4 ' +
+      'A1.75 1.75 0 0 1 8 2.25 Z M3.75 7.25 A4.25 4.25 0 0 0 12.25 7.25 M8 11.5 V14',
+  },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
   file: { stroke: 'M4 1.75 H9.25 L12 4.5 V14.25 H4 Z M9.25 1.75 V4.5 H12' },
   /*

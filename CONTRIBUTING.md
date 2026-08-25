@@ -66,6 +66,14 @@ objc2 FFI a click-navigating macOS notification needs — restates that table ve
 `unsafe_code = "deny"`. Its `Cargo.toml` header names the safe wrappers that were rejected and
 why. A second such crate is an open-an-issue-first change.
 
+**Exactly one thing in this repository reaches the network, and it is not the webview.**
+Dictation sends recorded audio to a host that is a `const` in `wtm-dictate`, by invoking `curl`.
+`src-tauri/tests/network_boundary.rs` pins three properties: the CSP still permits the frontend no
+network destination at all, that host stays a constant rather than becoming configuration, and no
+crate in the workspace declares an HTTP client. A second network call, or reaching for `reqwest`,
+is an open-an-issue-first change — ARCHITECTURE §6a records why `curl` was chosen over a linked TLS
+stack, and what it costs.
+
 **`wtm-core` must compile for `wasm32-unknown-unknown`.** That is not because anyone runs it
 in a browser; it is a mechanical proof that the domain has no operating-system dependency. If
 your change makes that check fail, the logic belongs in an adapter.

@@ -30,8 +30,10 @@
   import { errorMessage, type Doctor } from '../ipc/types';
   import { attention } from '../state/attention.svelte';
   import { composerPrefs, type SendKey } from '../state/composer.svelte';
+  import { DESTINATION, dictation, type DictateMode } from '../state/dictate.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import Choice from './ui/Choice.svelte';
   import Dialog from './ui/Dialog.svelte';
@@ -110,6 +112,58 @@
     } catch (e) {
       error = errorMessage(e);
     }
+  }
+
+  /**
+   * The transcription key, as typed. Never as stored.
+   *
+   * Deliberately not seeded from the backend, because there is no command that would seed it: a
+   * stored key is reported as a boolean and never returned. So the field is blank on every open
+   * even when a key exists, and the help text below says so rather than leaving a blank field
+   * looking like an absent key.
+   */
+  let dictateKey = $state('');
+  let keySaved = $state(false);
+
+  /**
+   * Save the key on blur, for the same reason the PATH field does — and one more.
+   *
+   * Every `set_pref` rewrites the whole config file; this one spawns a keychain process. A
+   * keystroke-level save would run one per character of a pasted key.
+   */
+  async function commitKey() {
+    if (dictateKey.trim() === '') return;
+    error = null;
+    try {
+      await dictation.setKey(dictateKey);
+      // Cleared rather than left on screen: the value is stored now, and a secret lingering in a
+      // form field is a secret in a screenshot.
+      dictateKey = '';
+      keySaved = true;
+    } catch (e) {
+      error = errorMessage(e);
+    }
+  }
+
+  /**
+   * Turn dictation on, having said what that means.
+   *
+   * The one preference in this dialog that asks before applying, which breaks the file header's
+   * "everything applies immediately" rule on purpose. That rule exists because a setting you cannot
+   * see the effect of is one you cannot choose — it assumes the effect is *visible*. Audio leaving
+   * the machine is not, so the consent has to be explicit and has to name where it goes.
+   */
+  async function toggleDictation(on: boolean) {
+    if (!on) {
+      await dictation.setEnabled('off');
+      return;
+    }
+    const agreed = window.confirm(
+      `Dictation records your microphone and sends the audio to ${DESTINATION} for transcription.\n\n` +
+        'This is the only feature in wtm that sends anything off your machine. It needs SoX ' +
+        '(brew install sox) and a Deepgram API key.\n\nTurn it on?',
+    );
+    if (agreed) await dictation.setEnabled('on');
   }
 
   async function chooseOpener(event: Event) {
@@ -276,6 +330,74 @@
             {/each}
           </select>
         </Field>
+
+        <!--
+          Dictation. Off unless turned on, and the one control here that asks first — see
+          `toggleDictation` for why this section breaks the applies-immediately rule.
+        -->
+        <div class="o-stack">
+          <h3 class="c-section-heading">Dictation</h3>
+          <Choice
+            type="checkbox"
+            checked={dictation.enabled === 'on'}
+            onchange={(on) => void toggleDictation(on)}
+          >
+            Dictate prompts with the microphone
+          </Choice>
+          <p class="c-field__help">
+            The only feature that sends anything off this machine: audio goes to {DESTINATION}
+            to be transcribed. Needs SoX and a key, both set up under Advanced.
+          </p>
+
+          {#if dictation.enabled === 'on'}
+            {#if dictation.status !== null && dictation.status.missing.length > 0}
+              <Banner variant="warn">
+                Dictation needs {dictation.status.missing.join(' and ')}, which
+                {dictation.status.missing.length === 1 ? 'is' : 'are'} not on your PATH.
+                {#snippet action()}
+                  <code class="u-mono">brew install sox</code>
+                {/snippet}
+              </Banner>
+            {:else if dictation.status !== null && !dictation.status.keySet}
+              <Banner variant="warn">
+                No transcription key yet — add one under Advanced.
+              </Banner>
+            {/if}
+
+            <Field
+              id="settings-dictate-mode"
+              label="Microphone button"
+              help="Hold cannot outlive the press, which is why it is the default."
+            >
+              <select
+                id="settings-dictate-mode"
+                class="c-select"
+                value={dictation.mode}
+                onchange={(e) =>
+                  void dictation.setMode(
+                    (e.currentTarget as HTMLSelectElement).value as DictateMode,
+                  )}
+              >
+                <option value="hold">Hold to talk</option>
+                <option value="tap">Tap to start, tap to stop</option>
+              </select>
+            </Field>
+
+            <Field
+              id="settings-dictate-keyterms"
+              label="Words to listen for"
+              help="Comma separated. Terms the transcriber should expect — the fix for “SDK” coming back as “S D K”."
+            >
+              <TextInput
+                id="settings-dictate-keyterms"
+                value={dictation.keyterms}
+                placeholder="SDK, ChatGPT, Tauri, argv, PTY"
+                onblur={(e) =>
+                  void dictation.setKeyterms((e.currentTarget as HTMLInputElement).value)}
+              />
+            </Field>
+          {/if}
+        </div>
       </div>
     {:else if section === 'notifications'}
       <div class="o-stack o-stack--loose c-settings__panel">
@@ -330,6 +452,45 @@
           <Button variant="neutral" size="sm" onclick={commitPath}>Save PATH</Button>
           {#if pathSaved}
             <span class="c-status--ok">Saved — restart wtm to use it.</span>
+          {/if}
+        </div>
+
+        <!--
+          The transcription key.
+
+          Beside the PATH override because both are machine-level setup rather than taste, and both
+          are things you set once. It is blank on every open even when a key is stored: nothing
+          reads a key back out of the backend, which is the point rather than an omission.
+        -->
+        <Field
+          id="settings-dictate-key"
+          label="Transcription key"
+          help={dictation.status?.keySet === true
+            ? 'A key is stored in your keychain. Type a new one to replace it, or save an empty field to remove it.'
+            : `A Deepgram API key, kept in your keychain and sent only to ${DESTINATION}.`}
+        >
+          <TextInput
+            id="settings-dictate-key"
+            bind:value={dictateKey}
+            mono
+            placeholder={dictation.status?.keySet === true ? '••••••••' : 'Paste a key'}
+            oninput={() => (keySaved = false)}
+            onblur={commitKey}
+          />
+        </Field>
+        <div class="c-settings__row">
+          <Button variant="neutral" size="sm" onclick={commitKey}>Save key</Button>
+          {#if dictation.status?.keySet === true}
+            <Button
+              variant="quiet"
+              size="sm"
+              onclick={() => void dictation.setKey('').then(() => (keySaved = false))}
+            >
+              Remove
+            </Button>
+          {/if}
+          {#if keySaved}
+            <span class="c-status--ok">Saved to your keychain.</span>
           {/if}
         </div>
 

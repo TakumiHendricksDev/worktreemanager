@@ -19,6 +19,7 @@
   import { errorMessage, type AgentAttachment } from '../ipc/types';
   import { commandsFor } from '../agent-commands';
   import { composerPrefs } from '../state/composer.svelte';
+  import { DESTINATION, dictation } from '../state/dictate.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
@@ -405,6 +406,50 @@
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   });
+
+  /**
+   * What the microphone button says it will do.
+   *
+   * Names the destination in the tooltip rather than only in Settings. The consent step is where
+   * agreement happens, but a control that sends audio to a third party should keep saying so where
+   * it is pressed, not only where it was switched on.
+   */
+  const micTitle = $derived(
+    dictation.transcribing
+      ? 'Transcribing…'
+      : dictation.recording
+        ? 'Recording — release to transcribe'
+        : dictation.mode === 'hold'
+          ? `Hold to dictate — audio goes to ${DESTINATION}`
+          : `Tap to dictate, tap again to stop — audio goes to ${DESTINATION}`,
+  );
+
+  async function beginDictation() {
+    await dictation.start();
+  }
+
+  /**
+   * End a recording and put what was said in the draft.
+   *
+   * Appended rather than replacing, and separated by a space when there is already text: dictation
+   * is routinely used to finish a sentence somebody started typing, and clobbering that would make
+   * the button dangerous to press by accident.
+   */
+  async function endDictation() {
+    if (!dictation.recording) return;
+    const said = await dictation.stop();
+    if (said === null) {
+      if (dictation.error !== null) sessions.error = dictation.error;
+      return;
+    }
+    draft = draft.trim() === '' ? said : `${draft.replace(/\s+$/, '')} ${said}`;
+    composer?.focus();
+  }
+
+  async function toggleDictation() {
+    if (dictation.recording) await endDictation();
+    else await beginDictation();
+  }
 
   async function submit(event: Event) {
     event.preventDefault();
@@ -1312,6 +1357,43 @@
                 <option value="folders">Folders…</option>
               </select>
             </span>
+
+            {#if dictation.available}
+              <!--
+              Hold-to-talk, or tap-to-toggle, by preference.
+
+              `onpointerdown`/`onpointerup` rather than click, because hold mode needs the two ends
+              of the press separately — and `onpointerleave` ends a recording whose button the
+              pointer has wandered off, which is otherwise a hot microphone with no visible control
+              to stop it.
+
+              The transcript lands in the draft and is never sent. A mistranscription that sent
+              itself is not recoverable, and this feature's whole failure mode is getting a word
+              wrong.
+            -->
+              <button
+                class="c-composer__mic"
+                class:is-recording={dictation.recording}
+                type="button"
+                disabled={pane.ended !== null ||
+                  pane.error !== null ||
+                  dictation.transcribing}
+                aria-pressed={dictation.recording}
+                aria-label={dictation.recording ? 'Stop dictating' : 'Dictate'}
+                title={micTitle}
+                onpointerdown={dictation.mode === 'hold' ? beginDictation : undefined}
+                onpointerup={dictation.mode === 'hold' ? endDictation : undefined}
+                onpointerleave={dictation.mode === 'hold' ? endDictation : undefined}
+                onclick={dictation.mode === 'tap' ? toggleDictation : undefined}
+              >
+                <Icon name="mic" size={14} />
+                {#if dictation.recording || dictation.transcribing}
+                  <span class="c-composer__mic-note">
+                    {dictation.transcribing ? 'transcribing…' : 'listening…'}
+                  </span>
+                {/if}
+              </button>
+            {/if}
 
             <button
               class="c-composer__context"

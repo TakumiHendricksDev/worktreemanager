@@ -17,6 +17,7 @@
     disabled = false,
     element = $bindable(null),
     oninput,
+    onblur,
   }: {
     id?: string;
     value?: string;
@@ -28,6 +29,8 @@
     disabled?: boolean;
     element?: HTMLInputElement | null;
     oninput?: (event: Event) => void;
+    /** For a value worth saving once it stops being half-typed — a path, a key. */
+    onblur?: (event: FocusEvent) => void;
   } = $props();
 </script>
 
@@ -41,6 +44,7 @@
   {placeholder}
   {disabled}
   {oninput}
+  {onblur}
   bind:this={element}
   bind:value
   class="c-input"

@@ -10,6 +10,7 @@ pub mod agent_bridge;
 pub mod app;
 pub mod bridge;
 pub mod commands;
+pub mod dictate;
 pub mod display;
 pub mod handoff;
 pub mod notifier;
@@ -191,6 +192,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::dictation_status,
+            commands::set_dictation_key,
+            commands::start_dictation,
+            commands::stop_dictation,
             commands::list_projects,
             commands::register_project,
             commands::unregister_project,

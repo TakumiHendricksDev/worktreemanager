@@ -6,6 +6,7 @@ members = [
   "crates/wtm-git",
   "crates/wtm-exec",
   "crates/wtm-agent",
+  "crates/wtm-dictate",
   "crates/wtm-render",
   "crates/wtm-notify",
   "crates/wtm-testkit",
@@ -39,6 +40,7 @@ wtm-config  = { path = "crates/wtm-config" }
 wtm-git     = { path = "crates/wtm-git" }
 wtm-exec    = { path = "crates/wtm-exec" }
 wtm-agent   = { path = "crates/wtm-agent" }
+wtm-dictate = { path = "crates/wtm-dictate" }
 wtm-render  = { path = "crates/wtm-render" }
 wtm-notify  = { path = "crates/wtm-notify" }
 wtm-testkit = { path = "crates/wtm-testkit" }

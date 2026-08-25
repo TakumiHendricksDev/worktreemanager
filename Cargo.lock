@@ -5411,6 +5411,7 @@ dependencies = [
  "wtm-agent",
  "wtm-config",
  "wtm-core",
+ "wtm-dictate",
  "wtm-exec",
  "wtm-git",
  "wtm-notify",
@@ -5454,6 +5455,14 @@ dependencies = [
  "thiserror 2.0.19",
  "wtm-render",
  "wtm-testkit",
+]
+
+[[package]]
+name = "wtm-dictate"
+version = "0.7.0"
+dependencies = [
+ "serde_json",
+ "wtm-core",
 ]
 
 [[package]]

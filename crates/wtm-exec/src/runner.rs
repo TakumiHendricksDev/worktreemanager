@@ -128,10 +128,16 @@ impl Runner {
             .current_dir(&inv.cwd)
             .env_clear()
             .envs(&env)
-            // Not inherited: a child that reads the app's stdin would consume
+            // Not inherited either way: a child that reads the app's stdin would consume
             // whatever the parent process had, and under `cargo tauri dev` that is
-            // the developer's terminal.
-            .stdin(Stdio::null())
+            // the developer's terminal. Piped only when there is a payload to write, which
+            // `run_inner` closes immediately afterwards — so a script that prompts still sees EOF
+            // rather than hanging. See `Invocation::stdin`.
+            .stdin(if inv.stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(streams.stdio())
             .stderr(streams.stdio());
 
@@ -220,6 +226,21 @@ impl Runner {
         // exactly what a chatty script does.
         let stdout = Self::drain(child.stdout.take());
         let stderr = Self::drain(child.stderr.take());
+
+        // After the drains are running, never before: a child that answers while we are still
+        // writing would otherwise fill its stdout pipe and block, and we would block writing to
+        // its stdin, which is a deadlock with no timeout in it. Dropped at the end of the block so
+        // the child sees EOF — a write with no close is how `curl --config -` waits forever.
+        if let Some(payload) = inv.stdin.as_deref()
+            && let Some(mut pipe) = child.stdin.take()
+        {
+            use std::io::Write;
+            // A closed pipe here is the child having exited already, which the wait below reports
+            // properly. Failing the whole call on it would replace that diagnosis with a less
+            // useful one.
+            let _ = pipe.write_all(payload.as_bytes());
+            let _ = pipe.flush();
+        }
 
         let deadline = started + Duration::from_millis(inv.timeout_ms);
         let mut timed_out = false;
@@ -499,6 +520,39 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ExecError::Timeout { .. }), "got {err:?}");
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_stdin_payload_is_delivered_and_then_closed() {
+        // The mechanism that keeps a credential out of `argv` — `curl --config -` and `security -i`
+        // both read a secret this way. Two properties, and the second is the one that bites: the
+        // pipe has to be *closed* after writing, or a child that reads to EOF waits for a timeout
+        // instead of answering.
+        let started = Instant::now();
+        let out = runner()
+            .run(
+                &inv(&["sh", "-c", "cat"], 5_000).with_stdin("hello from stdin"),
+                &CancelToken::new(),
+            )
+            .unwrap();
+
+        assert_eq!(out.stdout, "hello from stdin");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the child should see EOF at once, not wait for the deadline"
+        );
+    }
+
+    #[test]
+    fn a_stdin_payload_never_reaches_a_log_through_debug() {
+        // `Invocation` carries a secret now, and `#[derive(Debug)]` on a struct holding one is how
+        // it ends up in a tracing span or a panic message. The `Debug` impl is hand-written for
+        // exactly this, so it is worth a test that fails if somebody restores the derive.
+        let inv = inv(&["true"], 1_000).with_stdin("sk-do-not-log-me");
+        let rendered = format!("{inv:?}");
+
+        assert!(!rendered.contains("sk-do-not-log-me"), "{rendered}");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 
     #[test]

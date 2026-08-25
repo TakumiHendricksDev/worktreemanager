@@ -343,6 +343,42 @@ pub async fn set_pref(app: AppState<'_>, key: String, value: String) -> Reply<()
     blocking(move || app.config.set_user_pref(&key, &value).map_err(Into::into)).await
 }
 
+// ─────────────────────────────── dictation ───────────────────────────────
+
+/// Whether dictation can be offered, and what is missing if not.
+#[tauri::command]
+pub async fn dictation_status(app: AppState<'_>) -> Reply<crate::dictate::DictationStatus> {
+    let app = Arc::clone(&app);
+    blocking(move || Ok(crate::dictate::status(&app))).await
+}
+
+/// Store the transcription key.
+///
+/// One-way, deliberately: there is no command that reads it back. The frontend can learn that a key
+/// is set — `DictationStatus::key_set` — and never what it is, which is the same discipline
+/// `reveal_env_value` and `EnvKeys` keep for environment values. An empty string clears it, so the
+/// Settings field needs no separate Clear button.
+#[tauri::command]
+pub async fn set_dictation_key(app: AppState<'_>, key: String) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || crate::dictate::set_key(&app, &key).map_err(|e| ErrorView::new("dictate", e)))
+        .await
+}
+
+/// Start recording from the microphone.
+#[tauri::command]
+pub async fn start_dictation(app: AppState<'_>) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || crate::dictate::start(&app).map_err(|e| ErrorView::new("dictate", e))).await
+}
+
+/// Stop recording and return what was said.
+#[tauri::command]
+pub async fn stop_dictation(app: AppState<'_>) -> Reply<String> {
+    let app = Arc::clone(&app);
+    blocking(move || crate::dictate::stop(&app).map_err(|e| ErrorView::new("dictate", e))).await
+}
+
 // ─────────────────────────────── diagnostics ───────────────────────────────
 
 /// The resolved `PATH` and which project tools are reachable.
