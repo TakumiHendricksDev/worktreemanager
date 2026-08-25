@@ -82,7 +82,9 @@
             <button
               class="c-agent-tree__parent"
               class:is-selected={visible.has(group.parent.id)}
-              title="Back to {sessions.labelOf(group.parent)}, the session that started this run"
+              title="Back to {sessions.labelOf(
+                group.parent,
+              )}, the session that started this run"
               onclick={() => sessions.showRelated(group.parent?.id ?? '')}
             >
               {sessions.labelOf(group.parent)}
@@ -100,7 +102,9 @@
               onclick={() => sessions.showRelated(only.id)}
             >
               <SessionDot status={sessions.statusOfPane(only)} />
-              <span class="c-agent-tree__label">{only.agentTitle ?? sessions.labelOf(only)}</span>
+              <span class="c-agent-tree__label"
+                >{only.agentTitle ?? sessions.labelOf(only)}</span
+              >
             </button>
           {:else}
             <button

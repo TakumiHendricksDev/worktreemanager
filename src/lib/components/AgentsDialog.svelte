@@ -22,11 +22,7 @@
    * three are here.
    */
   import { panesOf } from '../state/layout.svelte';
-  import {
-    AT_TILE_CAP,
-    MAX_PANES_PER_WORKTREE,
-    sessions,
-  } from '../state/sessions.svelte';
+  import { AT_TILE_CAP, MAX_PANES_PER_WORKTREE, sessions } from '../state/sessions.svelte';
   import { STATUS_WORD } from '../status';
   import Button from './ui/Button.svelte';
   import Dialog from './ui/Dialog.svelte';
@@ -74,7 +70,9 @@
               {@const status = sessions.statusOfPane(child)}
               <li class="c-agents__row" class:is-selected={visible.has(child.id)}>
                 <SessionDot {status} />
-                <span class="c-agents__name">{child.agentTitle ?? sessions.labelOf(child)}</span>
+                <span class="c-agents__name"
+                  >{child.agentTitle ?? sessions.labelOf(child)}</span
+                >
                 <span class="c-agents__meta">
                   {sessions.labelOf(child)}{#if child.model}<span class="c-agents__model"
                       >{child.model}</span
@@ -97,9 +95,7 @@
                     variant="quiet"
                     size="sm"
                     disabled={visible.has(child.id) || atTileCap}
-                    title={atTileCap
-                      ? AT_TILE_CAP
-                      : 'Open this session beside the others'}
+                    title={atTileCap ? AT_TILE_CAP : 'Open this session beside the others'}
                     onclick={() => show(child.id, true)}
                   >
                     Split

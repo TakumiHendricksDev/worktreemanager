@@ -595,7 +595,9 @@ class Sessions {
   labelOf(pane: Pane): string {
     const kind = pane.kind;
     if (kind.kind !== 'agent') return 'Shell';
-    return this.options.find((option) => option.id === kind.provider)?.label ?? kind.provider;
+    return (
+      this.options.find((option) => option.id === kind.provider)?.label ?? kind.provider
+    );
   }
 
   /**
