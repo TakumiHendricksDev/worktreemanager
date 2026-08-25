@@ -71,6 +71,14 @@ fn the_production_tree_has_exactly_the_platform_seams_it_declares() {
         };
 
         for (number, line) in text.lines().enumerate() {
+            // A line of prose is not a seam. Writing down *why* a file chose a runtime probe
+            // over a compile-time branch means naming the thing not being used, and a scanner
+            // that reads its own advice back as a violation punishes the explanation this
+            // test's failure message asks for. Only `//`-prefixed lines are skipped, so an
+            // attribute with a trailing comment is still caught.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
             // Matches `cfg(target_os = …)` and `cfg(not(target_os = …))` alike. `cfg!(…)`
             // is deliberately *not* matched: it is a runtime boolean, both arms compile,
             // and it is the escape hatch this test wants people to reach for.

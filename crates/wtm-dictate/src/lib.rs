@@ -275,9 +275,9 @@ pub const KEYCHAIN_SERVICE: &str = "wtm-dictation";
 
 /// Which secret store this machine has.
 ///
-/// Chosen by which program resolves on PATH rather than by `#[cfg(target_os)]`, deliberately:
-/// `src-tauri/tests/platform_seams.rs` caps compile-time platform seams at two files, and this
-/// distinction does not need to be one — a Linux machine with `security` on PATH is not a thing,
+/// Chosen by which program resolves on PATH rather than by a compile-time platform branch,
+/// deliberately: `src-tauri/tests/platform_seams.rs` holds those to a declared allowlist, and this
+/// distinction does not need to join it — a Linux machine with `security` on PATH is not a thing,
 /// and the runtime probe is what the composition root already does for agent executables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keystore {
