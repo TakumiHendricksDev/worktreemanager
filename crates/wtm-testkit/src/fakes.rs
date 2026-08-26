@@ -362,7 +362,9 @@ pub struct FakeGit {
     /// Names of mutating operations, in order.
     mutations: Mutex<Vec<String>>,
     fail_add: Mutex<Option<String>>,
+    created_path: Mutex<Option<PathBuf>>,
     merged: Mutex<Option<bool>>,
+    prunes: Mutex<usize>,
 }
 
 impl FakeGit {
@@ -457,6 +459,13 @@ impl FakeGit {
         self
     }
 
+    /// Make git report a different recorded path than the one requested.
+    #[must_use]
+    pub fn with_created_path(self, path: impl Into<PathBuf>) -> Self {
+        self.created_path.lock().replace(path.into());
+        self
+    }
+
     #[must_use]
     pub fn with_merged(self, merged: bool) -> Self {
         *self.merged.lock() = Some(merged);
@@ -473,6 +482,12 @@ impl FakeGit {
     #[must_use]
     pub fn was_mutated(&self) -> bool {
         !self.mutations.lock().is_empty()
+    }
+
+    /// How many times planning asked git to drop stale worktree entries.
+    #[must_use]
+    pub fn prune_count(&self) -> usize {
+        *self.prunes.lock()
     }
 
     fn note(&self, what: impl Into<String>) {
@@ -498,9 +513,10 @@ impl Git for FakeGit {
     }
 
     fn prune_worktrees(&self, _repo_root: &Path) -> Result<(), GitError> {
-        // Deliberately NOT recorded as a mutation: prune only drops admin entries
-        // for directories the user already deleted, so planning may call it freely
-        // without violating the no-mutation invariant.
+        // Not recorded as a mutation: prune only drops admin entries for directories
+        // the user already deleted, so planning may call it freely. Counted so a test
+        // can still prove the create pipeline actually asks.
+        *self.prunes.lock() += 1;
         Ok(())
     }
 
@@ -564,9 +580,14 @@ impl Git for FakeGit {
         }
         self.note(format!("add_worktree {}", opts.path.display()));
 
+        let path = self
+            .created_path
+            .lock()
+            .clone()
+            .unwrap_or_else(|| opts.path.clone());
         let worktree = Worktree {
-            id: WorktreeId::from_path(&opts.path),
-            path: opts.path.clone(),
+            id: WorktreeId::from_path(&path),
+            path,
             head: Some(CommitId::new("3333333333333333333333333333333333333333")),
             checkout: opts
                 .branch

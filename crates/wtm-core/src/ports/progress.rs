@@ -12,14 +12,18 @@ use crate::model::PlanWarning;
 
 /// Something worth telling the user about, mid-operation.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ProgressEvent {
     /// A pipeline stage began. `index`/`total` drive a determinate progress bar.
     Stage {
         id: String,
         label: String,
-        index: u8,
-        total: u8,
+        index: u16,
+        total: u16,
     },
     /// A lookup command started — shown as a per-field spinner.
     LookupStarted {
@@ -66,7 +70,7 @@ pub enum ProgressEvent {
 pub trait ProgressSink: Send + Sync {
     fn emit(&self, event: ProgressEvent);
 
-    fn stage(&self, id: &str, label: &str, index: u8, total: u8) {
+    fn stage(&self, id: &str, label: &str, index: u16, total: u16) {
         self.emit(ProgressEvent::Stage {
             id: id.to_owned(),
             label: label.to_owned(),

@@ -156,13 +156,13 @@
   grid-row: 1;
 }
 
-.c-attachment figcaption span {
+.c-attachment__name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.c-attachment figcaption small {
+.c-attachment__size {
   color: var(--fg-subtle);
 }
 
@@ -295,7 +295,7 @@
     var(--accent) calc(var(--context) * 1%),
     var(--border) calc(var(--context) * 1%)
   );
-  mask: radial-gradient(circle, transparent 42%, #000 45%);
+  mask: radial-gradient(circle, transparent 42%, var(--fg) 45%);
 }
 
 .c-context {

@@ -61,7 +61,8 @@ export type IconName =
   | 'theme-light'
   | 'theme-dark'
   | 'bolt'
-  | 'mic';
+  | 'mic'
+  | 'warn';
 
 export interface IconSpec {
   /** Drawn with `stroke: currentColor; fill: none`. */
@@ -107,6 +108,8 @@ export const icons: Record<IconName, IconSpec> = {
       'A1.75 1.75 0 0 1 8 2.25 Z M3.75 7.25 A4.25 4.25 0 0 0 12.25 7.25 M8 11.5 V14',
   },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
+  /** A triangle, the same shape warnings already used as a `!` glyph in preflight lists. */
+  warn: { stroke: 'M8 3 L13.25 13.25 H2.75 Z M8 6.75 V10 M8 11.5 V12.25' },
   file: { stroke: 'M4 1.75 H9.25 L12 4.5 V14.25 H4 Z M9.25 1.75 V4.5 H12' },
   /*
    * Three bars, not six dots.

@@ -39,24 +39,30 @@
   const warns = $derived(preflight.filter((p) => p.severity === 'warn'));
 
   const canRemove = $derived(
-    !busy && errors.every((p) => p.overridable && (force || acknowledged.includes(p.id))),
+    !busy &&
+      !loading &&
+      errors.every((p) => p.overridable && (force || acknowledged.includes(p.id))),
   );
 
   // Re-check when the branch checkbox changes: the unmerged-work warning only applies then.
+  let previewSeq = 0;
   $effect(() => {
     const wantsBranch = deleteBranch;
+    const seq = ++previewSeq;
     loading = true;
     void commands
       .removePreflight(projectId, worktree.id, wantsBranch)
       .then((items) => {
+        if (seq !== previewSeq) return;
         preflight = items;
         error = null;
       })
       .catch((e) => {
+        if (seq !== previewSeq) return;
         error = errorMessage(e);
       })
       .finally(() => {
-        loading = false;
+        if (seq === previewSeq) loading = false;
       });
   });
 
@@ -97,13 +103,6 @@
       error = errorMessage(e);
     } finally {
       busy = false;
-    }
-  }
-
-  function onKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && !busy) {
-      event.stopPropagation();
-      onclose();
     }
   }
 </script>

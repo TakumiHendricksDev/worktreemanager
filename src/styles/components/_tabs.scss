@@ -12,11 +12,10 @@
  * content), and `.c-dialog__body` does, so an unmodified strip is what lines up there.
  * Defaulting to zero means the version that needs nothing gets nothing.
  *
- * No `role="tab"` here, and none in the markup at either call site. These are buttons that
- * swap a panel, announced only by an `aria-label` on the `<nav>`. Real tab semantics need
- * `tablist`/`tab`/`tabpanel`, `aria-selected`, `aria-controls` and arrow-key roving — worth
- * doing, and worth doing to both call sites at once rather than to whichever one is being
- * touched today.
+ * Settings now implements `tablist`/`tab`/`aria-selected` and arrow-key roving on this strip.
+ * The sidebar worktree list is a genuine vertical tablist of its own. A stacked *pane* tab
+ * (one session visible, N mounted) is still the rejected layout-node change in ARCHITECTURE.md
+ * §8 — these in-panel strips are not that.
  */
 
 .c-tabs {

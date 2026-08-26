@@ -114,9 +114,7 @@
   color: var(--fg);
 }
 
-.c-approval__question legend small,
-.c-approval__choice small,
-.c-approval__notes small {
+.c-approval__hint {
   font-size: var(--step--2);
   font-weight: 400;
   color: var(--fg-muted);

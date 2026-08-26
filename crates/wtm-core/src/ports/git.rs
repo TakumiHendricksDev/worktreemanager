@@ -143,6 +143,9 @@ pub trait Git: Send + Sync {
                 }
             }
         }
+        argv.push("--".to_owned());
+        // Paths cross IPC and config as UTF-8 strings; lossy conversion is the seam
+        // that records that assumption rather than silently inventing a different path.
         argv.push(opts.path.to_string_lossy().into_owned());
         argv.push(opts.start_point.clone());
         argv
@@ -228,6 +231,7 @@ mod tests {
                 "--no-track",
                 "-b",
                 "task/ACME-1234-slug",
+                "--",
                 "/x/ACME-1234-slug",
                 "origin/develop",
             ]
@@ -270,5 +274,23 @@ mod tests {
             create_branch: false,
         });
         assert!(argv.contains(&"--detach".to_owned()));
+    }
+
+    #[test]
+    fn a_path_that_looks_like_a_flag_is_separated_from_options() {
+        // Without `--`, git would parse `-sneaky` as an unknown switch instead of a path.
+        let argv = ArgvOnly.add_worktree_argv(&AddOptions {
+            path: PathBuf::from("-sneaky"),
+            branch: None,
+            start_point: "-HEAD".to_owned(),
+            track: TrackMode::Detach,
+            create_branch: false,
+        });
+        let sep = argv
+            .iter()
+            .position(|a| a == "--")
+            .expect("a `--` separator");
+        assert_eq!(&argv[sep + 1], "-sneaky");
+        assert_eq!(&argv[sep + 2], "-HEAD");
     }
 }

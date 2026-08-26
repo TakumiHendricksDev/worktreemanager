@@ -63,6 +63,9 @@
   let contextOpen = $state(false);
   let skillsOpen = $state(false);
   let confirmRestart = $state(false);
+  let confirmClose = $state(false);
+  let copiedReply = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
   /**
    * True from submit until the turn is accepted or refused.
    *
@@ -269,6 +272,7 @@
         id: o.id,
         label: o.label,
         capability: sessions.capabilities[o.id] ?? null,
+        failed: sessions.capabilityFailed[o.id] === true,
       })),
   );
 
@@ -324,6 +328,11 @@
   async function restartConfirmed() {
     confirmRestart = false;
     await sessions.restart(pane.id);
+  }
+
+  async function closeConfirmed() {
+    confirmClose = false;
+    await sessions.close(pane.id);
   }
 
   /*
@@ -458,8 +467,12 @@
           : `Tap to dictate, tap again to stop — audio goes to ${DESTINATION}`,
   );
 
+  let stopRequested = false;
+
   async function beginDictation() {
+    stopRequested = false;
     await dictation.start();
+    if (stopRequested) await endDictation();
   }
 
   /**
@@ -468,9 +481,16 @@
    * Appended rather than replacing, and separated by a space when there is already text: dictation
    * is routinely used to finish a sentence somebody started typing, and clobbering that would make
    * the button dangerous to press by accident.
+   *
+   * A press shorter than the start round trip used to no-op here (`recording` was still false)
+   * and leave the microphone live once start resolved. `stopRequested` closes that window.
    */
   async function endDictation() {
-    if (!dictation.recording) return;
+    if (!dictation.recording) {
+      stopRequested = true;
+      return;
+    }
+    stopRequested = false;
     const said = await dictation.stop();
     if (said === null) {
       if (dictation.error !== null) sessions.error = dictation.error;
@@ -526,7 +546,12 @@
       }
       if (command === '/copy') {
         const copied = await copyLatestResponse();
-        if (copied) draft = '';
+        if (copied) {
+          draft = '';
+          copiedReply = true;
+          clearTimeout(copyTimer);
+          copyTimer = setTimeout(() => (copiedReply = false), 1400);
+        }
         return;
       }
       /*
@@ -1090,7 +1115,7 @@
           icon="sm"
           title="End this session and close the pane"
           ariaLabel="Close session"
-          onclick={() => void sessions.close(pane.id)}
+          onclick={() => (confirmClose = true)}
         >
           <Icon name="close" size={12} />
         </Button>
@@ -1385,8 +1410,10 @@
                     <Icon name="close" size={10} />
                   </button>
                   <figcaption>
-                    <span title={attachment.name}>{attachment.name}</span>
-                    <small>{formatBytes(attachment.size)}</small>
+                    <span class="c-attachment__name" title={attachment.name}
+                      >{attachment.name}</span
+                    >
+                    <small class="c-attachment__size">{formatBytes(attachment.size)}</small>
                   </figcaption>
                 </figure>
               {/each}
@@ -1512,6 +1539,7 @@
               effortPending={pane.effortPending}
               disabled={pane.ended !== null || pane.error !== null}
               onchange={(next) => sessions.configure(pane.id, next)}
+              onretry={(id) => void sessions.retryCapability(id)}
             />
 
             <div class="c-composer__send">
@@ -1549,6 +1577,9 @@
                 >
                   {sending ? 'Sending…' : 'Send'}
                 </Button>
+              {/if}
+              {#if copiedReply}
+                <span class="c-status--ok">Copied the last reply.</span>
               {/if}
             </div>
           </div>
@@ -1612,6 +1643,23 @@
       <Button variant="neutral" onclick={() => (confirmRestart = false)}>Cancel</Button>
       <Button variant="danger-solid" onclick={() => void restartConfirmed()}>Restart</Button
       >
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if confirmClose}
+  <Dialog title="Close session?" onclose={() => (confirmClose = false)}>
+    {#snippet body()}
+      <p>
+        Closing ends this {provider === null ? 'shell' : 'conversation'} and removes the pane.
+        {#if provider !== null}
+          Delegated children and any side question are closed with it.
+        {/if}
+      </p>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="neutral" onclick={() => (confirmClose = false)}>Cancel</Button>
+      <Button variant="danger-solid" onclick={() => void closeConfirmed()}>Close</Button>
     {/snippet}
   </Dialog>
 {/if}

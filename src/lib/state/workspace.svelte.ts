@@ -122,6 +122,8 @@ class Workspace {
    * the star the user just clicked flick back off. Not `$state`: nothing renders it.
    */
   private favoriteEpoch = 0;
+  /** Bumped at the start of every list fetch so a stale `finally` cannot clear a newer spinner. */
+  private listEpoch = 0;
 
   loadingProjects = $state(false);
   /** True only when there is nothing to show yet — the one case that warrants a placeholder. */
@@ -312,17 +314,19 @@ class Workspace {
     if (cold) this.loadingWorktrees = true;
     else this.revalidating = true;
 
-    const epoch = this.favoriteEpoch;
+    const favoriteAt = this.favoriteEpoch;
+    const epoch = ++this.listEpoch;
 
     try {
       const list = await commands.listWorktrees(projectId);
 
       // Guard against a slow response for a project the user has since navigated away from.
       if (this.activeProjectId !== projectId) return;
+      if (epoch !== this.listEpoch) return;
 
       // A star clicked while this was in flight is newer than what came back, and has
       // already been written to disk. Keep it rather than letting the stale answer win.
-      if (this.favoriteEpoch !== epoch) {
+      if (this.favoriteEpoch !== favoriteAt) {
         const local = new Map(this.worktrees.map((w) => [w.id, w.favorite]));
         for (const fresh of list) {
           const known = local.get(fresh.id);
@@ -343,13 +347,16 @@ class Workspace {
         this.selectedWorktreeId = (list.find((w) => w.isMain) ?? list[0])?.id ?? null;
       }
     } catch (e) {
+      if (epoch !== this.listEpoch) return;
       this.error = errorMessage(e);
       // Keep whatever is on screen. A failed refresh is a reason to show a retry banner, not
       // a reason to throw away a list that was correct a moment ago.
       if (this.worktrees.length === 0) this.stale = false;
     } finally {
-      this.loadingWorktrees = false;
-      this.revalidating = false;
+      if (epoch === this.listEpoch) {
+        this.loadingWorktrees = false;
+        this.revalidating = false;
+      }
     }
   }
 
@@ -363,10 +370,10 @@ class Workspace {
     const list = this.ordered;
     if (list.length === 0) return;
     const current = list.findIndex((w) => w.id === this.selectedWorktreeId);
-    const next = Math.min(
-      Math.max((current === -1 ? 0 : current) + delta, 0),
-      list.length - 1,
-    );
+    // Nothing selected: ArrowDown starts *on* the first row, ArrowUp on the last. Starting
+    // from 0 then adding delta used to skip the first row on the way down.
+    const from = current === -1 ? (delta > 0 ? -1 : list.length) : current;
+    const next = Math.min(Math.max(from + delta, 0), list.length - 1);
     this.selectedWorktreeId = list[next]?.id ?? this.selectedWorktreeId;
   }
 

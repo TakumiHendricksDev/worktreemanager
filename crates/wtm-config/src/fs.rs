@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use wtm_core::error::ConfigError;
 use wtm_core::ports::fs::FileStore;
@@ -133,6 +134,23 @@ pub fn absolutize(path: &Path) -> Result<PathBuf, ConfigError> {
     Ok(out)
 }
 
+/// A sibling of `path` that will not collide with another in-flight atomic write.
+///
+/// User config, trust, and the session store all used `path.with_extension("toml.tmp")`,
+/// which is one name for every writer. Two saves at once would truncate each other's
+/// temporary file, and a crash mid-write could leave a shared leftover. The pid and a
+/// process-local counter keep the file in the same directory (so `rename` stays atomic)
+/// without sharing a name.
+pub fn unique_temp_path(path: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    path.with_file_name(format!("{name}.{}.{seq}.tmp", std::process::id()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +229,16 @@ mod tests {
         // Rewriting /var to /private/var would make displayed paths unrecognizable.
         let path = Path::new("/var/folders/x");
         assert_eq!(absolutize(path).unwrap(), PathBuf::from("/var/folders/x"));
+    }
+
+    #[test]
+    fn unique_temp_paths_stay_siblings_and_do_not_reuse_a_name() {
+        let path = Path::new("/tmp/config.toml");
+        let first = unique_temp_path(path);
+        let second = unique_temp_path(path);
+        assert_eq!(first.parent(), path.parent());
+        assert_ne!(first, second);
+        assert_ne!(first, path.with_extension("toml.tmp"));
     }
 
     #[test]

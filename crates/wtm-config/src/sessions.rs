@@ -130,7 +130,7 @@ impl SessionStore {
             message: format!("serialize the session store: {e}"),
         })?;
 
-        let temp = path.with_extension("toml.tmp");
+        let temp = crate::fs::unique_temp_path(path);
         std::fs::write(&temp, text).map_err(|e| ConfigError::Io {
             path: temp.clone(),
             message: e.to_string(),

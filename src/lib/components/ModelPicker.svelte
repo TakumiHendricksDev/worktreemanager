@@ -74,6 +74,7 @@
    * organization has this switched off".
    */
   import type { Capability } from '../ipc/types';
+  import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
 
   /** One provider's entry in the model menu. */
@@ -81,6 +82,8 @@
     id: string;
     label: string;
     capability: Capability | null;
+    /** True when the last probe failed, as opposed to still being in flight. */
+    failed?: boolean;
   }
 
   const {
@@ -94,6 +97,7 @@
     effortPending = false,
     disabled = false,
     onchange,
+    onretry,
   }: {
     /** Every agent this repository and machine can start, in catalogue order. */
     providers: ModelGroup[];
@@ -117,6 +121,8 @@
       mode: string | null;
       fast: boolean;
     }) => void;
+    /** Re-probe a provider whose last capability fetch failed. */
+    onretry?: (provider: string) => void;
   } = $props();
 
   /** The provider whose models, ladder and labels this control is showing. */
@@ -247,7 +253,16 @@
 
 <div class="c-model-picker">
   {#if capability === null}
-    <p class="c-model-picker__note c-status--subtle">reading capabilities…</p>
+    {#if chosenGroup?.failed}
+      <p class="c-model-picker__note c-status--warn">
+        Could not read capabilities.
+        {#if onretry}
+          <Button variant="link" size="sm" onclick={() => onretry(chosen)}>Retry</Button>
+        {/if}
+      </p>
+    {:else}
+      <p class="c-model-picker__note c-status--subtle">reading capabilities…</p>
+    {/if}
   {:else if models.length === 0}
     <p class="c-model-picker__note c-status--warn">
       This agent reported no models. It may not be logged in.

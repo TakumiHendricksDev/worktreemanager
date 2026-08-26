@@ -145,8 +145,36 @@ pub fn request_url(utterance: &Utterance) -> String {
 ///
 /// curl's parser treats a backslash as an escape inside double quotes, so both it and the quote
 /// character have to be doubled back. Everything else is literal.
+///
+/// This is not a security boundary on its own, and that is the reason [`ensure_key_safe`] exists
+/// beside it: a newline inside double quotes still ends the directive in both grammars this crate
+/// writes into, so quoting is not enough and the unsafe character has to be refused rather than
+/// escaped.
 fn escape_config(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Refuse a key that cannot be carried into a line-oriented payload without changing its meaning.
+///
+/// The key is written into two grammars — the `curl` config on stdin and the `security -i`
+/// keychain script — and both treat a raw newline as the end of the current directive regardless of
+/// the quoting around it. So a key containing `\n` is not an escaping problem, it is an injection
+/// primitive: `\nurl = "http://…"` redirects every recording, and `\ndelete-generic-password …`
+/// runs an extra keychain verb. A real Deepgram key is base64-ish ASCII, so rejecting every control
+/// character (C0, DEL, C1 — which includes `\n` and `\r`) is wrong in no direction.
+///
+/// Checked against the trimmed value, because that is what both payloads embed: [`request_config`]
+/// and [`Keystore::write`] pass `key.trim()`, so an interior control character is the case that
+/// survives trimming and the case this guards.
+///
+/// # Errors
+///
+/// [`DictateError::InvalidKey`] when the trimmed key holds a control character.
+pub fn ensure_key_safe(key: &str) -> Result<(), DictateError> {
+    if key.trim().chars().any(char::is_control) {
+        return Err(DictateError::InvalidKey);
+    }
+    Ok(())
 }
 
 /// The `curl` configuration to hand over on stdin, carrying the URL and the credential.
@@ -206,10 +234,7 @@ const STATUS_MARKER: &str = "wtm-status:";
 /// rather than from a body that happens not to parse.
 pub fn parse_response(stdout: &str) -> Result<String, DictateError> {
     let (body, status) = match stdout.rsplit_once(STATUS_MARKER) {
-        Some((body, status)) => (
-            body.trim_end_matches('\n'),
-            status.trim().parse::<u16>().unwrap_or(0),
-        ),
+        Some((body, status)) => (body.trim_end_matches('\n'), status.trim()),
         // No marker at all means curl never got far enough to write one — a DNS failure, a refused
         // connection, a missing CA. Its own message on stderr is the useful thing, and the caller
         // has it.
@@ -218,6 +243,14 @@ pub fn parse_response(stdout: &str) -> Result<String, DictateError> {
                 message: stdout.trim().to_owned(),
             });
         }
+    };
+
+    let Ok(status) = status.parse::<u16>() else {
+        // A marker with no number is as useless as no marker: treating it as HTTP 0
+        // made a parse failure look like the service refused with a code nobody sends.
+        return Err(DictateError::Unreachable {
+            message: format!("curl wrote a status marker that was not a number: {status}"),
+        });
     };
 
     match status {

@@ -63,6 +63,7 @@
    */
   const pending = new Map<string, Uint8Array[]>();
   const MAX_PENDING_CHUNKS = 2048;
+  const MAX_PENDING_SESSIONS = 8;
 
   /** Deliberately not `$state`: the flush effect writes it, and reading it must not re-trigger. */
   let attachedTo: string | null = null;
@@ -188,18 +189,16 @@
     resize.observe(host);
 
     const unlistenOutput = listen<PtyOutput>('pty:output', (event) => {
-      const bytes = base64ToBytes(event.payload.chunkBase64);
-
-      // Buffer until we both know our session and have flushed its backlog. Writing straight
-      // through before the flush would put late chunks ahead of early ones.
-      if (session === null || attachedTo !== session) {
-        if (session !== null && event.payload.session !== session) return;
-        buffer(event.payload.session, bytes);
+      const incoming = event.payload.session;
+      // Filter before decoding: every pane hears every session's chunks, and base64 is the
+      // expensive half of the hottest path in the app.
+      if (session !== null && attachedTo === session) {
+        if (incoming !== session) return;
+        created.write(base64ToBytes(event.payload.chunkBase64));
         return;
       }
-
-      if (event.payload.session !== session) return;
-      created.write(bytes);
+      if (session !== null && incoming !== session) return;
+      buffer(incoming, base64ToBytes(event.payload.chunkBase64));
     });
 
     const unlistenExit = listen<PtyExit>('pty:exit', (event) => {
@@ -224,6 +223,10 @@
   });
 
   function buffer(id: string, bytes: Uint8Array) {
+    if (!pending.has(id) && pending.size >= MAX_PENDING_SESSIONS) {
+      const first = pending.keys().next().value;
+      if (first !== undefined) pending.delete(first);
+    }
     const chunks = pending.get(id) ?? [];
     chunks.push(bytes);
     if (chunks.length > MAX_PENDING_CHUNKS)
@@ -288,8 +291,13 @@
 </script>
 
 <div class="c-terminal">
-  <div class="c-terminal__screen" bind:this={host}></div>
+  <div
+    class="c-terminal__screen"
+    bind:this={host}
+    role="log"
+    aria-label="Terminal output"
+  ></div>
   {#if status}
-    <p class="c-terminal__status">{status}</p>
+    <p class="c-terminal__status" aria-live="polite">{status}</p>
   {/if}
 </div>

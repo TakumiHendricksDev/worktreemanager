@@ -17,9 +17,12 @@
    * `tests/env_masking.rs` proving exactly the property it proved before: no value reaches the
    * window except through `reveal_env_value`, one key at a time, read fresh from disk.
    */
+  import { onDestroy } from 'svelte';
+
   import { commands } from '../ipc/commands';
   import { errorMessage, type Worktree } from '../ipc/types';
   import Dialog from './ui/Dialog.svelte';
+  import Button from './ui/Button.svelte';
 
   const {
     worktree,
@@ -33,6 +36,8 @@
 
   let copied = $state(false);
   let copiedKey = $state<string | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  let copyKeyTimer: ReturnType<typeof setTimeout> | undefined;
   /** Values the user has explicitly revealed. Gone when this dialog closes, which is the point. */
   let revealed = $state<Record<string, string>>({});
   let revealError = $state<string | null>(null);
@@ -41,7 +46,8 @@
     try {
       await navigator.clipboard.writeText(worktree.path);
       copied = true;
-      setTimeout(() => (copied = false), 1400);
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copied = false), 1400);
     } catch {
       // Clipboard access can be denied; the path is selectable as a fallback.
     }
@@ -74,11 +80,17 @@
         revealed[key] ?? (await commands.revealEnvValue(projectId, worktree.id, key));
       await navigator.clipboard.writeText(value);
       copiedKey = key;
-      setTimeout(() => (copiedKey = null), 1400);
+      clearTimeout(copyKeyTimer);
+      copyKeyTimer = setTimeout(() => (copiedKey = null), 1400);
     } catch (e) {
       revealError = errorMessage(e);
     }
   }
+
+  onDestroy(() => {
+    clearTimeout(copyTimer);
+    clearTimeout(copyKeyTimer);
+  });
 </script>
 
 <Dialog title={worktree.title} {onclose} wide>
@@ -153,9 +165,8 @@
               <th>{row.label}</th>
               <td>
                 {#if row.url}
-                  <button
-                    class="c-button c-button--link c-button--sm"
-                    onclick={() => open(row.url ?? '')}>{row.value}</button
+                  <Button variant="link" size="sm" onclick={() => open(row.url ?? '')}
+                    >{row.value}</Button
                   >
                 {:else}
                   <code>{row.value}</code>
@@ -194,14 +205,16 @@
               <td>
                 {#if revealed[key] !== undefined}
                   <code class="c-detail__revealed">{revealed[key]}</code>
-                  <button class="c-row-action" onclick={() => hide(key)}>hide</button>
+                  <Button variant="link" size="sm" onclick={() => hide(key)}>hide</Button>
                 {:else}
                   <code class="c-detail__masked" aria-label="hidden value">••••••••</code>
-                  <button class="c-row-action" onclick={() => reveal(key)}>reveal</button>
+                  <Button variant="link" size="sm" onclick={() => reveal(key)}
+                    >reveal</Button
+                  >
                 {/if}
-                <button class="c-row-action" onclick={() => copyValue(key)}>
+                <Button variant="link" size="sm" onclick={() => copyValue(key)}>
                   {copiedKey === key ? 'copied' : 'copy'}
-                </button>
+                </Button>
               </td>
             </tr>
           {/each}
@@ -211,6 +224,6 @@
   {/snippet}
 
   {#snippet footer()}
-    <button class="c-button c-button--neutral c-button--md" onclick={onclose}>Close</button>
+    <Button variant="neutral" onclick={onclose}>Done</Button>
   {/snippet}
 </Dialog>

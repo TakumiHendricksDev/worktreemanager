@@ -65,9 +65,10 @@ pub fn adapters(
 ) -> (ResolvedPath, Runner, PtyHostImpl, PipeHostImpl, SystemClock) {
     let path = ResolvedPath::resolve(path_override);
     let runner = Runner::new(path.clone());
-    let pty = PtyHostImpl::new(path.clone());
+    let clock = SystemClock::new();
+    let pty = PtyHostImpl::with_clock(path.clone(), std::sync::Arc::new(clock.clone()));
     let pipe = PipeHostImpl::new(path.clone());
-    (path, runner, pty, pipe, SystemClock::new())
+    (path, runner, pty, pipe, clock)
 }
 
 #[cfg(test)]

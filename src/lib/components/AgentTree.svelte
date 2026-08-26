@@ -95,16 +95,18 @@
             <!-- One child is the `ask_agent` case, and it has a name worth showing. A count of one
                  would be strictly less information in the same space. -->
             {@const only = group.children[0]}
+            {@const status = sessions.statusOfPane(only)}
             <button
               class="c-agent-tree__item"
               class:is-selected={visible.has(only.id)}
               title={detail(only)}
               onclick={() => sessions.showRelated(only.id)}
             >
-              <SessionDot status={sessions.statusOfPane(only)} />
+              <SessionDot {status} />
               <span class="c-agent-tree__label"
                 >{only.agentTitle ?? sessions.labelOf(only)}</span
               >
+              <span class="c-agent-tree__status">{STATUS_WORD[status] || 'idle'}</span>
             </button>
           {:else}
             <button

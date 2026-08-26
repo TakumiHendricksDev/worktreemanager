@@ -31,10 +31,12 @@
    * a disabled row reading *"no `code` on wtm's PATH"* is the fastest available diagnosis of
    * this app's most likely production failure — a bundled app that cannot see Homebrew.
    */
+  import { onDestroy } from 'svelte';
+
   import { commands } from '../ipc/commands';
-  import Icon from './ui/Icon.svelte';
   import { errorMessage, type Opener } from '../ipc/types';
   import { workspace } from '../state/workspace.svelte';
+  import Icon from './ui/Icon.svelte';
 
   const {
     projectId,
@@ -125,6 +127,8 @@
     failure = null;
     opened = null;
   });
+
+  onDestroy(() => clearTimeout(timer));
 </script>
 
 {#if primary}

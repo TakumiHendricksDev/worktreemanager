@@ -100,7 +100,7 @@
 
   <div class="c-worktree-bar__facts">
     {#if worktree.branch}
-      <code class="c-worktree-bar__branch">{worktree.branch}</code>
+      <code class="c-worktree-bar__branch" title={worktree.branch}>{worktree.branch}</code>
     {:else}
       <span class="c-status--muted">detached</span>
     {/if}
@@ -113,7 +113,7 @@
          single click away. -->
 
     {#if worktree.isMain}<span class="c-badge c-badge--accent">main worktree</span>{/if}
-    {#each visibleBadges as badge (badge.label)}
+    {#each visibleBadges as badge, i (`${badge.label}:${i}`)}
       <span class="c-badge" title={badge.label}>{badge.label}: {badge.value}</span>
     {/each}
   </div>
@@ -152,7 +152,7 @@
           onchange={pickLink}
         >
           <option value="">Links</option>
-          {#each worktree.links as link (link.label)}
+          {#each worktree.links as link, i (`${link.label}:${i}`)}
             <option value={link.url}>{link.label} — {link.url}</option>
           {/each}
         </select>
@@ -185,8 +185,9 @@
     <span class="c-detail__divider" aria-hidden="true"></span>
 
     <!-- The main worktree cannot be removed; git refuses, and so does the pipeline. -->
-    <button
-      class="c-button c-button--danger-outline c-button--sm"
+    <Button
+      variant="danger-outline"
+      size="sm"
       onclick={onremove}
       disabled={worktree.isMain}
       title={worktree.isMain
@@ -194,6 +195,6 @@
         : 'Remove this worktree'}
     >
       Remove
-    </button>
+    </Button>
   </div>
 </header>

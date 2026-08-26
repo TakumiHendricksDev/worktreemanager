@@ -46,7 +46,7 @@ use crate::ports::pty::{PtyHost, PtySink};
 use crate::ports::template::{Context, TemplateEngine};
 
 /// Total stage count, for progress reporting.
-const STAGES: u8 = 10;
+const STAGES: u16 = 10;
 
 /// Default deadline for a lookup command when its config does not set one.
 ///
@@ -116,6 +116,8 @@ struct Planned {
     preview: PlanPreview,
     add: AddOptions,
     fetch: Option<(String, String)>,
+    setup_base_ctx: Context,
+    values: FormValues,
 }
 
 /// Resolve `remote/ref` only when the prefix names a configured remote.
@@ -189,6 +191,9 @@ impl CreatePipeline {
         let local = self.git.branches(&project.root, BranchFilter::Local)?;
         let remote = self.git.branches(&project.root, BranchFilter::Remote)?;
         let remotes = self.git.remotes(&project.root)?;
+        // Drop worktrees whose directories are already gone so a hand-deleted checkout
+        // cannot raise a non-overridable `branch_in_use` that blocks re-create forever.
+        let _ = self.git.prune_worktrees(&project.root);
         let worktrees = self.git.list_worktrees(&project.root)?;
         let base_commit = self.git.rev_parse(&project.root, &base_ref)?;
 
@@ -238,11 +243,12 @@ impl CreatePipeline {
         let add = Self::add_options(&branch_plan, &directory, &base_ref, &local);
         let git_argv = self.git.add_worktree_argv(&add);
 
-        // Setup argv is rendered with the *planned* worktree in scope, since that is exactly
-        // what stage 9 will do — the review screen must show the real command.
+        // The worktree does not exist yet, so the preview uses the path and branch being planned.
+        // Stage 9 renders again after git returns the authoritative path and head.
         let mut setup_ctx = ctx.clone();
         insert_planned_worktree(&mut setup_ctx, &directory, branch_plan.branch());
-        let (setup_argv, setup_cwd) = self.render_setup(project, &setup_ctx, &values)?;
+        let (setup_argv, setup_cwd) =
+            self.render_setup(project, &setup_ctx, &values, Some(&directory))?;
 
         let fetch = project
             .create
@@ -276,6 +282,8 @@ impl CreatePipeline {
             },
             add,
             fetch,
+            setup_base_ctx: ctx,
+            values,
         })
     }
 
@@ -403,32 +411,27 @@ impl CreatePipeline {
 
         progress.stage("setup", "Running project setup", 9, STAGES);
 
-        let mut setup_ctx = req.ambient.clone();
-        for (key, value) in &planned.preview.plan_values() {
-            setup_ctx.insert(key.clone(), value.clone());
-        }
+        // Git is allowed to canonicalize the path, and only the created worktree has a real head.
+        // Rendering here keeps a first setup run identical to retry instead of reusing the preview.
+        let mut setup_ctx = planned.setup_base_ctx.clone();
         insert_actual_worktree(&mut setup_ctx, &worktree);
 
-        let Some(argv) = planned.preview.plan.setup_argv.clone() else {
+        let (Some(argv), Some(cwd)) =
+            self.render_setup(project, &setup_ctx, &planned.values, Some(&worktree.path))?
+        else {
             progress.stage("done", "Done", STAGES, STAGES);
             return Ok(CreateOutcome::Created {
                 worktree,
                 setup_session: None,
             });
         };
-        let cwd = planned
-            .preview
-            .plan
-            .setup_cwd
-            .clone()
-            .unwrap_or_else(|| project.root.clone());
 
         let mut inv = Invocation::new(
             argv.clone(),
             cwd.clone(),
             setup.command.timeout_ms.unwrap_or(DEFAULT_SETUP_TIMEOUT_MS),
         );
-        inv.env = self.render_env(&setup.command.env, &setup_ctx, "setup");
+        inv.env = self.render_env(&setup.command.env, &setup_ctx, "setup")?;
 
         progress.emit(crate::ports::progress::ProgressEvent::CommandStarted {
             argv: argv.clone(),
@@ -514,13 +517,19 @@ impl CreatePipeline {
         let mut argv = self.render_argv(&setup.command.run, &ctx, "setup.run")?;
         argv.extend_from_slice(extra_args);
 
-        let cwd = resolve_cwd(&setup.command.cwd, project, Some(worktree));
+        let cwd = resolve_cwd(
+            &setup.command.cwd,
+            project,
+            Some(&worktree.path),
+            self.engine.as_ref(),
+            &ctx,
+        );
         let mut inv = Invocation::new(
             argv,
             cwd,
             setup.command.timeout_ms.unwrap_or(DEFAULT_SETUP_TIMEOUT_MS),
         );
-        inv.env = self.render_env(&setup.command.env, &ctx, "setup");
+        inv.env = self.render_env(&setup.command.env, &ctx, "setup")?;
 
         let spawned = self
             .pty
@@ -602,26 +611,29 @@ impl CreatePipeline {
 
             if let Some(pattern) = &field.pattern {
                 let rendered = value.as_template_string();
-                let matches = self
-                    .engine
-                    .eval_bool(
-                        &format!("field.{}.pattern", field.key),
-                        &format!("subject | matches({})", quote(pattern)),
-                        &{
-                            let mut ctx = Context::new();
-                            ctx.insert("subject".to_owned(), rendered.clone());
-                            ctx
-                        },
-                    )
-                    .unwrap_or(true);
-                if !matches {
-                    problems.push(FieldProblem::new(
+                // Fail closed: a template that cannot be evaluated is not a match.
+                // Treating an error as success would let a bad pattern through.
+                match self.engine.eval_bool(
+                    &format!("field.{}.pattern", field.key),
+                    &format!("subject | matches({})", quote(pattern)),
+                    &{
+                        let mut ctx = Context::new();
+                        ctx.insert("subject".to_owned(), rendered.clone());
+                        ctx
+                    },
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => problems.push(FieldProblem::new(
                         &field.key,
                         field
                             .pattern_message
                             .clone()
                             .unwrap_or_else(|| format!("Must match {pattern}")),
-                    ));
+                    )),
+                    Err(error) => problems.push(FieldProblem::new(
+                        &field.key,
+                        format!("could not evaluate the field pattern: {error}"),
+                    )),
                 }
             }
         }
@@ -703,7 +715,13 @@ impl CreatePipeline {
             ctx,
             &format!("lookup.{}.run", lookup.id),
         )?;
-        let cwd = resolve_cwd(&lookup.command.cwd, project, None);
+        let cwd = resolve_cwd(
+            &lookup.command.cwd,
+            project,
+            None,
+            self.engine.as_ref(),
+            ctx,
+        );
 
         let mut inv = Invocation::new(
             argv,
@@ -713,7 +731,7 @@ impl CreatePipeline {
                 .timeout_ms
                 .unwrap_or(DEFAULT_LOOKUP_TIMEOUT_MS),
         );
-        inv.env = self.render_env(&lookup.command.env, ctx, &format!("lookup.{}", lookup.id));
+        inv.env = self.render_env(&lookup.command.env, ctx, &format!("lookup.{}", lookup.id))?;
 
         let output = self.runner.run(&inv, cancel)?;
 
@@ -823,27 +841,33 @@ impl CreatePipeline {
         // `{type}/{key}-{slug}` into `experiment/ACME-0000-`, which git accepts and nothing
         // else catches.
         if let Some(pattern) = &project.naming.branch_must_match {
-            let ok = self
-                .engine
-                .eval_bool(
-                    "naming.branch_must_match",
-                    &format!("subject | matches({})", quote(pattern)),
-                    &{
-                        let mut c = Context::new();
-                        c.insert("subject".to_owned(), trimmed.to_owned());
-                        c
-                    },
-                )
-                .unwrap_or(true);
-            if !ok {
-                return Err(WtmError::Render(crate::error::RenderError::Unusable {
-                    key: "naming.branch".to_owned(),
-                    rendered: trimmed.to_owned(),
-                    message: format!(
-                        "does not match the project's required branch pattern `{pattern}` — \
-                         usually a missing title or an issue summary that slugified to nothing"
-                    ),
-                }));
+            match self.engine.eval_bool(
+                "naming.branch_must_match",
+                &format!("subject | matches({})", quote(pattern)),
+                &{
+                    let mut c = Context::new();
+                    c.insert("subject".to_owned(), trimmed.to_owned());
+                    c
+                },
+            ) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(WtmError::Render(crate::error::RenderError::Unusable {
+                        key: "naming.branch".to_owned(),
+                        rendered: trimmed.to_owned(),
+                        message: format!(
+                            "does not match the project's required branch pattern `{pattern}` — \
+                             usually a missing title or an issue summary that slugified to nothing"
+                        ),
+                    }));
+                }
+                Err(error) => {
+                    return Err(WtmError::Render(crate::error::RenderError::Unusable {
+                        key: "naming.branch".to_owned(),
+                        rendered: trimmed.to_owned(),
+                        message: format!("could not evaluate the required branch pattern: {error}"),
+                    }));
+                }
             }
         }
 
@@ -1014,6 +1038,7 @@ impl CreatePipeline {
         project: &Project,
         ctx: &Context,
         values: &FormValues,
+        worktree_path: Option<&std::path::Path>,
     ) -> Result<(Option<Vec<String>>, Option<PathBuf>), WtmError> {
         let Some(setup) = &project.setup else {
             return Ok((None, None));
@@ -1040,7 +1065,13 @@ impl CreatePipeline {
 
         Ok((
             Some(argv),
-            Some(resolve_cwd(&setup.command.cwd, project, None)),
+            Some(resolve_cwd(
+                &setup.command.cwd,
+                project,
+                worktree_path,
+                self.engine.as_ref(),
+                ctx,
+            )),
         ))
     }
 
@@ -1066,13 +1097,13 @@ impl CreatePipeline {
         env: &BTreeMap<String, String>,
         ctx: &Context,
         key: &str,
-    ) -> BTreeMap<String, String> {
+    ) -> Result<BTreeMap<String, String>, WtmError> {
         env.iter()
-            .filter_map(|(name, template)| {
+            .map(|(name, template)| {
                 self.engine
                     .render(&format!("{key}.env.{name}"), template, ctx)
-                    .ok()
                     .map(|value| (name.clone(), value))
+                    .map_err(Into::into)
             })
             .collect()
     }
@@ -1195,25 +1226,21 @@ impl CreatePipeline {
     }
 }
 
-impl PlanPreview {
-    /// The token values the plan was built from, for reuse in stage 9.
-    fn plan_values(&self) -> BTreeMap<String, String> {
-        let mut out = self.lookups.clone();
-        out.extend(self.computed.clone());
-        out
-    }
-}
-
 /// Where a command runs.
-fn resolve_cwd(
+pub fn resolve_cwd(
     base: &crate::model::CwdBase,
     project: &Project,
-    worktree: Option<&Worktree>,
+    worktree_path: Option<&std::path::Path>,
+    engine: &dyn TemplateEngine,
+    ctx: &Context,
 ) -> PathBuf {
     use crate::model::CwdBase;
     match base {
-        CwdBase::RepoRoot | CwdBase::MainWorktree | CwdBase::Custom(_) => project.root.clone(),
-        CwdBase::Worktree => worktree.map_or_else(|| project.root.clone(), |w| w.path.clone()),
+        CwdBase::RepoRoot | CwdBase::MainWorktree => project.root.clone(),
+        CwdBase::Worktree => worktree_path.map_or_else(|| project.root.clone(), PathBuf::from),
+        CwdBase::Custom(template) => engine
+            .render("cwd", template, ctx)
+            .map_or_else(|_| project.root.clone(), PathBuf::from),
     }
 }
 

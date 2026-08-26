@@ -339,7 +339,7 @@ fn tools(agents: &[(String, String)]) -> Value {
                     "agent": agent_schema,
                     "model": {
                         "type": "string",
-                        "description": "Optional provider model id. Omit to use the configured default.",
+                        "description": "Optional exact provider model id, not a display label or inferred alias. Omit unless the id is already known; omission uses the configured default.",
                     },
                     "effort": {
                         "type": "string",
@@ -384,7 +384,10 @@ fn tools(agents: &[(String, String)]) -> Value {
                                     "description": "A short label shown in the child-session tree.",
                                 },
                                 "agent": task_agent_schema,
-                                "model": { "type": "string" },
+                                "model": {
+                                    "type": "string",
+                                    "description": "Optional exact provider model id. Omit unless already known.",
+                                },
                                 "effort": { "type": "string" },
                                 "mode": { "type": "string" },
                                 "prompt": {

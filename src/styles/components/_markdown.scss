@@ -106,7 +106,7 @@
 
 .c-markdown__block pre {
   margin: 0;
-  padding: var(--sp-3);
+  padding: var(--sp-6) var(--sp-3) var(--sp-3);
   font-family: var(--font-mono);
   font-size: var(--step--2);
   line-height: 1.55;
@@ -115,12 +115,18 @@
   overflow-y: auto;
 }
 
+.c-markdown__copy {
+  position: absolute;
+  top: var(--sp-1);
+  right: var(--sp-1);
+}
+
 /* The language, where a highlighter's theme would otherwise be doing the telling. Positioned rather
    than in flow so it cannot push the first line of code down and misalign a pasted diff. */
 .c-markdown__lang {
   position: absolute;
   top: var(--sp-1);
-  right: var(--sp-2);
+  left: var(--sp-2);
   font-family: var(--font-mono);
   font-size: var(--step--2);
   color: var(--fg-subtle);

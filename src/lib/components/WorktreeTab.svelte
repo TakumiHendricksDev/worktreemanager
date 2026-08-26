@@ -15,6 +15,7 @@
     worktree,
     status,
     selected,
+    controls = 'worktree-detail',
     onselect,
     onfavorite,
   }: {
@@ -28,6 +29,8 @@
      */
     status: PaneStatus | null;
     selected: boolean;
+    /** The panel this tab controls. Null while the create pane is on screen. */
+    controls?: string | null;
     onselect: () => void;
     onfavorite: () => void;
   } = $props();
@@ -67,7 +70,7 @@
     role="tab"
     id={`tab-${worktree.id}`}
     aria-selected={selected}
-    aria-controls="worktree-detail"
+    aria-controls={controls ?? undefined}
     tabindex={selected ? 0 : -1}
     class="c-worktree-tab__button"
     class:is-selected={selected}

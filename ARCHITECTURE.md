@@ -1,6 +1,6 @@
 # Architecture
 
-The README answers *how do I run this*. This answers *why is it built this way*, including the options
+The README answers _how do I run this_. This answers _why is it built this way_, including the options
 that were considered and rejected — those are the parts that get re-litigated otherwise.
 
 ---
@@ -25,7 +25,7 @@ library repo with no config at all still gets a working New Worktree dialog.
 
 There is a test for it, not just a claim: `repo_hygiene.rs` scans every tracked file for identifiers
 belonging to a specific project or machine and fails `just check` if any appear. The design held; the
-*fixtures* did not, until that lint existed.
+_fixtures_ did not, until that lint existed.
 
 ---
 
@@ -57,17 +57,17 @@ dependency — do not relax the check.
 
 ### Why the split is where it is
 
-The seam follows *reason to change*, not nouns. Each adapter exists because it wraps one external thing
+The seam follows _reason to change_, not nouns. Each adapter exists because it wraps one external thing
 that might be swapped, or that has to be tested differently: a file format, the git CLI's output
 grammar, the OS process API, a template language.
 
 Further splits considered and rejected:
 
-| Rejected split | Why |
-|---|---|
+| Rejected split                           | Why                                                                                                                                                                  |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wtm-cmd` + `wtm-pty` as separate crates | Both are "spawn a child process on this OS." Same reason to change, same `libc` dependency, and they share PATH/environment construction. Splitting duplicates that. |
-| `wtm-domain` + `wtm-usecase` | The use-cases are the only consumer of the types. Two crates that always change together are one crate. |
-| A `wtm-ports` crate holding only traits | Pointless — `wtm-core` already has no dependencies for the traits to escape from. |
+| `wtm-domain` + `wtm-usecase`             | The use-cases are the only consumer of the types. Two crates that always change together are one crate.                                                              |
+| A `wtm-ports` crate holding only traits  | Pointless — `wtm-core` already has no dependencies for the traits to escape from.                                                                                    |
 
 `wtm-render` is the borderline case at ~180 lines. It stays separate because it is the adapter most
 likely to be swapped, and because keeping `minijinja` out of core's dependency tree is what preserves the
@@ -122,7 +122,7 @@ Given that, making the ports async buys nothing and costs a lot: `#[async_trait]
 'static` bounds spreading through every closure, and fakes that need a runtime to test. Sync trait
 objects are object-safe, trivially fakeable, and testable with a plain `#[test]`.
 
-PTY streaming needs concurrency, but it needs *threads*, not tasks — `MasterPty::try_clone_reader()`
+PTY streaming needs concurrency, but it needs _threads_, not tasks — `MasterPty::try_clone_reader()`
 hands back a blocking `Box<dyn Read + Send>`. One OS thread per session is the right primitive for a
 handful of terminals.
 
@@ -142,17 +142,17 @@ unusual; a script written to be run by a human at a terminal tends to acquire al
   `trap … INT` that also execs a shell.
 - **It prompts on stdin** with a numbered branch picker (`read -rp "Select [1-3/n]: "`).
 - **`confirm()` loops forever on EOF stdin** — `read` fails, `$REPLY` stays stale, the `*)` arm prints
-  "Please enter y or n." and loops. So redirecting stdin from `/dev/null` is *not* protection.
+  "Please enter y or n." and loops. So redirecting stdin from `/dev/null` is _not_ protection.
 - **`worktree_list` is literally `git worktree list`** — elastic column widths, and paths may contain
   spaces.
 
 The consequences, which are load-bearing:
 
-1. **The app drives git itself** and calls the project's *setup* command for the rest. For that script
+1. **The app drives git itself** and calls the project's _setup_ command for the rest. For that script
    is `./bin/worktree.sh init <abs-path>`, the one entry point that returns normally and prompts for
    nothing (given an absolute path it takes the `elif [ -d "$input" ]` branch, skipping both the picker
    and `confirm()`).
-2. **Every captured command carries a mandatory timeout**, and the process *group* is killed on
+2. **Every captured command carries a mandatory timeout**, and the process _group_ is killed on
    expiry. A timeout is not optional pessimism here; it is the only defense against `confirm()`.
 3. **Interactive commands run in a real PTY** with a terminal pane, so a prompt is answerable rather
    than fatal.
@@ -194,12 +194,12 @@ The create pipeline is an explicit ten-stage state machine with one invariant:
 
 That single line buys three things: `preview()` and `execute()` are the same code; a failed preview is
 infinitely retryable with nothing to clean up; and the review screen can show the exact `git worktree
-add` argv and the exact setup argv *with its cwd* before anything has happened.
+add` argv and the exact setup argv _with its cwd_ before anything has happened.
 
 **On setup failure the worktree is not auto-removed.** By the time a setup command fails it may have
 written a `.env`, allocated ports, copied IDE config, and cloned a multi-gigabyte database volume.
 Silently removing that leaks the volumes and destroys work the user can often fix with one command.
-Instead the pipeline returns a *successful* Rust value describing a partial outcome, and the UI offers
+Instead the pipeline returns a _successful_ Rust value describing a partial outcome, and the UI offers
 Retry setup / Open shell / Remove worktree. `Retry setup` reuses stage 9 verbatim, which is also the
 "adopt an existing worktree" path — one implementation, two callers.
 
@@ -224,13 +224,13 @@ One agent asking another for a review — "have Codex look at this plan" — has
 the difference is entirely about who owns the second session.
 
 The cheap shape needs no code. `[agent.claude.mcp.codex]` points a Claude session at `codex mcp-server`
-and Claude opens a Codex thread through it. But that thread lives inside a process *Claude* spawned, so
+and Claude opens a Codex thread through it. But that thread lives inside a process _Claude_ spawned, so
 wtm cannot see it: no pane, no streaming, no approval card. The observable result is a tool call that
-spins for two minutes and returns a paragraph. For a feature whose entire point is *watching another
-agent work*, that is the wrong shape.
+spins for two minutes and returns a paragraph. For a feature whose entire point is _watching another
+agent work_, that is the wrong shape.
 
 So every delegated session has to be wtm's own, which means wtm has to expose tools to the CLIs — and an
-MCP server is a child process the *CLI* spawns, starting life outside the app. Three consequences, each
+MCP server is a child process the _CLI_ spawns, starting life outside the app. Three consequences, each
 of which is the reason for a piece of `bridge.rs` and `handoff.rs`:
 
 **The server is the app's own binary, behind `--mcp-bridge`.** A separate sidecar would have to be
@@ -242,11 +242,11 @@ because a stray `println!` on the startup path would corrupt the first frame and
 server that failed to start.
 
 **A Unix socket, not a port.** `~/.config/wtm/handoff.sock` at 0600, set explicitly rather than left to
-the umask: the socket is the door into "start an agent in my worktree", so the permission bits *are* the
+the umask: the socket is the door into "start an agent in my worktree", so the permission bits _are_ the
 access control. Binding unlinks first, because a socket file outlives the process that made it.
 
 **A token, because the socket cannot say who is calling.** Filesystem permissions establish that the
-caller is this user; they do not establish *which session* it is. That matters because the target
+caller is this user; they do not establish _which session_ it is. That matters because the target
 worktree is deliberately not a parameter — it comes from who is asking, so there is no way for a model
 to start an agent somewhere the user is not looking. Each session is issued a token when its MCP config
 is built, and the token resolves to a worktree.
@@ -256,7 +256,7 @@ recording. The blast radius is not new: the target comes from the compiled catal
 config, it runs in the caller's own worktree, it is refused unless the repository offers it, and the new
 session's approval mode is the repository's own. An agent that can already run `bash` here is not
 meaningfully constrained by being unable to open a sibling pane — and unlike a subprocess, a handoff is
-*visible*.
+_visible_.
 
 There are three MCP tools over the same path. `ask_agent` is one child and preserves the original
 handoff behavior. `spawn_agents` accepts up to twenty self-contained tasks, each with its own provider,
@@ -270,7 +270,7 @@ conflict.
 
 `close_agents` is the third, and it exists because the second one's best property is also a leak.
 A child keeps its process and its conversation after it answers — deliberately, since the point was
-to *watch* it — so somebody has to end them, and a session that believes it made a function call
+to _watch_ it — so somebody has to end them, and a session that believes it made a function call
 never will. Twenty children from one call otherwise sit there holding twenty CLIs.
 
 It takes **no arguments**, which is the same decision as the worktree not being a parameter: the
@@ -279,7 +279,7 @@ started" needs no identifiers at all. A session id never appears in a tool resul
 nothing published for a confused prompt to aim at a pane the user opened themselves. Children whose
 delegated turn has not returned are counted and reported rather than closed, which is what makes the
 tool safe to call while part of a wave is still running — the one thing it cannot see is a child the
-*user* has since adopted, because that would need per-session turn tracking the app does not keep.
+_user_ has since adopted, because that would need per-session turn tracking the app does not keep.
 It walks settled descendants, not just the first generation, and keeps a settled child with a busy
 grandchild rather than orphaning one or cancelling the other. `close_agent` emits nothing on its own,
 so `agent:released` is the mirror of `agent:spawned`: without it the window would keep panes pointing
@@ -287,26 +287,26 @@ at processes that are gone. The token that authorised the call dies with the ses
 until the worktree was removed.
 
 The obligation is stated in the appended instructions rather than only in the tool's description,
-because a description is read while a tool is being *chosen* and this one lands after the choice.
+because a description is read while a tool is being _chosen_ and this one lands after the choice.
 The frontend has the matching rule: closing a pane closes its children, depth-first, and its `/btw`
 side pane, since an orphaned child holds no tile and both routes to one — the rail and the agents
 dialog — are drawn from its parent.
 
 **A self-describing tool is not enough, and finding that out cost a real attempt.** The tool's
 description names the phrasings people use — "let Codex review this", "second opinion" — and it still
-lost. A user's global skills are in the same context, and a skill *named after an agent*, wrapping that
+lost. A user's global skills are in the same context, and a skill _named after an agent_, wrapping that
 agent's CLI, is a common thing to have; the one on the machine this was tested on declared `codex
 review` and `second opinion` as its own triggers. Against a name that direct, a tool called `ask_agent`
 does not win, and the observed failure was precisely that: "pass to codex" answered by a skill shelling
 out to a subprocess nobody could see.
 
 That is not a bug in the skill, and it is not fixable by writing a better description, because both are
-reasonable readings. The deciding fact is about the *environment* — this session is a pane in a window
+reasonable readings. The deciding fact is about the _environment_ — this session is a pane in a window
 somebody is watching, so an agent reached any other way is invisible — and nothing in the session can
 know it unless wtm says so. So wtm appends it: `--append-system-prompt` on Claude,
 `developerInstructions` on Codex's `thread/start`, and a prefix on Cursor's first ACP prompt (ACP has
 no developer-instruction field). All are **appends**; the neighbouring
-`--system-prompt` and `baseInstructions` *replace* the CLI's own prompt and would discard the user's
+`--system-prompt` and `baseInstructions` _replace_ the CLI's own prompt and would discard the user's
 `CLAUDE.md` or `AGENTS.md` along with it, which is a near-identical name for an opposite behaviour and
 therefore pinned by a test rather than left to review.
 
@@ -317,7 +317,7 @@ One thing this exposed rather than introduced: `SessionRequest` used to carry pr
 `--mcp-config` JSON, and Codex has no such flag, so `codex.rs` ignored the field completely. A
 repository declaring MCP servers got them on one provider and silently got none on the other. Serializing
 per provider — a JSON document for Claude, `-c mcp_servers.…` overrides for Codex, and structured
-`mcpServers` on Cursor's ACP `session/new` — is what a provider module is *for*, and the provider
+`mcpServers` on Cursor's ACP `session/new` — is what a provider module is _for_, and the provider
 mapping tests are the regression boundary.
 
 ---
@@ -328,7 +328,7 @@ Both were found by running against a real repository rather than by reasoning, a
 thing a fake cannot surface.
 
 **`git branch -d` asks a different question than we do.** The remove pipeline warns when a
-branch has commits not in the project's *base*. But `-d` refuses unless the branch is merged
+branch has commits not in the project's _base_. But `-d` refuses unless the branch is merged
 into **HEAD** — and a branch cut from `origin/develop` is fully contained in develop while not
 being in the main checkout's `main`. So `-d` refused, and a branch the user had explicitly asked
 to delete silently survived. The pipeline now runs its own merge check against the base and
@@ -337,7 +337,7 @@ honoured rather than overridden by a stricter check they were never shown.
 
 **An undefined token is not equal to `''`.** A teardown step guarded with
 `when = "env.COMPOSE_PROJECT_NAME != ''"` ran on a worktree that had no environment file at
-all, because in jinja semantics `undefined != ''` is *true*. It failed harmlessly — the step is
+all, because in jinja semantics `undefined != ''` is _true_. It failed harmlessly — the step is
 `on_failure = "warn"` — but for entirely the wrong reason. The idiom is
 `env.FOO | default_if_empty('') != ''`, and
 `engine::tests::an_undefined_token_is_not_equal_to_the_empty_string` pins it so the trap cannot
@@ -394,11 +394,11 @@ Both answer "nothing to print". (This is the same union-of-all-platforms propert
 
 **Nothing is logged.** No `tracing` call carries an environment value. Note that
 `Runner::run_inner` opens a span with the argv at `debug` level, so a config that
-interpolated a secret into a command *would* put it in a debug log; the default filter is
+interpolated a secret into a command _would_ put it in a debug log; the default filter is
 `info`, but that is a reason to keep it that way.
 
 **No value crosses the IPC boundary.** Not "no secret" — no value. The worktree listing
-carries `EnvKeys`, which is a `Vec<String>` of key *names*, and a separate `reveal_env_value`
+carries `EnvKeys`, which is a `Vec<String>` of key _names_, and a separate `reveal_env_value`
 command fetches exactly one on request, read fresh from disk and not cached in the frontend.
 A screenshot, a screen-share, or a rummage through the webview's memory has nothing to find.
 
@@ -411,7 +411,7 @@ check for `scheme://user:pass@host` in the value; and a pass that flagged any va
 an already-known secret. That third signal existed because of a real finding — an earlier
 version exempted `AWS_ACCESS_KEY_ID` on the reasonable-sounding argument that it is the public
 half of a key pair, and a leak test against a real `.env` showed the local `MinIO` setup used
-*one string* for the access key, the secret key, the `MinIO` user and the `MinIO` password. The
+_one string_ for the access key, the secret key, the `MinIO` user and the `MinIO` password. The
 exemption was publishing the secret verbatim.
 
 That finding is the argument against the whole approach, not just against that exemption. The
@@ -425,7 +425,7 @@ hold a value, so no input can produce a payload containing one, and no future ed
 sending one by accident. Roughly 150 lines of classifier and its tests went with it.
 
 The cost is one extra click for a port number. That is the right trade, and it is also
-*visible* — an over-masked value annoys you until you fix it, whereas an under-masked one is
+_visible_ — an over-masked value annoys you until you fix it, whereas an under-masked one is
 silent.
 
 `src-tauri/tests/env_masking.rs` proves it end to end: a repo whose `.env` is nothing but
@@ -548,7 +548,7 @@ something a dragged height is covered by.
 **Which sessions are dock shells is tracked in `src-tauri`, not in the domain.** `PtyHost::spawn`
 already records a worktree per session, but actions and the setup stage tag theirs with the same worktree
 id — so a lookup by worktree alone would hand the dock a running build to type into. The index lives in
-`App` rather than as a session *kind* on the port, for the same reason the palette list is assembled
+`App` rather than as a session _kind_ on the port, for the same reason the palette list is assembled
 there: "which session is the UI's terminal" is a frontend concept `wtm-core` has no stake in, and keeping
 it out means the domain still compiles for `wasm32`. Liveness is never read from that index — every
 lookup intersects with what the pty host reports as running.
@@ -563,25 +563,30 @@ concept: `sessions.focusOrOpenShell` is what ⌘J goes through, and repeating th
 worktree's shells. `close_terminal` takes a session id for the same reason — closing "the worktree's
 shell" would have been a coin flip over somebody's dev server.
 
-**A tab strip was considered and rejected for now.** Tabs are a *stack* — one pane visible, N mounted
+**A tab strip was considered and rejected for now.** Tabs are a _stack_ — one pane visible, N mounted
 and hidden — which is a new `Layout` node kind and a third arm in every operation in
 `layout.svelte.ts`: `tilesOf`, `handlesOf`, `insert`, `move`, `remove`, plus a new drop target and the
-`aria-selected` semantics `_tabs.scss` insists on. That module is pure tree algebra with no test runner
-behind it (see the counterweight in §8a), so the change is all risk and no new capability: several
-shells side by side already tile, drag, resize and keep their scrollback. The backend re-keying above is
-the part that had to happen either way, so a stack node stays available as a purely-frontend follow-up.
+tab semantics a stacked pane would need (`tablist`/`tab`/`tabpanel`, `aria-selected`, arrow-key
+roving). `_tabs.scss` styles a lighter in-panel strip (Settings, formerly the detail pane). Settings
+now implements `tablist`/`tab`/`aria-selected` on that strip, and the sidebar worktree list is a
+separate vertical tablist — neither is the stacked pane node that would need a new `Layout` kind.
+That module is pure tree algebra with no
+test runner behind it (see the counterweight in §8a), so the change is all risk and no new
+capability: several shells side by side already tile, drag, resize and keep their scrollback. The
+backend re-keying above is the part that had to happen either way, so a stack node stays available as
+a purely-frontend follow-up.
 
 **The arrangement persists across a quit; the sessions do not.** `sessions.toml` calls itself a
 resume list rather than a session list, and the reason holds — re-establishing every conversation on
 launch would fork a CLI per pane for conversations you may be done with. That argument was quietly
-doing double duty, though: it was also why the *split tree* was thrown away, and a layout is not a
+doing double duty, though: it was also why the _split tree_ was thrown away, and a layout is not a
 process. So each worktree's tree, pane order and focus are remembered in `localStorage` beside
 `wtm.worktrees.*`, and a restored pane comes back **detached** — in its place, holding nothing,
 offering to fill itself. A shell fills itself when the worktree is first looked at, because a login
 shell has nothing to resume and nothing to decide; an agent waits to be asked, because resuming picks
 a conversation. Launch still spawns nothing.
 
-The related fix is that a *reload* used to lose the transcript of sessions that were still running:
+The related fix is that a _reload_ used to lose the transcript of sessions that were still running:
 the events had been emitted to a window that no longer existed. `App` now keeps a bounded per-session
 ring of what it emitted, numbered, and `agent_replay` hands it back — in memory only, which is why
 the no-transcript rule in `wtm-config::sessions` is untouched. The number is what makes re-attaching
@@ -605,19 +610,19 @@ count is the requested feature, but those children live behind the agent rail an
 when selected or explicitly split.
 
 **The per-worktree cap counts leaves of the layout, and it did not always.** It counted pane
-*records*, which were the same thing until delegation shipped — after which one `spawn_agents` run of
+_records_, which were the same thing until delegation shipped — after which one `spawn_agents` run of
 three children in a worktree showing one session read as four panes, and every subsequent Shell,
 agent and resume there was refused. Silently: a refusal returns rather than raising, and the only
 copy of the explanation lived in the surface's empty state, a branch that renders when the worktree
 has no panes, which is the one situation in which you cannot be at the cap. It now sets
 `sessions.error`, which has a banner that is always mounted. The global cap still counts processes,
-because that is what *it* bounds, but only ones the user opened — a delegated run's budget is
+because that is what _it_ bounds, but only ones the user opened — a delegated run's budget is
 `MAX_TASKS` in `handoff.rs`, and applying a second one here meant the eighth child of one fan-out
 locked pane creation app-wide.
 
 **The rail summarises; the list is a dialog.** Twenty children do not fit in a band above the panes,
-and widening it spends rows the sessions need — so the rail answers the two glanceable questions, *is
-anything running* and *does anything need me*, with per-run `needs you` and `failed` counts that a
+and widening it spends rows the sessions need — so the rail answers the two glanceable questions, _is
+anything running_ and _does anything need me_, with per-run `needs you` and `failed` counts that a
 fold is not allowed to hide, and `AgentsDialog` holds the rest with Show, Split and Close per row.
 That is the split the sidebar already makes with the Inspector, and §8's own argument against a
 persistent rail — a third region competing for `min-height: 0`, needing a `z-index` — is why the
@@ -652,7 +657,7 @@ behaviour. The one place the app does this targets `[aria-selected="true"]`.
 
 **Counterweight, acknowledged.** Going global gives up Svelte's `css_unused_selector` warning, which
 was the only automated CSS feedback this repository had — there is no stylelint and no JS test runner.
-Two things partly offset it: Sass is a real compiler, so a bad `@use`, mixin or nesting is now a *build*
+Two things partly offset it: Sass is a real compiler, so a bad `@use`, mixin or nesting is now a _build_
 failure where a typo'd selector inside a `<style>` block used to be silently valid CSS; and the UI
 components express their class contracts as **typed props** (`variant: 'accent' | …`, `name: IconName`),
 which is now the only mechanism that catches a wrong class name before a human does. What is not
@@ -663,7 +668,7 @@ decision, and it belongs written down rather than discovered in eighteen months.
 
 ## 9. Deliberately not doing
 
-- **`git2` / `gix`.** The porcelain CLI *is* the compatibility contract. Shelling out means the user's
+- **`git2` / `gix`.** The porcelain CLI _is_ the compatibility contract. Shelling out means the user's
   git config, credential helpers, hooks, and commit signing behave identically to their terminal — and
   `git2`'s worktree support is incomplete besides.
 - **A plugin or WASM extension system.** TOML + argv + minijinja already satisfies "no code changes for

@@ -23,6 +23,7 @@
     name,
     size = 'md',
     disabled = false,
+    id,
     onchange,
     children,
   }: {
@@ -32,6 +33,8 @@
     name?: string;
     size?: 'md' | 'sm';
     disabled?: boolean;
+    /** Ties the control to an outer `<label for>`, so Field and Choice do not double-label. */
+    id?: string;
     /** Receives the control's new checked state. */
     onchange?: (checked: boolean) => void;
     children: Snippet;
@@ -40,6 +43,7 @@
 
 <label class="c-choice" class:c-choice--sm={size === 'sm'}>
   <input
+    {id}
     {...{ type }}
     {name}
     {checked}

@@ -188,7 +188,25 @@ impl AgentSession {
             // gone already is the ordinary case when the CLI exited on its own.
             let _ = run(&self.session, &self.host, &self.events, steps);
         }
+        let listed = self
+            .host
+            .sessions()
+            .iter()
+            .any(|live| live.session == self.session);
         let _ = self.host.close_stdin(&self.session);
+        // A CLI that exited on EOF after the courtesy decline is already gone. Killing it
+        // would be recorded as `Signalled`, which the UI reads as a crash rather than an end.
+        // Only skip the kill when we *saw* it listed and then it disappeared: a host that
+        // never reports sessions (tests) must still take the backstop.
+        if listed
+            && !self
+                .host
+                .sessions()
+                .iter()
+                .any(|live| live.session == self.session)
+        {
+            return Ok(());
+        }
         self.host.kill(&self.session)
     }
 }

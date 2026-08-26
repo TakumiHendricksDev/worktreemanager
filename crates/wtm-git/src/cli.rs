@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use wtm_core::error::{ExecError, GitError};
-use wtm_core::model::{BranchRef, CommitId, TrackMode, WorkingTreeStatus, Worktree};
+use wtm_core::model::{
+    BranchRef, Checkout, CommitId, TrackMode, WorkingTreeStatus, Worktree, WorktreeId,
+};
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation};
 use wtm_core::ports::git::{AddOptions, BranchFilter, Git};
 
@@ -268,7 +270,7 @@ impl Git for GitCli {
     }
 
     fn fetch(&self, repo_root: &Path, remote: &str, refspec: &str) -> Result<(), GitError> {
-        self.git(repo_root, &["fetch", remote, refspec], FETCH_TIMEOUT)?;
+        self.git(repo_root, &["fetch", "--", remote, refspec], FETCH_TIMEOUT)?;
         Ok(())
     }
 
@@ -281,21 +283,28 @@ impl Git for GitCli {
         let tail: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
         self.git(repo_root, &tail, MUTATE_TIMEOUT)?;
 
-        // Re-list rather than synthesizing the result: git decides the final
-        // recorded path (symlink resolution, trailing separators), and reporting a
-        // path git does not agree with would break every later lookup by id.
+        // Prefer git's record because it enriches the result with the resolved path
+        // and HEAD. A successful mutation remains authoritative when that best-effort
+        // lookup cannot match: reporting failure here would strand a live worktree and
+        // any branch that `git worktree add` just created.
         let created = self
             .list_worktrees(repo_root)?
             .into_iter()
             .find(|w| paths_equal(&w.path, &opts.path));
 
-        created.ok_or_else(|| GitError::Unparsable {
-            message: format!(
-                "git reported success but {} is not in `worktree list`",
-                opts.path.display()
-            ),
-            raw: String::new(),
-        })
+        Ok(created.unwrap_or_else(|| Worktree {
+            id: WorktreeId::from_path(&opts.path),
+            path: opts.path.clone(),
+            head: None,
+            checkout: opts
+                .branch
+                .clone()
+                .map_or(Checkout::Detached, |branch| Checkout::Branch { branch }),
+            is_main: false,
+            is_bare: false,
+            locked: None,
+            prunable: None,
+        }))
     }
 
     fn remove_worktree(
@@ -309,6 +318,7 @@ impl Git for GitCli {
         if force {
             args.push("--force");
         }
+        args.push("--");
         args.push(&path);
         self.git(repo_root, &args, MUTATE_TIMEOUT)?;
         Ok(())
@@ -556,6 +566,11 @@ mod tests {
         let calls = runner.argvs();
         assert!(!calls[0].contains(&"--force".to_owned()));
         assert!(calls[1].contains(&"--force".to_owned()));
+        assert!(
+            calls[0].windows(2).any(|w| w == ["--", "/wt/a"]),
+            "the path must follow `--` so a dash-prefixed worktree cannot be parsed as a flag: {:?}",
+            calls[0]
+        );
     }
 
     #[test]
@@ -630,25 +645,31 @@ mod tests {
     }
 
     #[test]
-    fn add_worktree_errors_if_git_succeeds_but_the_worktree_is_absent() {
-        // Would otherwise return a worktree whose id no later lookup can resolve.
+    fn a_created_worktree_is_reported_even_when_the_relist_cannot_match_its_path() {
+        // A mismatch after exit zero must not turn creation into a reported failure:
+        // cleanup cannot undo a live worktree or the branch git created for it.
         let (git, _) = git_with(vec![
             FakeRunner::ok(""),
             FakeRunner::ok("worktree /repo\0HEAD a\0branch refs/heads/main\0\0"),
         ]);
-        let err = git
+        let created = git
             .add_worktree(
                 &repo(),
                 &AddOptions {
                     path: PathBuf::from("/wt/missing"),
-                    branch: None,
+                    branch: Some(BranchRef::new("task/missing")),
                     start_point: "HEAD".to_owned(),
-                    track: TrackMode::Detach,
-                    create_branch: false,
+                    track: TrackMode::NoTrack,
+                    create_branch: true,
                 },
             )
-            .unwrap_err();
-        assert!(matches!(err, GitError::Unparsable { .. }), "got {err:?}");
+            .unwrap();
+
+        assert_eq!(created.path, PathBuf::from("/wt/missing"));
+        assert_eq!(created.id, WorktreeId::from_path(Path::new("/wt/missing")));
+        assert_eq!(created.head, None);
+        assert_eq!(created.branch(), Some(&BranchRef::new("task/missing")));
+        assert!(!created.is_main);
     }
 
     #[test]

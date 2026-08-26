@@ -59,7 +59,10 @@
 
   {#each warns as item (item.id)}
     <li class="c-preflight__item">
-      <span class="c-preflight__message c-status--warn">! {item.message}</span>
+      <span class="c-preflight__message c-status--warn">
+        <Icon name="warn" size={14} />
+        {item.message}
+      </span>
       {#if item.hint}<span class="c-preflight__hint">{item.hint}</span>{/if}
     </li>
   {/each}

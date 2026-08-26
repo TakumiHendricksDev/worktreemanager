@@ -752,7 +752,10 @@ impl Protocol for CursorProtocol {
 
     fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step> {
         let Some(pending) = self.pending.remove(id) else {
-            return Vec::new();
+            return vec![Step::Emit(AgentEvent::Notice {
+                level: NoticeLevel::Warn,
+                message: format!("No pending approval `{id}` to answer."),
+            })];
         };
         let result = match (&pending.kind, answer) {
             (

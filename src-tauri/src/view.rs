@@ -598,6 +598,32 @@ mod tests {
         assert!(!object.contains_key("is_main"), "must not emit snake_case");
     }
 
+    #[test]
+    fn a_progress_event_carries_camel_case_fields() {
+        // `ProgressEvent` is serialized at the domain boundary and consumed as `types.ts`.
+        // `rename_all = "snake_case"` on the tag used to leave `duration_ms` on the wire
+        // while the frontend read `durationMs`, so a finished command never showed its duration.
+        use wtm_core::ports::progress::ProgressEvent;
+
+        let json = serde_json::to_value(ProgressEvent::CommandFinished {
+            argv: vec!["git".to_owned()],
+            code: 0,
+            duration_ms: 12,
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "command_finished");
+        assert_eq!(json["durationMs"], 12);
+        assert!(json.get("duration_ms").is_none(), "{json}");
+
+        let warning = serde_json::to_value(ProgressEvent::Warning(
+            wtm_core::model::PlanWarning::new("id", "msg"),
+        ))
+        .unwrap();
+        assert_eq!(warning["kind"], "warning");
+        assert_eq!(warning["id"], "id");
+        assert_eq!(warning["message"], "msg");
+    }
+
     /// The capability, which is the newest thing on this boundary and the one with two nested
     /// struct lists inside it.
     ///

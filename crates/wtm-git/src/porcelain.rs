@@ -119,9 +119,12 @@ pub fn parse_status(output: &str) -> WorkingTreeStatus {
             continue;
         }
 
-        // A rename or copy in the index is followed by its source path as a
-        // separate field. Consume it so it is not mistaken for the next entry.
-        if x == 'R' || x == 'C' {
+        // Each rename/copy column contributes a source path. Consuming only the index-side one
+        // desynchronizes every entry after a worktree rename, and double forms carry two.
+        for _ in [x, y]
+            .into_iter()
+            .filter(|column| matches!(column, 'R' | 'C'))
+        {
             let _source = fields.next();
         }
 
@@ -404,6 +407,31 @@ mod tests {
             status.untracked, 0,
             "the source path must not be read as an entry"
         );
+    }
+
+    #[test]
+    fn a_worktree_rename_consumes_its_source_path_without_inflating_staged_changes() {
+        let status = parse_status(" R new/path.rs\0old/path.rs\0");
+        assert_eq!(status.staged, 0);
+        assert!(status.dirty_tracked);
+        assert_eq!(status.untracked, 0);
+    }
+
+    #[test]
+    fn a_double_rename_consumes_both_source_paths() {
+        let status =
+            parse_status("RR final/path.rs\0index/source.rs\0worktree/source.rs\0M  next.rs\0");
+        assert_eq!(status.staged, 2, "the rename and the following staged file");
+        assert!(status.dirty_tracked);
+        assert_eq!(status.untracked, 0);
+    }
+
+    #[test]
+    fn a_worktree_copy_consumes_its_source_path() {
+        let status = parse_status(" C copied/path.rs\0source/path.rs\0");
+        assert_eq!(status.staged, 0);
+        assert!(status.dirty_tracked);
+        assert_eq!(status.untracked, 0);
     }
 
     #[test]

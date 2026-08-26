@@ -196,10 +196,12 @@ const HEAD_BYTES: usize = 4_096;
 fn read_head(file: &Path) -> Option<String> {
     use std::io::Read;
 
-    let mut buffer = vec![0u8; HEAD_BYTES];
-    let mut handle = std::fs::File::open(file).ok()?;
-    let read = handle.read(&mut buffer).ok()?;
-    buffer.truncate(read);
+    let mut buffer = Vec::new();
+    std::fs::File::open(file)
+        .ok()?
+        .take(HEAD_BYTES as u64)
+        .read_to_end(&mut buffer)
+        .ok()?;
     // Lossy rather than a failure: a description with a stray byte in it is still a better label
     // than no label, and this is a menu rather than a parser anybody depends on.
     Some(String::from_utf8_lossy(&buffer).into_owned())

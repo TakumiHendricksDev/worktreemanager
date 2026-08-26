@@ -311,6 +311,10 @@ fn preflight_blocks_a_branch_already_checked_out_elsewhere() {
         "should name the holder: {}",
         item.message
     );
+    assert!(
+        h.git.prune_count() >= 1,
+        "stale worktree entries must be pruned before listing, or a hand-deleted checkout blocks recreate"
+    );
 }
 
 #[test]
@@ -679,6 +683,149 @@ fn setup_receives_the_rendered_worktree_path() {
     );
     // Setup runs from the repo root, not the new worktree — the surprising-but-correct case.
     assert_eq!(spawned[0].cwd, PathBuf::from(REPO));
+}
+
+#[test]
+fn setup_uses_the_created_worktree_and_form_context_on_its_first_run() {
+    let git = Arc::new(
+        FakeGit::with_main(REPO, "main")
+            .with_rev("main", "abc")
+            .with_created_path("/canonical/thing"),
+    );
+
+    let mut p = project();
+    p.setup = Some(wtm_core::model::SetupSpec {
+        command: wtm_core::model::CommandSpec {
+            run: vec![
+                "/bin/setup".to_owned(),
+                "{{ name }}".to_owned(),
+                "{{ worktree.path }}".to_owned(),
+                "{{ worktree.head }}".to_owned(),
+            ],
+            cwd: wtm_core::model::CwdBase::Worktree,
+            env: [
+                ("FORM".to_owned(), "{{ name }}".to_owned()),
+                ("HEAD".to_owned(), "{{ worktree.head }}".to_owned()),
+                ("PATH_TOKEN".to_owned(), "{{ worktree.path }}".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+            timeout_ms: Some(1000),
+            pty: true,
+            when: None,
+            on_failure: wtm_core::model::OnFailure::Keep,
+            args_when: vec![],
+        },
+        concurrency: wtm_core::model::Concurrency::default(),
+    });
+
+    let files = FakeFileStore::new();
+    files.add_file("/bin/setup", "#!/bin/sh\n");
+    let pty = Arc::new(FakePty::new());
+    let pipeline = CreatePipeline {
+        git: Arc::clone(&git) as Arc<dyn wtm_core::ports::git::Git>,
+        runner: Arc::new(FakeRunner::new()),
+        pty: Arc::clone(&pty) as Arc<dyn wtm_core::ports::pty::PtyHost>,
+        engine: Arc::new(Engine::new()),
+        files: Arc::new(files),
+        clock: Arc::new(FakeClock::new()),
+    };
+
+    let req = request(p, &[("name", "Thing"), ("base", "main")]);
+    let preview = pipeline
+        .preview(&req, &NullProgress, &CancelToken::new())
+        .unwrap();
+    assert_eq!(preview.plan.setup_cwd, Some(PathBuf::from("/thing")));
+
+    pipeline
+        .execute(
+            &req,
+            &NullProgress,
+            Arc::new(NullPtySink),
+            &CancelToken::new(),
+        )
+        .unwrap();
+
+    let spawned = pty.spawns();
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].cwd, PathBuf::from("/canonical/thing"));
+    assert_eq!(
+        spawned[0].argv,
+        vec![
+            "/bin/setup",
+            "Thing",
+            "/canonical/thing",
+            "3333333333333333333333333333333333333333",
+        ]
+    );
+    assert_eq!(
+        spawned[0].env.get("FORM").map(String::as_str),
+        Some("Thing")
+    );
+    assert_eq!(
+        spawned[0].env.get("HEAD").map(String::as_str),
+        Some("3333333333333333333333333333333333333333")
+    );
+    assert_eq!(
+        spawned[0].env.get("PATH_TOKEN").map(String::as_str),
+        Some("/canonical/thing")
+    );
+}
+
+#[test]
+fn a_custom_setup_cwd_is_rendered_rather_than_ignored() {
+    let git = Arc::new(
+        FakeGit::with_main(REPO, "main")
+            .with_rev("main", "abc")
+            .with_created_path("/canonical/thing"),
+    );
+
+    let mut p = project();
+    p.setup = Some(wtm_core::model::SetupSpec {
+        command: wtm_core::model::CommandSpec {
+            run: vec!["/bin/setup".to_owned()],
+            cwd: wtm_core::model::CwdBase::Custom("{{ worktree.path }}/nested".to_owned()),
+            env: BTreeMap::new(),
+            timeout_ms: Some(1000),
+            pty: true,
+            when: None,
+            on_failure: wtm_core::model::OnFailure::Keep,
+            args_when: vec![],
+        },
+        concurrency: wtm_core::model::Concurrency::default(),
+    });
+
+    let files = FakeFileStore::new();
+    files.add_file("/bin/setup", "#!/bin/sh\n");
+    let pty = Arc::new(FakePty::new());
+    let pipeline = CreatePipeline {
+        git: Arc::clone(&git) as Arc<dyn wtm_core::ports::git::Git>,
+        runner: Arc::new(FakeRunner::new()),
+        pty: Arc::clone(&pty) as Arc<dyn wtm_core::ports::pty::PtyHost>,
+        engine: Arc::new(Engine::new()),
+        files: Arc::new(files),
+        clock: Arc::new(FakeClock::new()),
+    };
+
+    let req = request(p, &[("name", "Thing"), ("base", "main")]);
+    let preview = pipeline
+        .preview(&req, &NullProgress, &CancelToken::new())
+        .unwrap();
+    assert_eq!(preview.plan.setup_cwd, Some(PathBuf::from("/thing/nested")));
+
+    pipeline
+        .execute(
+            &req,
+            &NullProgress,
+            Arc::new(NullPtySink),
+            &CancelToken::new(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        pty.spawns()[0].cwd,
+        PathBuf::from("/canonical/thing/nested")
+    );
 }
 
 #[test]

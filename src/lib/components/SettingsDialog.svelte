@@ -44,6 +44,12 @@
   const { onclose }: { onclose: () => void } = $props();
 
   type Section = 'appearance' | 'general' | 'notifications' | 'advanced';
+  const SECTIONS: { id: Section; label: string }[] = [
+    { id: 'appearance', label: 'Appearance' },
+    { id: 'general', label: 'General' },
+    { id: 'notifications', label: 'Notifications' },
+    { id: 'advanced', label: 'Advanced' },
+  ];
   let section = $state<Section>('appearance');
 
   const MODES: { value: ThemeChoice; label: string }[] = [
@@ -73,7 +79,8 @@
   let doctor = $state<Doctor | null>(null);
   let pathOverride = $state('');
   let pathSaved = $state(false);
-  let error = $state<string | null>(null);
+  let loadError = $state<string | null>(null);
+  let pathError = $state<string | null>(null);
 
   /*
    * Loaded once when the dialog opens rather than when Advanced is first shown.
@@ -92,7 +99,7 @@
         doctor = d;
         pathOverride = stored ?? '';
       } catch (e) {
-        error = errorMessage(e);
+        loadError = errorMessage(e);
       }
     })();
   });
@@ -105,12 +112,12 @@
    * when a half-typed path stops being half-typed.
    */
   async function commitPath() {
-    error = null;
+    pathError = null;
     try {
       await commands.setPref('exec.path', pathOverride.trim());
       pathSaved = true;
     } catch (e) {
-      error = errorMessage(e);
+      pathError = errorMessage(e);
     }
   }
 
@@ -124,6 +131,11 @@
    */
   let dictateKey = $state('');
   let keySaved = $state(false);
+  let keyBusy = false;
+  let confirmDictation = $state(false);
+
+  let keyError = $state<string | null>(null);
+  let confirmRemoveKey = $state(false);
 
   /**
    * Save the key on blur, for the same reason the PATH field does — and one more.
@@ -132,16 +144,21 @@
    * keystroke-level save would run one per character of a pasted key.
    */
   async function commitKey() {
-    if (dictateKey.trim() === '') return;
-    error = null;
+    if (keyBusy) return;
+    const value = dictateKey.trim();
+    if (value === '') return;
+    keyBusy = true;
+    keyError = null;
     try {
-      await dictation.setKey(dictateKey);
+      await dictation.setKey(value);
       // Cleared rather than left on screen: the value is stored now, and a secret lingering in a
       // form field is a secret in a screenshot.
       dictateKey = '';
       keySaved = true;
     } catch (e) {
-      error = errorMessage(e);
+      keyError = errorMessage(e);
+    } finally {
+      keyBusy = false;
     }
   }
 
@@ -158,12 +175,12 @@
       await dictation.setEnabled('off');
       return;
     }
-    const agreed = window.confirm(
-      `Dictation records your microphone and sends the audio to ${DESTINATION} for transcription.\n\n` +
-        'This is the only feature in wtm that sends anything off your machine. It needs SoX ' +
-        '(brew install sox) and a Deepgram API key.\n\nTurn it on?',
-    );
-    if (agreed) await dictation.setEnabled('on');
+    confirmDictation = true;
+  }
+
+  async function agreeDictation() {
+    confirmDictation = false;
+    await dictation.setEnabled('on');
   }
 
   async function chooseOpener(event: Event) {
@@ -172,60 +189,78 @@
   }
 
   /**
-   * The six custom properties a user-defined palette needs, as an inline style string.
+   * Paint a custom palette's six properties onto a swatch chip.
    *
-   * Only for swatches. The *selected* palette is painted on `<html>` by the appearance
-   * store; this puts the same six values on one chip so an unselected custom palette can
-   * still show what it looks like. A built-in needs none of this — its `data-palette`
-   * attribute matches a real rule.
+   * `setProperty` rather than concatenating into a `style` string: a palette value containing
+   * `;` would otherwise inject extra declarations. Same route `theme.applyCustom` uses on `<html>`.
    */
-  function customSwatch(id: string): string | undefined {
-    const p = theme.customPalettes.find((c) => c.id === id && !c.error);
-    if (!p) return undefined;
-    const [b3, b4, b5, b6] = p.brand;
-    return (
-      `--palette-hue:${p.hue};--palette-chroma:${p.chroma};` +
-      `--brand-300:${b3};--brand-400:${b4};--brand-500:${b5};--brand-600:${b6}`
-    );
+  function paintSwatch(node: HTMLElement, id: string) {
+    const apply = (target: string) => {
+      const p = theme.customPalettes.find((c) => c.id === target && !c.error);
+      if (!p) {
+        node.removeAttribute('style');
+        return;
+      }
+      const [b3, b4, b5, b6] = p.brand;
+      node.style.setProperty('--palette-hue', String(p.hue));
+      node.style.setProperty('--palette-chroma', String(p.chroma));
+      node.style.setProperty('--brand-300', b3 ?? '');
+      node.style.setProperty('--brand-400', b4 ?? '');
+      node.style.setProperty('--brand-500', b5 ?? '');
+      node.style.setProperty('--brand-600', b6 ?? '');
+    };
+    apply(id);
+    return {
+      update(next: string) {
+        apply(next);
+      },
+    };
+  }
+
+  let sectionTabs: HTMLElement | undefined;
+
+  function onSectionKey(event: KeyboardEvent, current: Section) {
+    const ids = SECTIONS.map((s) => s.id);
+    const at = ids.indexOf(current);
+    let next = at;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = at + 1;
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = at - 1;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = ids.length - 1;
+    else return;
+    event.preventDefault();
+    const id = ids[Math.min(Math.max(next, 0), ids.length - 1)];
+    if (id) section = id;
+    // Query this strip only: the sidebar also uses `.c-tabs`, and a document-wide
+    // `[aria-selected="true"]` would steal focus from Settings if both were mounted.
+    queueMicrotask(() => {
+      sectionTabs?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
+    });
   }
 </script>
 
 <Dialog title="Settings" {onclose} wide>
   {#snippet body()}
-    <nav class="c-tabs" aria-label="Settings sections">
-      <button
-        class="c-tabs__tab"
-        class:is-active={section === 'appearance'}
-        onclick={() => (section = 'appearance')}
-      >
-        Appearance
-      </button>
-      <button
-        class="c-tabs__tab"
-        class:is-active={section === 'general'}
-        onclick={() => (section = 'general')}
-      >
-        General
-      </button>
-      <button
-        class="c-tabs__tab"
-        class:is-active={section === 'notifications'}
-        onclick={() => (section = 'notifications')}
-      >
-        Notifications
-      </button>
-      <button
-        class="c-tabs__tab"
-        class:is-active={section === 'advanced'}
-        onclick={() => (section = 'advanced')}
-      >
-        Advanced
-      </button>
-    </nav>
-
-    {#if error}
-      <p class="c-status--danger">{error}</p>
-    {/if}
+    <div
+      class="c-tabs"
+      role="tablist"
+      aria-label="Settings sections"
+      bind:this={sectionTabs}
+    >
+      {#each SECTIONS as tab (tab.id)}
+        <button
+          role="tab"
+          class="c-tabs__tab"
+          class:is-active={section === tab.id}
+          aria-selected={section === tab.id}
+          tabindex={section === tab.id ? 0 : -1}
+          onclick={() => (section = tab.id)}
+          onkeydown={(event) => onSectionKey(event, tab.id)}
+        >
+          {tab.label}
+        </button>
+      {/each}
+    </div>
 
     {#if section === 'appearance'}
       <div class="o-stack o-stack--loose c-settings__panel">
@@ -251,7 +286,7 @@
                 <span
                   class="c-palette__chips"
                   data-palette={option.id}
-                  style={option.custom ? customSwatch(option.id) : undefined}
+                  use:paintSwatch={option.custom ? option.id : ''}
                 >
                   <span class="c-palette__chip c-palette__chip--bg"></span>
                   <span class="c-palette__chip c-palette__chip--surface"></span>
@@ -434,11 +469,14 @@
       </div>
     {:else}
       <div class="o-stack o-stack--loose c-settings__panel">
+        {#if loadError}
+          <p class="c-status--danger">{loadError}</p>
+        {/if}
         <Field
           id="settings-path"
           label="PATH override"
           help="Leave empty to use the PATH probed from your login shell. Takes effect when wtm restarts."
-          errors={[error]}
+          errors={[pathError]}
         >
           <TextInput
             id="settings-path"
@@ -468,6 +506,7 @@
           help={dictation.status?.keySet === true
             ? 'A key is stored in your keychain. Type a new one to replace it, or save an empty field to remove it.'
             : `A Deepgram API key, kept in your keychain and sent only to ${DESTINATION}.`}
+          errors={[keyError]}
         >
           <TextInput
             id="settings-dictate-key"
@@ -481,11 +520,7 @@
         <div class="c-settings__row">
           <Button variant="neutral" size="sm" onclick={commitKey}>Save key</Button>
           {#if dictation.status?.keySet === true}
-            <Button
-              variant="quiet"
-              size="sm"
-              onclick={() => void dictation.setKey('').then(() => (keySaved = false))}
-            >
+            <Button variant="quiet" size="sm" onclick={() => (confirmRemoveKey = true)}>
               Remove
             </Button>
           {/if}
@@ -531,3 +566,42 @@
     <Button variant="neutral" onclick={onclose}>Done</Button>
   {/snippet}
 </Dialog>
+
+{#if confirmDictation}
+  <Dialog title="Turn on dictation" onclose={() => (confirmDictation = false)}>
+    {#snippet body()}
+      <p>
+        Dictation records your microphone and sends the audio to
+        <code>{DESTINATION}</code> for transcription. This is the only feature in wtm that
+        sends anything off your machine. It needs SoX (<code>brew install sox</code>) and a
+        Deepgram API key.
+      </p>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="neutral" onclick={() => (confirmDictation = false)}>Cancel</Button>
+      <Button variant="accent" onclick={() => void agreeDictation()}>Turn on</Button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if confirmRemoveKey}
+  <Dialog title="Remove transcription key?" onclose={() => (confirmRemoveKey = false)}>
+    {#snippet body()}
+      <p>
+        The key is deleted from your keychain. Dictation will not work until you paste a new
+        one.
+      </p>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="neutral" onclick={() => (confirmRemoveKey = false)}>Cancel</Button>
+      <Button
+        variant="danger-solid"
+        onclick={() =>
+          void dictation.setKey('').then(() => {
+            confirmRemoveKey = false;
+            keySaved = false;
+          })}>Remove</Button
+      >
+    {/snippet}
+  </Dialog>
+{/if}

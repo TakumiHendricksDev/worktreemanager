@@ -40,7 +40,20 @@
   const groups = $derived(sessions.runsIn(worktreeId));
   const atTileCap = $derived(visible.size >= MAX_PANES_PER_WORKTREE);
 
-  /** Show it, and get out of the way — the point of the click was to read the transcript. */
+  let closingId = $state<string | null>(null);
+  const closing = $derived(
+    groups.flatMap((g) => g.children).find((c) => c.id === closingId) ?? null,
+  );
+
+  function closeChild(id: string) {
+    closingId = id;
+  }
+
+  async function closeConfirmed() {
+    const id = closingId;
+    closingId = null;
+    if (id) await sessions.close(id);
+  }
   function show(paneId: string, split: boolean) {
     sessions.showRelated(paneId, split);
     onclose();
@@ -70,7 +83,9 @@
               {@const status = sessions.statusOfPane(child)}
               <li class="c-agents__row" class:is-selected={visible.has(child.id)}>
                 <SessionDot {status} />
-                <span class="c-agents__name"
+                <span
+                  class="c-agents__name"
+                  title={child.agentTitle ?? sessions.labelOf(child)}
                   >{child.agentTitle ?? sessions.labelOf(child)}</span
                 >
                 <span class="c-agents__meta">
@@ -104,7 +119,7 @@
                     variant="danger-outline"
                     size="sm"
                     title="End this session and remove it"
-                    onclick={() => void sessions.close(child.id)}
+                    onclick={() => closeChild(child.id)}
                   >
                     Close
                   </Button>
@@ -118,6 +133,21 @@
   {/snippet}
 
   {#snippet footer()}
-    <Button variant="accent" onclick={onclose}>Done</Button>
+    <Button variant="neutral" onclick={onclose}>Done</Button>
   {/snippet}
 </Dialog>
+
+{#if closing}
+  <Dialog title="Close session?" onclose={() => (closingId = null)}>
+    {#snippet body()}
+      <p>
+        Closing {closing.agentTitle ?? sessions.labelOf(closing)} ends that conversation and any
+        children it started.
+      </p>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="neutral" onclick={() => (closingId = null)}>Cancel</Button>
+      <Button variant="danger-solid" onclick={() => void closeConfirmed()}>Close</Button>
+    {/snippet}
+  </Dialog>
+{/if}

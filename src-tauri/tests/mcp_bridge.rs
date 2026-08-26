@@ -272,6 +272,17 @@ fn the_tool_description_names_the_phrasings_a_user_actually_types() {
         description.contains("does not share your conversation"),
         "the description must say the prompt has to stand alone: {description}"
     );
+
+    let model = reply["result"]["tools"][0]["inputSchema"]["properties"]["model"]["description"]
+        .as_str()
+        .unwrap()
+        .to_lowercase();
+    for phrase in ["exact", "not a display label", "omit"] {
+        assert!(
+            model.contains(phrase),
+            "the model override must steer callers away from guessed ids: {model}"
+        );
+    }
 }
 
 #[test]

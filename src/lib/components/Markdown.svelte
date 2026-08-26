@@ -13,6 +13,7 @@
    */
   import { commands } from '../ipc/commands';
   import { parse, type Block, type Span } from '../markdown';
+  import Button from './ui/Button.svelte';
 
   const { source }: { source: string } = $props();
 
@@ -30,6 +31,20 @@
   function open(event: MouseEvent, href: string) {
     event.preventDefault();
     void commands.openUrl(href).catch(() => {});
+  }
+
+  let copiedBlock = $state<number | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function copyBlock(text: string, index: number) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedBlock = index;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copiedBlock = null), 1400);
+    } catch {
+      /* Clipboard access can be denied. */
+    }
   }
 </script>
 
@@ -58,6 +73,11 @@
            of what highlighting communicates here and the rest costs a dependency and a theme. -->
       <div class="c-markdown__block">
         {#if block.lang}<span class="c-markdown__lang">{block.lang}</span>{/if}
+        <span class="c-markdown__copy">
+          <Button variant="quiet" size="sm" onclick={() => void copyBlock(block.text, i)}>
+            {copiedBlock === i ? 'Copied' : 'Copy'}
+          </Button>
+        </span>
         <pre>{block.text}</pre>
       </div>
     {:else if block.kind === 'list'}

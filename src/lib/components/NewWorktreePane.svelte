@@ -32,6 +32,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { workspace } from '../state/workspace.svelte';
   import ReviewPanel from './ReviewPanel.svelte';
+  import RemoveWorktreeDialog from './RemoveWorktreeDialog.svelte';
   import SchemaForm from './SchemaForm.svelte';
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
@@ -67,6 +68,8 @@
    * effect that bumps it depend on itself.
    */
   let previewSeq = 0;
+  /** Same shape as `previewSeq`: a stale form response must not clobber a newer project's. */
+  let formSeq = 0;
 
   let phase = $state<Phase>('form');
   let adoptBranch = $state<string | null>(null);
@@ -75,6 +78,10 @@
   let session = $state<string | null>(null);
   let outcome = $state<CreateOutcome | null>(null);
   let runError = $state<string | null>(null);
+  let confirmingRemove = $state(false);
+  let acting = $state(false);
+
+  const removable = $derived(outcome && 'worktree' in outcome ? outcome.worktree : null);
 
   /**
    * What the run is doing, as it does it.
@@ -114,12 +121,16 @@
   );
 
   $effect(() => {
+    const id = projectId;
+    const seq = ++formSeq;
     void commands
-      .worktreeForm(projectId)
+      .worktreeForm(id)
       .then((f) => {
+        if (seq !== formSeq) return;
         form = f;
       })
       .catch((e) => {
+        if (seq !== formSeq) return;
         loadError = errorMessage(e);
       });
   });
@@ -215,7 +226,14 @@
           session = payload.session;
           break;
         case 'warning':
-          notes = [...notes, { id: payload.id, text: payload.message, kind: 'warning' }];
+          notes = [
+            ...notes,
+            {
+              id: `warn-${notes.length}-${payload.id}`,
+              text: payload.message,
+              kind: 'warning',
+            },
+          ];
           break;
         case 'note':
           notes = [
@@ -267,7 +285,8 @@
 
   async function retrySetup() {
     const worktree = outcome && 'worktree' in outcome ? outcome.worktree : null;
-    if (!worktree) return;
+    if (!worktree || acting) return;
+    acting = true;
     runError = null;
     phase = 'running';
     notes = [];
@@ -289,25 +308,22 @@
     } catch (e) {
       runError = errorMessage(e);
       phase = 'done';
+    } finally {
+      acting = false;
     }
   }
 
-  async function removeIt() {
-    const worktree = outcome && 'worktree' in outcome ? outcome.worktree : null;
-    if (!worktree) return;
-    try {
-      await commands.removeWorktree({
-        projectId,
-        worktreeId: worktree.id,
-        deleteBranch: true,
-        force: true,
-        acknowledged: [],
-      });
-      await workspace.refreshWorktrees();
-      onclose();
-    } catch (e) {
-      runError = errorMessage(e);
-    }
+  function removeIt() {
+    if (!removable || acting) return;
+    confirmingRemove = true;
+  }
+
+  function onRemoveClosed() {
+    confirmingRemove = false;
+    const id = removable?.id;
+    void workspace.refreshWorktrees().then(() => {
+      if (id && !workspace.worktrees.some((w) => w.id === id)) onclose();
+    });
   }
 
   function onKeydown(event: KeyboardEvent) {
@@ -481,8 +497,16 @@
             those and lose work that is usually one command from fixed.
           </p>
           <div class="c-new-worktree__remedies">
-            <Button variant="neutral" onclick={retrySetup}>Re-run setup</Button>
-            <Button variant="danger-outline" onclick={removeIt}>Remove the worktree</Button>
+            <Button
+              variant="neutral"
+              onclick={retrySetup}
+              disabled={acting || confirmingRemove}>Re-run setup</Button
+            >
+            <Button
+              variant="danger-outline"
+              onclick={removeIt}
+              disabled={acting || confirmingRemove}>Remove the worktree</Button
+            >
           </div>
         {/if}
 
@@ -517,3 +541,7 @@
     </div>
   </footer>
 </section>
+
+{#if confirmingRemove && removable}
+  <RemoveWorktreeDialog {projectId} worktree={removable} onclose={onRemoveClosed} />
+{/if}

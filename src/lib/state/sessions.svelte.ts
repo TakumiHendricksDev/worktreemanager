@@ -441,6 +441,14 @@ class Sessions {
    */
   capabilities = $state<Record<string, Capability | null>>({});
   /**
+   * Providers whose last capability probe failed.
+   *
+   * Separate from `capabilities` because `null` there already means "in flight". Folding
+   * failure into the same map made the picker spin on "reading capabilities…" forever and
+   * blocked retry — `provider in capabilities` was true for a null that would never fill.
+   */
+  capabilityFailed = $state<Record<string, boolean>>({});
+  /**
    * Conversations that can be picked up again, by worktree.
    *
    * Refreshed on demand and on selection rather than polled — the same policy `workspace` states, and
@@ -878,20 +886,35 @@ class Sessions {
   /**
    * Ask a provider what it can do, once.
    *
-   * `null` in the map means "asked and it failed", which the picker renders as a warning — distinct
-   * from an absent key, which means "not asked yet" and renders as a spinner. Collapsing those two
-   * would make a logged-out CLI look like a slow one.
+   * An absent key is "not asked yet" (or "failed and cleared for retry"). `null` is a probe
+   * in flight — claimed before the await so two panes do not spawn two Codex servers.
+   * Failure is `capabilityFailed`, so the picker can offer Retry instead of spinning.
    */
   async loadCapability(provider: string): Promise<void> {
-    if (provider in this.capabilities) return;
+    if (this.capabilities[provider] != null) return;
+    if (provider in this.capabilities && this.capabilities[provider] === null) return;
     // Claimed before the await, so two panes opening at once do not both spawn a probe.
     this.capabilities = { ...this.capabilities, [provider]: null };
+    this.capabilityFailed = { ...this.capabilityFailed, [provider]: false };
     try {
       const capability = await commands.agentCapability(provider);
       this.capabilities = { ...this.capabilities, [provider]: capability };
     } catch (e) {
       this.error = errorMessage(e);
+      const next = { ...this.capabilities };
+      delete next[provider];
+      this.capabilities = next;
+      this.capabilityFailed = { ...this.capabilityFailed, [provider]: true };
     }
+  }
+
+  /** Drop a failed probe so `loadCapability` can ask again. */
+  async retryCapability(provider: string): Promise<void> {
+    const next = { ...this.capabilities };
+    delete next[provider];
+    this.capabilities = next;
+    this.capabilityFailed = { ...this.capabilityFailed, [provider]: false };
+    await this.loadCapability(provider);
   }
 
   /**
@@ -1110,8 +1133,7 @@ class Sessions {
           resume: record.providerSession,
         },
       });
-      const live = this.paneById(pane.id);
-      if (live) this.claimSession(live, session);
+      await this.claimOrClose(pane.id, session, 'agent');
       // It is running now, so it must stop being offered — `list_resumable` excludes live sessions,
       // and refreshing is what makes the list agree with the screen.
       void this.refreshResumable(worktreeId);
@@ -1446,8 +1468,7 @@ class Sessions {
           resume: pane.providerSession,
         },
       });
-      const live = this.paneById(pane.id);
-      if (live) this.claimSession(live, session);
+      await this.claimOrClose(pane.id, session, 'agent');
       this.error = null;
       void this.refreshResumable(pane.worktreeId);
     } catch (e) {
@@ -1777,8 +1798,7 @@ class Sessions {
         rows: SPAWN_ROWS,
         cols: SPAWN_COLS,
       });
-      const live = this.paneById(pane.id);
-      if (live) this.claimSession(live, session);
+      await this.claimOrClose(pane.id, session, 'shell');
     } catch (e) {
       const live = this.paneById(pane.id);
       if (live) live.error = errorMessage(e);
@@ -1861,8 +1881,7 @@ class Sessions {
           fast: pane.fast,
         },
       });
-      const live = this.paneById(pane.id);
-      if (live) this.claimSession(live, session);
+      await this.claimOrClose(pane.id, session, 'agent');
       this.error = null;
     } catch (e) {
       const live = this.paneById(pane.id);
@@ -2067,11 +2086,18 @@ class Sessions {
   async answer(paneId: string, requestId: string, answer: ApprovalAnswer): Promise<void> {
     const pane = this.paneById(paneId);
     if (!pane?.session) return;
+    const request = pane.approvals.find((a) => a.id === requestId);
     pane.approvals = pane.approvals.filter((a) => a.id !== requestId);
     try {
       await commands.answerApproval(pane.session, requestId, answer);
     } catch (e) {
       this.error = errorMessage(e);
+      // Put the card back so a failed round trip is retryable rather than stranding the
+      // turn with no control attached to it.
+      const live = this.paneById(paneId);
+      if (live && request && !live.approvals.some((a) => a.id === requestId)) {
+        live.approvals = [request, ...live.approvals];
+      }
     }
   }
 
@@ -2212,9 +2238,10 @@ class Sessions {
                 fast: pane.fast,
               },
             });
-      this.claimSession(pane, session);
+      await this.claimOrClose(pane.id, session, pane.kind.kind);
     } catch (e) {
-      pane.error = errorMessage(e);
+      const live = this.paneById(pane.id);
+      if (live) live.error = errorMessage(e);
     }
 
     // The conversation this just ended is no longer running, so it can be offered again. That is
@@ -2290,6 +2317,30 @@ class Sessions {
         agentTitle: pane.agentTitle,
       })),
     });
+  }
+
+  /**
+   * Bind a backend session to a pane, or close it if the pane vanished during the await.
+   *
+   * Every open path that used to drop the id when `live` was null leaked a CLI. `openSide`
+   * already closed in that case; this is that rule in one place.
+   */
+  private async claimOrClose(
+    paneId: string,
+    session: string,
+    kind: 'shell' | 'agent',
+  ): Promise<void> {
+    const live = this.paneById(paneId);
+    if (live) {
+      this.claimSession(live, session);
+      return;
+    }
+    try {
+      if (kind === 'shell') await commands.closeTerminal(session);
+      else await commands.closeAgentSession(session);
+    } catch {
+      /* Already gone is the ordinary case here. */
+    }
   }
 
   /**

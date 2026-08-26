@@ -190,22 +190,30 @@ impl RemovePipeline {
         );
 
         // ── teardown, before git touches the directory ──
-        let total = u8::try_from(project.remove.pre.len()).unwrap_or(u8::MAX) + 2;
+        let total = u16::try_from(project.remove.pre.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(2);
         for (index, step) in project.remove.pre.iter().enumerate() {
             cancel.check()?;
 
             if let Some(when) = &step.when {
-                // A worktree that was never set up has nothing to tear down.
-                if !self
-                    .engine
-                    .eval_bool("remove.pre.when", when, &ctx)
-                    .unwrap_or(false)
-                {
-                    continue;
+                // A worktree that was never set up has nothing to tear down. A template
+                // that fails to evaluate is skipped with a warning rather than silently
+                // leaving containers and root-owned files behind.
+                match self.engine.eval_bool("remove.pre.when", when, &ctx) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        warnings.push(PlanWarning::new(
+                            format!("teardown_{index}_when"),
+                            format!("could not evaluate `when` for teardown step {index}: {error}"),
+                        ));
+                        continue;
+                    }
                 }
             }
 
-            let step_index = u8::try_from(index).unwrap_or(0) + 1;
+            let step_index = u16::try_from(index).unwrap_or(u16::MAX).saturating_add(1);
             progress.stage("teardown", "Running project teardown", step_index, total);
 
             let argv: Vec<String> = step
@@ -233,17 +241,35 @@ impl RemovePipeline {
                 cwd,
                 step.timeout_ms.unwrap_or(DEFAULT_PRE_TIMEOUT_MS),
             );
-            inv.env = step
+            inv.env = match step
                 .env
                 .iter()
-                .filter_map(|(name, template)| {
+                .map(|(name, template)| {
                     self.engine
                         .render(&format!("remove.pre.env.{name}"), template, &ctx)
-                        .ok()
                         .map(|value| (name.clone(), value))
                 })
-                .collect();
+                .collect::<Result<_, _>>()
+            {
+                Ok(env) => env,
+                Err(error) => {
+                    warnings.push(PlanWarning::new(
+                        format!("teardown_{index}_env"),
+                        format!("could not render env for teardown step {index}: {error}"),
+                    ));
+                    match step.on_failure {
+                        OnFailure::Fail => {
+                            return Ok(RemoveOutcome::TeardownFailed {
+                                session: None,
+                                warnings,
+                            });
+                        }
+                        OnFailure::Warn | OnFailure::Ignore | OnFailure::Keep => continue,
+                    }
+                }
+            };
 
+            let mut teardown_session = None;
             let result = if step.pty {
                 self.pty
                     .spawn(
@@ -253,7 +279,10 @@ impl RemovePipeline {
                         Some(req.worktree.id.as_str()),
                         Arc::clone(sink),
                     )
-                    .and_then(|spawned| self.pty.wait(&spawned.session, cancel))
+                    .and_then(|spawned| {
+                        teardown_session = Some(spawned.session.clone());
+                        self.pty.wait(&spawned.session, cancel)
+                    })
                     .map(|outcome| {
                         if outcome.is_success() {
                             Ok(())
@@ -282,7 +311,7 @@ impl RemovePipeline {
                     }
                     OnFailure::Fail => {
                         return Ok(RemoveOutcome::TeardownFailed {
-                            session: None,
+                            session: teardown_session,
                             warnings,
                         });
                     }

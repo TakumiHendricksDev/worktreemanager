@@ -1282,7 +1282,10 @@ impl Protocol for ClaudeProtocol {
     fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step> {
         // Removed rather than read: the first answer wins, exactly as on the other provider.
         let Some(pending) = self.pending.remove(id) else {
-            return Vec::new();
+            return vec![Step::Emit(AgentEvent::Notice {
+                level: NoticeLevel::Warn,
+                message: format!("No pending approval `{id}` to answer."),
+            })];
         };
 
         let response = match answer {

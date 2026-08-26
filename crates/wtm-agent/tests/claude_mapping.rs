@@ -400,8 +400,15 @@ fn a_can_use_tool_request_becomes_an_approval_answered_on_the_top_level_request_
         "echo hello > probe.txt"
     );
 
-    // The first answer wins, same as the other provider.
-    assert!(d.answer(&id, &ApprovalAnswer::Allow).is_empty());
+    // The first answer wins, same as the other provider. A silent no-op would strand
+    // the CLI on a stale click, so the second answer is a notice rather than nothing.
+    let second = d.answer(&id, &ApprovalAnswer::Allow);
+    assert!(
+        events(&second)
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Notice { .. })),
+        "{second:?}"
+    );
 }
 
 #[test]

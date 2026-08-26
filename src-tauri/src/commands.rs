@@ -978,7 +978,7 @@ pub async fn remove_worktree(
             force,
             acknowledged,
         )?;
-        // End every dock shell in the worktree before teardown runs.
+        // End every dock shell and agent in the worktree before teardown runs.
         //
         // Two reasons, and the second is the one that bites. A shell sitting in a directory
         // that is about to be deleted keeps running with an unlinked cwd, which is confusing
@@ -987,18 +987,9 @@ pub async fn remove_worktree(
         // `git worktree remove` refuse, so a removal that ought to work fails for a reason
         // nothing in the dialog mentions.
         //
-        // All of them, not one: a worktree can hold several, and the odds that the one running a
-        // dev server is the one left behind are exactly as bad as they sound.
-        for session in app.shells_in(&worktree_id) {
-            app.close_shell(&session);
-        }
-
-        // And every agent session, for the same reason with more force. An agent mid-turn is
-        // *writing* into the directory git is about to refuse to delete, and unlike a shell it may
-        // also be holding a model connection open with nothing left to talk to.
-        for session in app.agents_in(&worktree_id) {
-            app.close_agent(&session);
-        }
+        // One `terminate_groups` for all of them: a serial close would pay 400 ms grace per
+        // session, and a worktree can hold several shells and agents.
+        app.terminate_sessions_in(&worktree_id);
 
         let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
         let sink = crate::pty_bridge::EventSink::new(handle);
@@ -1068,6 +1059,7 @@ pub async fn run_setup(
             sink,
             &progress,
         )?;
+        app.reap_hosts();
 
         Ok(crate::view::SetupResultView {
             session: session.as_str().to_owned(),
@@ -1151,6 +1143,8 @@ pub async fn run_action(
         // Defence in depth: guards were checked at config load, but an argv is only fully
         // known once its templates are rendered.
         wtm_config::check_forbidden(&project, &argv)?;
+
+        app.reap_hosts();
 
         let cwd = display::resolve_cwd(
             &action.command.cwd,
@@ -1594,9 +1588,19 @@ fn open_agent_process(
 
     let sink: Arc<dyn wtm_agent::session::AgentSink> =
         crate::agent_bridge::AgentEventSink::new(handle);
-    let session = app
-        .open_agent(entry, &req, &worktree, project_id, &sink)
-        .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+    let session = match app.open_agent(entry, &req, &worktree, project_id, &sink) {
+        Ok(session) => session,
+        Err(error) => {
+            if let Some(token) = req
+                .mcp
+                .get(handoff::SERVER_NAME)
+                .and_then(|server| server.env.get(handoff::TOKEN_ENV))
+            {
+                app.handoff.forget_unbound(token);
+            }
+            return Err(ErrorView::new("exec", error.to_string()));
+        }
+    };
 
     Ok(session.as_str().to_owned())
 }
@@ -1616,12 +1620,28 @@ pub async fn send_turn(
     let app = Arc::clone(&app);
     blocking(move || {
         app.with_agent(&session, |agent| agent.send_turn(&text, &attachments))
-            .map_err(|e| ErrorView::new("exec", e.to_string()))
+            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+        drop_staged_attachments(&attachments);
+        Ok(())
     })
     .await
 }
 
 const MAX_AGENT_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
+
+fn staged_attachment_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("wtm-agent-attachments")
+}
+
+fn drop_staged_attachments(attachments: &[wtm_core::model::AgentAttachment]) {
+    let root = staged_attachment_dir();
+    for attachment in attachments {
+        let path = std::path::Path::new(&attachment.path);
+        if path.starts_with(&root) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
 
 /// Read a file the user picked or dropped and prepare it for both agent transports.
 #[tauri::command]
@@ -1650,7 +1670,7 @@ pub async fn stage_agent_attachment(
             .and_then(|part| part.to_str())
             .filter(|part| !part.is_empty())
             .unwrap_or("pasted-file");
-        let directory = std::env::temp_dir().join("wtm-agent-attachments");
+        let directory = staged_attachment_dir();
         std::fs::create_dir_all(&directory)
             .map_err(|e| ErrorView::new("io", format!("create attachment directory: {e}")))?;
         let path = directory.join(format!("{}-{safe_name}", uuid::Uuid::new_v4()));
@@ -2058,13 +2078,44 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
         .spawn(&inv, None, Arc::clone(&sink) as Arc<dyn PipeSink>)
         .map_err(|e| e.to_string())?;
 
-    for frame in wtm_agent::codex::model_list_frames() {
+    let frames = wtm_agent::codex::model_list_frames();
+    let Some((initialize, after_initialize)) = frames.split_first() else {
+        let _ = app.pipe.kill(&spawned.session);
+        return Err("codex model probe had no initialization frame".to_owned());
+    };
+    app.pipe
+        .write_line(&spawned.session, initialize)
+        .map_err(|e| e.to_string())?;
+
+    // Codex 0.147 stopped accepting requests pipelined behind `initialize`. Waiting for that reply
+    // preserves the JSON-RPC handshake and keeps the picker from losing the exact ids a handoff
+    // needs when a display label differs from the provider's model name.
+    let deadline = app.clock.monotonic_ms() + CAPABILITY_TIMEOUT_MS;
+    loop {
+        let initialized = sink.lines.lock().iter().any(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|value| value.get("id").and_then(serde_json::Value::as_i64))
+                == Some(1)
+        });
+        if initialized {
+            break;
+        }
+        if app.clock.monotonic_ms() >= deadline {
+            let _ = app.pipe.kill(&spawned.session);
+            return Err(
+                "codex did not answer `initialize` — check that `codex` is logged in".to_owned(),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    for frame in after_initialize {
         app.pipe
-            .write_line(&spawned.session, &frame)
+            .write_line(&spawned.session, frame)
             .map_err(|e| e.to_string())?;
     }
 
-    let deadline = app.clock.monotonic_ms() + CAPABILITY_TIMEOUT_MS;
     let mut models = Vec::new();
     loop {
         let found = sink.lines.lock().iter().find_map(|line| {

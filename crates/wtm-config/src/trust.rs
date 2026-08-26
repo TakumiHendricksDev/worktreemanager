@@ -110,7 +110,7 @@ impl TrustStore {
         })?;
 
         // Same directory, so the rename stays within one filesystem and is atomic.
-        let temporary = path.with_extension("toml.tmp");
+        let temporary = crate::fs::unique_temp_path(path);
         std::fs::write(&temporary, text).map_err(|e| io(&e))?;
         std::fs::rename(&temporary, path).map_err(|e| io(&e))
     }

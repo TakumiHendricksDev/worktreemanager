@@ -31,7 +31,7 @@ pub mod user;
 pub mod validate;
 
 pub use briefs::{Brief, BriefMeta};
-pub use fs::{RealFileStore, absolutize, parse_dotenv};
+pub use fs::{RealFileStore, absolutize, parse_dotenv, unique_temp_path};
 pub use layers::{BUILT_IN_DEFAULTS, LOCAL_FILENAME, LayerPaths, REPO_FILENAME};
 pub use paths::AppPaths;
 pub use sessions::{SessionRecord, SessionStore};

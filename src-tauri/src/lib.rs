@@ -281,13 +281,12 @@ pub fn run() {
                 use tauri::Manager;
 
                 if let Some(app) = handle.try_state::<Arc<App>>() {
-                    let killed = app.pty.kill_all();
+                    let mut pids = app.pty.take_running_pids();
+                    pids.extend(app.pipe.take_running_pids());
+                    let killed = pids.len();
+                    wtm_exec::signal::terminate_groups(&pids);
                     if killed > 0 {
-                        tracing::info!(sessions = killed, "terminated pty sessions on quit");
-                    }
-                    let killed = app.pipe.kill_all();
-                    if killed > 0 {
-                        tracing::info!(sessions = killed, "terminated agent sessions on quit");
+                        tracing::info!(sessions = killed, "terminated sessions on quit");
                     }
                 }
             }

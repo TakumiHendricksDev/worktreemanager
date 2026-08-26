@@ -28,7 +28,7 @@
 //! every one of them running.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
@@ -170,31 +170,54 @@ impl PipeHostImpl {
     /// survives the app that spawned it, holding a model connection open. Returns how many
     /// groups were signalled, for the shutdown log.
     pub fn kill_all(&self) -> usize {
-        let mut pids = Vec::new();
-        {
-            // Collected under the lock and signalled outside it: `terminate_groups` sleeps for
-            // the grace period, and holding the registry across that sleep would block every
-            // other call for as long as it lasts.
-            let sessions = self.sessions.lock();
-            for session in sessions.values() {
-                if session.outcome.lock().is_some() {
-                    continue;
-                }
-                session.intervention.lock().replace(Intervention::Killed);
-                if let Some(pid) = session.pid {
-                    pids.push(pid);
-                }
-            }
-        }
-
+        let pids = self.take_running_pids();
         signal::terminate_groups(&pids);
         pids.len()
+    }
+
+    /// Mark running sessions killed and return their pids, without signalling.
+    ///
+    /// The caller batches those pids into one [`signal::terminate_groups`] so teardown
+    /// pays a single grace period instead of one per session.
+    pub fn take_running_pids(&self) -> Vec<u32> {
+        self.take_pids_matching(|_| true)
+    }
+
+    /// Same as [`Self::take_running_pids`], but only for the named sessions.
+    pub fn take_pids(&self, ids: &[SessionId]) -> Vec<u32> {
+        self.take_pids_matching(|id| ids.iter().any(|wanted| wanted == id))
+    }
+
+    fn take_pids_matching(&self, wanted: impl Fn(&SessionId) -> bool) -> Vec<u32> {
+        let mut pids = Vec::new();
+        let sessions = self.sessions.lock();
+        for (id, session) in sessions.iter() {
+            if !wanted(id) {
+                continue;
+            }
+            if session.outcome.lock().is_some() {
+                continue;
+            }
+            let mut intervention = session.intervention.lock();
+            if intervention.is_none() {
+                intervention.replace(Intervention::Killed);
+            }
+            drop(intervention);
+            if let Some(pid) = session.pid {
+                pids.push(pid);
+            }
+        }
+        pids
     }
 
     /// Record an intervention and signal the group.
     fn intervene(&self, id: &SessionId, why: Intervention) -> Result<(), ExecError> {
         let (pid, flag) = self.with_session(id, |s| (s.pid, Arc::clone(&s.intervention)))?;
-        flag.lock().replace(why);
+        let mut recorded = flag.lock();
+        if recorded.is_none() {
+            recorded.replace(why);
+        }
+        drop(recorded);
         if let Some(pid) = pid {
             signal::terminate_group(pid);
         }
@@ -204,21 +227,35 @@ impl PipeHostImpl {
 
 /// Forward every complete line from `reader` to `deliver`, until EOF.
 ///
-/// Returns `Err` only when a line grew past [`MAX_LINE_BYTES`], which the caller turns into an
+/// Returns `Err` only when a line grew past `max_bytes`, which the caller turns into an
 /// intervention. An I/O error is EOF as far as this is concerned: the child is gone and the
 /// exit path is what reports why.
+///
+/// The cap is applied *while* reading, via [`Read::take`]. Checking after `read_until` has
+/// already grown the buffer would let a child with no newline allocate until the process is
+/// killed.
 fn pump(reader: impl std::io::Read, mut deliver: impl FnMut(&str)) -> Result<(), ()> {
+    pump_limited(reader, MAX_LINE_BYTES, &mut deliver)
+}
+
+fn pump_limited(
+    reader: impl std::io::Read,
+    max_bytes: usize,
+    deliver: &mut impl FnMut(&str),
+) -> Result<(), ()> {
     let mut buffered = BufReader::with_capacity(READ_CAPACITY, reader);
     let mut line = Vec::new();
 
     loop {
         line.clear();
-        match buffered.read_until(b'\n', &mut line) {
+        let mut limited =
+            (&mut buffered).take(u64::try_from(max_bytes.saturating_add(1)).unwrap_or(u64::MAX));
+        match limited.read_until(b'\n', &mut line) {
             Ok(0) | Err(_) => return Ok(()),
             Ok(_) => {}
         }
 
-        if line.len() > MAX_LINE_BYTES {
+        if line.len() > max_bytes {
             return Err(());
         }
 
@@ -299,18 +336,30 @@ impl PipeHost for PipeHostImpl {
 
         // stderr on its own thread. Not merged into stdout: a diagnostic interleaved into the
         // JSON stream turns a useful message into a parse error.
-        let stderr_thread = {
-            let id = id.clone();
-            let sink = Arc::clone(&sink);
-            stderr.map(|handle| {
-                std::thread::Builder::new()
+        let stderr_thread = match stderr {
+            Some(handle) => {
+                let id = id.clone();
+                let sink = Arc::clone(&sink);
+                match std::thread::Builder::new()
                     .name(format!("pipe-err-{}", id.as_str()))
                     .spawn(move || {
                         // A too-long line on stderr is not worth ending a session over, so the
                         // result is ignored here where stdout's is not.
                         let _ = pump(handle, |line| sink.on_stderr(&id, line));
-                    })
-            })
+                    }) {
+                    Ok(join) => Some(join),
+                    Err(e) => {
+                        // The child is running and stdout is still open. A missing stderr
+                        // reader would deadlock the moment the child filled that pipe.
+                        signal::terminate_group(pid);
+                        return Err(ExecError::Spawn {
+                            argv: inv.display(),
+                            message: format!("could not start the stderr thread: {e}"),
+                        });
+                    }
+                }
+            }
+            None => None,
         };
 
         {
@@ -342,7 +391,7 @@ impl PipeHost for PipeHostImpl {
                     // Both readers finished before the exit is reported, so the UI can never be
                     // told a session ended while its output is still arriving. Joined rather
                     // than detached for exactly that ordering.
-                    if let Some(Ok(handle)) = stderr_thread {
+                    if let Some(handle) = stderr_thread {
                         let _ = handle.join();
                     }
 
@@ -365,9 +414,12 @@ impl PipeHost for PipeHostImpl {
                     outcome.lock().replace(final_outcome.clone());
                     sink.on_exit(&id, &final_outcome);
                 })
-                .map_err(|e| ExecError::Spawn {
-                    argv: inv.display(),
-                    message: format!("could not start the reader thread: {e}"),
+                .map_err(|e| {
+                    signal::terminate_group(pid);
+                    ExecError::Spawn {
+                        argv: inv.display(),
+                        message: format!("could not start the reader thread: {e}"),
+                    }
                 })?;
         }
 
@@ -719,5 +771,21 @@ mod tests {
                 "a session survived quit"
             );
         }
+    }
+
+    #[test]
+    fn a_line_without_a_newline_is_refused_before_the_buffer_grows_unbounded() {
+        // The cap used to be checked after `read_until` had already allocated the whole
+        // line. A child that never writes `\n` would grow until the process was killed.
+        let input = vec![b'x'; 32];
+        let mut delivered = Vec::new();
+        let result = super::pump_limited(input.as_slice(), 16, &mut |line| {
+            delivered.push(line.to_owned());
+        });
+        assert!(result.is_err(), "a line past the cap must end the pump");
+        assert!(
+            delivered.is_empty(),
+            "the oversized line must not be delivered"
+        );
     }
 }

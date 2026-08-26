@@ -28,6 +28,7 @@
 //! the feature.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -113,26 +114,53 @@ pub fn save(dir: &Path, meta: &BriefMeta, markdown: &str) -> Result<String, Conf
 
     // Colons are legal on the platforms this app targets but are a path separator in some tooling and
     // in Finder's display, so the timestamp is flattened. A counter suffix would need a directory
-    // read to pick; a nanosecond-precision stamp does not collide in practice.
-    let id = meta
+    // read to pick; a nanosecond-precision stamp does not collide in practice. A second-level
+    // collision still happens if two saves share a clock tick, so the exclusive create below
+    // retries with `-2`, `-3`, … rather than overwriting.
+    let base = meta
         .created
         .replace([':', '.', '+'], "-")
         .trim_end_matches('Z')
         .to_owned();
 
-    let body = dir.join(format!("{id}.md"));
-    std::fs::write(&body, markdown).map_err(|e| io(&body, &e))?;
-    restrict(&body, 0o600);
-
-    let sidecar = dir.join(format!("{id}.toml"));
-    let text = toml::to_string_pretty(meta).map_err(|e| ConfigError::Io {
-        path: sidecar.clone(),
-        message: format!("serialize the brief metadata: {e}"),
-    })?;
-    std::fs::write(&sidecar, text).map_err(|e| io(&sidecar, &e))?;
-    restrict(&sidecar, 0o600);
-
-    Ok(id)
+    let mut id = base.clone();
+    let mut suffix = 2_u32;
+    loop {
+        let body = dir.join(format!("{id}.md"));
+        match create_restricted(&body) {
+            Ok(mut file) => {
+                file.write_all(markdown.as_bytes())
+                    .map_err(|e| io(&body, &e))?;
+                let sidecar = dir.join(format!("{id}.toml"));
+                let text = toml::to_string_pretty(meta).map_err(|e| ConfigError::Io {
+                    path: sidecar.clone(),
+                    message: format!("serialize the brief metadata: {e}"),
+                })?;
+                match create_restricted(&sidecar) {
+                    Ok(mut file) => {
+                        file.write_all(text.as_bytes())
+                            .map_err(|e| io(&sidecar, &e))?;
+                        return Ok(id);
+                    }
+                    Err(error) => {
+                        let _ = std::fs::remove_file(&body);
+                        return Err(io(&sidecar, &error));
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                id = format!("{base}-{suffix}");
+                suffix = suffix.saturating_add(1);
+                if suffix > 1_000 {
+                    return Err(ConfigError::Io {
+                        path: dir.to_path_buf(),
+                        message: "could not mint a unique brief id".to_owned(),
+                    });
+                }
+            }
+            Err(error) => return Err(io(&body, &error)),
+        }
+    }
 }
 
 /// Every brief in a directory, newest first.
@@ -165,9 +193,27 @@ pub fn list(dir: &Path) -> Vec<Brief> {
     out
 }
 
+/// Whether `id` is a name [`save`] could have minted, and nothing else.
+///
+/// `save` derives the id from a flattened RFC 3339 timestamp — ASCII digits, `-`, and the `T`
+/// separator — so a real id matches `[0-9A-Za-z-]+`. That matters because the id crosses IPC from
+/// the webview (`remove_brief`, and any read), and `Path::join` follows `..`: an unchecked id is a
+/// path-traversal primitive, so `../../…/secret` would read or **delete** a `.md`/`.toml` outside
+/// the plans directory. Refusing anything outside the minted shape closes that without a
+/// canonicalisation dance, and rejects the empty string, which would otherwise target the
+/// directory itself. This is the same containment `wtm_exec::path::app_bundle_in` does for a value
+/// that is only ever a literal.
+#[must_use]
+fn is_minted_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 /// Read one brief by id.
 #[must_use]
 pub fn read(dir: &Path, id: &str) -> Option<Brief> {
+    if !is_minted_id(id) {
+        return None;
+    }
     let sidecar = dir.join(format!("{id}.toml"));
     let meta: BriefMeta = toml::from_str(&std::fs::read_to_string(&sidecar).ok()?).ok()?;
     let markdown = std::fs::read_to_string(dir.join(format!("{id}.md"))).ok()?;
@@ -185,6 +231,10 @@ pub fn read(dir: &Path, id: &str) -> Option<Brief> {
 /// grounds that a future non-filesystem store might need one — which is a signature written for a
 /// store that does not exist, and clippy was right to say so.
 pub fn remove(dir: &Path, id: &str) {
+    // A traversing id would delete files outside the plans directory. See `is_minted_id`.
+    if !is_minted_id(id) {
+        return;
+    }
     let _ = std::fs::remove_file(dir.join(format!("{id}.md")));
     let _ = std::fs::remove_file(dir.join(format!("{id}.toml")));
 }
@@ -209,6 +259,18 @@ pub fn title_of(markdown: &str) -> String {
     } else {
         title
     }
+}
+
+/// Create a new file that is already `0600`, so a crash between `write` and `chmod` cannot
+/// leave a world-readable brief. `create_new` is also what makes a colliding id fail instead
+/// of silently overwriting another plan.
+fn create_restricted(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
 }
 
 /// Tighten a path's permissions, best-effort.
@@ -331,6 +393,49 @@ mod tests {
         let title = title_of(&long);
         assert!(title.chars().count() <= 81, "got {}", title.chars().count());
         assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn a_brief_id_that_escapes_the_plans_directory_is_refused() {
+        // The id crosses IPC from the webview and is interpolated into a path; `Path::join` follows
+        // `..`, so an unchecked id reads or deletes files outside the plans directory. Here `plans`
+        // sits beside a `secret.md`, and `../secret` resolves to it.
+        let root = tempfile::tempdir().unwrap();
+        let plans = root.path().join("plans");
+        std::fs::create_dir_all(&plans).unwrap();
+        let secret = root.path().join("secret.md");
+        std::fs::write(&secret, "do not delete me").unwrap();
+
+        remove(&plans, "../secret");
+        assert!(
+            secret.exists(),
+            "traversal id must not delete an outside file"
+        );
+        assert!(
+            read(&plans, "../secret").is_none(),
+            "traversal id must not read out"
+        );
+
+        // Separator- and dot-bearing ids are refused whatever they point at.
+        for hostile in ["../secret", "a/b", "a.b", "", "..", "a\\b"] {
+            assert!(!is_minted_id(hostile), "should refuse {hostile:?}");
+        }
+        // A real minted id is still accepted, so the guard does not break ordinary use.
+        let id = save(&plans, &meta("ok", "2026-08-05T12:00:00Z"), "body").unwrap();
+        assert!(is_minted_id(&id));
+        assert!(read(&plans, &id).is_some());
+    }
+
+    #[test]
+    fn a_second_save_at_the_same_timestamp_gets_a_suffix_instead_of_overwriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = save(dir.path(), &meta("one", "2026-08-05T12:00:00Z"), "first").unwrap();
+        let second = save(dir.path(), &meta("two", "2026-08-05T12:00:00Z"), "second").unwrap();
+        assert_eq!(first, "2026-08-05T12-00-00");
+        assert_eq!(second, "2026-08-05T12-00-00-2");
+        assert_eq!(read(dir.path(), &first).unwrap().markdown, "first");
+        assert_eq!(read(dir.path(), &second).unwrap().markdown, "second");
+        assert!(is_minted_id(&second));
     }
 
     #[cfg(unix)]

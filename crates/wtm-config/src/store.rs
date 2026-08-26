@@ -55,6 +55,10 @@ pub struct FileConfigStore {
     engine: Arc<dyn TemplateEngine>,
     clock: Arc<dyn Clock>,
     cache: Mutex<BTreeMap<PathBuf, CacheEntry>>,
+    /// Serializes read-modify-write of `config.toml`. Two overlapping `set_favorite`
+    /// or `register_project` calls would otherwise each load, mutate, and save, and
+    /// the second write would drop the first.
+    user_write: Mutex<()>,
 }
 
 impl std::fmt::Debug for FileConfigStore {
@@ -79,6 +83,7 @@ impl FileConfigStore {
             engine,
             clock,
             cache: Mutex::new(BTreeMap::new()),
+            user_write: Mutex::new(()),
         }
     }
 
@@ -118,6 +123,7 @@ impl FileConfigStore {
         worktree: &str,
         favorite: bool,
     ) -> Result<(), ConfigError> {
+        let _write = self.user_write.lock();
         let mut config = self.user_config()?;
         if !config
             .projects
@@ -412,12 +418,14 @@ impl ConfigStore for FileConfigStore {
             message: format!("not a git repository: {e}"),
         })?;
 
+        let _write = self.user_write.lock();
         let mut config = self.user_config()?;
         config.register(&root, self.clock.today());
         self.save_user_config(&config)
     }
 
     fn unregister_project(&self, repo_root: &Path) -> Result<(), ConfigError> {
+        let _write = self.user_write.lock();
         let mut config = self.user_config()?;
         config.unregister(repo_root);
         self.save_user_config(&config)?;
@@ -430,6 +438,7 @@ impl ConfigStore for FileConfigStore {
     }
 
     fn set_user_pref(&self, key: &str, value: &str) -> Result<(), ConfigError> {
+        let _write = self.user_write.lock();
         let mut config = self.user_config()?;
         config.set_pref(key, value);
         self.save_user_config(&config)

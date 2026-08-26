@@ -437,17 +437,13 @@ pub fn resolve_cwd(
     engine: &dyn TemplateEngine,
     ctx: &Context,
 ) -> std::path::PathBuf {
-    use wtm_core::model::CwdBase;
-
-    match base {
-        CwdBase::RepoRoot | CwdBase::MainWorktree => project.root.clone(),
-        // Falling back to the repo root rather than failing: a config that asks for the
-        // worktree in a context without one is a validation error, caught at load time.
-        CwdBase::Worktree => worktree.map_or_else(|| project.root.clone(), |w| w.path.clone()),
-        CwdBase::Custom(template) => engine
-            .render("cwd", template, ctx)
-            .map_or_else(|_| project.root.clone(), std::path::PathBuf::from),
-    }
+    wtm_core::usecase::create::resolve_cwd(
+        base,
+        project,
+        worktree.map(|worktree| worktree.path.as_path()),
+        engine,
+        ctx,
+    )
 }
 
 /// The token scope for anything running against an existing worktree.

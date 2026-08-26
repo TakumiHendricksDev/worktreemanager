@@ -22,10 +22,13 @@
   const {
     onnew,
     onselectworktree,
+    detailId = 'worktree-detail',
   }: {
     onnew: () => void;
     /** Picking a worktree means "show me that one", so the pane leaves the create view. */
     onselectworktree?: () => void;
+    /** The panel this tablist controls, or empty while the create pane owns the screen. */
+    detailId?: string | null;
   } = $props();
 
   /**
@@ -78,14 +81,32 @@
   function onKeydown(event: KeyboardEvent) {
     const moves: Record<string, number> = { ArrowDown: 1, ArrowUp: -1 };
     const delta = moves[event.key];
-    if (delta === undefined) return;
-
-    event.preventDefault();
-    workspace.selectRelative(delta);
-    onselectworktree?.();
-    // Move real focus with the selection, or the next arrow press would be handled by
-    // the element the user has actually focused rather than by the list.
-    focusSelectedTab();
+    if (delta !== undefined) {
+      event.preventDefault();
+      workspace.selectRelative(delta);
+      onselectworktree?.();
+      focusSelectedTab();
+      return;
+    }
+    if (event.key === 'Home') {
+      event.preventDefault();
+      const first = workspace.ordered[0];
+      if (first) {
+        workspace.select(first.id);
+        onselectworktree?.();
+        focusSelectedTab();
+      }
+      return;
+    }
+    if (event.key === 'End') {
+      event.preventDefault();
+      const last = workspace.ordered.at(-1);
+      if (last) {
+        workspace.select(last.id);
+        onselectworktree?.();
+        focusSelectedTab();
+      }
+    }
   }
 
   /** Escape clears, Enter and ArrowDown hand off to the list. */
@@ -196,6 +217,7 @@
             {worktree}
             status={railStatus(worktree.id)}
             selected={worktree.id === workspace.selectedWorktreeId}
+            controls={detailId}
             onselect={() => {
               workspace.select(worktree.id);
               onselectworktree?.();
@@ -212,6 +234,7 @@
             {worktree}
             status={railStatus(worktree.id)}
             selected={worktree.id === workspace.selectedWorktreeId}
+            controls={detailId}
             onselect={() => {
               workspace.select(worktree.id);
               onselectworktree?.();

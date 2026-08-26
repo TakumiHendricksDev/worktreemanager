@@ -100,7 +100,7 @@
 /* The one chip that is a literal token: `--brand-500` is set per palette, so it inherits
    correctly without being recomputed. */
 .c-palette__chip--brand {
-  background: var(--brand-500);
+  background: var(--accent);
 }
 
 .c-palette__name {

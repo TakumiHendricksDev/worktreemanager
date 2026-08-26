@@ -123,6 +123,9 @@ pub struct WorktreeId(String);
 impl WorktreeId {
     #[must_use]
     pub fn from_path(path: &Path) -> Self {
+        // Worktree identity crosses IPC as a string. Non-UTF-8 paths are lossy here
+        // because the UI, config, and git argv all carry `String`; a round-trip that
+        // invented a different path would be worse than documenting the assumption.
         Self(path.to_string_lossy().into_owned())
     }
 

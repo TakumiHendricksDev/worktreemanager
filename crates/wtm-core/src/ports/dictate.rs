@@ -69,6 +69,16 @@ pub enum DictateError {
     #[error("no transcription key is set")]
     NoKey,
 
+    /// The key contains a character that cannot be carried safely.
+    ///
+    /// Both consumers of the key — the `curl` config and the keychain `security -i` script — are
+    /// line-oriented parsers where a raw newline ends the current directive whatever the quoting
+    /// around it. A key holding one is refused before either payload is built rather than escaped,
+    /// because two different grammars made safe by one escaping pass is a standing invitation to a
+    /// bug. See `wtm_dictate::ensure_key_safe`.
+    #[error("the transcription key contains an unsupported character")]
+    InvalidKey,
+
     /// The service rejected the credential.
     #[error("the transcription service rejected the key")]
     Unauthorized,

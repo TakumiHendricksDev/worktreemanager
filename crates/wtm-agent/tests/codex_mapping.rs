@@ -639,11 +639,16 @@ fn a_command_approval_request_becomes_a_blocking_card_and_its_answer_replies_on_
     // The first answer wins. A second — two panes, or a click racing a keystroke — finds nothing,
     // because `answer` removes the request when it replies. Replying twice on one id would
     // desynchronise the server's view of the turn.
+    let second = driver.answer(&id, &ApprovalAnswer::Deny { message: None });
     assert!(
-        driver
-            .answer(&id, &ApprovalAnswer::Deny { message: None })
-            .is_empty(),
-        "a second answer for the same request must write nothing"
+        writes(&second).is_empty(),
+        "a second answer must not write to the server"
+    );
+    assert!(
+        events(&second)
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Notice { .. })),
+        "a stale answer is a notice rather than a silent no-op: {second:?}"
     );
 }
 
@@ -995,6 +1000,32 @@ fn an_error_notification_naming_a_usage_limit_becomes_limit_reached_rather_than_
     assert!(matches!(
         events(&ordinary).first(),
         Some(AgentEvent::Failed { .. })
+    ));
+}
+
+#[test]
+fn a_nested_provider_error_keeps_the_actionable_message() {
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"method":"error","params":{"error":{"message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The model id is not supported.\"}}"}}}"#,
+    );
+
+    assert!(matches!(
+        events(&steps).as_slice(),
+        [AgentEvent::Failed { message }] if message == "The model id is not supported."
+    ));
+}
+
+#[test]
+fn a_failed_turn_completion_keeps_its_error() {
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"method":"turn/completed","params":{"turn":{"id":"turn-7","status":"failed","error":{"message":"Please sign in again."}}}}"#,
+    );
+
+    assert!(matches!(
+        events(&steps).as_slice(),
+        [AgentEvent::Failed { message }] if message == "Please sign in again."
     ));
 }
 

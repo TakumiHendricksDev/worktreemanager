@@ -136,14 +136,22 @@
   font-size: var(--step--2);
   color: var(--fg-subtle);
   line-height: 1.4;
+}
 
-  summary {
-    cursor: pointer;
-    /* The marker is the affordance; a hover colour is what says it is one. */
-    &:hover {
-      color: var(--fg-muted);
-    }
-  }
+.c-transcript__group summary,
+.c-transcript__thinking summary,
+.c-transcript__raw summary,
+.c-transcript__patch summary,
+.c-transcript__tool summary {
+  cursor: pointer;
+}
+
+.c-transcript__group summary:hover,
+.c-transcript__thinking summary:hover,
+.c-transcript__raw summary:hover,
+.c-transcript__patch summary:hover,
+.c-transcript__tool summary:hover {
+  color: var(--fg-muted);
 }
 
 .c-transcript__patch summary {
@@ -467,13 +475,13 @@
   font-size: var(--step--2);
 }
 
-.c-transcript__attachment figcaption span {
+.c-transcript__attachment-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.c-transcript__attachment figcaption small {
+.c-transcript__attachment-size {
   color: var(--fg-subtle);
 }
 

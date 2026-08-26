@@ -445,14 +445,12 @@ impl CodexProtocol {
                 return Vec::new();
             }
 
-            let detail = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("the app server rejected a request");
+            let detail = provider_error_message(error)
+                .unwrap_or_else(|| "the app server rejected a request".to_owned());
             // Classified here too, not only on the `error` notification: a `turn/start` refused
             // because the account is out of credit is rejected as a *reply*, which is the most
             // likely single place a Codex exhaustion actually lands.
-            return vec![Step::Emit(limit_or_failure(detail))];
+            return vec![Step::Emit(limit_or_failure(&detail))];
         }
 
         if Some(id) == self.init_id {
@@ -555,6 +553,9 @@ impl CodexProtocol {
                 // Turns do not overlap on one thread. Clear unconditionally so a malformed or
                 // newer completion payload cannot leave Stop targeting a turn that already ended.
                 self.active_turn_id = None;
+                if let Some(detail) = params.get("turn").and_then(provider_error_message) {
+                    return vec![Step::Emit(limit_or_failure(&detail))];
+                }
                 AgentEvent::TurnFinished {
                     turn,
                     // `turn/completed` carries **no usage at all** — also verified on the wire,
@@ -621,10 +622,8 @@ impl CodexProtocol {
                 }
             }
             "error" => limit_or_failure(
-                params
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("the app server reported an error"),
+                &provider_error_message(params)
+                    .unwrap_or_else(|| "the app server reported an error".to_owned()),
             ),
             /*
              * The account's rate-limit windows, which arrive routinely and mean nothing until one
@@ -846,7 +845,10 @@ impl Protocol for CodexProtocol {
         // finds nothing here. That is the whole concurrency story — two panes, or a click and a
         // keystroke, cannot both reply and desynchronise the server's view of the turn.
         let Some(pending) = self.pending.remove(id) else {
-            return Vec::new();
+            return vec![Step::Emit(AgentEvent::Notice {
+                level: NoticeLevel::Warn,
+                message: format!("No pending approval `{id}` to answer."),
+            })];
         };
 
         if pending.kind == PendingKind::UserInput {
@@ -1009,6 +1011,24 @@ fn limit_or_failure(reason: &str) -> AgentEvent {
             message: reason.to_owned(),
         },
     }
+}
+
+/// The app server has used both a direct `message` and a nested `error.message`, with the latter
+/// sometimes containing a serialized API error. Unwrapping every layer here keeps authentication
+/// and model-selection failures actionable instead of turning them into the same generic notice.
+fn provider_error_message(value: &Value) -> Option<String> {
+    if let Some(message) = value.get("message").and_then(Value::as_str) {
+        if let Ok(nested) = serde_json::from_str::<Value>(message)
+            && let Some(detail) = provider_error_message(&nested)
+        {
+            return Some(detail);
+        }
+        if !message.trim().is_empty() {
+            return Some(message.to_owned());
+        }
+    }
+
+    value.get("error").and_then(provider_error_message)
 }
 
 /// A sentence about the first rate-limit window that is full, or `None` while there is room.

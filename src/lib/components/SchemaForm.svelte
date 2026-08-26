@@ -15,6 +15,7 @@
   import { commands } from '../ipc/commands';
   import { errorMessage, type Field as FieldSpec } from '../ipc/types';
   import Field from './ui/Field.svelte';
+  import Choice from './ui/Choice.svelte';
 
   const {
     projectId,
@@ -85,6 +86,20 @@
     return field.hasDynamicOptions ? (options[field.key]?.values ?? []) : field.options;
   }
 
+  function selectedOf(key: string): string[] {
+    return (values[key] ?? '')
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+
+  function toggleMulti(key: string, option: string, on: boolean): void {
+    const next = new Set(selectedOf(key));
+    if (on) next.add(option);
+    else next.delete(option);
+    values[key] = [...next].join(',');
+  }
+
   const inertKeys = $derived(new Set(inert));
 </script>
 
@@ -108,19 +123,46 @@
       help={field.kind === 'bool' ? null : field.help}
     >
       {#if field.kind === 'bool'}
-        <label class="c-choice">
-          <input
-            id={`f-${field.key}`}
-            type="checkbox"
-            checked={values[field.key] === 'true'}
-            onchange={(e) =>
-              (values[field.key] = (e.currentTarget as HTMLInputElement).checked
-                ? 'true'
-                : 'false')}
-          />
-          <span class="c-choice__hint">{field.help ?? ''}</span>
-        </label>
-      {:else if field.kind === 'select' || field.kind === 'multiselect'}
+        <Choice
+          id={`f-${field.key}`}
+          checked={values[field.key] === 'true'}
+          onchange={(on) => (values[field.key] = on ? 'true' : 'false')}
+        >
+          {field.help ?? ''}
+        </Choice>
+      {:else if field.kind === 'multiselect'}
+        <div class="o-stack">
+          {#each optionsFor(field) as option (option)}
+            <Choice
+              checked={selectedOf(field.key).includes(option)}
+              onchange={(on) => toggleMulti(field.key, option, on)}
+            >
+              {option}
+            </Choice>
+          {/each}
+          {#if field.allowCustom}
+            <input
+              id={`f-${field.key}`}
+              class="c-input"
+              type="text"
+              placeholder={field.placeholder ?? 'Add extra values, comma-separated'}
+              value={selectedOf(field.key)
+                .filter((value) => !optionsFor(field).includes(value))
+                .join(', ')}
+              oninput={(e) => {
+                const extras = (e.currentTarget as HTMLInputElement).value
+                  .split(',')
+                  .map((part) => part.trim())
+                  .filter(Boolean);
+                const known = selectedOf(field.key).filter((value) =>
+                  optionsFor(field).includes(value),
+                );
+                values[field.key] = [...known, ...extras].join(',');
+              }}
+            />
+          {/if}
+        </div>
+      {:else if field.kind === 'select'}
         {#if field.allowCustom}
           <!-- One searchable combobox: typing filters the browser's suggestions and is also a
                valid custom ref. The old select-plus-input made the same value look like two fields. -->
@@ -166,7 +208,8 @@
           id={`f-${field.key}`}
           class="c-input"
           type="number"
-          bind:value={values[field.key]}
+          value={values[field.key]}
+          oninput={(e) => (values[field.key] = (e.currentTarget as HTMLInputElement).value)}
         />
       {:else}
         <input

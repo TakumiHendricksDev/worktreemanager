@@ -221,7 +221,7 @@
   });
 </script>
 
-<div class="c-surface" class:is-hidden={!visible} aria-label="Sessions">
+<div class="c-surface" class:is-hidden={!visible} role="region" aria-label="Sessions">
   {#if activeId}
     <AgentTree worktreeId={activeId} onbrowse={() => (browsingAgents = true)} />
   {/if}

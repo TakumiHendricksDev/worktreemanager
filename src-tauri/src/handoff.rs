@@ -233,6 +233,12 @@ pub struct Hub {
     /// same fact on its panes, but a tool call arrives on the socket thread and never goes near the
     /// webview, so the answer has to exist on this side too.
     children: parking_lot::Mutex<BTreeMap<String, Vec<Child>>>,
+    /// Children recorded against a token before the parent session id existed.
+    ///
+    /// The child's first MCP call can arrive before [`Hub::bind_session`]. Filing those
+    /// under a missing parent used to drop them, so `close_agents` could not see the
+    /// first delegation of a run.
+    pending: parking_lot::Mutex<BTreeMap<String, Vec<Child>>>,
 }
 
 impl Hub {
@@ -258,6 +264,29 @@ impl Hub {
         if let Some(caller) = self.tokens.lock().get_mut(token) {
             caller.session = Some(session.to_owned());
         }
+        if let Some(pending) = self.pending.lock().remove(token) {
+            self.children
+                .lock()
+                .entry(session.to_owned())
+                .or_default()
+                .extend(pending);
+        }
+    }
+
+    /// Forget a token that never bound to a session — typically because spawn failed
+    /// after the MCP config was built.
+    pub fn forget_unbound(&self, token: &str) {
+        {
+            let mut tokens = self.tokens.lock();
+            if tokens
+                .get(token)
+                .is_none_or(|caller| caller.session.is_some())
+            {
+                return;
+            }
+            tokens.remove(token);
+        }
+        self.pending.lock().remove(token);
     }
 
     /// Keep delegation inheritance aligned with a live effort change on the calling session.
@@ -281,6 +310,33 @@ impl Hub {
             .entry(parent.to_owned())
             .or_default()
             .push(child);
+    }
+
+    /// Record a child against whoever currently owns `token`.
+    ///
+    /// If the parent session id is not bound yet, the child is queued on the token and
+    /// flushed by [`Hub::bind_session`].
+    pub fn record_child_for(&self, token: &str, child: Child) {
+        let parent = self
+            .tokens
+            .lock()
+            .get(token)
+            .and_then(|caller| caller.session.clone());
+        if let Some(parent) = parent {
+            self.record_child(Some(&parent), child);
+        } else {
+            self.pending
+                .lock()
+                .entry(token.to_owned())
+                .or_default()
+                .push(child);
+        }
+    }
+
+    /// Every descendant of `parent`, deepest first.
+    #[must_use]
+    pub fn descendants(&self, parent: &str) -> Vec<Child> {
+        collect_all(&self.children.lock(), parent)
     }
 
     /// Mark a child's delegated turn finished, so it becomes closable.
@@ -364,7 +420,22 @@ impl Hub {
     /// would fail *after* opening a pane, which is a worse way to find out. The parentage map goes
     /// with them; its sessions were killed by the same teardown.
     pub fn forget_worktree(&self, worktree: &str) {
-        self.tokens.lock().retain(|_, c| c.worktree != worktree);
+        let dropped: Vec<String> = {
+            let mut tokens = self.tokens.lock();
+            let dropped = tokens
+                .iter()
+                .filter(|(_, caller)| caller.worktree == worktree)
+                .map(|(token, _)| token.clone())
+                .collect();
+            tokens.retain(|_, caller| caller.worktree != worktree);
+            dropped
+        };
+        {
+            let mut pending = self.pending.lock();
+            for token in &dropped {
+                pending.remove(token);
+            }
+        }
         let mut children = self.children.lock();
         for list in children.values_mut() {
             list.retain(|child| child.worktree != worktree);
@@ -403,6 +474,18 @@ fn collect_closable(children: &BTreeMap<String, Vec<Child>>, parent: &str) -> (V
         }
     }
     (closable, busy)
+}
+
+fn collect_all(children: &BTreeMap<String, Vec<Child>>, parent: &str) -> Vec<Child> {
+    let Some(direct) = children.get(parent) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for child in direct {
+        out.extend(collect_all(children, &child.session));
+        out.push(child.clone());
+    }
+    out
 }
 
 /// Collects one turn's assistant text and reports when the turn is over.
@@ -613,7 +696,7 @@ fn run_task(
         "starting a handoff"
     );
 
-    let opened = open_pane(handle, app, &caller, target, task, run_id);
+    let opened = open_pane(handle, app, token, &caller, target, task, run_id);
     let (session, capture, rx) = match opened {
         Ok(parts) => parts,
         Err(error) => return Response::failed(error),
@@ -666,6 +749,7 @@ fn run_task(
 fn open_pane(
     handle: &tauri::AppHandle,
     app: &Arc<App>,
+    token: &str,
     caller: &Caller,
     target: &str,
     task: &Task,
@@ -754,9 +838,19 @@ fn open_pane(
     });
 
     let sink: Arc<dyn wtm_agent::session::AgentSink> = Arc::clone(&capture) as _;
-    let session = app
-        .open_agent(entry, &req, &worktree, &caller.project, &sink)
-        .map_err(|e| format!("could not start a {target} session: {e}"))?;
+    let session = match app.open_agent(entry, &req, &worktree, &caller.project, &sink) {
+        Ok(session) => session,
+        Err(error) => {
+            if let Some(issued) = req
+                .mcp
+                .get(SERVER_NAME)
+                .and_then(|server| server.env.get(TOKEN_ENV))
+            {
+                app.handoff.forget_unbound(issued);
+            }
+            return Err(format!("could not start a {target} session: {error}"));
+        }
+    };
 
     crate::agent_bridge::announce_spawn(
         handle,
@@ -775,9 +869,10 @@ fn open_pane(
     );
 
     // After the announcement, because both need the same two ids and the frontend is the one that
-    // cannot wait. Unsettled until the turn returns; see `Hub::settled_children`.
-    app.handoff.record_child(
-        caller.session.as_deref(),
+    // cannot wait. Unsettled until the turn returns; see `Hub::settled_children`. Keyed on the
+    // parent token so a child whose first MCP call races `bind_session` is still parented.
+    app.handoff.record_child_for(
+        token,
         Child {
             session: session.as_str().to_owned(),
             worktree: caller.worktree.clone(),
@@ -1266,18 +1361,39 @@ mod tests {
     }
 
     #[test]
-    fn a_caller_whose_session_id_is_not_bound_yet_records_no_children() {
-        // `record_child` is handed `caller.session`, which is `None` between the token being issued
-        // and the provider process starting. Storing those under a placeholder key would pool every
-        // unbound caller's children together, which is the one way this map could hand a parent
-        // somebody else's session.
+    fn a_child_recorded_against_an_unbound_token_is_parented_once_the_session_binds() {
+        // The first MCP call can arrive before `bind_session`. Dropping it used to make the
+        // first delegation of a run unclosable.
         let hub = Hub::default();
-        hub.record_child(None, child("orphan", "wt-a"));
+        let token = hub.issue(Caller {
+            project: "p".to_owned(),
+            worktree: "wt-a".to_owned(),
+            provider: "claude".to_owned(),
+            effort: None,
+            session: None,
+        });
+        hub.record_child_for(&token, child("orphan", "wt-a"));
+        hub.bind_session(&token, "session-a");
         hub.settle_child("orphan");
 
-        let (settled, busy) = hub.settled_children("");
-        assert!(settled.is_empty(), "nothing is filed under an empty parent");
+        let (settled, busy) = hub.settled_children("session-a");
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].session, "orphan");
         assert_eq!(busy, 0);
+    }
+
+    #[test]
+    fn forget_unbound_drops_a_token_that_never_got_a_session() {
+        let hub = Hub::default();
+        let token = hub.issue(Caller {
+            project: "p".to_owned(),
+            worktree: "wt-a".to_owned(),
+            provider: "claude".to_owned(),
+            effort: None,
+            session: None,
+        });
+        hub.forget_unbound(&token);
+        assert!(hub.resolve(&token).is_none());
     }
 
     #[test]

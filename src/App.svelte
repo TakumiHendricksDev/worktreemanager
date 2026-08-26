@@ -96,6 +96,7 @@
   }
 
   onMount(() => {
+    let gone = false;
     void (async () => {
       await theme.init();
 
@@ -104,6 +105,7 @@
       // session under the default rather than the chosen behaviour.
       await composerPrefs.init();
       await dictation.init();
+      if (gone) return;
 
       const stored = await commands.getPref('ui.sidebar_width').catch(() => null);
       const parsed = stored ? Number.parseInt(stored, 10) : NaN;
@@ -116,14 +118,24 @@
       // approval of a session adopted from a reload would be judged as "not asked yet" whatever the
       // user had already answered.
       offAttention = await attention.init();
+      if (gone) {
+        offAttention?.();
+        return;
+      }
 
       // Awaited, unlike the worktree list it precedes: this subscribes to every `pty:*` and
       // `agent:*` stream, and a session whose events arrive before the listeners attach streams
       // into nothing. Nothing can start a session until there is a worktree list to start one
       // from, so paying for this first costs nothing visible.
       offSessions = await sessions.init();
+      if (gone) {
+        offSessions?.();
+        offAttention?.();
+        return;
+      }
 
       await workspace.init();
+      if (gone) return;
       booted = true;
     })();
 
@@ -200,7 +212,10 @@
        */
       if (meta && event.key === 'i') {
         const target = event.target as HTMLElement | null;
-        if (!target?.closest('.c-surface')) {
+        if (
+          !target?.closest('.c-surface') &&
+          !document.querySelector('[aria-modal="true"]')
+        ) {
           event.preventDefault();
           if (workspace.selected) showInspector = true;
         }
@@ -221,6 +236,7 @@
     window.addEventListener('keydown', onKey);
 
     return () => {
+      gone = true;
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
       void unlistenSettings.then((off) => off());
@@ -330,6 +346,7 @@
       <Sidebar
         onnew={() => (mainView = 'new')}
         onselectworktree={() => (mainView = 'worktree')}
+        detailId={mainView === 'worktree' ? 'worktree-detail' : null}
       />
     </aside>
 

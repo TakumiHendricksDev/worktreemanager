@@ -1,3 +1,28 @@
+<script lang="ts" module>
+  /**
+   * Mounted dialogs, oldest first. Escape and the focus trap belong only to the last entry:
+   * two window listeners cannot coordinate via `stopPropagation`.
+   */
+  let nextDialog = 0;
+  const stack: number[] = [];
+
+  function registerDialog(): number {
+    const id = nextDialog;
+    nextDialog += 1;
+    stack.push(id);
+    return id;
+  }
+
+  function unregisterDialog(id: number): void {
+    const index = stack.lastIndexOf(id);
+    if (index >= 0) stack.splice(index, 1);
+  }
+
+  function topDialog(): number | undefined {
+    return stack.at(-1);
+  }
+</script>
+
 <script lang="ts">
   /**
    * The modal.
@@ -28,7 +53,7 @@
    * on teardown, so closing returns you to the button you pressed rather than to the top of
    * the document.
    */
-  import type { Snippet } from 'svelte';
+  import { onDestroy, type Snippet } from 'svelte';
 
   import Button from './Button.svelte';
   import Icon from './Icon.svelte';
@@ -59,15 +84,27 @@
 
   let panel = $state<HTMLElement | null>(null);
 
+  /*
+   * Only the topmost dialog traps focus and handles Escape. Two mounted dialogs used to
+   * bounce focus into each other forever (⌘I over Settings is the reachable case), and
+   * Escape closed both because sibling `window` listeners ignore `stopPropagation`.
+   */
+  const depth = registerDialog();
+  onDestroy(() => unregisterDialog(depth));
+
+  function isTop(): boolean {
+    return topDialog() === depth;
+  }
+
   function onKeydown(event: KeyboardEvent) {
-    if (event.key !== 'Escape' || closeDisabled) return;
-    // Stopped so a dialog opened from within another Escape-handling view does not close both.
-    event.stopPropagation();
+    if (!isTop() || event.key !== 'Escape' || closeDisabled) return;
+    event.stopImmediatePropagation();
     onclose();
   }
 
   function onScrim() {
-    if (!closeDisabled) onclose();
+    if (!isTop() || closeDisabled) return;
+    onclose();
   }
 
   /** Everything Tab can reach inside the panel, in document order. */
@@ -113,6 +150,7 @@
    * controls are all disabled mid-operation does not spin.
    */
   function onFocusIn(event: FocusEvent) {
+    if (!isTop()) return;
     const target = event.target as Node | null;
     if (!panel || !target || panel.contains(target)) return;
     const wrap = focusables();
@@ -155,7 +193,7 @@
     <!-- `display: contents` so the form participates in no layout: the panel's flex column
          still sees the body and footer as its own children, which is what keeps the body
          scrollable and the footer pinned. -->
-    <form {onsubmit} style="display: contents">
+    <form {onsubmit} class="c-dialog__form">
       <div class="c-dialog__body">{@render body()}</div>
       <div class="c-dialog__foot">{@render footer()}</div>
     </form>

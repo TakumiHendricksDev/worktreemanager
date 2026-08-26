@@ -18,11 +18,12 @@
     element = $bindable(null),
     oninput,
     onblur,
+    ariaLabel,
   }: {
     id?: string;
     value?: string;
     /** `search` gets the platform's clear affordance; `number` gets its stepper. */
-    type?: 'text' | 'search' | 'number';
+    type?: 'text' | 'search' | 'number' | 'password';
     /** For a value read character by character — a path, a hash. */
     mono?: boolean;
     placeholder?: string;
@@ -31,6 +32,7 @@
     oninput?: (event: Event) => void;
     /** For a value worth saving once it stops being half-typed — a path, a key. */
     onblur?: (event: FocusEvent) => void;
+    ariaLabel?: string;
   } = $props();
 </script>
 
@@ -45,6 +47,7 @@
   {disabled}
   {oninput}
   {onblur}
+  aria-label={ariaLabel}
   bind:this={element}
   bind:value
   class="c-input"

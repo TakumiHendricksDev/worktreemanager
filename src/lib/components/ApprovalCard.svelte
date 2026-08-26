@@ -44,6 +44,7 @@
   import type { ApprovalAnswer, ApprovalRequest } from '../ipc/types';
   import Markdown from './Markdown.svelte';
   import Button from './ui/Button.svelte';
+  import TextInput from './ui/TextInput.svelte';
 
   const {
     request,
@@ -86,6 +87,7 @@
 
   /** What to send back with a plan denial, so the next plan is a revision rather than a guess. */
   let changes = $state('');
+  let card = $state<HTMLElement | null>(null);
 
   /**
    * What makes this a different request from the last one.
@@ -113,6 +115,9 @@
     otherSelected = {};
     notes = '';
     changes = '';
+    queueMicrotask(() => {
+      card?.querySelector<HTMLElement>('button:not([disabled]), textarea, input')?.focus();
+    });
   });
 
   const complete = $derived.by(() => {
@@ -186,8 +191,8 @@
   }
 </script>
 
-<div class="c-approval" role="alertdialog" aria-label={heading}>
-  <p class="c-approval__ask">{heading}</p>
+<div class="c-approval" role="alertdialog" aria-label={heading} bind:this={card}>
+  <p class="c-approval__ask" aria-live="assertive">{heading}</p>
 
   {#if request.kind === 'command'}
     <code class="c-approval__body">{request.command}</code>
@@ -232,7 +237,9 @@
             {#if question.header}<span class="c-approval__eyebrow">{question.header}</span
               >{/if}
             <span>{question.question}</span>
-            {#if question.multiple}<small>Select all that apply</small>{/if}
+            {#if question.multiple}<small class="c-approval__hint"
+                >Select all that apply</small
+              >{/if}
           </legend>
 
           {#if question.options.length > 0}
@@ -253,7 +260,9 @@
                   />
                   <span>
                     <strong>{option.label}</strong>
-                    {#if option.description}<small>{option.description}</small>{/if}
+                    {#if option.description}<small class="c-approval__hint"
+                        >{option.description}</small
+                      >{/if}
                   </span>
                 </label>
               {/each}
@@ -292,14 +301,16 @@
               {/if}
             </div>
           {:else}
-            <input
-              class="c-input c-approval__freeform"
+            <TextInput
               type={question.secret ? 'password' : 'text'}
-              aria-label={question.question}
+              ariaLabel={question.question}
               placeholder="Type your answer"
               value={other[question.id] ?? ''}
               oninput={(event) =>
-                (other = { ...other, [question.id]: event.currentTarget.value })}
+                (other = {
+                  ...other,
+                  [question.id]: (event.currentTarget as HTMLInputElement).value,
+                })}
             />
           {/if}
         </fieldset>
@@ -307,7 +318,7 @@
     </div>
 
     <label class="c-approval__notes">
-      <span>Notes <small>optional</small></span>
+      <span>Notes <small class="c-approval__hint">optional</small></span>
       <textarea
         class="c-textarea"
         rows="2"
@@ -387,10 +398,6 @@
           {reading ? 'Hide the plan' : 'Read the plan'}
         </Button>
       {/if}
-      <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}>
-        Approve
-      </Button>
-      <span class="c-approval__divider" aria-hidden="true"></span>
       <Button
         variant="danger-outline"
         size="sm"
@@ -409,10 +416,10 @@
       >
         Request changes
       </Button>
+      <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}>
+        Approve
+      </Button>
     {:else}
-      <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}
-        >Allow</Button
-      >
       <Button
         variant="neutral"
         size="sm"
@@ -421,9 +428,6 @@
       >
         Always this session
       </Button>
-      <!-- Past the divider, alone, matching the worktree header's treatment of Remove: a
-         destructive-feeling control flush against a neutral one is how it gets clicked by
-         accident. Deny is not destructive, but it does end something the user was waiting for. -->
       <span class="c-approval__divider" aria-hidden="true"></span>
       <Button
         variant="danger-outline"
@@ -433,6 +437,9 @@
       >
         Deny
       </Button>
+      <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}
+        >Allow</Button
+      >
     {/if}
   </div>
 </div>

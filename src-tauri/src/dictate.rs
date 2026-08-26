@@ -144,6 +144,9 @@ pub fn set_key(app: &Arc<App>, key: &str) -> Result<(), String> {
         clear_key(app);
         return Ok(());
     }
+    // Refused here so the Settings dialog explains it, rather than letting a newline reach the
+    // `security -i` script that stores it. See `wtm_dictate::ensure_key_safe`.
+    wtm_dictate::ensure_key_safe(key).map_err(|e| human(&e))?;
     let store = keystore(app).ok_or_else(|| {
         "no secret store on PATH — dictation needs `security` on macOS or `secret-tool` on Linux"
             .to_owned()
@@ -281,6 +284,9 @@ fn transcribe(app: &Arc<App>, audio: &[u8]) -> Result<String, String> {
         return Err(human(&DictateError::Silent));
     }
     let key = stored_key(app).ok_or_else(|| human(&DictateError::NoKey))?;
+    // Defence in depth: a key stored by a build older than this check, or written into the keychain
+    // by another tool, could still carry a newline into the `curl` config below.
+    wtm_dictate::ensure_key_safe(&key).map_err(|e| human(&e))?;
     let utterance = utterance(app);
 
     // Written next to the recording and removed straight after: `curl --data-binary @-` would read
@@ -318,6 +324,9 @@ fn transcribe(app: &Arc<App>, audio: &[u8]) -> Result<String, String> {
 fn human(error: &DictateError) -> String {
     match error {
         DictateError::NoKey => "No transcription key. Add one in Settings → Advanced.".to_owned(),
+        DictateError::InvalidKey => {
+            "That key contains an unsupported character — check for a stray line break.".to_owned()
+        }
         DictateError::Unauthorized => {
             "The transcription key was rejected. Check it in Settings → Advanced.".to_owned()
         }

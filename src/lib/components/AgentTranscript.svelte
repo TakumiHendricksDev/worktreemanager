@@ -17,10 +17,26 @@
    * drops from the front — so a row's key is its kind plus the id or ordinal it was built from.
    */
   import type { AgendaStep, AgentAttachment, AgentEvent, AgentUsage } from '../ipc/types';
+  import { tick } from 'svelte';
   import Button from './ui/Button.svelte';
   import Markdown from './Markdown.svelte';
 
   const { events }: { events: AgentEvent[] } = $props();
+
+  /**
+   * Stable identity for a transcript event, keyed by object identity rather than array
+   * position. The store trims from the front, so an index-based key would remount every
+   * remaining row and reopen the wrong `<details>`.
+   */
+  const eventOrd = new WeakMap<AgentEvent, number>();
+  let nextOrd = 1;
+  function identity(event: AgentEvent): number {
+    const existing = eventOrd.get(event);
+    if (existing !== undefined) return existing;
+    const assigned = nextOrd++;
+    eventOrd.set(event, assigned);
+    return assigned;
+  }
 
   /** Only the recent tail is folded and mounted until the reader asks for older activity. */
   const EVENT_PAGE = 800;
@@ -94,8 +110,8 @@
       return last !== undefined && last.kind === 'thinking' ? last : null;
     }
 
-    events.slice(firstVisible).forEach((event, visibleIndex) => {
-      const index = firstVisible + visibleIndex;
+    events.slice(firstVisible).forEach((event) => {
+      const index = identity(event);
       switch (event.kind) {
         case 'attachments':
           out.push({
@@ -135,7 +151,7 @@
 
         case 'command_started': {
           const row: Extract<Row, { kind: 'command' }> = {
-            key: `c${event.id}`,
+            key: `c:${event.id || index}`,
             kind: 'command',
             command: event.command,
             output: '',
@@ -160,7 +176,7 @@
 
         case 'tool_started': {
           const row: Extract<Row, { kind: 'tool' }> = {
-            key: `l${event.id}`,
+            key: `tool:${event.id || index}`,
             kind: 'tool',
             name: event.name,
             title: event.title,
@@ -243,7 +259,7 @@
         // another pane. Warn because nothing broke — the session ran out of a quota.
         case 'limit_reached':
           out.push({
-            key: `l${index}`,
+            key: `lim:${index}`,
             kind: 'notice',
             level: 'warn',
             text: event.message,
@@ -302,6 +318,22 @@
     });
 
     return group(out);
+  });
+
+  $effect(() => {
+    const live = new Set<string>();
+    for (const row of rows) {
+      live.add(row.key);
+      if (row.kind === 'steps') {
+        for (const step of row.steps) live.add(step.key);
+      }
+    }
+    for (const key of Object.keys(disclosures)) {
+      if (!live.has(key)) delete disclosures[key];
+    }
+    for (const key of Object.keys(diffLimits)) {
+      if (!live.has(key)) delete diffLimits[key];
+    }
   });
 
   /**
@@ -578,12 +610,22 @@
     if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
     return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   }
+
+  let root: HTMLElement | null = null;
+
+  async function showEarlier() {
+    const host = root?.parentElement;
+    const fromBottom = host ? host.scrollHeight - host.scrollTop : 0;
+    visibleEvents += EVENT_PAGE;
+    await tick();
+    if (host) host.scrollTop = host.scrollHeight - fromBottom;
+  }
 </script>
 
-<div class="c-transcript">
+<div class="c-transcript" bind:this={root}>
   {#if firstVisible > 0}
     <div class="c-transcript__paging">
-      <Button variant="quiet" size="sm" onclick={() => (visibleEvents += EVENT_PAGE)}>
+      <Button variant="quiet" size="sm" onclick={() => void showEarlier()}>
         Show {Math.min(EVENT_PAGE, firstVisible).toLocaleString()} earlier events
       </Button>
     </div>
@@ -632,8 +674,12 @@
               >
             {/if}
             <figcaption>
-              <span>{attachment.name}</span>
-              <small>{formatBytes(attachment.size)}</small>
+              <span class="c-transcript__attachment-name" title={attachment.name}
+                >{attachment.name}</span
+              >
+              <small class="c-transcript__attachment-size"
+                >{formatBytes(attachment.size)}</small
+              >
             </figcaption>
           </figure>
         {/each}

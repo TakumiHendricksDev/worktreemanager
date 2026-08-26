@@ -5,6 +5,7 @@
   import Markdown from './Markdown.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
+  import TextInput from './ui/TextInput.svelte';
 
   const { side }: { side: Pane } = $props();
 
@@ -69,15 +70,16 @@
     </div>
   {:else if failure}
     <p class="c-side-question__error">{failure}</p>
-  {:else if question !== null || side.working}
+  {:else if side.working}
     <p class="c-side-question__waiting" aria-live="polite">Thinking…</p>
+  {:else if question !== null}
+    <p class="c-side-question__waiting" aria-live="polite">No written reply.</p>
   {:else if !side.ready}
     <p class="c-side-question__waiting" aria-live="polite">Opening side chat…</p>
   {:else}
     <form class="c-side-question__ask" onsubmit={(event) => void ask(event)}>
-      <input
-        class="c-input"
-        aria-label="Side question"
+      <TextInput
+        ariaLabel="Side question"
         placeholder="Ask about what’s already in this conversation…"
         bind:value={draft}
       />

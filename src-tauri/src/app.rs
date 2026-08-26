@@ -133,6 +133,12 @@ const MAX_REPLAY: usize = 8_000;
 /// one forgotten session from retaining hundreds of cumulative diff snapshots indefinitely.
 const MAX_REPLAY_BYTES: usize = 32 * 1024 * 1024;
 
+/// How much serialized transcript data every live session may keep, together.
+///
+/// The per-session cap still applies; this stops a handful of long-running agents from
+/// retaining 32 MiB each indefinitely.
+const MAX_REPLAY_BYTES_GLOBAL: usize = 128 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 struct BufferedEvent {
     seq_event: SeqEvent,
@@ -197,6 +203,15 @@ impl ReplayBuffer {
         seq
     }
 
+    fn pop_oldest(&mut self) -> bool {
+        if let Some(removed) = self.events.pop_front() {
+            self.bytes = self.bytes.saturating_sub(removed.bytes);
+            true
+        } else {
+            false
+        }
+    }
+
     fn snapshot(&self) -> Vec<SeqEvent> {
         self.events
             .iter()
@@ -217,6 +232,33 @@ fn replaces(previous: &AgentEvent, newer: &AgentEvent) -> bool {
         | (AgentEvent::SkillsListed { .. }, AgentEvent::SkillsListed { .. })
         | (AgentEvent::Usage(_), AgentEvent::Usage(_)) => true,
         _ => false,
+    }
+}
+
+/// Drop oldest events from other sessions until the global replay budget is met.
+fn trim_global_replay(
+    agents: &mut BTreeMap<wtm_core::model::SessionId, AgentEntry>,
+    keep: &wtm_core::model::SessionId,
+) {
+    loop {
+        let total: usize = agents.values().map(|entry| entry.replay.bytes).sum();
+        if total <= MAX_REPLAY_BYTES_GLOBAL {
+            return;
+        }
+        let victim = agents
+            .iter()
+            .filter(|(id, entry)| *id != keep && !entry.replay.events.is_empty())
+            .max_by_key(|(_, entry)| entry.replay.bytes)
+            .map(|(id, _)| id.clone());
+        let Some(victim) = victim else {
+            return;
+        };
+        let Some(entry) = agents.get_mut(&victim) else {
+            return;
+        };
+        if !entry.replay.pop_oldest() {
+            return;
+        }
     }
 }
 
@@ -878,14 +920,21 @@ impl App {
         if self.shells.lock().remove(&session).is_none() {
             return false;
         }
-        match self.pty.kill(&session) {
+        let closed = match self.pty.kill(&session) {
             Ok(()) => true,
             Err(error) => {
                 // Already finished: the user typed `exit` before reaching for the control.
                 tracing::debug!(%session, %error, "no live shell to close");
                 false
             }
-        }
+        };
+        self.pty.reap_finished(KEEP_FINISHED_SESSIONS);
+        closed
+    }
+
+    pub(crate) fn reap_hosts(&self) {
+        self.pty.reap_finished(KEEP_FINISHED_SESSIONS);
+        self.pipe.reap_finished(KEEP_FINISHED_SESSIONS);
     }
 
     /// The ids of every session the pty host still reports as running.
@@ -1073,7 +1122,18 @@ impl App {
     /// that outlived its session was one UUID and `Caller` per pane until the worktree died, and
     /// the only thing that can still present it is a CLI we just signalled to exit.
     pub fn close_agent(&self, session: &str) -> bool {
+        // Descendants first: `forget_session` drops the parentage map, and doing that
+        // before signalling would leave child CLIs running with no owner.
+        for child in self.handoff.descendants(session) {
+            let _ = self.end_agent_process(&child.session);
+        }
+        let closed = self.end_agent_process(session);
         self.handoff.forget_session(session);
+        self.pipe.reap_finished(KEEP_FINISHED_SESSIONS);
+        closed
+    }
+
+    fn end_agent_process(&self, session: &str) -> bool {
         let id = wtm_core::model::SessionId::new(session);
         let Some(entry) = self.agents.lock().remove(&id) else {
             return false;
@@ -1081,11 +1141,44 @@ impl App {
         match entry.session.close() {
             Ok(()) => true,
             Err(error) => {
-                // Already finished: the CLI exited before the user reached for the control.
                 tracing::debug!(%session, %error, "no live agent session to close");
                 false
             }
         }
+    }
+
+    /// Signal every dock shell and agent in a worktree with one grace period.
+    ///
+    /// Used by worktree removal: calling [`Self::close_shell`] / [`Self::close_agent`] in a
+    /// loop would pay 400 ms per session.
+    pub fn terminate_sessions_in(&self, worktree_id: &str) {
+        let shells: Vec<wtm_core::model::SessionId> = self
+            .shells_in(worktree_id)
+            .into_iter()
+            .map(wtm_core::model::SessionId::new)
+            .collect();
+        let agents: Vec<wtm_core::model::SessionId> = self
+            .agents_in(worktree_id)
+            .into_iter()
+            .map(wtm_core::model::SessionId::new)
+            .collect();
+        let mut pids = self.pty.take_pids(&shells);
+        pids.extend(self.pipe.take_pids(&agents));
+        wtm_exec::signal::terminate_groups(&pids);
+        {
+            let mut map = self.shells.lock();
+            for session in &shells {
+                map.remove(session);
+            }
+        }
+        {
+            let mut map = self.agents.lock();
+            for session in &agents {
+                map.remove(session);
+                self.handoff.forget_session(session.as_str());
+            }
+        }
+        self.reap_hosts();
     }
 
     /// Every agent session the *worktree* has, live or not, for teardown.
@@ -1285,8 +1378,9 @@ impl App {
         let id = wtm_core::model::SessionId::new(session);
         let mut agents = self.agents.lock();
         let entry = agents.get_mut(&id)?;
-
-        Some(entry.replay.push(event))
+        let seq = entry.replay.push(event);
+        trim_global_replay(&mut agents, &id);
+        Some(seq)
     }
 
     /// Everything a session has emitted that is still buffered, oldest first.

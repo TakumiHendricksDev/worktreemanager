@@ -24,21 +24,26 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use wtm_core::error::ExecError;
 use wtm_core::model::{ExitOutcome, SessionId};
+use wtm_core::ports::clock::Clock;
 use wtm_core::ports::exec::{CancelToken, Invocation};
 use wtm_core::ports::pty::{PtyHost, PtySession, PtySink, Spawned};
 
-use crate::clock::instant_now;
+use crate::clock::SystemClock;
 use crate::path::ResolvedPath;
 use crate::signal;
 
 /// How often [`PtyHost::wait`] checks for completion, cancellation and the deadline.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// How long to wait for the reader to publish an outcome after the one allowed
+/// TERM/grace/KILL escalation has completed.
+const FINAL_OUTCOME_WAIT_MS: u64 = 1_000;
 
 /// Read buffer size. Large enough that a chatty build does not cause an event
 /// storm, small enough that an interactive prompt appears immediately (the read
@@ -61,7 +66,7 @@ struct Session {
     /// unusual; without it we cannot signal the group.
     pid: Option<u32>,
     timeout_ms: u64,
-    started: Instant,
+    started_ms: u64,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     /// Set once by the reader thread when the child is reaped.
@@ -74,6 +79,7 @@ struct Session {
 /// `portable-pty`-backed [`PtyHost`].
 pub struct PtyHostImpl {
     path: ResolvedPath,
+    clock: Arc<dyn Clock>,
     sessions: Mutex<HashMap<SessionId, Session>>,
 }
 
@@ -88,8 +94,13 @@ impl std::fmt::Debug for PtyHostImpl {
 impl PtyHostImpl {
     #[must_use]
     pub fn new(path: ResolvedPath) -> Self {
+        Self::with_clock(path, Arc::new(SystemClock::new()))
+    }
+
+    pub(crate) fn with_clock(path: ResolvedPath, clock: Arc<dyn Clock>) -> Self {
         Self {
             path,
+            clock,
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -111,7 +122,11 @@ impl PtyHostImpl {
     /// Record an intervention and signal the group.
     fn intervene(&self, id: &SessionId, why: Intervention) -> Result<(), ExecError> {
         let (pid, flag) = self.with_session(id, |s| (s.pid, Arc::clone(&s.intervention)))?;
-        flag.lock().replace(why);
+        let mut recorded = flag.lock();
+        if recorded.is_none() {
+            recorded.replace(why);
+        }
+        drop(recorded);
         if let Some(pid) = pid {
             signal::terminate_group(pid);
         }
@@ -122,10 +137,10 @@ impl PtyHostImpl {
     /// readable after a failure.
     pub fn reap_finished(&self, keep: usize) {
         let mut sessions = self.sessions.lock();
-        let mut finished: Vec<(SessionId, Instant)> = sessions
+        let mut finished: Vec<(SessionId, u64)> = sessions
             .iter()
             .filter(|(_, s)| s.outcome.lock().is_some())
-            .map(|(id, s)| (id.clone(), s.started))
+            .map(|(id, s)| (id.clone(), s.started_ms))
             .collect();
         if finished.len() <= keep {
             return;
@@ -159,28 +174,106 @@ impl PtyHostImpl {
     ///
     /// Returns how many groups were signalled, for the shutdown log.
     pub fn kill_all(&self) -> usize {
+        let pids = self.take_running_pids();
+        signal::terminate_groups(&pids);
+        pids.len()
+    }
+
+    /// Mark running sessions killed and return their pids, without signalling.
+    ///
+    /// The caller batches those pids into one [`signal::terminate_groups`] so teardown
+    /// pays a single grace period instead of one per session.
+    pub fn take_running_pids(&self) -> Vec<u32> {
+        self.take_pids_matching(|_| true)
+    }
+
+    /// Same as [`Self::take_running_pids`], but only for the named sessions.
+    pub fn take_pids(&self, ids: &[SessionId]) -> Vec<u32> {
+        self.take_pids_matching(|id| ids.iter().any(|wanted| wanted == id))
+    }
+
+    fn take_pids_matching(&self, wanted: impl Fn(&SessionId) -> bool) -> Vec<u32> {
         let mut pids = Vec::new();
-        {
-            // Collected under the lock and signalled outside it. `terminate_groups`
-            // sleeps for the grace period, and holding the registry across that sleep
-            // would block every other pty call for as long as it lasts.
-            let sessions = self.sessions.lock();
-            for session in sessions.values() {
-                if session.outcome.lock().is_some() {
-                    continue;
-                }
-                // So the recorded outcome names the cause rather than the resulting
-                // signal, exactly as `intervene` does. Nothing reads it at exit; it
-                // matters the first time this is called from anywhere else.
-                session.intervention.lock().replace(Intervention::Killed);
-                if let Some(pid) = session.pid {
-                    pids.push(pid);
-                }
+        let sessions = self.sessions.lock();
+        for (id, session) in sessions.iter() {
+            if !wanted(id) {
+                continue;
+            }
+            if session.outcome.lock().is_some() {
+                continue;
+            }
+            // So the recorded outcome names the cause rather than the resulting
+            // signal, exactly as `intervene` does.
+            let mut intervention = session.intervention.lock();
+            if intervention.is_none() {
+                intervention.replace(Intervention::Killed);
+            }
+            drop(intervention);
+            if let Some(pid) = session.pid {
+                pids.push(pid);
+            }
+        }
+        pids
+    }
+}
+
+/// Wait for the reader thread without trusting it to publish an outcome forever.
+///
+/// A descendant can keep the slave side of a pty open even after the child group
+/// has been killed. Once escalation has run, the registry must therefore have its
+/// own terminal deadline instead of using EOF as an unbounded completion signal.
+fn wait_for_outcome(
+    outcome: &Mutex<Option<ExitOutcome>>,
+    cancel: &CancelToken,
+    started_ms: u64,
+    timeout_ms: u64,
+    clock: &dyn Clock,
+    mut intervene: impl FnMut(Intervention) -> Result<(), ExecError>,
+    mut pause: impl FnMut(Duration),
+) -> Result<ExitOutcome, ExecError> {
+    let timeout_deadline_ms = started_ms.saturating_add(timeout_ms);
+    let mut final_wait: Option<(Intervention, u64)> = None;
+
+    loop {
+        let now_ms = clock.monotonic_ms();
+        if let Some(done) = outcome.lock().clone() {
+            return Ok(match done {
+                ExitOutcome::TimedOut { .. } => ExitOutcome::TimedOut {
+                    after_ms: now_ms.saturating_sub(started_ms),
+                },
+                other => other,
+            });
+        }
+
+        if let Some((cause, deadline_ms)) = final_wait {
+            if now_ms >= deadline_ms {
+                return Ok(match cause {
+                    Intervention::Cancelled => ExitOutcome::Cancelled,
+                    Intervention::TimedOut => ExitOutcome::TimedOut {
+                        after_ms: now_ms.saturating_sub(started_ms),
+                    },
+                    Intervention::Killed => ExitOutcome::Signalled { signal: 9 },
+                });
+            }
+        } else {
+            let cause = if cancel.is_cancelled() {
+                Some(Intervention::Cancelled)
+            } else if now_ms >= timeout_deadline_ms {
+                Some(Intervention::TimedOut)
+            } else {
+                None
+            };
+
+            if let Some(cause) = cause {
+                intervene(cause)?;
+                // Start this deadline after escalation returns because the signal
+                // adapter deliberately spends one grace period between TERM and KILL.
+                let deadline_ms = clock.monotonic_ms().saturating_add(FINAL_OUTCOME_WAIT_MS);
+                final_wait = Some((cause, deadline_ms));
             }
         }
 
-        signal::terminate_groups(&pids);
-        pids.len()
+        pause(POLL_INTERVAL);
     }
 }
 
@@ -301,9 +394,15 @@ impl PtyHost for PtyHostImpl {
                     outcome.lock().replace(final_outcome.clone());
                     sink.on_exit(&id, &final_outcome);
                 })
-                .map_err(|e| ExecError::Spawn {
-                    argv: inv.display(),
-                    message: format!("reader thread: {e}"),
+                .map_err(|e| {
+                    // The child exists; failing to start the reader would otherwise leak it.
+                    if let Some(pid) = pid {
+                        signal::terminate_group(pid);
+                    }
+                    ExecError::Spawn {
+                        argv: inv.display(),
+                        message: format!("reader thread: {e}"),
+                    }
                 })?;
         }
 
@@ -316,7 +415,7 @@ impl PtyHost for PtyHostImpl {
                 worktree: worktree.map(str::to_owned),
                 pid,
                 timeout_ms: inv.timeout_ms,
-                started: instant_now(),
+                started_ms: self.clock.monotonic_ms(),
                 writer: Arc::new(Mutex::new(writer)),
                 master: Arc::new(Mutex::new(pair.master)),
                 outcome,
@@ -331,33 +430,30 @@ impl PtyHost for PtyHostImpl {
     }
 
     fn wait(&self, session: &SessionId, cancel: &CancelToken) -> Result<ExitOutcome, ExecError> {
-        let (outcome, started, timeout_ms) = self.with_session(session, |s| {
-            (Arc::clone(&s.outcome), s.started, s.timeout_ms)
+        let (outcome, started_ms, timeout_ms) = self.with_session(session, |s| {
+            (Arc::clone(&s.outcome), s.started_ms, s.timeout_ms)
         })?;
 
-        let deadline = started + Duration::from_millis(timeout_ms);
-
-        loop {
-            if let Some(done) = outcome.lock().clone() {
-                // Fill in the real elapsed time now that we know it.
-                return Ok(match done {
-                    ExitOutcome::TimedOut { .. } => ExitOutcome::TimedOut {
-                        after_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                    },
-                    other => other,
-                });
-            }
-
-            if cancel.is_cancelled() {
-                tracing::info!(session = %session, "cancelled; terminating group");
-                self.intervene(session, Intervention::Cancelled)?;
-            } else if instant_now() >= deadline {
-                tracing::warn!(session = %session, timeout_ms, "timed out; terminating group");
-                self.intervene(session, Intervention::TimedOut)?;
-            }
-
-            std::thread::sleep(POLL_INTERVAL);
-        }
+        wait_for_outcome(
+            &outcome,
+            cancel,
+            started_ms,
+            timeout_ms,
+            self.clock.as_ref(),
+            |why| {
+                match why {
+                    Intervention::Cancelled => {
+                        tracing::info!(session = %session, "cancelled; terminating group");
+                    }
+                    Intervention::TimedOut => {
+                        tracing::warn!(session = %session, timeout_ms, "timed out; terminating group");
+                    }
+                    Intervention::Killed => {}
+                }
+                self.intervene(session, why)
+            },
+            std::thread::sleep,
+        )
     }
 
     fn write(&self, session: &SessionId, data: &[u8]) -> Result<(), ExecError> {
@@ -408,7 +504,8 @@ impl PtyHost for PtyHostImpl {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::time::Instant;
 
     use super::*;
 
@@ -433,6 +530,38 @@ mod tests {
         fn on_exit(&self, _session: &SessionId, outcome: &ExitOutcome) {
             self.exit.lock().replace(outcome.clone());
             self.exit_calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Default)]
+    struct AdvancingClock {
+        monotonic_ms: AtomicU64,
+    }
+
+    impl AdvancingClock {
+        fn advance(&self, duration: Duration) {
+            self.monotonic_ms.fetch_add(
+                u64::try_from(duration.as_millis()).unwrap(),
+                Ordering::SeqCst,
+            );
+        }
+    }
+
+    impl Clock for AdvancingClock {
+        fn now_unix_ms(&self) -> u64 {
+            0
+        }
+
+        fn today(&self) -> String {
+            "2026-08-26".to_owned()
+        }
+
+        fn now_iso(&self) -> String {
+            "2026-08-26T00:00:00Z".to_owned()
+        }
+
+        fn monotonic_ms(&self) -> u64 {
+            self.monotonic_ms.load(Ordering::SeqCst)
         }
     }
 
@@ -572,6 +701,35 @@ mod tests {
             other => panic!("expected TimedOut, got {other:?}"),
         }
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn wait_returns_after_one_intervention_when_the_reader_never_records_an_outcome() {
+        let clock = AdvancingClock::default();
+        let outcome = Mutex::new(None);
+        let interventions = AtomicUsize::new(0);
+
+        let result = wait_for_outcome(
+            &outcome,
+            &CancelToken::new(),
+            0,
+            100,
+            &clock,
+            |cause| {
+                assert_eq!(cause, Intervention::TimedOut);
+                interventions.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            |duration| clock.advance(duration),
+        )
+        .unwrap();
+
+        assert!(matches!(result, ExitOutcome::TimedOut { .. }));
+        assert_eq!(interventions.load(Ordering::SeqCst), 1);
+        assert!(
+            clock.monotonic_ms() <= 100 + FINAL_OUTCOME_WAIT_MS + 25,
+            "wait exceeded its final deadline"
+        );
     }
 
     /// An interactive prompt loop that ignores EOF is the exact hazard a GUI hits
