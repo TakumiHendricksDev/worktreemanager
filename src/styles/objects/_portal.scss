@@ -1,0 +1,25 @@
+/*
+ * The node a modal is moved into, at the end of `<body>`.
+ *
+ * `Dialog` is `position: fixed` at `$z-dialog`, which reads as "above the app" and is only true if
+ * the dialog is a child of a stacking context that reaches the whole window. Most callers are —
+ * they mount at the top of `App.svelte`. `SessionPane` is not: every pane sits inside an
+ * `.o-tiles__tile`, and that tile sets `isolation: isolate` for xterm's sake, so the two levels
+ * resolve *inside one pane*. Close a session in the top pane of a split and the panel is painted
+ * over by the pane below it, and the scrim dims every part of the app except the other tiles —
+ * both of which were visible bugs, not theory.
+ *
+ * Raising the numbers cannot fix that; nothing inside an isolated subtree can outrank a sibling of
+ * that subtree. So the element leaves the subtree instead. See the `portal` attachment in
+ * `Dialog.svelte` for the move itself and for why it is one wrapper rather than two.
+ *
+ * # `display: contents` and not an unstyled `div`
+ *
+ * Both work today, because everything inside is out of flow. But a plain block in `<body>` is a box
+ * in the page's layout that happens to measure zero, and the first descendant that is *not*
+ * fixed-positioned turns it into a real one. `contents` generates no box at all, so there is
+ * nothing to accidentally rely on.
+ */
+.o-portal {
+  display: contents;
+}

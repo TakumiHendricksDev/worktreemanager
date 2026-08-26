@@ -39,6 +39,14 @@
    * the hand-drawn scrim redundant in a way that would need the whole thing rebuilt rather than
    * adjusted. Worth doing one day; not as a side effect of a class rename.
    *
+   * # Why the markup is moved to `<body>`
+   *
+   * `z-index` is only comparable within a stacking context, and a pane's tile establishes one —
+   * see `objects/_portal.scss` for what that did to the two dialogs `SessionPane` owns. The
+   * `portal` attachment below moves the whole modal out to `<body>`, where the levels in
+   * `settings/_config.scss` mean what they say for every caller and not just the ones that happen
+   * to mount near the root.
+   *
    * # The focus trap
    *
    * `aria-modal="true"` is a promise that Tab cannot leave the dialog, and for a long time
@@ -54,6 +62,7 @@
    * the document.
    */
   import { onDestroy, type Snippet } from 'svelte';
+  import type { Attachment } from 'svelte/attachments';
 
   import Button from './Button.svelte';
   import Icon from './Icon.svelte';
@@ -83,6 +92,24 @@
   } = $props();
 
   let panel = $state<HTMLElement | null>(null);
+
+  /*
+   * Out of whatever stacking context the caller was rendered in, into `<body>`.
+   *
+   * # Why the scrim and the panel are wrapped
+   *
+   * They are siblings, and portaling each on its own would work by luck: Svelte tears a block down
+   * by walking the DOM from its first node to its last, so the two have to still be adjacent in
+   * `<body>` when that happens. They would be — `appendChild` runs in template order — until a
+   * second dialog opens between them, and the walk would then take somebody else's nodes with it.
+   * One wrapper makes the block one node, and one node cannot be walked past.
+   *
+   * No cleanup: Svelte removes the wrapper on teardown by reference, and `remove()` does not care
+   * which parent the node ended up in.
+   */
+  const portal: Attachment<HTMLElement> = (node) => {
+    document.body.appendChild(node);
+  };
 
   /*
    * Only the topmost dialog traps focus and handles Escape. Two mounted dialogs used to
@@ -164,41 +191,43 @@
 
 <svelte:window onkeydown={onKeydown} onfocusin={onFocusIn} />
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="o-scrim" onclick={onScrim}></div>
+<div class="o-portal" {@attach portal}>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="o-scrim" onclick={onScrim}></div>
 
-<div
-  bind:this={panel}
-  class="c-dialog"
-  class:c-dialog--wide={wide}
-  role="dialog"
-  aria-modal="true"
-  aria-label={title}
->
-  <div class="c-dialog__head">
-    <h2 class="c-dialog__title">{title}</h2>
-    <Button
-      variant="quiet"
-      icon="md"
-      disabled={closeDisabled}
-      onclick={onclose}
-      ariaLabel="Close"
-    >
-      <Icon name="close" />
-    </Button>
-  </div>
+  <div
+    bind:this={panel}
+    class="c-dialog"
+    class:c-dialog--wide={wide}
+    role="dialog"
+    aria-modal="true"
+    aria-label={title}
+  >
+    <div class="c-dialog__head">
+      <h2 class="c-dialog__title">{title}</h2>
+      <Button
+        variant="quiet"
+        icon="md"
+        disabled={closeDisabled}
+        onclick={onclose}
+        ariaLabel="Close"
+      >
+        <Icon name="close" />
+      </Button>
+    </div>
 
-  {#if onsubmit}
-    <!-- `display: contents` so the form participates in no layout: the panel's flex column
-         still sees the body and footer as its own children, which is what keeps the body
-         scrollable and the footer pinned. -->
-    <form {onsubmit} class="c-dialog__form">
+    {#if onsubmit}
+      <!-- `display: contents` so the form participates in no layout: the panel's flex column
+           still sees the body and footer as its own children, which is what keeps the body
+           scrollable and the footer pinned. -->
+      <form {onsubmit} class="c-dialog__form">
+        <div class="c-dialog__body">{@render body()}</div>
+        <div class="c-dialog__foot">{@render footer()}</div>
+      </form>
+    {:else}
       <div class="c-dialog__body">{@render body()}</div>
       <div class="c-dialog__foot">{@render footer()}</div>
-    </form>
-  {:else}
-    <div class="c-dialog__body">{@render body()}</div>
-    <div class="c-dialog__foot">{@render footer()}</div>
-  {/if}
+    {/if}
+  </div>
 </div>
