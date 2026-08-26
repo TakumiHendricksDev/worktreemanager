@@ -123,11 +123,12 @@ impl PtyHostImpl {
     fn intervene(&self, id: &SessionId, why: Intervention) -> Result<(), ExecError> {
         let (pid, flag) = self.with_session(id, |s| (s.pid, Arc::clone(&s.intervention)))?;
         let mut recorded = flag.lock();
-        if recorded.is_none() {
+        let first = recorded.is_none();
+        if first {
             recorded.replace(why);
         }
         drop(recorded);
-        if let Some(pid) = pid {
+        if first && let Some(pid) = pid {
             signal::terminate_group(pid);
         }
         Ok(())
@@ -247,13 +248,19 @@ fn wait_for_outcome(
 
         if let Some((cause, deadline_ms)) = final_wait {
             if now_ms >= deadline_ms {
-                return Ok(match cause {
+                let final_outcome = match cause {
                     Intervention::Cancelled => ExitOutcome::Cancelled,
                     Intervention::TimedOut => ExitOutcome::TimedOut {
                         after_ms: now_ms.saturating_sub(started_ms),
                     },
                     Intervention::Killed => ExitOutcome::Signalled { signal: 9 },
-                });
+                };
+                // The reader may never see EOF when a descendant holds the slave open. Marking
+                // the registry terminal here makes liveness and reaping agree with the bounded
+                // result this call returns; the reader may still publish the same intervention
+                // outcome later if that descriptor eventually closes.
+                outcome.lock().get_or_insert_with(|| final_outcome.clone());
+                return Ok(final_outcome);
             }
         } else {
             let cause = if cancel.is_cancelled() {
@@ -726,6 +733,10 @@ mod tests {
 
         assert!(matches!(result, ExitOutcome::TimedOut { .. }));
         assert_eq!(interventions.load(Ordering::SeqCst), 1);
+        assert!(
+            outcome.lock().is_some(),
+            "the registry must become terminal too"
+        );
         assert!(
             clock.monotonic_ms() <= 100 + FINAL_OUTCOME_WAIT_MS + 25,
             "wait exceeded its final deadline"

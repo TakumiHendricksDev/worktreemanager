@@ -86,6 +86,12 @@ struct AgentEntry {
     /// [`App::agent_session`] can return an owned handle rather than a borrow, which is what lets
     /// the guard die before the caller runs anything. See that function.
     session: Arc<wtm_agent::AgentSession>,
+    /// Clipboard files named in turns sent to this session.
+    ///
+    /// Providers receive their paths and may read them after `send_turn` returns, so deleting
+    /// them at that boundary races images and reliably breaks non-image attachments. Keeping
+    /// ownership here gives them the same lifetime as the session that can still refer to them.
+    staged_attachments: BTreeSet<PathBuf>,
     /// Everything this session has already emitted, so a reload can repaint it.
     ///
     /// # Why the backend holds a transcript at all
@@ -104,6 +110,22 @@ struct AgentEntry {
     replay: ReplayBuffer,
 }
 
+impl Drop for AgentEntry {
+    fn drop(&mut self) {
+        for path in &self.staged_attachments {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+pub(crate) fn staged_attachment_dir() -> PathBuf {
+    std::env::temp_dir().join("wtm-agent-attachments")
+}
+
+fn owned_staged_attachment(path: &Path) -> bool {
+    path.parent() == Some(staged_attachment_dir().as_path())
+}
+
 /// One buffered event and its position in the session's stream.
 ///
 /// The number is what makes re-attaching race-free. The frontend subscribes to `agent:event`
@@ -120,11 +142,11 @@ pub struct SeqEvent {
 
 /// How many events one session's replay buffer keeps.
 ///
-/// The frontend keeps `MAX_EVENTS = 20_000` per pane and this only has to survive long enough to
+/// The frontend keeps `MAX_EVENTS = 100_000` per pane and this only has to survive long enough to
 /// repaint one, so it is deliberately smaller: a reload after a very long session comes back with
 /// its recent history rather than all of it, which is the same trade the frontend already makes.
 /// Overflow drops the oldest.
-const MAX_REPLAY: usize = 8_000;
+const MAX_REPLAY: usize = 40_000;
 
 /// How much serialized transcript data one live session may keep for repainting a webview.
 ///
@@ -1022,6 +1044,7 @@ impl App {
                 title: None,
                 ephemeral: req.ephemeral,
                 session: Arc::new(session),
+                staged_attachments: BTreeSet::new(),
                 replay: ReplayBuffer::default(),
             },
         );
@@ -1112,6 +1135,25 @@ impl App {
         f(&session)
     }
 
+    /// Keep staged attachment files for as long as the session may still read them.
+    pub fn remember_staged_attachments(
+        &self,
+        session: &str,
+        attachments: &[wtm_core::model::AgentAttachment],
+    ) {
+        let id = wtm_core::model::SessionId::new(session);
+        let mut agents = self.agents.lock();
+        let Some(entry) = agents.get_mut(&id) else {
+            return;
+        };
+        entry.staged_attachments.extend(
+            attachments
+                .iter()
+                .map(|attachment| PathBuf::from(&attachment.path))
+                .filter(|path| owned_staged_attachment(path)),
+        );
+    }
+
     /// End an agent session and forget it.
     ///
     /// Forgetting is the load-bearing half, exactly as it is in [`Self::close_shell`]: `close`
@@ -1126,6 +1168,7 @@ impl App {
         // before signalling would leave child CLIs running with no owner.
         for child in self.handoff.descendants(session) {
             let _ = self.end_agent_process(&child.session);
+            self.handoff.forget_session(&child.session);
         }
         let closed = self.end_agent_process(session);
         self.handoff.forget_session(session);
@@ -1483,6 +1526,16 @@ fn expand_tilde(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_direct_children_of_the_staging_directory_are_owned_by_a_session() {
+        let root = staged_attachment_dir();
+        assert!(owned_staged_attachment(&root.join("generated-file")));
+        assert!(!owned_staged_attachment(
+            &root.join("nested/generated-file")
+        ));
+        assert!(!owned_staged_attachment(&root.join("../outside-file")));
+    }
 
     #[test]
     fn building_the_app_resolves_a_usable_path() {

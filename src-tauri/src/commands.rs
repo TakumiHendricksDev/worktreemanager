@@ -733,6 +733,22 @@ mod tests {
         assert!(regex_lite("^origin/HEAD$").is_ok());
     }
 
+    #[test]
+    fn a_multiselect_form_value_reaches_the_domain_as_a_list() {
+        let value = decode_field_value(
+            &wtm_core::model::FieldKind::Multiselect,
+            "frontend, backend, , tests",
+        );
+        assert_eq!(
+            value,
+            wtm_core::model::FieldValue::List(vec![
+                "frontend".to_owned(),
+                "backend".to_owned(),
+                "tests".to_owned(),
+            ])
+        );
+    }
+
     /// A panic must reach the UI as an error, not take the process with it.
     ///
     /// This boundary existed already but was unreachable in a release build: the profile set
@@ -772,6 +788,27 @@ mod tests {
 
 // ═══════════════════════════ create / remove ═══════════════════════════
 
+fn decode_field_value(
+    kind: &wtm_core::model::FieldKind,
+    text: &str,
+) -> wtm_core::model::FieldValue {
+    match kind {
+        wtm_core::model::FieldKind::Bool => wtm_core::model::FieldValue::Bool(text == "true"),
+        wtm_core::model::FieldKind::Number => text.parse::<f64>().map_or(
+            wtm_core::model::FieldValue::Empty,
+            wtm_core::model::FieldValue::Number,
+        ),
+        wtm_core::model::FieldKind::Multiselect => wtm_core::model::FieldValue::List(
+            text.split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        ),
+        _ => wtm_core::model::FieldValue::from(text.to_owned()),
+    }
+}
+
 /// Build the pipeline's request from what the frontend sent.
 fn create_request(
     app: &App,
@@ -789,14 +826,7 @@ fn create_request(
     let mut raw = std::collections::BTreeMap::new();
     for field in &project.fields {
         let text = values.get(&field.key).cloned().unwrap_or_default();
-        let value = match field.kind {
-            wtm_core::model::FieldKind::Bool => wtm_core::model::FieldValue::Bool(text == "true"),
-            wtm_core::model::FieldKind::Number => text.parse::<f64>().map_or(
-                wtm_core::model::FieldValue::Empty,
-                wtm_core::model::FieldValue::Number,
-            ),
-            _ => wtm_core::model::FieldValue::from(text),
-        };
+        let value = decode_field_value(&field.kind, &text);
         raw.insert(field.key.clone(), value);
     }
 
@@ -1621,27 +1651,13 @@ pub async fn send_turn(
     blocking(move || {
         app.with_agent(&session, |agent| agent.send_turn(&text, &attachments))
             .map_err(|e| ErrorView::new("exec", e.to_string()))?;
-        drop_staged_attachments(&attachments);
+        app.remember_staged_attachments(&session, &attachments);
         Ok(())
     })
     .await
 }
 
 const MAX_AGENT_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
-
-fn staged_attachment_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join("wtm-agent-attachments")
-}
-
-fn drop_staged_attachments(attachments: &[wtm_core::model::AgentAttachment]) {
-    let root = staged_attachment_dir();
-    for attachment in attachments {
-        let path = std::path::Path::new(&attachment.path);
-        if path.starts_with(&root) {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
 
 /// Read a file the user picked or dropped and prepare it for both agent transports.
 #[tauri::command]
@@ -1670,7 +1686,7 @@ pub async fn stage_agent_attachment(
             .and_then(|part| part.to_str())
             .filter(|part| !part.is_empty())
             .unwrap_or("pasted-file");
-        let directory = staged_attachment_dir();
+        let directory = crate::app::staged_attachment_dir();
         std::fs::create_dir_all(&directory)
             .map_err(|e| ErrorView::new("io", format!("create attachment directory: {e}")))?;
         let path = directory.join(format!("{}-{safe_name}", uuid::Uuid::new_v4()));

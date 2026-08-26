@@ -63,7 +63,7 @@
    */
   const pending = new Map<string, Uint8Array[]>();
   const MAX_PENDING_CHUNKS = 2048;
-  const MAX_PENDING_SESSIONS = 8;
+  const MAX_PENDING_SESSIONS = 40;
 
   /** Deliberately not `$state`: the flush effect writes it, and reading it must not re-trigger. */
   let attachedTo: string | null = null;

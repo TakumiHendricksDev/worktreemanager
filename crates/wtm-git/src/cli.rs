@@ -287,10 +287,18 @@ impl Git for GitCli {
         // and HEAD. A successful mutation remains authoritative when that best-effort
         // lookup cannot match: reporting failure here would strand a live worktree and
         // any branch that `git worktree add` just created.
-        let created = self
-            .list_worktrees(repo_root)?
-            .into_iter()
-            .find(|w| paths_equal(&w.path, &opts.path));
+        let created = match self.list_worktrees(repo_root) {
+            Ok(worktrees) => worktrees
+                .into_iter()
+                .find(|worktree| paths_equal(&worktree.path, &opts.path)),
+            Err(error) => {
+                // The mutation already succeeded. Relisting enriches the answer, but making its
+                // failure authoritative would report that no worktree was created while leaving
+                // both the checkout and possibly its new branch on disk.
+                tracing::debug!(%error, "could not enrich a newly created worktree from the relist");
+                None
+            }
+        };
 
         Ok(created.unwrap_or_else(|| Worktree {
             id: WorktreeId::from_path(&opts.path),
@@ -670,6 +678,29 @@ mod tests {
         assert_eq!(created.head, None);
         assert_eq!(created.branch(), Some(&BranchRef::new("task/missing")));
         assert!(!created.is_main);
+    }
+
+    #[test]
+    fn a_created_worktree_is_reported_even_when_the_relist_fails() {
+        let (git, _) = git_with(vec![
+            FakeRunner::ok(""),
+            FakeRunner::failed(128, "could not read worktree metadata"),
+        ]);
+        let created = git
+            .add_worktree(
+                &repo(),
+                &AddOptions {
+                    path: PathBuf::from("/wt/created"),
+                    branch: Some(BranchRef::new("task/created")),
+                    start_point: "HEAD".to_owned(),
+                    track: TrackMode::NoTrack,
+                    create_branch: true,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(created.path, PathBuf::from("/wt/created"));
+        assert_eq!(created.branch(), Some(&BranchRef::new("task/created")));
     }
 
     #[test]

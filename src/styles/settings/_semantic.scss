@@ -40,6 +40,21 @@
  * component that breaks it would.
  */
 
+/*
+ * Palette-preview roles resolve on the element carrying `data-palette`, not on `:root`.
+ * Settings shows several palettes at once, so inheriting the active theme's already-computed
+ * neutral tokens would make every swatch promise the same colours. Keeping the formula in the
+ * semantic layer lets the component obey the no-literals/no-primitives boundary while each
+ * swatch still resolves against its own local hue and chroma.
+ */
+[data-palette] {
+  --palette-swatch-bg: oklch(0.14 calc(0.014 * var(--palette-chroma)) var(--palette-hue));
+  --palette-swatch-surface: oklch(
+    0.687 calc(0.025 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --palette-swatch-accent: var(--brand-500);
+}
+
 :root[data-theme='light'] {
   color-scheme: light;
 

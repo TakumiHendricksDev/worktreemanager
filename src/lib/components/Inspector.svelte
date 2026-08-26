@@ -100,7 +100,8 @@
       <dt>Path</dt>
       <dd class="c-detail__path-row">
         <code>{worktree.path}</code>
-        <button class="c-row-action" onclick={copyPath}>{copied ? 'copied' : 'copy'}</button
+        <Button variant="link" size="sm" onclick={copyPath}
+          >{copied ? 'copied' : 'copy'}</Button
         >
       </dd>
 

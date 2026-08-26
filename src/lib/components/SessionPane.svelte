@@ -14,6 +14,7 @@
    */
   import { getCurrentWebview } from '@tauri-apps/api/webview';
   import { open } from '@tauri-apps/plugin-dialog';
+  import { onDestroy } from 'svelte';
 
   import { commands } from '../ipc/commands';
   import { errorMessage, type AgentAttachment } from '../ipc/types';
@@ -64,8 +65,10 @@
   let skillsOpen = $state(false);
   let confirmRestart = $state(false);
   let confirmClose = $state(false);
+  let closingSession = $state(false);
   let copiedReply = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  onDestroy(() => clearTimeout(copyTimer));
   /**
    * True from submit until the turn is accepted or refused.
    *
@@ -331,8 +334,14 @@
   }
 
   async function closeConfirmed() {
-    confirmClose = false;
-    await sessions.close(pane.id);
+    if (closingSession) return;
+    closingSession = true;
+    try {
+      await sessions.close(pane.id);
+      confirmClose = false;
+    } finally {
+      closingSession = false;
+    }
   }
 
   /*
@@ -1648,7 +1657,11 @@
 {/if}
 
 {#if confirmClose}
-  <Dialog title="Close session?" onclose={() => (confirmClose = false)}>
+  <Dialog
+    title="Close session?"
+    onclose={() => (confirmClose = false)}
+    closeDisabled={closingSession}
+  >
     {#snippet body()}
       <p>
         Closing ends this {provider === null ? 'shell' : 'conversation'} and removes the pane.
@@ -1658,8 +1671,16 @@
       </p>
     {/snippet}
     {#snippet footer()}
-      <Button variant="neutral" onclick={() => (confirmClose = false)}>Cancel</Button>
-      <Button variant="danger-solid" onclick={() => void closeConfirmed()}>Close</Button>
+      <Button
+        variant="neutral"
+        onclick={() => (confirmClose = false)}
+        disabled={closingSession}>Cancel</Button
+      >
+      <Button
+        variant="danger-solid"
+        onclick={() => void closeConfirmed()}
+        disabled={closingSession}>{closingSession ? 'Closing…' : 'Close'}</Button
+      >
     {/snippet}
   </Dialog>
 {/if}

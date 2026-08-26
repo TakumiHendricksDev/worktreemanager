@@ -119,12 +119,11 @@ pub fn parse_status(output: &str) -> WorkingTreeStatus {
             continue;
         }
 
-        // Each rename/copy column contributes a source path. Consuming only the index-side one
-        // desynchronizes every entry after a worktree rename, and double forms carry two.
-        for _ in [x, y]
-            .into_iter()
-            .filter(|column| matches!(column, 'R' | 'C'))
-        {
+        // A renamed/copied entry carries one source path, whichever column reports the change.
+        // Consuming only an index-side rename desynchronizes every entry after a worktree rename;
+        // consuming one per column is also wrong because porcelain v1 defines one original path
+        // per entry, not per status letter.
+        if matches!(x, 'R' | 'C') || matches!(y, 'R' | 'C') {
             let _source = fields.next();
         }
 
@@ -418,9 +417,8 @@ mod tests {
     }
 
     #[test]
-    fn a_double_rename_consumes_both_source_paths() {
-        let status =
-            parse_status("RR final/path.rs\0index/source.rs\0worktree/source.rs\0M  next.rs\0");
+    fn a_double_rename_status_consumes_one_source_path() {
+        let status = parse_status("RR final/path.rs\0source.rs\0M  next.rs\0");
         assert_eq!(status.staged, 2, "the rename and the following staged file");
         assert!(status.dirty_tracked);
         assert_eq!(status.untracked, 0);

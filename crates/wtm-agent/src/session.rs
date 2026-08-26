@@ -226,6 +226,9 @@ impl PipeSink for Relay {
     }
 
     fn on_stderr(&self, session: &SessionId, line: &str) {
+        if ignorable_stderr(&self.provider, line) {
+            return;
+        }
         // Surfaced as a notice rather than discarded. When a handshake fails this is usually the
         // only thing that says why, and a silent session with no transcript is the worst
         // possible presentation of "your CLI is not authenticated".
@@ -244,6 +247,13 @@ impl PipeSink for Relay {
         tracing::debug!(provider = %self.provider, session = %session, "agent session ended");
         self.events.on_exit(session, outcome);
     }
+}
+
+/// A provider diagnostic that is noisy but does not describe this session failing.
+fn ignorable_stderr(provider: &str, line: &str) -> bool {
+    provider == "codex"
+        && line.contains("codex_models_manager::manager: failed to renew cache TTL")
+        && line.contains("missing field `supports_parallel_tool_calls`")
 }
 
 /// Remove common ANSI/ECMA-48 terminal sequences from a line destined for the transcript.
@@ -402,7 +412,7 @@ fn bound_text(text: &mut String, maximum: usize, marker: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bound_transcript_event, strip_terminal_sequences};
+    use super::{bound_transcript_event, ignorable_stderr, strip_terminal_sequences};
     use wtm_core::model::AgentEvent;
 
     #[test]
@@ -415,6 +425,17 @@ mod tests {
     fn terminal_string_controls_are_removed_too() {
         let line = "before \u{1b}]8;;https://example.com\u{1b}\\link\u{1b}]8;;\u{7} after";
         assert_eq!(strip_terminal_sequences(line), "before link after");
+    }
+
+    #[test]
+    fn codex_model_cache_schema_noise_is_not_promoted_to_a_session_warning() {
+        let line = "2026-08-26T17:49:22Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_parallel_tool_calls` at line 98 column 5";
+        assert!(ignorable_stderr("codex", line));
+        assert!(!ignorable_stderr("claude", line));
+        assert!(!ignorable_stderr(
+            "codex",
+            "ERROR codex_models_manager::manager: failed to renew cache TTL: permission denied"
+        ));
     }
 
     #[test]

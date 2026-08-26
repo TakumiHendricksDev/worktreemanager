@@ -151,7 +151,7 @@
 
         case 'command_started': {
           const row: Extract<Row, { kind: 'command' }> = {
-            key: `c:${event.id || index}`,
+            key: `c:${event.id}:${index}`,
             kind: 'command',
             command: event.command,
             output: '',
@@ -176,7 +176,7 @@
 
         case 'tool_started': {
           const row: Extract<Row, { kind: 'tool' }> = {
-            key: `tool:${event.id || index}`,
+            key: `tool:${event.id}:${index}`,
             kind: 'tool',
             name: event.name,
             title: event.title,

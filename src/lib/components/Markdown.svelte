@@ -13,6 +13,7 @@
    */
   import { commands } from '../ipc/commands';
   import { parse, type Block, type Span } from '../markdown';
+  import { onDestroy } from 'svelte';
   import Button from './ui/Button.svelte';
 
   const { source }: { source: string } = $props();
@@ -46,6 +47,8 @@
       /* Clipboard access can be denied. */
     }
   }
+
+  onDestroy(() => clearTimeout(copyTimer));
 </script>
 
 <!--

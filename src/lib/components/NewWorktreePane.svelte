@@ -328,8 +328,14 @@
 
   function onKeydown(event: KeyboardEvent) {
     // Escape returns to the worktree list, but only while nothing is running — losing sight of
-    // a live setup transcript would be worse than an extra click.
-    if (event.key === 'Escape' && phase !== 'running') {
+    // a live setup transcript would be worse than an extra click. A removal confirmation can now
+    // be mounted inside this pane; its Dialog owns Escape while open, or sibling window listeners
+    // would close both the confirmation and this entire screen on the same keypress.
+    if (
+      event.key === 'Escape' &&
+      phase !== 'running' &&
+      !document.querySelector('[aria-modal="true"]')
+    ) {
       event.stopPropagation();
       onclose();
     }

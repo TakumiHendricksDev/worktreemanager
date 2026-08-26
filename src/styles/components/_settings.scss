@@ -74,15 +74,10 @@
 /*
  * Three chips, resolved against whichever palette the parent element names.
  *
- * They restate two steps of the neutral ramp rather than referencing `--gray-*`, and that is
- * the whole trick. `--gray-900` is declared once on `:root`, so it computes with the *root's*
- * hue and every element inherits that one resolved colour — a chip asking for it would show
- * the active palette, not its own. Declaring the `oklch()` here instead resolves it against
- * the `--palette-hue` this element inherits from its own `[data-palette]`.
- *
- * The lightness values are `--gray-900` and `--gray-400` from `settings/_primitives.scss`
- * and have to be kept in step with them by hand. A swatch that drifts promises the wrong
- * colour, so if those move, move these.
+ * They use preview roles declared on `[data-palette]` in the semantic layer. `--gray-900` is
+ * declared once on `:root`, so it computes with the *root's* hue and every element inherits
+ * that one resolved colour — a chip asking for it would show the active palette, not its own.
+ * The preview roles instead resolve against the hue and chroma carried by this swatch.
  *
  * `--gray-400` and not `--gray-200`, which was the first choice: at 0.911 the chip was very
  * nearly the card behind it, so a three-chip swatch read as two chips and a gap. The mid
@@ -90,17 +85,16 @@
  * show.
  */
 .c-palette__chip--bg {
-  background: oklch(0.14 calc(0.014 * var(--palette-chroma)) var(--palette-hue));
+  background: var(--palette-swatch-bg);
 }
 
 .c-palette__chip--surface {
-  background: oklch(0.687 calc(0.025 * var(--palette-chroma)) var(--palette-hue));
+  background: var(--palette-swatch-surface);
 }
 
-/* The one chip that is a literal token: `--brand-500` is set per palette, so it inherits
-   correctly without being recomputed. */
+/* This role resolves locally too; the app-wide `--accent` has already resolved on `:root`. */
 .c-palette__chip--brand {
-  background: var(--accent);
+  background: var(--palette-swatch-accent);
 }
 
 .c-palette__name {

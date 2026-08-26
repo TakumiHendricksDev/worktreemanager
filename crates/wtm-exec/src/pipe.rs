@@ -214,11 +214,12 @@ impl PipeHostImpl {
     fn intervene(&self, id: &SessionId, why: Intervention) -> Result<(), ExecError> {
         let (pid, flag) = self.with_session(id, |s| (s.pid, Arc::clone(&s.intervention)))?;
         let mut recorded = flag.lock();
-        if recorded.is_none() {
+        let first = recorded.is_none();
+        if first {
             recorded.replace(why);
         }
         drop(recorded);
-        if let Some(pid) = pid {
+        if first && let Some(pid) = pid {
             signal::terminate_group(pid);
         }
         Ok(())

@@ -41,6 +41,7 @@
   const atTileCap = $derived(visible.size >= MAX_PANES_PER_WORKTREE);
 
   let closingId = $state<string | null>(null);
+  let closingBusy = $state(false);
   const closing = $derived(
     groups.flatMap((g) => g.children).find((c) => c.id === closingId) ?? null,
   );
@@ -50,9 +51,16 @@
   }
 
   async function closeConfirmed() {
+    if (closingBusy) return;
     const id = closingId;
-    closingId = null;
-    if (id) await sessions.close(id);
+    if (!id) return;
+    closingBusy = true;
+    try {
+      await sessions.close(id);
+      closingId = null;
+    } finally {
+      closingBusy = false;
+    }
   }
   function show(paneId: string, split: boolean) {
     sessions.showRelated(paneId, split);
@@ -138,7 +146,11 @@
 </Dialog>
 
 {#if closing}
-  <Dialog title="Close session?" onclose={() => (closingId = null)}>
+  <Dialog
+    title="Close session?"
+    onclose={() => (closingId = null)}
+    closeDisabled={closingBusy}
+  >
     {#snippet body()}
       <p>
         Closing {closing.agentTitle ?? sessions.labelOf(closing)} ends that conversation and any
@@ -146,8 +158,14 @@
       </p>
     {/snippet}
     {#snippet footer()}
-      <Button variant="neutral" onclick={() => (closingId = null)}>Cancel</Button>
-      <Button variant="danger-solid" onclick={() => void closeConfirmed()}>Close</Button>
+      <Button variant="neutral" onclick={() => (closingId = null)} disabled={closingBusy}
+        >Cancel</Button
+      >
+      <Button
+        variant="danger-solid"
+        onclick={() => void closeConfirmed()}
+        disabled={closingBusy}>{closingBusy ? 'Closing…' : 'Close'}</Button
+      >
     {/snippet}
   </Dialog>
 {/if}

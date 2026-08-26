@@ -228,19 +228,36 @@ impl Runner {
         let stderr = Self::drain(child.stderr.take());
 
         // After the drains are running, never before: a child that answers while we are still
-        // writing would otherwise fill its stdout pipe and block, and we would block writing to
-        // its stdin, which is a deadlock with no timeout in it. Dropped at the end of the block so
-        // the child sees EOF — a write with no close is how `curl --config -` waits forever.
-        if let Some(payload) = inv.stdin.as_deref()
+        // writing would otherwise fill its stdout pipe and block. The write is on its own thread
+        // because a child can also keep stdin open without reading it; doing `write_all` here used
+        // to block before the deadline loop began, so the mandatory timeout did not actually bound
+        // an invocation with a large payload. The pipe is owned by the thread and closes at return,
+        // which is how `curl --config -` learns it has the complete request.
+        let stdin_thread = if let Some(payload) = inv.stdin.clone()
             && let Some(mut pipe) = child.stdin.take()
         {
-            use std::io::Write;
-            // A closed pipe here is the child having exited already, which the wait below reports
-            // properly. Failing the whole call on it would replace that diagnosis with a less
-            // useful one.
-            let _ = pipe.write_all(payload.as_bytes());
-            let _ = pipe.flush();
-        }
+            match std::thread::Builder::new()
+                .name("wtm-stdin".to_owned())
+                .spawn(move || {
+                    use std::io::Write;
+                    // A closed pipe is the child having exited already, which the wait below
+                    // reports more usefully than a second write error.
+                    let _ = pipe.write_all(payload.as_bytes());
+                    let _ = pipe.flush();
+                }) {
+                Ok(handle) => Some(handle),
+                Err(error) => {
+                    signal::terminate_group(pid);
+                    let _ = child.wait();
+                    return Err(ExecError::Spawn {
+                        argv: inv.display(),
+                        message: format!("could not start the stdin writer: {error}"),
+                    });
+                }
+            }
+        } else {
+            None
+        };
 
         let deadline = started + Duration::from_millis(inv.timeout_ms);
         let mut timed_out = false;
@@ -283,6 +300,11 @@ impl Runner {
         };
 
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if let Some(handle) = stdin_thread
+            && handle.is_finished()
+        {
+            let _ = handle.join();
+        }
         let stdout = stdout.take();
         let stderr = stderr.take();
 
@@ -540,6 +562,19 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "the child should see EOF at once, not wait for the deadline"
+        );
+    }
+
+    #[test]
+    fn a_child_that_does_not_read_a_large_stdin_payload_is_still_bounded_by_the_deadline() {
+        let started = Instant::now();
+        let command = inv(&["sh", "-c", "sleep 30"], 300).with_stdin("x".repeat(4 * 1024 * 1024));
+        let err = runner().run(&command, &CancelToken::new()).unwrap_err();
+
+        assert!(matches!(err, ExecError::Timeout { .. }), "got {err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the stdin writer must not sit in front of the deadline"
         );
     }
 

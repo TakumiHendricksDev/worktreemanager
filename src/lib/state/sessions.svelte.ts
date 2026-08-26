@@ -63,7 +63,7 @@ import {
  * the oldest, which degrades to "the top of a very long transcript is gone" rather than to an
  * unresponsive window.
  */
-const MAX_EVENTS = 20_000;
+const MAX_EVENTS = 100_000;
 
 /** Approximate UTF-16 bytes retained by one pane's normalized event log. */
 const MAX_EVENT_BYTES = 32 * 1024 * 1024;
@@ -82,8 +82,8 @@ function eventBytes(event: AgentEvent): number {
  * The cap **refuses** rather than evicting, which was already the right answer for a shell that
  * might be running a dev server and is more so for a session mid-turn.
  */
-export const MAX_PANES_PER_WORKTREE = 4;
-export const MAX_PANES = 8;
+export const MAX_PANES_PER_WORKTREE = 20;
+export const MAX_PANES = 40;
 
 /**
  * What a refused pane says.
@@ -103,7 +103,7 @@ export const AT_CAPACITY =
  * kill a session when they are only out of room on screen.
  */
 export const AT_TILE_CAP =
-  'This worktree already has as many panes as fit on one screen. Close or merge one to split another.';
+  'This worktree has reached its pane limit. Close or merge one to split another.';
 
 /** What the shell spawns at, corrected as soon as the pane has measured itself. */
 const SPAWN_ROWS = 24;
@@ -290,7 +290,7 @@ export interface Pane {
    * The provider says this session is out of usage, and the offer to continue elsewhere is standing.
    *
    * A register outside the transcript, like `usage` and `pendingProvider`: the banner needs the
-   * *current* answer, and scanning a 20 000-event log backwards for the most recent limit on every
+   * *current* answer, and scanning a 100,000-event log backwards for the most recent limit on every
    * render is the cost `working` was moved out of the transcript to avoid.
    *
    * Cleared four ways — a turn starting (the limit lifted, and a turn that runs is the only proof of
@@ -1360,8 +1360,8 @@ class Sessions {
       if (!surface) continue;
 
       // The per-worktree cap is re-applied rather than trusted, because a stored surface may have
-      // been written by a build with different limits and the cap is a statement about how many
-      // panes fit on one screen — as true of a restored pane as of a new one.
+      // been written by a build with different limits. A restored pane consumes the same tiling
+      // budget as a new one.
       //
       // `MAX_PANES` deliberately is **not** applied here. That one bounds OS threads and event
       // subscriptions, and a detached pane has neither; applying it across every remembered
@@ -1677,7 +1677,7 @@ class Sessions {
    * §8 already carves out the exception that a delegated run "may own up to twenty child processes
    * because that count is the requested feature", and that bound belongs where it is enforced, in
    * `handoff.rs`'s `MAX_TASKS`, rather than being applied a second time here against a different
-   * budget. Without this the eighth child of one fan-out locked pane creation app-wide.
+   * budget. Without this a large fan-out could still lock pane creation app-wide.
    */
   private hasRoom(worktreeId: string): boolean {
     const room =
@@ -1691,7 +1691,7 @@ class Sessions {
    * Whether another *tile* fits. Not a process: splitting a delegated child does not start one.
    *
    * `hasRoom` also checks the global process cap, which would refuse a split in a window that
-   * already has eight user-opened CLIs even though this call adds none.
+   * already has the maximum number of user-opened CLIs even though this call adds none.
    */
   private hasTileRoom(worktreeId: string): boolean {
     const room = panesOf(this.layoutFor(worktreeId)).length < MAX_PANES_PER_WORKTREE;
@@ -1704,9 +1704,9 @@ class Sessions {
    *
    * Distinct from `hasRoom` because a detached pane is already counted by it, so a worktree
    * restored at its per-worktree limit would refuse to fill even the first of its own panes. What
-   * the two caps are *for* is what separates them: `MAX_PANES_PER_WORKTREE` bounds how many panes
-   * fit on a screen and this pane already has its place, while `MAX_PANES` bounds OS threads and
-   * event subscriptions, which is exactly what filling one adds.
+   * the two caps are *for* is what separates them: `MAX_PANES_PER_WORKTREE` bounds the saved split
+   * tree and this pane already has its place, while `MAX_PANES` bounds OS threads and event
+   * subscriptions, which is exactly what filling one adds.
    *
    * Both counts exclude delegated children for the reasons `hasRoom` records, and the per-worktree
    * one intersects the layout with the pane list rather than reading `panesIn`: this one is asking

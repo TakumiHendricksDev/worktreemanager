@@ -593,18 +593,19 @@ the no-transcript rule in `wtm-config::sessions` is untouched. The number is wha
 race-free: the window subscribes before it asks for the buffer, so an event can arrive twice, and a
 counter the emitter owns is the one thing both sides can compare. The bound is bytes as well as event
 count, and cumulative snapshots — patches, agendas, skills and usage — replace their predecessor.
-The frontend applies the same byte bound, folds only an 800-event tail until asked, lazily mounts
-disclosure bodies and paginates diff lines. Display copies of prompts stop at 64 KiB and diffs/tool
-output at 2 MiB; the complete prompt still goes to the provider and the worktree remains the source of
-truth for a larger diff.
+The frontend applies the same byte bound, retains up to 100,000 events, folds only an 800-event
+tail until asked, lazily mounts disclosure bodies and paginates diff lines. Display copies of
+prompts stop at 64 KiB and diffs/tool output at 2 MiB; the complete prompt still goes to the
+provider and the worktree remains the source of truth for a larger diff.
 
-**Ordinary tiled panes are capped at four per worktree and eight in total, and the cap refuses rather
+**Ordinary tiled panes are capped at twenty per worktree and forty in total, and the cap refuses rather
 than evicting.**
-§3 sizes the pty design for "a handful of terminals": one OS thread each in Rust, and one `pty:output`
-subscription each on this side, so Tauri serialises every chunk once per mounted pane. Evicting the
+Each shell still costs one OS thread in Rust and one `pty:output` subscription on this side, so
+Tauri serialises every chunk once per mounted pane. Evicting the
 least-recently-viewed shell would be the usual answer and is the wrong one here — that shell may be
 running a dev server. Now that shells are uncapped per worktree in Rust, these frontend caps are the
-only bound, which is where a bound belongs: it is a statement about how many panes fit on a screen.
+only ordinary-session bound. The limits are intentionally generous; refusal remains safer than
+evicting a pane whose process may be doing useful work.
 An explicit delegated run is the one exception: it may own up to twenty child processes because that
 count is the requested feature, but those children live behind the agent rail and consume a tile only
 when selected or explicitly split.
@@ -617,8 +618,8 @@ copy of the explanation lived in the surface's empty state, a branch that render
 has no panes, which is the one situation in which you cannot be at the cap. It now sets
 `sessions.error`, which has a banner that is always mounted. The global cap still counts processes,
 because that is what _it_ bounds, but only ones the user opened — a delegated run's budget is
-`MAX_TASKS` in `handoff.rs`, and applying a second one here meant the eighth child of one fan-out
-locked pane creation app-wide.
+`MAX_TASKS` in `handoff.rs`, and applying a second one here meant a large fan-out could lock pane
+creation app-wide.
 
 **The rail summarises; the list is a dialog.** Twenty children do not fit in a band above the panes,
 and widening it spends rows the sessions need — so the rail answers the two glanceable questions, _is

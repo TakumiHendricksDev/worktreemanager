@@ -131,7 +131,7 @@
    */
   let dictateKey = $state('');
   let keySaved = $state(false);
-  let keyBusy = false;
+  let keyBusy = $state(false);
   let confirmDictation = $state(false);
 
   let keyError = $state<string | null>(null);
@@ -181,6 +181,21 @@
   async function agreeDictation() {
     confirmDictation = false;
     await dictation.setEnabled('on');
+  }
+
+  async function removeKey() {
+    if (keyBusy) return;
+    keyBusy = true;
+    keyError = null;
+    try {
+      await dictation.setKey('');
+      confirmRemoveKey = false;
+      keySaved = false;
+    } catch (e) {
+      keyError = errorMessage(e);
+    } finally {
+      keyBusy = false;
+    }
   }
 
   async function chooseOpener(event: Event) {
@@ -518,9 +533,19 @@
           />
         </Field>
         <div class="c-settings__row">
-          <Button variant="neutral" size="sm" onclick={commitKey}>Save key</Button>
+          <Button variant="neutral" size="sm" onclick={commitKey} disabled={keyBusy}
+            >Save key</Button
+          >
           {#if dictation.status?.keySet === true}
-            <Button variant="quiet" size="sm" onclick={() => (confirmRemoveKey = true)}>
+            <Button
+              variant="quiet"
+              size="sm"
+              onclick={() => {
+                keyError = null;
+                confirmRemoveKey = true;
+              }}
+              disabled={keyBusy}
+            >
               Remove
             </Button>
           {/if}
@@ -585,22 +610,26 @@
 {/if}
 
 {#if confirmRemoveKey}
-  <Dialog title="Remove transcription key?" onclose={() => (confirmRemoveKey = false)}>
+  <Dialog
+    title="Remove transcription key?"
+    onclose={() => (confirmRemoveKey = false)}
+    closeDisabled={keyBusy}
+  >
     {#snippet body()}
       <p>
         The key is deleted from your keychain. Dictation will not work until you paste a new
         one.
       </p>
+      {#if keyError}<p class="c-status--danger">{keyError}</p>{/if}
     {/snippet}
     {#snippet footer()}
-      <Button variant="neutral" onclick={() => (confirmRemoveKey = false)}>Cancel</Button>
       <Button
-        variant="danger-solid"
-        onclick={() =>
-          void dictation.setKey('').then(() => {
-            confirmRemoveKey = false;
-            keySaved = false;
-          })}>Remove</Button
+        variant="neutral"
+        onclick={() => (confirmRemoveKey = false)}
+        disabled={keyBusy}>Cancel</Button
+      >
+      <Button variant="danger-solid" onclick={() => void removeKey()} disabled={keyBusy}
+        >{keyBusy ? 'Removing…' : 'Remove'}</Button
       >
     {/snippet}
   </Dialog>

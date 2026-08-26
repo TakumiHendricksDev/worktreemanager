@@ -29,6 +29,7 @@
   let force = $state(false);
   let preflight = $state<Preflight[]>([]);
   let loading = $state(true);
+  let preflightReady = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
   let done = $state<string | null>(null);
@@ -41,6 +42,7 @@
   const canRemove = $derived(
     !busy &&
       !loading &&
+      preflightReady &&
       errors.every((p) => p.overridable && (force || acknowledged.includes(p.id))),
   );
 
@@ -50,15 +52,18 @@
     const wantsBranch = deleteBranch;
     const seq = ++previewSeq;
     loading = true;
+    preflightReady = false;
     void commands
       .removePreflight(projectId, worktree.id, wantsBranch)
       .then((items) => {
         if (seq !== previewSeq) return;
         preflight = items;
+        preflightReady = true;
         error = null;
       })
       .catch((e) => {
         if (seq !== previewSeq) return;
+        preflightReady = false;
         error = errorMessage(e);
       })
       .finally(() => {
