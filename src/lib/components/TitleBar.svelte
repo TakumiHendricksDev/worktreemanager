@@ -26,8 +26,17 @@
   import Icon from './ui/Icon.svelte';
   import type { IconName } from './ui/icons';
 
-  const { onaddproject, onsettings }: { onaddproject: () => void; onsettings: () => void } =
-    $props();
+  const {
+    sidebarCollapsed,
+    onaddproject,
+    onsettings,
+    ontogglesidebar,
+  }: {
+    sidebarCollapsed: boolean;
+    onaddproject: () => void;
+    onsettings: () => void;
+    ontogglesidebar: () => void;
+  } = $props();
 
   const themeIcons: Record<ThemeChoice, IconName> = {
     system: 'theme-system',
@@ -57,6 +66,18 @@
   <!-- Reserves space for the macOS traffic lights; a plain inset on Linux, where the
        window manager draws the controls outside the webview. -->
   <div class="c-titlebar__gutter" data-tauri-drag-region></div>
+
+  <Button
+    variant="quiet"
+    icon="md"
+    onclick={ontogglesidebar}
+    title={sidebarCollapsed ? 'Show worktree sidebar' : 'Hide worktree sidebar'}
+    ariaLabel={sidebarCollapsed ? 'Show worktree sidebar' : 'Hide worktree sidebar'}
+    ariaExpanded={!sidebarCollapsed}
+    ariaControls="worktree-sidebar"
+  >
+    <Icon name={sidebarCollapsed ? 'chevron-right' : 'chevron-left'} />
+  </Button>
 
   <!--
     Drag region on the container, not just the text: the path may be short, and the empty

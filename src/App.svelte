@@ -12,6 +12,7 @@
   import { onMount } from 'svelte';
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
+  import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
   import RemoveWorktreeDialog from './lib/components/RemoveWorktreeDialog.svelte';
@@ -38,8 +39,11 @@
   const MIN_SIDEBAR = 200;
   const MAX_SIDEBAR = 460;
   const DEFAULT_SIDEBAR = 276;
+  const SIDEBAR_WIDTH_PREF = 'ui.sidebar_width';
+  const SIDEBAR_COLLAPSED_PREF = 'ui.sidebar_collapsed';
 
   let sidebarWidth = $state(DEFAULT_SIDEBAR);
+  let sidebarCollapsed = $state(false);
   let dragging = $state(false);
   let booted = $state(false);
   let addError = $state<string | null>(null);
@@ -50,7 +54,7 @@
    * terminal need the room, and a modal implies a quick decision when a setup run can take
    * minutes. Removal stays a modal — a destructive confirmation should block.
    */
-  let mainView = $state<'worktree' | 'new'>('worktree');
+  let mainView = $state<'worktree' | 'database' | 'new'>('worktree');
   let showAddProject = $state(false);
   let showRemove = $state(false);
   let showSettings = $state(false);
@@ -107,11 +111,15 @@
       await dictation.init();
       if (gone) return;
 
-      const stored = await commands.getPref('ui.sidebar_width').catch(() => null);
-      const parsed = stored ? Number.parseInt(stored, 10) : NaN;
+      const [storedWidth, storedCollapsed] = await Promise.all([
+        commands.getPref(SIDEBAR_WIDTH_PREF).catch(() => null),
+        commands.getPref(SIDEBAR_COLLAPSED_PREF).catch(() => null),
+      ]);
+      const parsed = storedWidth ? Number.parseInt(storedWidth, 10) : NaN;
       if (Number.isFinite(parsed)) {
         sidebarWidth = Math.min(Math.max(parsed, MIN_SIDEBAR), MAX_SIDEBAR);
       }
+      sidebarCollapsed = storedCollapsed === 'true';
 
       // Before `sessions.init`, because that one starts delivering events and every event is judged
       // against the notification preference this reads. Started in the other order, the first
@@ -306,7 +314,7 @@
       window.removeEventListener('pointerup', onUp);
       // Persist only on release; saving on every move would write hundreds of times.
       void commands
-        .setPref('ui.sidebar_width', String(Math.round(sidebarWidth)))
+        .setPref(SIDEBAR_WIDTH_PREF, String(Math.round(sidebarWidth)))
         .catch(() => {});
     };
 
@@ -322,8 +330,14 @@
     event.preventDefault();
     sidebarWidth = Math.min(Math.max(sidebarWidth + delta, MIN_SIDEBAR), MAX_SIDEBAR);
     void commands
-      .setPref('ui.sidebar_width', String(Math.round(sidebarWidth)))
+      .setPref(SIDEBAR_WIDTH_PREF, String(Math.round(sidebarWidth)))
       .catch(() => {});
+  }
+
+  function toggleSidebar(): void {
+    sidebarCollapsed = !sidebarCollapsed;
+    dragging = false;
+    void commands.setPref(SIDEBAR_COLLAPSED_PREF, String(sidebarCollapsed)).catch(() => {});
   }
 
   /**
@@ -339,14 +353,25 @@
 </script>
 
 <div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
-  <TitleBar onaddproject={addProject} onsettings={() => (showSettings = true)} />
+  <TitleBar
+    {sidebarCollapsed}
+    onaddproject={addProject}
+    onsettings={() => (showSettings = true)}
+    ontogglesidebar={toggleSidebar}
+  />
 
-  <div class="c-shell__columns" class:is-dragging={dragging}>
-    <aside class="c-shell__col">
+  <div
+    class="c-shell__columns"
+    class:is-dragging={dragging}
+    class:is-sidebar-collapsed={sidebarCollapsed}
+  >
+    <aside class="c-shell__col" id="worktree-sidebar" hidden={sidebarCollapsed}>
       <Sidebar
         onnew={() => (mainView = 'new')}
         onselectworktree={() => (mainView = 'worktree')}
-        detailId={mainView === 'worktree' ? 'worktree-detail' : null}
+        detailId={mainView === 'worktree' || mainView === 'database'
+          ? 'worktree-detail'
+          : null}
       />
     </aside>
 
@@ -366,6 +391,7 @@
       aria-valuenow={Math.round(sidebarWidth)}
       aria-valuemin={MIN_SIDEBAR}
       aria-valuemax={MAX_SIDEBAR}
+      hidden={sidebarCollapsed}
       tabindex="0"
       onpointerdown={startDrag}
       onkeydown={onSplitterKey}
@@ -447,6 +473,9 @@
         <Detail
           worktree={workspace.selected}
           projectId={workspace.activeProjectId ?? ''}
+          databaseActive={mainView === 'database'}
+          onsessions={() => (mainView = 'worktree')}
+          ondatabase={() => (mainView = 'database')}
           onremove={() => (showRemove = true)}
           oninspect={() => (showInspector = true)}
           onfavorite={() => {
@@ -468,6 +497,7 @@
         hidden while the create pane owns the screen.
       -->
       <SessionSurface visible={booted && mainView === 'worktree'} />
+      <DatabaseSurface visible={booted && mainView === 'database'} />
     </main>
   </div>
 

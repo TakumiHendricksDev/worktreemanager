@@ -283,21 +283,66 @@ Everything else has a default. Field kinds are `text`, `multiline`, `number`, `b
 
 > ### Trust prompt
 >
-> `wtm.toml` can run shell commands to populate form options and to set worktrees up. wtm will **not**
-> run anything from a project until you explicitly approve it, and it re-asks whenever the file's
-> contents change. Read the commands before trusting — this is arbitrary code execution on your
-> machine, the same bargain as `direnv`.
+> `wtm.toml` can run shell commands and declare database targets. wtm will **not** use either from a
+> project until you explicitly approve it, and it re-asks whenever the file's contents change. The
+> prompt shows command argv and credential-free database targets; passwords and credential-bearing
+> URLs are never included.
+
+## Database viewer
+
+The Database view is attached to the selected worktree. It provides a schema/table tree, column
+metadata, paged and sortable table data, and an independent SQL console with selection execution,
+bounded results and cancellation. PostgreSQL and SQLite are supported; an engine not included in
+this build is shown as unavailable rather than attempted.
+
+A local service whose port and credentials vary per worktree belongs in the repo config:
+
+```toml
+[database.local]
+label = "Local database"
+engine = "postgres"
+scope = "worktree"             # the default
+environment = "local"          # the default
+host = "127.0.0.1"
+port = "{{ env.DB_PORT }}"
+name = "{{ env.DB_NAME }}"
+user = "{{ env.DB_USER }}"
+password = "{{ env.DB_PASSWORD }}"
+```
+
+`env.*` comes from the worktree's existing `[[display.source]]` files, so selecting another
+worktree resolves a different port and opens a different session. A file-backed repository is the
+same shape with `engine = "sqlite"` and `path = "var/app.sqlite3"`; relative paths resolve inside
+that worktree.
+
+Shared TEST/STAGING/PROD connections use `scope = "project"`. Their tabs and live session persist
+while you move among that project's worktrees, but never into another project. Put machine-specific
+definitions in the untracked, git-common `wtm.local.toml`; project-scoped profiles deliberately
+cannot use `env.*`, because that would make one allegedly shared session depend on whichever
+worktree happened to be selected when it connected.
+
+```toml
+[database.production]
+label = "Production (read only)"
+engine = "postgres"
+scope = "project"
+environment = "production"
+access = "read_only"
+url = "postgres://readonly-user:password@db.example.invalid/app"
+tls = "require"
+```
+
+Credentials are rendered and retained in Rust, never listed over IPC or logged. Read-only profiles
+are also enforced by the driver. A read/write production console has an additional per-session UI
+lock; table browsing remains available while it is locked.
 
 ## Environment values
 
 A worktree's `.env` often holds real credentials, and this app displays that file. How it is
 handled:
 
-- **Nothing leaves the machine.** No network capability at all — the CSP permits only `self`
-  and `ipc:`, no HTTP plugin permission is granted, there is no `fetch`/XHR/WebSocket in the
-  frontend and no HTTP client crate reachable on either platform wtm builds for. No telemetry.
-  (See [ARCHITECTURE.md](ARCHITECTURE.md) §6a for how to check that last one — grepping
-  `Cargo.lock` gives the wrong answer.)
+- **The webview cannot reach the network.** The CSP permits only `self` and IPC; database protocols
+  and opt-in dictation live behind narrow Rust commands. There is no telemetry.
 - **Nothing is logged.** No log line carries an environment value.
 - **No value is sent to the window.** Not "no secret" — *no value*. The listing carries key
   names only; the Environment tab shows `••••••••` for every row with a per-key **reveal**,

@@ -1,10 +1,8 @@
-//! What "wtm makes one network call" is allowed to mean.
+//! What network access is allowed to mean.
 //!
-//! This file exists because `SECURITY.md` and ARCHITECTURE §6a used to say wtm had **no** network
-//! access at all, and dictation made that false. A claim that was absolute and verifiable has been
-//! replaced by one that is narrow and conditional, which is a strictly worse kind of claim to have
-//! to trust — so the parts of it that can be checked mechanically are checked here rather than
-//! being left as prose that ages.
+//! The webview has no direct network access. Rust may reach the fixed transcription host when the
+//! user dictates, or a database target that an approved config declared and the user explicitly
+//! connected. The parts of that boundary that can be mechanical belong here rather than in prose.
 //!
 //! Three properties, each with a different way of going wrong:
 //!
@@ -13,9 +11,8 @@
 //! 2. **The destination is not configurable.** A settable endpoint is an exfiltration primitive,
 //!    and the difference between "sends audio to Deepgram" and "sends audio anywhere a config file
 //!    says" is invisible in a diff that adds one string field.
-//! 3. **Nothing else in the tree gained an HTTP client.** The `curl` decision is only defensible
-//!    while it is the *only* route out; a linked TLS stack appearing later would make this file's
-//!    reasoning obsolete without anybody noticing.
+//! 3. **Nothing gained an HTTP client.** Database protocols may need TLS; that is not permission to
+//!    add a general-purpose HTTP route around the webview's CSP.
 
 use std::path::Path;
 
@@ -80,9 +77,8 @@ fn the_transcription_host_is_compiled_in_rather_than_configured() {
 fn no_crate_in_this_workspace_links_an_http_client() {
     // "No HTTP client crate is reachable in the dependency graph" is a sentence `SECURITY.md` still
     // makes, and it survived dictation only because the request goes through `curl`. That is a
-    // choice worth defending mechanically: adding `reqwest` or a TLS stack would silently relocate
-    // the trust story from the system's certificate handling into this binary, and would reopen
-    // the licence question `deny.toml` answers today.
+    // choice worth defending mechanically. `wtm-db` links native TLS for PostgreSQL, but a protocol
+    // driver is not a general-purpose HTTP route and does not weaken this property.
     //
     // Manifests rather than `Cargo.lock`, deliberately — ARCHITECTURE §6a explains why the lockfile
     // is the wrong artefact to grep: it is the union of every platform, and it lists `reqwest`
@@ -95,9 +91,6 @@ fn no_crate_in_this_workspace_links_an_http_client() {
         "surf",
         "attohttpc",
         "curl-sys",
-        "rustls",
-        "native-tls",
-        "openssl",
     ];
 
     let mut offenders = Vec::new();
@@ -126,6 +119,6 @@ fn no_crate_in_this_workspace_links_an_http_client() {
 
     assert!(
         offenders.is_empty(),
-        "the one network call goes through curl; these declare a client instead: {offenders:?}"
+        "database protocols and dictation need no linked HTTP client; found: {offenders:?}"
     );
 }

@@ -19,7 +19,16 @@ export interface TrustPrompt {
   path: string;
   /** Every argv the config would run, verbatim. */
   commands: string[][];
+  /** Database targets the config could connect to. Credentials are never included. */
+  databases: DatabaseTrustDeclaration[];
   contentHash: string;
+}
+
+export interface DatabaseTrustDeclaration {
+  id: string;
+  engine: string;
+  target: string;
+  passwordConfigured: boolean;
 }
 
 export interface Project {
@@ -94,6 +103,83 @@ export interface Worktree {
    * one at a time with `commands.revealEnvValue`.
    */
   env: string[];
+}
+
+export type DatabaseEngine = 'postgres' | 'mysql' | 'sqlite';
+export type DatabaseScope = 'worktree' | 'project';
+export type DatabaseEnvironment = 'local' | 'test' | 'staging' | 'production';
+export type DatabaseAccess = 'read_write' | 'read_only';
+export type DatabaseTls = 'disable' | 'require';
+
+export interface DatabaseConnection {
+  id: string;
+  label: string;
+  engine: DatabaseEngine;
+  scope: DatabaseScope;
+  environment: DatabaseEnvironment;
+  access: DatabaseAccess;
+  tls: DatabaseTls;
+  target: string;
+  available: boolean;
+  problem: string | null;
+}
+
+export interface DatabaseSession {
+  id: string;
+  profileId: string;
+  label: string;
+  engine: DatabaseEngine;
+  environment: DatabaseEnvironment;
+  access: DatabaseAccess;
+  serverVersion: string | null;
+}
+
+export interface DatabaseSchema {
+  name: string;
+}
+
+export type RelationKind = 'table' | 'view' | 'materialized_view';
+
+export interface DatabaseRelation {
+  schema: string;
+  name: string;
+  kind: RelationKind;
+}
+
+export interface DatabaseColumn {
+  name: string;
+  typeName: string;
+  nullable: boolean;
+  default: string | null;
+  primaryKey: boolean;
+}
+
+export interface QueryColumn {
+  name: string;
+  typeName: string | null;
+}
+
+export interface QueryCell {
+  value: string | null;
+  truncated: boolean;
+}
+
+export interface QueryResult {
+  columns: QueryColumn[];
+  rows: QueryCell[][];
+  affectedRows: number;
+  durationMs: number;
+  truncated: boolean;
+  message: string | null;
+}
+
+export interface TablePageRequest {
+  schema: string;
+  table: string;
+  offset: number;
+  limit: number;
+  sortColumn: string | null;
+  sortDirection: 'asc' | 'desc' | null;
 }
 
 export interface Field {

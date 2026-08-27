@@ -1,0 +1,575 @@
+/*
+ * The database explorer, table browser and query console.
+ *
+ * Components layer: this is one named surface with its own look. The two-column body is local to
+ * the explorer rather than an object because its left rail and result workspace have no other user.
+ */
+
+.c-database {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.c-database.is-hidden {
+  display: none;
+}
+
+.c-database__toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.c-database__connection-picker {
+  flex: 0 1 34rem;
+  min-width: 12rem;
+}
+
+.c-database__connection-picker .c-select {
+  padding-block: 5px;
+  font-size: var(--step--1);
+}
+
+.c-database__toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.c-database__notice,
+.c-database__error {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--step--1);
+}
+
+.c-database__notice {
+  color: var(--fg-muted);
+  background: var(--info-soft);
+  border-bottom: 1px solid var(--info-line);
+}
+
+.c-database__error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--danger-line);
+}
+
+.c-database__body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(190px, 250px) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-database__explorer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.c-database__explorer-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--step--1);
+}
+
+.c-database__explorer-title span {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-database__search {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin: var(--sp-2);
+}
+
+.c-database__search-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--fg-subtle);
+  pointer-events: none;
+}
+
+.c-database__search-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--step--1);
+  color: var(--fg);
+  background: var(--bg-input);
+}
+
+.c-database__search-input::-webkit-search-decoration,
+.c-database__search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.c-database__search-input::placeholder {
+  color: var(--fg-subtle);
+}
+
+.c-database__search-input:focus-visible {
+  border-color: var(--border-focus);
+}
+
+.c-database__search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--fg-muted);
+}
+
+.c-database__search-clear:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.c-database__tree {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: var(--sp-2);
+}
+
+.c-database__tree-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  gap: var(--sp-1);
+  padding: 5px var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: var(--step--1);
+  text-align: left;
+  color: var(--fg-muted);
+}
+
+.c-database__tree-item:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.c-database__tree-item.is-active {
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+
+.c-database__tree-item--schema {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.c-database__tree-item--relation {
+  padding-left: var(--sp-3);
+}
+
+.c-database__tree-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-database__relations {
+  padding-left: var(--sp-3);
+}
+
+.c-database__relation-mark {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  background: var(--bg-input);
+}
+
+.c-database__tree-note {
+  display: block;
+  padding: var(--sp-1) var(--sp-4);
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-database__workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-database__workspace .c-tabs {
+  padding-inline: var(--sp-3);
+}
+
+.c-database__workspace .c-tabs__tab:disabled {
+  color: var(--fg-subtle);
+  cursor: default;
+}
+
+.c-database__object-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.c-database__object-head div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.c-database__object-head span {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-database__columns {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--sp-1);
+  overflow-x: auto;
+  padding: 0 var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-database__column {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  background: var(--bg-elevated);
+}
+
+.c-database__column code {
+  color: var(--fg);
+}
+
+.c-database__results {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.c-database__results--query {
+  border-top: 1px solid var(--border);
+}
+
+.c-database__grid-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.c-database__grid {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+}
+
+.c-database__grid th,
+.c-database__grid td {
+  max-width: 36rem;
+  padding: 6px 9px;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-database__grid thead {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+}
+
+.c-database__grid tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.c-database__row-number {
+  position: sticky;
+  left: 0;
+  width: 4ch;
+  color: var(--fg-subtle);
+  background: var(--bg-elevated);
+}
+
+.c-database__sort {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  font-weight: 600;
+  text-align: left;
+}
+
+.c-database__sort.is-active {
+  color: var(--accent);
+}
+
+.c-database__null {
+  font-style: italic;
+  color: var(--fg-subtle);
+}
+
+.c-database__grid .has-more::after {
+  content: '…';
+  color: var(--warn);
+}
+
+.c-database__result-empty,
+.c-database__empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 0;
+  padding: var(--sp-5);
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+}
+
+.c-database__empty p {
+  max-width: 68ch;
+  line-height: 1.6;
+}
+
+.c-database__example {
+  max-width: 100%;
+  overflow: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-code);
+  font-size: var(--step--2);
+}
+
+.c-database__result-meta,
+.c-database__pager {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+  background: var(--bg-elevated);
+}
+
+.c-database__pager {
+  justify-content: flex-end;
+}
+
+.c-database__query-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.c-database__query-hint {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-database__editor {
+  flex: 0 0 auto;
+  width: 100%;
+  height: 13rem;
+  min-height: 7rem;
+  max-height: 65%;
+  border-top: 1px solid var(--border);
+  resize: vertical;
+  overflow: hidden;
+  color: var(--fg);
+  background: var(--bg-code);
+}
+
+.c-database__editor:focus-within {
+  box-shadow: inset 0 0 0 2px var(--border-focus);
+}
+
+.c-database__editor .cm-editor {
+  height: 100%;
+  color: var(--fg);
+  background: var(--bg-code);
+}
+
+.c-database__editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.c-database__editor .cm-scroller {
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.c-database__editor .cm-content {
+  padding: var(--sp-3) 0;
+  caret-color: var(--fg);
+}
+
+.c-database__editor .cm-line {
+  padding-inline: var(--sp-2) var(--sp-3);
+}
+
+.c-database__editor .cm-gutters {
+  border-right: 1px solid var(--border);
+  color: var(--fg-subtle);
+  background: var(--bg-elevated);
+}
+
+.c-database__editor .cm-activeLine,
+.c-database__editor .cm-activeLineGutter {
+  background: var(--bg-hover);
+}
+
+.c-database__editor .cm-cursor {
+  border-left-color: var(--fg);
+}
+
+.c-database__editor .cm-selectionBackground {
+  background: var(--accent-soft);
+}
+
+.c-database__editor .cm-panels,
+.c-database__editor .cm-tooltip {
+  color: var(--fg);
+  background: var(--bg-elevated);
+}
+
+.c-database__editor .cm-panels {
+  border-color: var(--border);
+}
+
+.c-database__editor .cm-tooltip {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.c-database__editor .cm-textfield,
+.c-database__editor .cm-button {
+  border: 1px solid var(--border);
+  color: var(--fg);
+  background: var(--bg-input);
+}
+
+.c-database__editor [aria-selected='true'] {
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+
+.c-database__editor .tok-keyword,
+.c-database__editor .tok-operator {
+  color: var(--accent);
+}
+
+.c-database__editor .tok-typeName,
+.c-database__editor .tok-variableName2 {
+  color: var(--info);
+}
+
+.c-database__editor .tok-string,
+.c-database__editor .tok-string2 {
+  color: var(--ok);
+}
+
+.c-database__editor .tok-number,
+.c-database__editor .tok-bool,
+.c-database__editor .tok-atom {
+  color: var(--warn);
+}
+
+.c-database__editor .tok-comment {
+  font-style: italic;
+  color: var(--fg-subtle);
+}
+
+.c-database__editor .tok-invalid {
+  color: var(--danger);
+}
+
+.c-database__production {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border-block: 1px solid var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.c-database__production p {
+  margin-top: 2px;
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}
+
+@media (max-width: 760px) {
+  .c-database__body {
+    grid-template-columns: minmax(150px, 34%) minmax(0, 1fr);
+  }
+
+  .c-database__query-hint {
+    display: none;
+  }
+}

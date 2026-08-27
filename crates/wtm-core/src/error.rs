@@ -34,6 +34,9 @@ pub enum WtmError {
     #[error(transparent)]
     Render(#[from] RenderError),
 
+    #[error(transparent)]
+    Database(#[from] DatabaseError),
+
     /// The submitted form is not valid. Carries every field's problem at once so
     /// the UI can show all of them inline rather than one per round-trip.
     #[error("{} field(s) need attention", .0.len())]
@@ -63,6 +66,27 @@ pub enum WtmError {
     /// one call that handles secrets.
     #[error("`{0}` is not set for this worktree")]
     UnknownEnvKey(String),
+}
+
+/// A database failure whose message is safe to send to the webview.
+///
+/// Drivers are configured field-by-field rather than from a credential-bearing URL so their
+/// connection errors cannot echo a password here.
+#[derive(Debug, thiserror::Error, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DatabaseError {
+    #[error("database profile is invalid: {0}")]
+    InvalidConnection(String),
+    #[error("could not connect to the database: {0}")]
+    Connection(String),
+    #[error("database query failed: {0}")]
+    Query(String),
+    #[error("database session {0} is gone")]
+    NoSuchSession(String),
+    #[error("database query was cancelled")]
+    Cancelled,
+    #[error("the {0} database engine is not available in this build")]
+    UnsupportedEngine(String),
 }
 
 /// One field's validation problem.
@@ -157,6 +181,8 @@ pub enum ConfigError {
         path: PathBuf,
         /// Every distinct argv the config would run, for display.
         commands: Vec<Vec<String>>,
+        /// Database endpoints the config could connect to, with credentials omitted.
+        databases: Vec<DatabaseTrustDeclaration>,
         /// Hash of the reviewed content, so approval binds to *these* commands.
         content_hash: String,
     },
@@ -164,6 +190,16 @@ pub enum ConfigError {
     /// A configured command matched a `[[guards.forbid]]` rule.
     #[error("refusing to run `{argv}`: {reason}")]
     Forbidden { argv: String, reason: String },
+}
+
+/// One database capability shown before a repository config is trusted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseTrustDeclaration {
+    pub id: String,
+    pub engine: String,
+    pub target: String,
+    pub password_configured: bool,
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]

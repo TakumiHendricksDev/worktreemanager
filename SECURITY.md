@@ -54,28 +54,27 @@ than a networked service. The things worth reporting:
 
 Worth stating because it narrows the surface considerably:
 
-- **No network access, with exactly one opt-in exception.** This used to be unconditional, and
-  the honest thing is to say what changed rather than to keep a sentence that has stopped being
-  true. Dictation — off by default, and inert until you turn it on and store a key — records the
-  microphone and sends that recording to `api.deepgram.com` to be transcribed. Nothing else in
-  wtm reaches the network: no telemetry, no analytics, no crash reporting, no update check.
+- **No unsolicited network access.** There are two user-initiated routes: dictation sends a
+  recording to `api.deepgram.com`, and the database viewer connects to a database target disclosed
+  by an approved config after the user clicks Connect. There is no telemetry, analytics, crash
+  reporting or update check.
 
   What is unchanged, and is the reason the exception is narrow enough to describe in a bullet:
 
   - **The webview still cannot reach the network.** The CSP permits only `self` and `ipc:`, and
-    no HTTP plugin capability is granted. The recording and the request both run in Rust behind
-    `#[tauri::command]`, so an injected script can *ask* wtm to dictate and cannot dictate, reach
-    a microphone, or choose a destination.
-  - **The destination is not configurable.** It is a `const` in `wtm-dictate`, so no config file,
-    project or preference can redirect a recording. A settable endpoint would be an exfiltration
-    primitive wearing a feature's clothes.
+    no HTTP plugin capability is granted. Dictation and database protocols run in Rust behind
+    narrow commands; credentials never cross IPC.
+  - **The transcription destination is not configurable.** It is a `const` in `wtm-dictate`.
+    Database destinations necessarily are configurable, so repo and git-common config layers show
+    their credential-free targets in the content-hash-bound trust prompt before they can be used.
   - **No HTTP client crate is reachable** in the dependency graph of either platform wtm builds
-    for. The request is made by invoking `curl`, which also means TLS verification and proxy
-    handling stay with the system rather than moving into this binary.
-  - **The audio is the only thing sent**, it is deleted as soon as it is text, and the key lives
-    in your OS keychain — it is written in from Settings and never read back out across IPC.
+    for. Dictation uses `curl`; PostgreSQL TLS uses the platform TLS implementation inside the
+    database adapter and is not exposed as a general HTTP facility.
+  - **Dictation sends only the audio**, deletes it as soon as it is text, and keeps the key in the
+    OS keychain. Database sessions send the SQL the user runs to the selected database and return
+    bounded text results; connection credentials stay in Rust.
 
-  All four are enforced by `src-tauri/tests/network_boundary.rs`, which runs in `just check`.
+  The mechanical portions are enforced by `src-tauri/tests/network_boundary.rs`, which runs in `just check`.
   (`Cargo.lock` lists `reqwest` because a lockfile is the union of every platform; `cargo tree -i
   reqwest --target aarch64-apple-darwin` — or the Linux target — reports nothing. See
   ARCHITECTURE.md §6a.)

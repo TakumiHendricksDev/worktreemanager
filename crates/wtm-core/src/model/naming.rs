@@ -213,6 +213,15 @@ impl TokenScope {
         }
     }
 
+    /// A project-scoped database cannot depend on whichever worktree happens to be selected.
+    #[must_use]
+    pub fn project_database(profile: &str) -> Self {
+        Self::new(
+            format!("database.{profile}"),
+            [TokenSet::Vars, TokenSet::Repo, TokenSet::Os, TokenSet::Now],
+        )
+    }
+
     /// Why a token is unavailable here — the text that lands in the error, so it
     /// has to explain the ordering rather than just restate the rule.
     #[must_use]

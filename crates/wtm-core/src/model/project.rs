@@ -104,6 +104,14 @@ pub struct Project {
     #[serde(default)]
     pub display: DisplaySpec,
 
+    /// Database connections this repository offers, keyed by a stable id.
+    ///
+    /// A map rather than `[[database]]` for the same reason agents are keyed: config tables
+    /// merge per key, while arrays replace. A user can therefore add a machine-local `production`
+    /// profile without restating the repository's `local` profile.
+    #[serde(default)]
+    pub database: BTreeMap<String, DatabaseSpec>,
+
     #[serde(default, rename = "action")]
     pub actions: Vec<ActionSpec>,
 
@@ -792,6 +800,97 @@ pub struct DisplaySpec {
     pub tables: Vec<DisplayTable>,
 }
 
+// ───────────────────────────── databases ─────────────────────────────
+
+/// One database connection recipe.
+///
+/// Every string is a template resolved only when a worktree asks to connect. Resolved
+/// credentials never become part of the project view sent to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseSpec {
+    #[serde(default)]
+    pub label: Option<String>,
+    pub engine: DatabaseEngine,
+    #[serde(default)]
+    pub scope: DatabaseScope,
+    #[serde(default)]
+    pub environment: DatabaseEnvironment,
+    #[serde(default)]
+    pub access: DatabaseAccess,
+    /// A complete connection URL. Individual fields below override its corresponding parts.
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub port: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    /// `SQLite` database path. Invalid for server engines.
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub tls: DatabaseTls,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseEngine {
+    Postgres,
+    Mysql,
+    Sqlite,
+}
+
+impl DatabaseEngine {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Postgres => "postgres",
+            Self::Mysql => "mysql",
+            Self::Sqlite => "sqlite",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseScope {
+    #[default]
+    Worktree,
+    Project,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseEnvironment {
+    #[default]
+    Local,
+    Test,
+    Staging,
+    Production,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseAccess {
+    #[default]
+    ReadWrite,
+    ReadOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseTls {
+    #[default]
+    Disable,
+    Require,
+}
+
 // ─────────────────────────────── actions & guards ───────────────────────────────
 
 /// A command the user can run against a worktree on demand.
@@ -1061,6 +1160,7 @@ mod tests {
             setup: None,
             remove: RemoveSpec::default(),
             display: DisplaySpec::default(),
+            database: BTreeMap::new(),
             actions: Vec::new(),
             agent: BTreeMap::new(),
             guards: GuardSpec::default(),

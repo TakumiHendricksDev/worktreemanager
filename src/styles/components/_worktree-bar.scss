@@ -63,3 +63,10 @@
   align-items: center;
   gap: var(--sp-2);
 }
+
+.c-worktree-bar__view-switch {
+  display: flex;
+  align-items: center;
+  padding-right: var(--sp-2);
+  border-right: 1px solid var(--border);
+}

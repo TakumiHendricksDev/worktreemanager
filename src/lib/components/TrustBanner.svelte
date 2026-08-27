@@ -41,26 +41,43 @@
 <section class="c-trust" role="alert">
   {#if project.trust}
     <header class="c-trust__head">
-      <strong class="c-trust__who">{project.name} wants to run commands</strong>
+      <strong class="c-trust__who">{project.name} requests local capabilities</strong>
       <code class="c-trust__path">{project.trust.path}</code>
     </header>
 
     <p class="c-trust__prose">
-      This project's configuration declares the commands below. wtm will not run any of them
-      until you approve — and it will ask again if the file changes. Read them the way you
-      would read a <code>direnv</code> prompt: approving is the same as running them yourself.
+      This project's configuration declares the commands and database targets below. wtm
+      will not use any of them until you approve — and it will ask again if the file
+      changes. Read them the way you would read a <code>direnv</code> prompt: approval grants
+      these capabilities to the repository.
     </p>
 
-    <ul class="c-trust__commands">
-      {#each expanded ? project.trust.commands : project.trust.commands.slice(0, 4) as argv, i (i)}
-        <li><code>{argv.join(' ')}</code></li>
-      {/each}
-    </ul>
+    {#if project.trust.commands.length > 0}
+      <p class="c-trust__prose"><strong>Commands</strong></p>
+      <ul class="c-trust__commands">
+        {#each expanded ? project.trust.commands : project.trust.commands.slice(0, 4) as argv, i (i)}
+          <li><code>{argv.join(' ')}</code></li>
+        {/each}
+      </ul>
+    {/if}
 
     {#if project.trust.commands.length > 4 && !expanded}
       <Button variant="inline" onclick={() => (expanded = true)}>
         Show all {project.trust.commands.length} commands
       </Button>
+    {/if}
+
+    {#if project.trust.databases.length > 0}
+      <p class="c-trust__prose"><strong>Database connections</strong></p>
+      <ul class="c-trust__commands">
+        {#each project.trust.databases as database (database.id)}
+          <li>
+            <code>{database.engine} · {database.target}</code>
+            {#if database.passwordConfigured}
+              — credential configured{/if}
+          </li>
+        {/each}
+      </ul>
     {/if}
 
     {#if failure}
@@ -70,9 +87,7 @@
     <div class="c-trust__actions">
       <!-- Reject first, and neither is autofocused: the safe choice must not require
            more effort than the unsafe one. -->
-      <Button variant="neutral" onclick={() => decide(false)} disabled={busy}>
-        Don't run these
-      </Button>
+      <Button variant="neutral" onclick={() => decide(false)} disabled={busy}>Deny</Button>
       <Button variant="accent" onclick={() => decide(true)} disabled={busy}>
         {busy ? 'Saving…' : 'Approve this configuration'}
       </Button>

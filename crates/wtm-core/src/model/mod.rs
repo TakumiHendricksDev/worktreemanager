@@ -34,11 +34,12 @@ pub use plan::{
 };
 pub use project::{
     ActionSpec, AgentSpec, BranchScope, CommandSpec, ComputedSpec, Concurrency, ConditionalArgs,
-    CreateSpec, CwdBase, DirBase, DisplayBadge, DisplayLink, DisplaySource, DisplaySourceKind,
-    DisplaySpec, DisplayTable, ExistingBranchBehavior, ExistingBranchMatch, FieldDefault,
-    FieldKind, FieldSpec, ForbidRule, GuardSpec, LookupErrorPolicy, LookupFormat, LookupMapping,
-    LookupSpec, McpServerSpec, NamingSpec, OnFailure, OptionsParse, OptionsSource, Project,
-    ProjectId, ProjectMeta, RemoveSpec, RemoveStrategy, Rewrite, SUPPORTED_SCHEMA_VERSION,
+    CreateSpec, CwdBase, DatabaseAccess, DatabaseEngine, DatabaseEnvironment, DatabaseScope,
+    DatabaseSpec, DatabaseTls, DirBase, DisplayBadge, DisplayLink, DisplaySource,
+    DisplaySourceKind, DisplaySpec, DisplayTable, ExistingBranchBehavior, ExistingBranchMatch,
+    FieldDefault, FieldKind, FieldSpec, ForbidRule, GuardSpec, LookupErrorPolicy, LookupFormat,
+    LookupMapping, LookupSpec, McpServerSpec, NamingSpec, OnFailure, OptionsParse, OptionsSource,
+    Project, ProjectId, ProjectMeta, RemoveSpec, RemoveStrategy, Rewrite, SUPPORTED_SCHEMA_VERSION,
     SetupSpec, TrackModeSpec,
 };
 pub use value::{FieldValue, FormValues};

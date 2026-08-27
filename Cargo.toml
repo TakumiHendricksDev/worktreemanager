@@ -7,6 +7,7 @@ members = [
   "crates/wtm-exec",
   "crates/wtm-agent",
   "crates/wtm-dictate",
+  "crates/wtm-db",
   "crates/wtm-render",
   "crates/wtm-notify",
   "crates/wtm-testkit",
@@ -41,6 +42,7 @@ wtm-git     = { path = "crates/wtm-git" }
 wtm-exec    = { path = "crates/wtm-exec" }
 wtm-agent   = { path = "crates/wtm-agent" }
 wtm-dictate = { path = "crates/wtm-dictate" }
+wtm-db      = { path = "crates/wtm-db" }
 wtm-render  = { path = "crates/wtm-render" }
 wtm-notify  = { path = "crates/wtm-notify" }
 wtm-testkit = { path = "crates/wtm-testkit" }
@@ -73,6 +75,10 @@ time            = { version = "0.3", features = ["formatting", "parsing", "local
 nix             = { version = "0.31", features = ["signal", "process", "user"] }
 uuid            = { version = "1", features = ["v4", "serde"] }
 tracing         = "0.1"
+postgres        = "0.19"
+postgres-native-tls = "0.5"
+native-tls      = "0.2"
+rusqlite        = { version = "0.38", features = ["bundled", "column_decltype"] }
 
 # external — macOS notification FFI, used by `wtm-notify` alone. Already in the
 # lockfile via Tauri's own mobile unions, so these pins add no version churn.

@@ -28,8 +28,10 @@ pub mod model;
 pub mod ports;
 pub mod usecase;
 
-pub use error::{ConfigError, ExecError, GitError, RenderError, WtmError};
+pub use error::{ConfigError, DatabaseError, ExecError, GitError, RenderError, WtmError};
 pub use model::{
-    ActionSpec, BranchRef, Checkout, CommitId, CreateOutcome, CreatePlan, FieldKind, FieldSpec,
-    FieldValue, FormValues, PlanPreview, PreflightItem, Project, Remedy, Worktree, WorktreeId,
+    ActionSpec, BranchRef, Checkout, CommitId, CreateOutcome, CreatePlan, DatabaseAccess,
+    DatabaseEngine, DatabaseEnvironment, DatabaseScope, DatabaseSpec, DatabaseTls, FieldKind,
+    FieldSpec, FieldValue, FormValues, PlanPreview, PreflightItem, Project, Remedy, Worktree,
+    WorktreeId,
 };

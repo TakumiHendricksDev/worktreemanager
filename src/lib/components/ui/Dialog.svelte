@@ -104,11 +104,14 @@
    * second dialog opens between them, and the walk would then take somebody else's nodes with it.
    * One wrapper makes the block one node, and one node cannot be walked past.
    *
-   * No cleanup: Svelte removes the wrapper on teardown by reference, and `remove()` does not care
-   * which parent the node ended up in.
+   * The cleanup is load-bearing. Moving the wrapper takes it outside the DOM range Svelte removes
+   * for the caller's `{#if}` block, so without an explicit `remove()` a closed dialog stays in
+   * `<body>` as an inert snapshot. A session dialog freezes on “Closing…” because its owning pane
+   * has already gone; Settings simply looks as though Done did nothing.
    */
   const portal: Attachment<HTMLElement> = (node) => {
     document.body.appendChild(node);
+    return () => node.remove();
   };
 
   /*

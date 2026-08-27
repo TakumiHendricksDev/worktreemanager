@@ -22,8 +22,8 @@ use std::collections::BTreeSet;
 
 use wtm_core::error::{ConfigError, ConfigLayer};
 use wtm_core::model::{
-    CommandSpec, CwdBase, DirBase, OptionsSource, Project, SUPPORTED_SCHEMA_VERSION, TokenScope,
-    shadows_reserved_prefix,
+    CommandSpec, CwdBase, DatabaseEngine, DatabaseScope, DirBase, OptionsSource, Project,
+    SUPPORTED_SCHEMA_VERSION, TokenScope, shadows_reserved_prefix,
 };
 use wtm_core::ports::template::TemplateEngine;
 
@@ -61,10 +61,67 @@ pub fn validate(
     check_field_keys(project, origin)?;
     check_computed_keys(project, origin)?;
     check_lookup_ids(project, origin)?;
+    check_database_ids(project, origin)?;
     check_references(project, origin)?;
     check_commands(project, origin)?;
     check_templates(project, engine, origin)?;
     check_guards(project, origin)?;
+    Ok(())
+}
+
+fn check_database_ids(project: &Project, origin: &Origin) -> Result<(), ConfigError> {
+    for (id, database) in &project.database {
+        if id.is_empty()
+            || !id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+        {
+            return Err(origin.invalid(
+                &format!("database.{id}"),
+                "a database id may contain only letters, digits, underscores and hyphens",
+            ));
+        }
+
+        let has_url = database
+            .url
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty());
+        let has_host = database
+            .host
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty());
+        let has_path = database
+            .path
+            .as_ref()
+            .is_some_and(|value| !value.trim().is_empty());
+        match database.engine {
+            DatabaseEngine::Sqlite if !has_url && !has_path => {
+                return Err(origin.invalid(
+                    &format!("database.{id}"),
+                    "a SQLite profile needs `path` or `url`",
+                ));
+            }
+            DatabaseEngine::Sqlite if has_host || database.port.is_some() => {
+                return Err(origin.invalid(
+                    &format!("database.{id}"),
+                    "a SQLite profile uses a file path, not `host` or `port`",
+                ));
+            }
+            DatabaseEngine::Postgres | DatabaseEngine::Mysql if !has_url && !has_host => {
+                return Err(origin.invalid(
+                    &format!("database.{id}"),
+                    "a server database profile needs `host` or `url`",
+                ));
+            }
+            DatabaseEngine::Postgres | DatabaseEngine::Mysql if has_path => {
+                return Err(origin.invalid(
+                    &format!("database.{id}.path"),
+                    "`path` is only valid for SQLite profiles",
+                ));
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 
@@ -427,6 +484,29 @@ fn check_templates(
         }
     }
 
+    for (id, database) in &project.database {
+        let scope = match database.scope {
+            DatabaseScope::Worktree => TokenScope::worktree_command(format!("database.{id}")),
+            DatabaseScope::Project => TokenScope::project_database(id),
+        };
+        for (name, template) in [
+            ("url", &database.url),
+            ("host", &database.host),
+            ("port", &database.port),
+            ("name", &database.name),
+            ("user", &database.user),
+            ("password", &database.password),
+            ("path", &database.path),
+        ] {
+            if let Some(template) = template {
+                let key = format!("database.{id}.{name}");
+                engine
+                    .validate(&key, template, &scope)
+                    .map_err(|error| render_err(&key, error))?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -668,6 +748,37 @@ mod tests {
              [setup.env]\nPATH = '{{ env.LOGIN_PATH }}'\n",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_worktree_database_may_resolve_its_port_and_credentials_from_that_worktree() {
+        check(
+            "[database.local]\nengine = 'postgres'\nhost = '127.0.0.1'\n\
+             port = '{{ env.DB_PORT }}'\nname = '{{ env.DB_NAME }}'\n\
+             password = '{{ env.DB_PASSWORD }}'\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_project_database_cannot_depend_on_one_worktrees_environment() {
+        let err = check(
+            "[database.production]\nengine = 'postgres'\nscope = 'project'\n\
+             host = 'database.example.invalid'\npassword = '{{ env.DB_PASSWORD }}'\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("env"), "got {err}");
+    }
+
+    #[test]
+    fn a_sqlite_profile_uses_a_path_instead_of_a_network_address() {
+        check("[database.local]\nengine = 'sqlite'\npath = 'var/app.sqlite3'\n").unwrap();
+
+        let err = check(
+            "[database.bad]\nengine = 'sqlite'\npath = 'var/app.sqlite3'\nhost = 'localhost'\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("file path"), "got {err}");
     }
 
     #[test]

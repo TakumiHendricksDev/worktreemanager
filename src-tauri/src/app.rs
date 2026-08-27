@@ -16,9 +16,12 @@ use std::sync::Arc;
 
 use wtm_config::{AppPaths, FileConfigStore, RealFileStore};
 use wtm_core::error::{ConfigError, WtmError};
-use wtm_core::model::{AgentEvent, Project, WorkingTreeStatus, Worktree};
+use wtm_core::model::{
+    AgentEvent, DatabaseEngine, DatabaseScope, Project, WorkingTreeStatus, Worktree,
+};
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::config::ConfigStore;
+use wtm_core::ports::database::{DatabaseConnection, DatabaseHost};
 use wtm_core::ports::exec::CommandRunner;
 use wtm_core::ports::fs::FileStore;
 use wtm_core::ports::git::Git;
@@ -27,13 +30,37 @@ use wtm_exec::{PipeHostImpl, PtyHostImpl, ResolvedPath};
 use wtm_git::GitCli;
 
 use crate::display;
-use crate::view::{DoctorView, PaletteView, ProjectView, ToolView, TrustPromptView, WorktreeView};
+use crate::view::{
+    DatabaseConnectionView, DoctorView, PaletteView, ProjectView, ToolView, TrustPromptView,
+    WorktreeView,
+};
 
 /// Tools a project config commonly invokes, reported by the diagnostics panel.
 ///
 /// Not a dependency — wtm works fine without any of them — but when a project's config
 /// calls one and it is missing, this is the fastest route to understanding why.
 const KNOWN_TOOLS: &[&str] = &["git", "just", "acli", "docker", "gh", "bun", "npm"];
+
+/// A credential-free connection label for the picker.
+fn database_target(connection: &DatabaseConnection) -> String {
+    if let Some(path) = &connection.path {
+        return path.to_string_lossy().into_owned();
+    }
+    if connection.url.is_some() && connection.host.is_none() {
+        return "configured URL".to_owned();
+    }
+    let host = connection.host.as_deref().unwrap_or("localhost");
+    let default_port = match connection.engine {
+        DatabaseEngine::Postgres => 5432,
+        DatabaseEngine::Mysql => 3306,
+        DatabaseEngine::Sqlite => 0,
+    };
+    let port = connection.port.unwrap_or(default_port);
+    connection.name.as_ref().map_or_else(
+        || format!("{host}:{port}"),
+        |name| format!("{host}:{port}/{name}"),
+    )
+}
 
 /// How many finished sessions the pty registry keeps.
 ///
@@ -329,6 +356,8 @@ pub struct App {
     pub files: Arc<dyn FileStore>,
     pub clock: Arc<dyn Clock>,
     pub config: Arc<FileConfigStore>,
+    /// Live database connections. Concrete ownership belongs in the composition root, like PTYs.
+    pub database: Arc<dyn DatabaseHost>,
     resolved_path: ResolvedPath,
     /// `os.*` template tokens, resolved once — they cannot change while running.
     os_tokens: BTreeMap<String, String>,
@@ -448,6 +477,7 @@ impl App {
             Arc::clone(&engine),
             Arc::clone(&clock),
         ));
+        let database: Arc<dyn DatabaseHost> = Arc::new(wtm_db::Host::new(Arc::clone(&clock)));
 
         Ok(Self {
             git,
@@ -459,6 +489,7 @@ impl App {
             files: Arc::new(RealFileStore::new()),
             clock,
             config,
+            database,
             resolved_path,
             os_tokens: wtm_exec::os_tokens(),
             shells: parking_lot::Mutex::new(BTreeMap::new()),
@@ -491,14 +522,16 @@ impl App {
                         ConfigError::Untrusted {
                             path,
                             commands,
+                            databases,
                             content_hash,
                         } => (
-                            "This project's configuration declares commands that need your \
+                            "This project's configuration declares capabilities that need your \
                              approval before it can be used."
                                 .to_owned(),
                             Some(TrustPromptView {
                                 path: path.to_string_lossy().into_owned(),
                                 commands: commands.clone(),
+                                databases: databases.clone(),
                                 content_hash: content_hash.clone(),
                             }),
                         ),
@@ -605,6 +638,126 @@ impl App {
             .cloned()
             // Reports the key, never a partial value.
             .ok_or_else(|| WtmError::UnknownEnvKey(key.to_owned()))
+    }
+
+    /// Database profiles resolved for one selected worktree, with credentials omitted.
+    pub fn database_connections(
+        &self,
+        project: &Project,
+        worktree_id: &str,
+    ) -> Result<Vec<DatabaseConnectionView>, WtmError> {
+        let worktree = self.worktree(project, worktree_id)?;
+        Ok(project
+            .database
+            .iter()
+            .map(
+                |(id, spec)| match self.resolve_database(project, &worktree, id) {
+                    Ok(connection) => DatabaseConnectionView {
+                        id: id.clone(),
+                        label: connection.label.clone(),
+                        engine: connection.engine,
+                        scope: connection.scope,
+                        environment: connection.environment,
+                        access: connection.access,
+                        tls: connection.tls,
+                        target: database_target(&connection),
+                        available: wtm_db::supports(connection.engine),
+                        problem: (!wtm_db::supports(connection.engine)).then(|| {
+                            format!(
+                                "{} support is not available in this build",
+                                connection.engine.as_str()
+                            )
+                        }),
+                    },
+                    Err(error) => DatabaseConnectionView {
+                        id: id.clone(),
+                        label: spec.label.clone().unwrap_or_else(|| id.clone()),
+                        engine: spec.engine,
+                        scope: spec.scope,
+                        environment: spec.environment,
+                        access: spec.access,
+                        tls: spec.tls,
+                        target: "unresolved".to_owned(),
+                        available: false,
+                        problem: Some(error.to_string()),
+                    },
+                },
+            )
+            .collect())
+    }
+
+    /// Resolve one profile for the backend. The returned value must never be serialized or logged.
+    pub fn resolve_database(
+        &self,
+        project: &Project,
+        worktree: &Worktree,
+        profile_id: &str,
+    ) -> Result<DatabaseConnection, WtmError> {
+        let spec = project.database.get(profile_id).ok_or_else(|| {
+            wtm_core::error::DatabaseError::InvalidConnection(format!(
+                "unknown database profile `{profile_id}`"
+            ))
+        })?;
+        let mut context = display::base_context(project, &self.os_tokens);
+        if spec.scope == DatabaseScope::Worktree {
+            display::add_worktree_tokens(&mut context, worktree);
+            let sources =
+                display::read_sources(project, self.files.as_ref(), self.engine.as_ref(), &context);
+            display::add_source_tokens(&mut context, project, &sources);
+        }
+
+        let render = |field: &str, template: &Option<String>| -> Result<Option<String>, WtmError> {
+            template
+                .as_ref()
+                .map(|template| {
+                    self.engine
+                        .render(
+                            &format!("database.{profile_id}.{field}"),
+                            template,
+                            &context,
+                        )
+                        .map(|value| value.trim().to_owned())
+                        .map_err(WtmError::from)
+                })
+                .transpose()
+                .map(|value| value.filter(|value| !value.is_empty()))
+        };
+
+        let port = render("port", &spec.port)?
+            .map(|value| {
+                value.parse::<u16>().map_err(|_| {
+                    wtm_core::error::DatabaseError::InvalidConnection(format!(
+                        "database.{profile_id}.port did not resolve to a valid port"
+                    ))
+                })
+            })
+            .transpose()?;
+        let path = render("path", &spec.path)?.map(PathBuf::from).map(|path| {
+            if path.is_absolute() {
+                path
+            } else if spec.scope == DatabaseScope::Worktree {
+                worktree.path.join(path)
+            } else {
+                project.root.join(path)
+            }
+        });
+
+        Ok(DatabaseConnection {
+            profile_id: profile_id.to_owned(),
+            label: spec.label.clone().unwrap_or_else(|| profile_id.to_owned()),
+            engine: spec.engine,
+            scope: spec.scope,
+            environment: spec.environment,
+            access: spec.access,
+            url: render("url", &spec.url)?,
+            host: render("host", &spec.host)?,
+            port,
+            name: render("name", &spec.name)?,
+            user: render("user", &spec.user)?,
+            password: render("password", &spec.password)?,
+            path,
+            tls: spec.tls,
+        })
     }
 
     /// Star or unstar a worktree.

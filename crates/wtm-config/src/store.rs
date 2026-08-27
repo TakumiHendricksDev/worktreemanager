@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use toml::Value;
-use wtm_core::error::{ConfigError, ConfigLayer};
+use wtm_core::error::{ConfigError, ConfigLayer, DatabaseTrustDeclaration};
 use wtm_core::model::{Project, ProjectId};
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::config::{ConfigStore, LayerProvenance, TrustDecision};
@@ -222,8 +222,9 @@ impl FileConfigStore {
             };
 
             let declared = declared_commands_in(&layer.value);
-            if declared.is_empty() {
-                // Nothing to execute, so nothing to approve.
+            let databases = declared_databases_in(&layer.value);
+            if declared.is_empty() && databases.is_empty() {
+                // Nothing to execute or connect to, so nothing to approve.
                 continue;
             }
             if store.is_approved(path, source) {
@@ -233,6 +234,7 @@ impl FileConfigStore {
             return Err(ConfigError::Untrusted {
                 path: path.clone(),
                 commands: declared,
+                databases,
                 content_hash: trust::content_hash(source),
             });
         }
@@ -300,6 +302,48 @@ fn declared_commands_in(value: &Value) -> Vec<Vec<String>> {
     let mut out: Vec<Vec<String>> = Vec::new();
     collect_runs(value, &mut out);
     out
+}
+
+/// Database network capabilities in a raw config layer, with credentials omitted.
+///
+/// This intentionally runs before deserialization for the same reason command collection does: a
+/// broken config still has to disclose what approving it would permit.
+fn declared_databases_in(value: &Value) -> Vec<DatabaseTrustDeclaration> {
+    let Some(databases) = value.get("database").and_then(Value::as_table) else {
+        return Vec::new();
+    };
+
+    databases
+        .iter()
+        .filter_map(|(id, value)| {
+            let table = value.as_table()?;
+            let engine = table
+                .get("engine")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned();
+            let target = if table.contains_key("url") {
+                "configured URL".to_owned()
+            } else if let Some(path) = table.get("path").and_then(Value::as_str) {
+                path.to_owned()
+            } else {
+                let host = table
+                    .get("host")
+                    .and_then(Value::as_str)
+                    .unwrap_or("configured host");
+                table
+                    .get("port")
+                    .and_then(Value::as_str)
+                    .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}"))
+            };
+            Some(DatabaseTrustDeclaration {
+                id: id.clone(),
+                engine,
+                target,
+                password_configured: table.contains_key("password"),
+            })
+        })
+        .collect()
 }
 
 fn collect_runs(value: &Value, out: &mut Vec<Vec<String>>) {
@@ -546,6 +590,38 @@ mod tests {
     }
 
     #[test]
+    fn a_config_declaring_a_database_is_refused_until_approved_without_disclosing_credentials() {
+        let h = Harness::new();
+        h.write_repo_config(
+            "[database.local]\nengine = 'postgres'\nhost = '127.0.0.1'\n\
+             port = '{{ env.DB_PORT }}'\npassword = 'do-not-display'\n",
+        );
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Untrusted {
+                commands,
+                databases,
+                path,
+                ..
+            } => {
+                assert_eq!(path, h.repo.join("wtm.toml"));
+                assert!(commands.is_empty());
+                assert_eq!(databases.len(), 1);
+                assert_eq!(databases[0].id, "local");
+                assert_eq!(databases[0].engine, "postgres");
+                assert_eq!(databases[0].target, "127.0.0.1:{{ env.DB_PORT }}");
+                assert!(databases[0].password_configured);
+                assert!(!format!("{databases:?}").contains("do-not-display"));
+            }
+            other => panic!("expected Untrusted, got {other:?}"),
+        }
+
+        h.approve("wtm.toml");
+        let project = h.store.load(&h.repo).unwrap();
+        assert!(project.database.contains_key("local"));
+    }
+
+    #[test]
     fn editing_an_approved_config_re_arms_the_prompt() {
         let h = Harness::new();
         h.write_repo_config("[setup]\nrun = ['./bin/setup.sh']\n");
@@ -751,6 +827,20 @@ mod tests {
     fn declared_commands_deduplicates() {
         let value = layers::document("[a]\nrun = ['x']\n\n[b]\nrun = ['x']\n").unwrap();
         assert_eq!(declared_commands_in(&value).len(), 1);
+    }
+
+    #[test]
+    fn declared_databases_only_report_targets_and_password_presence() {
+        let value = layers::document(
+            "[database.production]\nengine = 'postgres'\n\
+             url = 'postgres://person:secret@example.invalid/app'\npassword = 'secret'\n",
+        )
+        .unwrap();
+        let found = declared_databases_in(&value);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "configured URL");
+        assert!(found[0].password_configured);
+        assert!(!format!("{found:?}").contains("secret"));
     }
 
     #[test]

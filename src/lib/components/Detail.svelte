@@ -25,12 +25,18 @@
   const {
     worktree,
     projectId,
+    databaseActive,
+    onsessions,
+    ondatabase,
     onremove,
     onfavorite,
     oninspect,
   }: {
     worktree: Worktree;
     projectId: string;
+    databaseActive: boolean;
+    onsessions: () => void;
+    ondatabase: () => void;
     onremove: () => void;
     onfavorite: () => void;
     oninspect: () => void;
@@ -44,5 +50,14 @@
   aria-labelledby={`tab-${worktree.id}`}
   tabindex="-1"
 >
-  <WorktreeBar {worktree} {projectId} {onremove} {onfavorite} {oninspect} />
+  <WorktreeBar
+    {worktree}
+    {projectId}
+    {databaseActive}
+    {onsessions}
+    {ondatabase}
+    {onremove}
+    {onfavorite}
+    {oninspect}
+  />
 </div>

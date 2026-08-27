@@ -28,12 +28,18 @@
   const {
     worktree,
     projectId,
+    databaseActive,
+    onsessions,
+    ondatabase,
     onremove,
     onfavorite,
     oninspect,
   }: {
     worktree: Worktree;
     projectId: string;
+    databaseActive: boolean;
+    onsessions: () => void;
+    ondatabase: () => void;
     onremove: () => void;
     onfavorite: () => void;
     oninspect: () => void;
@@ -119,6 +125,21 @@
   </div>
 
   <div class="c-worktree-bar__actions">
+    <div class="c-worktree-bar__view-switch" aria-label="Worktree view">
+      <Button
+        variant={databaseActive ? 'quiet' : 'neutral'}
+        size="sm"
+        ariaPressed={!databaseActive}
+        onclick={onsessions}>Sessions</Button
+      >
+      <Button
+        variant={databaseActive ? 'neutral' : 'quiet'}
+        size="sm"
+        ariaPressed={databaseActive}
+        onclick={ondatabase}>Database</Button
+      >
+    </div>
+
     {#if startable.length > 0}
       <!-- Available even when the only pane is a shell; starting an agent never has to replace it. -->
       <span class="o-overlay-select">

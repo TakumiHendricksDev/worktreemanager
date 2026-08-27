@@ -345,38 +345,31 @@ quietly return.
 
 ---
 
-## 6a. Environment values
+## 6a. Environment values and network boundaries
 
 A worktree's `.env` is the most sensitive thing this app reads — Stripe keys, database
 passwords, SMTP credentials — and the app's job involves displaying that file.
 
-**Nothing leaves the machine except a recording you asked to have transcribed.** This section
-said "nothing leaves the machine" without qualification until dictation was added, and the
-qualification is worth more than the slogan was: an absolute claim that quietly acquires an
-exception is worse than a narrow claim that is true.
-
-The exception is one feature, off by default and inert until a key is stored, which sends
-recorded audio to `api.deepgram.com`. Everything that made the original claim checkable still
-holds around it: the CSP allows `connect-src 'self' ipc:` and nothing else, no HTTP plugin
-permission is granted, no `fetch`/XHR/WebSocket appears in the frontend, and no HTTP client crate
-is reachable in the dependency graph of either platform this app builds for. No telemetry, no
-analytics, no crash reporting.
+**Nothing leaves the machine without a direct user action.** Dictation sends recorded audio to the
+compiled-in `api.deepgram.com` host. The database viewer connects only after a config's
+credential-free target has passed the existing content-hash trust gate and the user clicks Connect.
+There is no telemetry, analytics, crash reporting or update check.
 
 **The egress is in Rust, and that placement is the whole design.** A `fetch` from the webview
 would have been fewer lines and would have widened `connect-src` — after which "the frontend
 cannot reach the network" stops being true for every future feature too, not just this one. Going
-through a `#[tauri::command]` keeps the webview exactly as constrained as it was, keeps the grant
-list in `capabilities/default.json` unchanged, and leaves the destination somewhere a config file
-cannot reach: a `const` in `wtm-dictate`, asserted by `src-tauri/tests/network_boundary.rs`.
+through narrow `#[tauri::command]` functions keeps the webview exactly as constrained as it was and
+keeps the grant list in `capabilities/default.json` unchanged. The transcription destination stays
+a `const`; database destinations are config by definition, so trust disclosure and explicit Connect
+are their corresponding boundary.
 
-**The request is `curl`, not a linked client.** Three reasons, and the first is not aesthetic:
+**The transcription request is `curl`, not a linked HTTP client.** Three reasons, and the first is not aesthetic:
 `rustls` needs a crypto backend, and `ring` and `aws-lc-rs` both carry an OpenSSL clause that
 `deny.toml`'s permissive-only list rejects — passing that check would have meant widening the
-licence policy to buy a dictation button. `native-tls` moves the cost to a system OpenSSL build
-dependency on the Linux target, the one platform the README admits nobody has run. And shelling
-out is what §9 already argues for with `git2`: `curl` uses the system trust store and honours the
-user's proxy configuration, where a linked stack would ignore both. The cost, stated plainly, is
-that `curl` is now a runtime prerequisite for dictation.
+licence policy to buy a dictation button. And shelling out is what §9 already argues for with
+`git2`: `curl` uses the system trust store and honours the user's proxy configuration. PostgreSQL
+TLS is a different boundary: its protocol driver uses `native-tls`, kept inside `wtm-db`, and does
+not provide arbitrary HTTP. The cost is a system OpenSSL build dependency on Linux.
 
 Verified rather than assumed, and cheap to re-verify.
 

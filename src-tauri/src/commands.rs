@@ -31,8 +31,8 @@ use crate::handoff;
 use crate::openers;
 use crate::view::{
     ActionView, AgentOptionView, AgentSessionView, BackgroundTaskView, BriefView, CapabilityView,
-    DoctorView, ErrorView, FieldView, FormView, OpenersView, PaletteView, ProjectView,
-    RegisteredView, ResumableView, TerminalSessionView, WorktreeView,
+    DatabaseConnectionView, DoctorView, ErrorView, FieldView, FormView, OpenersView, PaletteView,
+    ProjectView, RegisteredView, ResumableView, TerminalSessionView, WorktreeView,
 };
 
 /// Shared application state.
@@ -432,6 +432,125 @@ pub async fn reveal_env_value(
             .map_err(Into::into)
     })
     .await
+}
+
+// ── databases ──
+
+/// Database recipes available for the selected worktree. No credential is serialized here.
+#[tauri::command]
+pub async fn list_database_connections(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+) -> Reply<Vec<DatabaseConnectionView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let project = app.project(&project_id)?;
+        app.database_connections(&project, &worktree_id)
+            .map_err(Into::into)
+    })
+    .await
+}
+
+/// Open one dedicated database session for an explorer or query console.
+#[tauri::command]
+pub async fn connect_database(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    profile_id: String,
+) -> Reply<wtm_core::ports::database::DatabaseSession> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let project = app.project(&project_id)?;
+        let worktree = app.worktree(&project, &worktree_id)?;
+        let connection = app.resolve_database(&project, &worktree, &profile_id)?;
+        app.database.connect(connection).map_err(Into::into)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn disconnect_database(app: AppState<'_>, session: String) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || app.database.disconnect(&session).map_err(Into::into)).await
+}
+
+#[tauri::command]
+pub async fn database_schemas(
+    app: AppState<'_>,
+    session: String,
+) -> Reply<Vec<wtm_core::ports::database::DatabaseSchema>> {
+    let app = Arc::clone(&app);
+    blocking(move || app.database.schemas(&session).map_err(Into::into)).await
+}
+
+#[tauri::command]
+pub async fn database_relations(
+    app: AppState<'_>,
+    session: String,
+    schema: String,
+) -> Reply<Vec<wtm_core::ports::database::DatabaseRelation>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.database
+            .relations(&session, &schema)
+            .map_err(Into::into)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn database_columns(
+    app: AppState<'_>,
+    session: String,
+    schema: String,
+    relation: String,
+) -> Reply<Vec<wtm_core::ports::database::DatabaseColumn>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.database
+            .columns(&session, &schema, &relation)
+            .map_err(Into::into)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn run_database_query(
+    app: AppState<'_>,
+    session: String,
+    sql: String,
+    max_rows: Option<u32>,
+) -> Reply<wtm_core::ports::database::QueryResult> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.database
+            .query(&session, &sql, max_rows.unwrap_or(500))
+            .map_err(Into::into)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn database_table_page(
+    app: AppState<'_>,
+    session: String,
+    request: wtm_core::ports::database::TablePageRequest,
+) -> Reply<wtm_core::ports::database::QueryResult> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.database
+            .table_page(&session, &request)
+            .map_err(Into::into)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn cancel_database_query(app: AppState<'_>, session: String) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || app.database.cancel(&session).map_err(Into::into)).await
 }
 
 /// Open an `http`/`https` URL in the user's browser.

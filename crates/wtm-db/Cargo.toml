@@ -1,0 +1,26 @@
+[package]
+name        = "wtm-db"
+description = "Database connection and introspection adapters for Worktree Manager."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wtm-core = { workspace = true }
+native-tls = { workspace = true }
+parking_lot = { workspace = true }
+postgres = { workspace = true }
+postgres-native-tls = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wtm-testkit = { workspace = true }

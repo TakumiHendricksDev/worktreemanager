@@ -30,6 +30,10 @@
   }
 }
 
+.c-shell__columns.is-sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .c-shell__col {
   min-height: 0;
   min-width: 0;

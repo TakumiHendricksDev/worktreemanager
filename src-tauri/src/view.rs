@@ -17,7 +17,8 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use wtm_core::error::WtmError;
 use wtm_core::model::{
-    FieldKind, PlanPreview, PreflightItem, PreflightSeverity, Project, Worktree,
+    DatabaseAccess, DatabaseEngine, DatabaseEnvironment, DatabaseScope, DatabaseTls, FieldKind,
+    PlanPreview, PreflightItem, PreflightSeverity, Project, Worktree,
 };
 
 /// A registered repository, as the sidebar's project switcher needs it.
@@ -66,6 +67,8 @@ pub struct TrustPromptView {
     pub path: String,
     /// Every argv the config would run, verbatim. The whole point of the prompt.
     pub commands: Vec<Vec<String>>,
+    /// Database targets the config could connect to. Credentials are omitted.
+    pub databases: Vec<wtm_core::error::DatabaseTrustDeclaration>,
     pub content_hash: String,
 }
 
@@ -168,6 +171,23 @@ pub struct WorktreeView {
     /// Key names from the project's declared display source, for the Env tab. Names only —
     /// see [`EnvKeys`].
     pub env: EnvKeys,
+}
+
+/// One configured database as the connection picker needs it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseConnectionView {
+    pub id: String,
+    pub label: String,
+    pub engine: DatabaseEngine,
+    pub scope: DatabaseScope,
+    pub environment: DatabaseEnvironment,
+    pub access: DatabaseAccess,
+    pub tls: DatabaseTls,
+    /// A credential-free description such as `127.0.0.1:5432/app`.
+    pub target: String,
+    pub available: bool,
+    pub problem: Option<String>,
 }
 
 /// One field of the New Worktree form.
@@ -373,6 +393,7 @@ impl From<WtmError> for ErrorView {
             WtmError::Git(_) => "git",
             WtmError::Exec(_) => "exec",
             WtmError::Render(_) => "render",
+            WtmError::Database(_) => "database",
             WtmError::Validation(_) => "validation",
             WtmError::Preflight(_) => "preflight",
             WtmError::Cancelled => "cancelled",
@@ -400,6 +421,12 @@ impl From<wtm_core::error::ConfigError> for ErrorView {
 impl From<wtm_core::error::GitError> for ErrorView {
     fn from(err: wtm_core::error::GitError) -> Self {
         WtmError::Git(err).into()
+    }
+}
+
+impl From<wtm_core::error::DatabaseError> for ErrorView {
+    fn from(err: wtm_core::error::DatabaseError) -> Self {
+        WtmError::Database(err).into()
     }
 }
 
@@ -819,6 +846,7 @@ mod tests {
         let err = wtm_core::error::ConfigError::Untrusted {
             path: PathBuf::from("/r/wtm.toml"),
             commands: vec![vec!["./bin/setup.sh".to_owned()]],
+            databases: vec![],
             content_hash: "deadbeef".to_owned(),
         };
         let view = ErrorView::from(err);
@@ -847,6 +875,7 @@ mod tests {
             setup: None,
             remove: wtm_core::model::RemoveSpec::default(),
             display: wtm_core::model::DisplaySpec::default(),
+            database: std::collections::BTreeMap::new(),
             actions: vec![],
             agent: std::collections::BTreeMap::new(),
             guards: wtm_core::model::GuardSpec::default(),

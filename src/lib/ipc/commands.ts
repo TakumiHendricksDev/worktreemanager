@@ -10,6 +10,11 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type {
   DictationStatus,
+  DatabaseColumn,
+  DatabaseConnection,
+  DatabaseRelation,
+  DatabaseSchema,
+  DatabaseSession,
   Action,
   AgentAttachment,
   AgentOption,
@@ -32,6 +37,8 @@ import type {
   SeqEvent,
   SetupResult,
   TerminalSession,
+  TablePageRequest,
+  QueryResult,
   Worktree,
 } from './types';
 
@@ -354,6 +361,25 @@ export const commands = {
    */
   revealEnvValue: (projectId: string, worktreeId: string, key: string) =>
     invoke<string>('reveal_env_value', { projectId, worktreeId, key }),
+
+  // ── databases ──
+  listDatabaseConnections: (projectId: string, worktreeId: string) =>
+    invoke<DatabaseConnection[]>('list_database_connections', { projectId, worktreeId }),
+  connectDatabase: (projectId: string, worktreeId: string, profileId: string) =>
+    invoke<DatabaseSession>('connect_database', { projectId, worktreeId, profileId }),
+  disconnectDatabase: (session: string) => invoke<void>('disconnect_database', { session }),
+  databaseSchemas: (session: string) =>
+    invoke<DatabaseSchema[]>('database_schemas', { session }),
+  databaseRelations: (session: string, schema: string) =>
+    invoke<DatabaseRelation[]>('database_relations', { session, schema }),
+  databaseColumns: (session: string, schema: string, relation: string) =>
+    invoke<DatabaseColumn[]>('database_columns', { session, schema, relation }),
+  runDatabaseQuery: (session: string, sql: string, maxRows = 500) =>
+    invoke<QueryResult>('run_database_query', { session, sql, maxRows }),
+  databaseTablePage: (session: string, request: TablePageRequest) =>
+    invoke<QueryResult>('database_table_page', { session, request }),
+  cancelDatabaseQuery: (session: string) =>
+    invoke<void>('cancel_database_query', { session }),
 
   /** Opens an http/https URL. The scheme is validated in Rust — see `open_url`. */
   openUrl: (url: string) => invoke<void>('open_url', { url }),

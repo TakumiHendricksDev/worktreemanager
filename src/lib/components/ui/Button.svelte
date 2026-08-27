@@ -22,6 +22,7 @@
     title,
     ariaLabel,
     ariaExpanded,
+    ariaPressed,
     ariaControls,
     onclick,
     children,
@@ -58,6 +59,8 @@
      * gives up the one mechanism that catches a mistyped class name — see the note above.
      */
     ariaExpanded?: boolean;
+    /** For two-state view toggles such as Sessions / Database. */
+    ariaPressed?: boolean;
     /** The id of the region a disclosure toggles. */
     ariaControls?: string;
     onclick?: (event: MouseEvent) => void;
@@ -72,6 +75,7 @@
   {onclick}
   aria-label={ariaLabel}
   aria-expanded={ariaExpanded}
+  aria-pressed={ariaPressed}
   aria-controls={ariaControls}
   class="c-button c-button--{variant} c-button--{size}"
   class:c-button--full={full}

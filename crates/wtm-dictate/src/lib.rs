@@ -1,10 +1,10 @@
 //! Dictation: recording speech and turning it into text.
 //!
-//! # The only part of this application that talks to the network
+//! # The only part of this application that speaks HTTP
 //!
-//! wtm otherwise reaches nothing but local processes and the filesystem, and `SECURITY.md` used to
-//! say so without qualification. This crate is the exception, added deliberately, and the shape of
-//! it is most of the argument for why the exception is affordable.
+//! The database adapter can speak database protocols to an explicitly selected target. This crate
+//! is the only general request-shaped egress, and its fixed destination is most of the argument for
+//! why that narrower exception is affordable.
 //!
 //! What makes dictation usable for writing prompts about software is punctuation inferred from
 //! language rather than from pause length, and getting "SDK" and "`ChatGPT`" right instead of "S D K"
@@ -19,8 +19,9 @@
 //!    an OpenSSL clause that `deny.toml`'s permissive-only list rejects. Passing that check by
 //!    widening the licence policy would be paying for a dictation button with the supply-chain
 //!    rule, which is the wrong trade.
-//! 2. **`native-tls` moves the cost to the Linux build**, which would gain a system OpenSSL build
-//!    dependency — on the one platform the README admits has never been run by a human.
+//! 2. **No general HTTP abstraction enters the app.** The database adapter links `native-tls` for
+//!    `PostgreSQL`, but it cannot turn a URL into a request; adding an HTTP client would create a new
+//!    route around the fixed-host boundary described here.
 //! 3. **It is the house style.** ARCHITECTURE §9 rejects `git2` because the porcelain CLI *is* the
 //!    compatibility contract; the same argument applies here with more force, because `curl` uses
 //!    the system trust store and honours the proxy configuration the user already has, where a

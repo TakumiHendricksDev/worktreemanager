@@ -1386,6 +1386,10 @@ class Sessions {
         // Its own id back, not a fresh one: the stored tree names panes by id, so minting new ones
         // would leave every leaf pointing at nothing.
         pane.id = stored.id;
+        // Meaningless after a quit and exact after a webview reload. Leaving this behind made
+        // `adopt` append the still-running shell as a second pane, then `materialise` spawned a new
+        // shell for this supposedly detached one. Every reload therefore multiplied terminals.
+        pane.session = stored.session;
         pane.providerSession = stored.providerSession;
         pane.model = stored.model;
         pane.effort = stored.effort;

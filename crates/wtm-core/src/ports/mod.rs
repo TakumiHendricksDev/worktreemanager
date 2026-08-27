@@ -27,6 +27,7 @@
 
 pub mod clock;
 pub mod config;
+pub mod database;
 pub mod dictate;
 pub mod exec;
 pub mod fs;
@@ -38,6 +39,7 @@ pub mod template;
 
 pub use clock::Clock;
 pub use config::{ConfigStore, TrustDecision};
+pub use database::{DatabaseConnection, DatabaseHost, DatabaseSession};
 pub use dictate::{DictateError, Utterance};
 pub use exec::{CancelToken, CommandRunner, Invocation, Output};
 pub use fs::FileStore;
