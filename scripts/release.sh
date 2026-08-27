@@ -110,10 +110,13 @@ replace_once(
 )
 RUBY
 
-    # Cargo owns the lockfile's copies of every workspace package version. Asking Cargo to refresh
-    # it avoids a hand-written replacement that could touch an unrelated dependency at 0.x.y.
-    cargo metadata --format-version 1 --no-deps >/dev/null
+    step "running the local release gates"
+    just check
+    just audit
 
+    # Cargo updates the lockfile's workspace package versions during the compile gate above. Check
+    # afterwards so the safety assertion covers Cargo's generated edit as well as the three source
+    # fields, without hand-editing dependency-shaped records in Cargo.lock.
     expected_changes=$'Cargo.lock\nCargo.toml\npackage.json\nsrc-tauri/tauri.conf.json'
     actual_changes="$(git diff --name-only | LC_ALL=C sort)"
     [ "$actual_changes" = "$expected_changes" ] || {
@@ -121,10 +124,6 @@ RUBY
             "$expected_changes" "$actual_changes" >&2
         die "versioning changed an unexpected set of files"
     }
-
-    step "running the local release gates"
-    just check
-    just audit
 
     git add Cargo.toml Cargo.lock package.json src-tauri/tauri.conf.json
     git commit \
