@@ -26,9 +26,9 @@
 //! 3. **`thread/start` alone does not mean ready.** It is a second round trip after
 //!    `initialize`, which is why [`Step::Ready`] exists separately from `SessionReady`.
 //!
-//! Not needed, and worth recording so nobody adds it defensively: `capabilities.experimentalApi`.
-//! Some methods are gated behind it, but `initialize`, `thread/start`, `thread/resume`,
-//! `thread/list`, `turn/start` and `model/list` are not.
+//! `thread/settings/update` is gated behind `capabilities.experimentalApi`. The session handshake
+//! opts in because live picker changes depend on that method; the short-lived model-list probe does
+//! not, because `model/list` is stable and asking for a capability it never uses would be noise.
 
 use std::collections::BTreeMap;
 
@@ -339,8 +339,9 @@ impl CodexProtocol {
             params["model"] = json!(model);
         }
         if let Some(mode) = &self.req.mode {
-            let (approval, sandbox, _) = expand_mode(mode);
+            let (approval, reviewer, sandbox, _) = expand_mode(mode);
             params["approvalPolicy"] = json!(approval);
+            params["approvalsReviewer"] = json!(reviewer);
             // The half that used to be missing. Sending only `approvalPolicy` left the sandbox at
             // whatever `~/.codex/config.toml` said, so two sessions wtm believed were configured
             // identically could have different filesystem reach.
@@ -408,8 +409,9 @@ impl CodexProtocol {
         // tagged object, where `thread/start` takes `sandbox`, a plain string. Sending the string
         // to both is what broke every turn on this provider once; see `expand_mode`.
         if let Some(mode) = &self.req.mode {
-            let (approval, _, policy) = expand_mode(mode);
+            let (approval, reviewer, _, policy) = expand_mode(mode);
             params["approvalPolicy"] = json!(approval);
+            params["approvalsReviewer"] = json!(reviewer);
             params["sandboxPolicy"] = policy;
         }
         let (_, step) = self.request("turn/start", &params);
@@ -727,7 +729,11 @@ impl Protocol for CodexProtocol {
                     "name": CLIENT_NAME,
                     "title": "Worktree Manager",
                     "version": env!("CARGO_PKG_VERSION"),
-                }
+                },
+                // Verified against codex-cli 0.147.0: without this opt-in the server rejects
+                // `thread/settings/update` with -32600, leaving the picker on screen but the
+                // running thread on its previous permission mode.
+                "capabilities": { "experimentalApi": true },
             }),
         );
         self.init_id = Some(id);
@@ -810,15 +816,13 @@ impl Protocol for CodexProtocol {
 
     /// Change the model or the mode on a running thread.
     ///
-    /// No frame is written, and that is the whole implementation: `turn_frame` re-sends `model`,
-    /// `effort`, `approvalPolicy` and `sandboxPolicy` on *every* `turn/start`, and the server
-    /// treats each as "this turn and subsequent ones". So the change lands by mutating the request
-    /// the next turn will be built from.
+    /// `thread/settings/update` makes the picker a real thread setting immediately, instead of a
+    /// value held only by wtm until the next prompt. `turn_frame` still repeats the effective values:
+    /// that redundancy protects resumed and queued turns, and agrees with the server's sticky
+    /// "this turn and subsequent turns" contract.
     ///
-    /// The consequence is worth being explicit about, because it differs from Claude: a change made
-    /// while a turn is already running does not affect that turn. It affects the next one. There is
-    /// no protocol method to re-approve a turn already in flight, and inventing one by interrupting
-    /// and resubmitting would throw away work the user did not ask to discard.
+    /// An already-running turn keeps the settings it started with. Interrupting and resubmitting it
+    /// would throw away work the user did not ask to discard; the update governs every later turn.
     fn reconfigure(
         &mut self,
         model: Option<&str>,
@@ -828,16 +832,40 @@ impl Protocol for CodexProtocol {
         // never offers the control and this is always `None`. See `AgentCapability::supports_fast`.
         _fast: Option<bool>,
     ) -> Vec<Step> {
+        let Some(thread) = self.thread_id.clone() else {
+            if let Some(model) = model {
+                self.req.model = Some(model.to_owned());
+            }
+            if let Some(effort) = effort {
+                self.req.effort = Some(effort.to_owned());
+            }
+            if let Some(mode) = mode {
+                self.req.mode = Some(mode.to_owned());
+            }
+            return Vec::new();
+        };
+
+        let mut params = json!({ "threadId": thread });
         if let Some(model) = model {
             self.req.model = Some(model.to_owned());
+            params["model"] = json!(model);
         }
         if let Some(effort) = effort {
             self.req.effort = Some(effort.to_owned());
+            params["effort"] = json!(effort);
         }
         if let Some(mode) = mode {
             self.req.mode = Some(mode.to_owned());
+            let (approval, reviewer, _, policy) = expand_mode(mode);
+            params["approvalPolicy"] = json!(approval);
+            params["approvalsReviewer"] = json!(reviewer);
+            params["sandboxPolicy"] = policy;
         }
-        Vec::new()
+        if model.is_none() && effort.is_none() && mode.is_none() {
+            return Vec::new();
+        }
+        let (_, step) = self.request("thread/settings/update", &params);
+        vec![step]
     }
 
     fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step> {
@@ -1324,8 +1352,8 @@ fn turn_id(params: &Value) -> String {
 
 /// One wtm mode preset, as the protocol fields it stands for.
 ///
-/// Returns `(approvalPolicy, sandbox, sandboxPolicy)`. See [`crate::capability::codex_modes`] for
-/// why the two axes are presented as three presets rather than as nine combinations.
+/// Returns `(approvalPolicy, approvalsReviewer, sandbox, sandboxPolicy)`. See
+/// [`crate::capability::codex_modes`] for why the axes are presented as three presets.
 ///
 /// # The sandbox is spelled two different ways and they are not interchangeable
 ///
@@ -1346,16 +1374,29 @@ fn turn_id(params: &Value) -> String {
 /// one. A stale `wtm.toml` naming a mode a later version renamed must not silently open the sandbox
 /// — the safe direction for an unknown value is the cautious one, and if it is wrong the user sees
 /// approval prompts rather than unreviewed writes.
-fn expand_mode(mode: &str) -> (&'static str, &'static str, Value) {
+fn expand_mode(mode: &str) -> (&'static str, &'static str, &'static str, Value) {
     match mode {
-        "read-only" => ("on-request", "read-only", json!({ "type": "readOnly" })),
+        "read-only" => (
+            "on-request",
+            "user",
+            "read-only",
+            json!({ "type": "readOnly" }),
+        ),
+        "auto" => (
+            "on-request",
+            "auto_review",
+            "workspace-write",
+            json!({ "type": "workspaceWrite" }),
+        ),
         "full-access" => (
             "never",
+            "user",
             "danger-full-access",
             json!({ "type": "dangerFullAccess" }),
         ),
         _ => (
             "on-request",
+            "user",
             "workspace-write",
             json!({ "type": "workspaceWrite" }),
         ),

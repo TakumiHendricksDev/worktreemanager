@@ -117,6 +117,17 @@ audit:
     cargo deny check
     {{ pm }} audit
 
+# Ship one clean, tested main commit, publish its GitHub artifacts, and update the Homebrew cask.
+# The tap waits for the release build because its sha256 is derived from the built macOS zip.
+[macos]
+release version:
+    @bash scripts/release.sh "{{ version }}"
+
+[linux]
+release version:
+    @just _err "release is macOS-only (it verifies the .app before updating Homebrew)"
+    @exit 1
+
 # ─────────────────────────────── build ───────────────────────────────
 
 # The installable bundle for this OS: .app on macOS, AppImage on Linux. Fast, and

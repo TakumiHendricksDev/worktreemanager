@@ -412,7 +412,15 @@ just check      # everything CI runs — do this before pushing
 just audit      # licenses + RUSTSEC advisories
 just doctor     # what's installed, and the PATH the app will actually use
 just icon       # redraw src-tauri/icons from assets/brand/wtm-icon.svg
+just release 0.9.1  # test, tag, publish, and update the Homebrew tap (macOS)
 ```
+
+`just release <version>` starts only from a clean, up-to-date `main`. It updates every version
+field, runs `just check` and `just audit`, pushes the release commit, and waits for CI before
+creating the tag. The tag starts the macOS and Linux release build; after both artifacts pass their
+checksums and the macOS bundle inspection, the command publishes the draft and pushes the verified
+macOS checksum to `TakumiHendricksDev/homebrew-tap`. A stopped command can be run again with the
+same version to resume completed stages safely.
 
 Commits are signed through the 1Password SSH agent (`commit.gpgsign=true` globally), so 1Password must
 be running and unlocked or the commit will hang waiting on Touch ID.

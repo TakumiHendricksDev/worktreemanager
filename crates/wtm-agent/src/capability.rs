@@ -243,15 +243,13 @@ fn mode(id: &str, label: &str, description: &str, risk: ModeRisk, is_default: bo
 ///
 /// # Why presets and not two controls
 ///
-/// The protocol has two independent axes — `approvalPolicy` (`untrusted` | `on-request` | `never`)
-/// and `sandbox` (`read-only` | `workspace-write` | `danger-full-access`) — and wtm was sending
-/// only the first, so the sandbox was whatever `~/.codex/config.toml` happened to say. Exposing
-/// both as separate pickers would offer nine combinations, most of which are incoherent
-/// (`never` + `read-only` is an agent that cannot act and will not ask), and would need a second
-/// control in a toolbar that is already four wide on a quarter-width pane.
+/// The protocol has three independent axes: approval policy, approval reviewer, and sandbox. Wtm
+/// once sent only the first, so the rest came from `~/.codex/config.toml` and the same picker value
+/// behaved differently between machines. Exposing the axes as separate pickers would offer a pile
+/// of incoherent combinations and would need more controls in a toolbar that is already four wide.
 ///
 /// So: the three combinations Codex itself names, under one control, matching Claude's one control.
-/// The expansion back into two fields happens in [`crate::codex`], which is where the protocol is
+/// The expansion back into those fields happens in [`crate::codex`], where the protocol is
 /// already being spoken.
 ///
 /// Unlike the model list this is a compiled table on both providers, because `permissionProfile/list`
@@ -269,7 +267,7 @@ pub fn codex_modes() -> Vec<AgentMode> {
         mode(
             "auto",
             "Auto",
-            "Edit and run inside the worktree automatically; ask only to leave it. Clarification questions are separate",
+            "Edit and run in the worktree; permission requests are reviewed automatically. Clarification questions are separate",
             ModeRisk::Elevated,
             true,
         ),

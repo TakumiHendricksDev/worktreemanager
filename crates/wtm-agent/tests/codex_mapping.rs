@@ -121,6 +121,10 @@ fn the_handshake_is_initialize_then_initialized_then_a_thread_carrying_the_cwd()
     assert_eq!(opening[0]["method"], "initialize");
     // The server refuses anything sent before `initialize`, so this frame has to be first.
     assert_eq!(opening[0]["params"]["clientInfo"]["name"], "wtm");
+    assert_eq!(
+        opening[0]["params"]["capabilities"]["experimentalApi"], true,
+        "live thread settings are gated behind this capability"
+    );
 
     // Note the reply carries no `jsonrpc` field. That is what the real server sends; requiring
     // one here would reject every response it makes.
@@ -140,6 +144,7 @@ fn the_handshake_is_initialize_then_initialized_then_a_thread_carrying_the_cwd()
     // before — left the sandbox at whatever `~/.codex/config.toml` said, so two sessions wtm
     // believed were configured the same could have different filesystem reach.
     assert_eq!(frames[1]["params"]["approvalPolicy"], "on-request");
+    assert_eq!(frames[1]["params"]["approvalsReviewer"], "auto_review");
     assert_eq!(frames[1]["params"]["sandbox"], "workspace-write");
 
     // Nothing is ready yet: `thread/start` is a second round trip, which is why `Step::Ready`
@@ -1148,21 +1153,28 @@ fn the_capability_frames_ask_without_the_experimental_capability() {
 }
 
 #[test]
-fn each_mode_preset_expands_to_both_protocol_axes() {
-    // The protocol has two independent fields and Codex's own TUI offers three named combinations
-    // of them. wtm offers the same three, so this is the table that has to stay true — a preset
+fn each_mode_preset_expands_to_every_protocol_axis() {
+    // The protocol has independent fields and Codex's own TUI offers three named combinations of
+    // them. wtm offers the same three, so this is the table that has to stay true — a preset
     // that sent the wrong sandbox would be a control whose label does not describe what it does.
     //
     // `thread/start` spells the sandbox as a **string**. `turn/start` spells the same setting as a
     // tagged **object** under a different key, which is why the two are asserted separately below
     // rather than sharing one expectation. Both spellings are copied from
     // `codex app-server generate-json-schema` — `SandboxMode` and `SandboxPolicy`.
-    for (mode, approval, sandbox, policy) in [
-        ("read-only", "on-request", "read-only", "readOnly"),
-        ("auto", "on-request", "workspace-write", "workspaceWrite"),
+    for (mode, approval, reviewer, sandbox, policy) in [
+        ("read-only", "on-request", "user", "read-only", "readOnly"),
+        (
+            "auto",
+            "on-request",
+            "auto_review",
+            "workspace-write",
+            "workspaceWrite",
+        ),
         (
             "full-access",
             "never",
+            "user",
             "danger-full-access",
             "dangerFullAccess",
         ),
@@ -1176,6 +1188,7 @@ fn each_mode_preset_expands_to_both_protocol_axes() {
         let frames = writes(&driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#));
         let open = &frames[1]["params"];
         assert_eq!(open["approvalPolicy"], approval, "{mode} approval");
+        assert_eq!(open["approvalsReviewer"], reviewer, "{mode} reviewer");
         assert_eq!(open["sandbox"], sandbox, "{mode} sandbox");
         assert!(
             open["sandbox"].is_string(),
@@ -1186,6 +1199,10 @@ fn each_mode_preset_expands_to_both_protocol_axes() {
         let turn = writes(&driver.send_turn("go", &[]));
         let params = &turn[0]["params"];
         assert_eq!(params["approvalPolicy"], approval, "{mode} turn approval");
+        assert_eq!(
+            params["approvalsReviewer"], reviewer,
+            "{mode} turn reviewer"
+        );
         // The object form, and the assertion that would have caught the bug that shipped: a plain
         // string here is rejected by the server, and a rejected `turn/start` produces no answer at
         // all — a session that takes a message, says `0 in 0 out`, and never replies.
@@ -1214,6 +1231,7 @@ fn a_mode_this_build_does_not_know_falls_back_to_the_cautious_preset() {
     driver.open();
     let frames = writes(&driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#));
     assert_eq!(frames[1]["params"]["approvalPolicy"], "on-request");
+    assert_eq!(frames[1]["params"]["approvalsReviewer"], "user");
     assert_eq!(frames[1]["params"]["sandbox"], "workspace-write");
 }
 
@@ -1240,12 +1258,13 @@ fn a_turn_start_the_server_rejects_is_surfaced_rather_than_looking_like_silence(
 }
 
 #[test]
-fn a_turn_re_sends_the_mode_which_is_why_this_provider_needs_no_restart() {
-    // The counterpart to Claude's control requests. Codex has no "change the mode" method at all —
-    // it re-reads these off every `turn/start` — so `reconfigure` writes nothing and the change
-    // rides the next turn instead.
+fn a_turn_re_sends_the_mode_after_a_live_change() {
+    // The settings update owns the live change. Repeating it at turn start makes queued turns and
+    // the app server's sticky setting agree instead of relying on either one alone.
     let mut driver = ready_driver();
-    driver.reconfigure(Some("gpt-5.6-luna"), Some("max"), Some("full-access"), None);
+    let update =
+        writes(&driver.reconfigure(Some("gpt-5.6-luna"), Some("max"), Some("full-access"), None));
+    assert_eq!(update[0]["method"], "thread/settings/update");
 
     let frames = writes(&driver.send_turn("go", &[]));
     let params = &frames[0]["params"];
@@ -1264,15 +1283,25 @@ fn a_turn_re_sends_the_mode_which_is_why_this_provider_needs_no_restart() {
 }
 
 #[test]
-fn reconfiguring_codex_writes_nothing_by_itself() {
-    // Deliberate, and the reason it has its own test: a frame here would be a second way to say
-    // the same thing, and a turn already in flight cannot be re-approved anyway. The change is
-    // recorded and lands on the next turn — see the method's docs.
+fn reconfiguring_codex_updates_the_running_thread_immediately() {
+    // A picker change that existed only in wtm's memory was indistinguishable from a broken control:
+    // Codex retained the old approval policy until another prompt happened to carry the new one.
     let mut driver = ready_driver();
-    assert!(
-        driver
-            .reconfigure(Some("gpt-5.5"), Some("high"), Some("read-only"), None)
-            .is_empty()
+    let frames =
+        writes(&driver.reconfigure(Some("gpt-5.5"), Some("high"), Some("read-only"), None));
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["method"], "thread/settings/update");
+    assert_eq!(
+        frames[0]["params"]["threadId"],
+        "019fd37c-f1e4-7a22-81e7-02200fd6d127"
+    );
+    assert_eq!(frames[0]["params"]["model"], "gpt-5.5");
+    assert_eq!(frames[0]["params"]["effort"], "high");
+    assert_eq!(frames[0]["params"]["approvalPolicy"], "on-request");
+    assert_eq!(frames[0]["params"]["approvalsReviewer"], "user");
+    assert_eq!(
+        frames[0]["params"]["sandboxPolicy"],
+        json!({ "type": "readOnly" })
     );
 }
 
