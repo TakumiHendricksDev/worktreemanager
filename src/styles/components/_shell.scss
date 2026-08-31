@@ -16,6 +16,7 @@
 }
 
 .c-shell__columns {
+  position: relative;
   display: grid;
   grid-template-columns: var(--sidebar-w) 1px 1fr;
   flex: 1 1 auto;
@@ -32,6 +33,23 @@
 
 .c-shell__columns.is-sidebar-collapsed {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/*
+ * Once the rail is gone, its restore action stays attached to the edge it left through.
+ * The small backplate distinguishes it from controls owned by whichever detail surface is open.
+ */
+.c-shell__sidebar-handle {
+  position: absolute;
+  top: var(--sp-3);
+  left: 0;
+  z-index: 1;
+  padding: 2px 3px 2px 1px;
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
 }
 
 .c-shell__col {

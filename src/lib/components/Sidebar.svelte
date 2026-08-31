@@ -21,10 +21,13 @@
 
   const {
     onnew,
+    oncollapse,
     onselectworktree,
     detailId = 'worktree-detail',
   }: {
     onnew: () => void;
+    /** Hides this rail; the shell owns the matching edge control that restores it. */
+    oncollapse: () => void;
     /** Picking a worktree means "show me that one", so the pane leaves the create view. */
     onselectworktree?: () => void;
     /** The panel this tablist controls, or empty while the create pane owns the screen. */
@@ -135,31 +138,45 @@
 </script>
 
 <nav class="c-sidebar" aria-label="Worktrees">
-  <div class="c-search" role="search">
-    <span class="c-search__icon"><Icon name="search" size={14} /></span>
-    <label class="u-visually-hidden" for="worktree-search">Filter worktrees</label>
-    <input
-      id="worktree-search"
-      class="c-search__input"
-      type="search"
-      bind:this={searchEl}
-      bind:value={workspace.query}
-      onkeydown={onSearchKeydown}
-      placeholder="Filter worktrees"
-      autocomplete="off"
-      spellcheck="false"
-      disabled={!workspace.activeProject?.usable}
-    />
-    {#if workspace.query !== ''}
-      <button
-        class="c-search__clear"
-        onclick={() => (workspace.query = '')}
-        title="Clear the filter"
-      >
-        <Icon name="close" size={12} />
-        <span class="u-visually-hidden">Clear the filter</span>
-      </button>
-    {/if}
+  <div class="c-sidebar__controls">
+    <div class="c-search" role="search">
+      <span class="c-search__icon"><Icon name="search" size={14} /></span>
+      <label class="u-visually-hidden" for="worktree-search">Filter worktrees</label>
+      <input
+        id="worktree-search"
+        class="c-search__input"
+        type="search"
+        bind:this={searchEl}
+        bind:value={workspace.query}
+        onkeydown={onSearchKeydown}
+        placeholder="Filter worktrees"
+        autocomplete="off"
+        spellcheck="false"
+        disabled={!workspace.activeProject?.usable}
+      />
+      {#if workspace.query !== ''}
+        <button
+          class="c-search__clear"
+          onclick={() => (workspace.query = '')}
+          title="Clear the filter"
+        >
+          <Icon name="close" size={12} />
+          <span class="u-visually-hidden">Clear the filter</span>
+        </button>
+      {/if}
+    </div>
+
+    <Button
+      variant="quiet"
+      icon="md"
+      onclick={oncollapse}
+      title="Hide worktree sidebar"
+      ariaLabel="Hide worktree sidebar"
+      ariaExpanded={true}
+      ariaControls="worktree-sidebar"
+    >
+      <Icon name="chevron-left" size={14} />
+    </Button>
   </div>
 
   <div class="c-sidebar__list-wrap" bind:this={listEl}>

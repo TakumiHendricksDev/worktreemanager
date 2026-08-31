@@ -19,12 +19,20 @@
   border-right: 1px solid var(--border);
 }
 
+.c-sidebar__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: var(--sp-3) var(--sp-3) var(--sp-2);
+  flex: 0 0 auto;
+}
+
 .c-search {
   position: relative;
   display: flex;
   align-items: center;
-  margin: var(--sp-3) var(--sp-3) var(--sp-2);
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /*

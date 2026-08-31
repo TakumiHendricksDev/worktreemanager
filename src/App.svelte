@@ -353,12 +353,7 @@
 </script>
 
 <div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
-  <TitleBar
-    {sidebarCollapsed}
-    onaddproject={addProject}
-    onsettings={() => (showSettings = true)}
-    ontogglesidebar={toggleSidebar}
-  />
+  <TitleBar onaddproject={addProject} onsettings={() => (showSettings = true)} />
 
   <div
     class="c-shell__columns"
@@ -368,6 +363,7 @@
     <aside class="c-shell__col" id="worktree-sidebar" hidden={sidebarCollapsed}>
       <Sidebar
         onnew={() => (mainView = 'new')}
+        oncollapse={toggleSidebar}
         onselectworktree={() => (mainView = 'worktree')}
         detailId={mainView === 'worktree' || mainView === 'database'
           ? 'worktree-detail'
@@ -396,6 +392,24 @@
       onpointerdown={startDrag}
       onkeydown={onSplitterKey}
     ></div>
+
+    {#if sidebarCollapsed}
+      <!-- The restore action belongs to the edge the rail disappeared through. Keeping it
+           out of the title bar prevents it from reading as a window-level command. -->
+      <div class="c-shell__sidebar-handle">
+        <Button
+          variant="quiet"
+          icon="md"
+          onclick={toggleSidebar}
+          title="Show worktree sidebar"
+          ariaLabel="Show worktree sidebar"
+          ariaExpanded={false}
+          ariaControls="worktree-sidebar"
+        >
+          <Icon name="chevron-right" size={14} />
+        </Button>
+      </div>
+    {/if}
 
     <main class="c-shell__col c-shell__col--detail">
       {#if addError}
