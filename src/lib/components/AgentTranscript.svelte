@@ -16,7 +16,13 @@
    * streaming transcript is every few milliseconds. The array index is not stable — a bounded log
    * drops from the front — so a row's key is its kind plus the id or ordinal it was built from.
    */
-  import type { AgendaStep, AgentAttachment, AgentEvent, AgentUsage } from '../ipc/types';
+  import type {
+    AgendaStep,
+    AgentAttachment,
+    AgentEvent,
+    AgentUsage,
+    ApprovalRequest,
+  } from '../ipc/types';
   import { tick } from 'svelte';
   import Button from './ui/Button.svelte';
   import Markdown from './Markdown.svelte';
@@ -76,6 +82,7 @@
     | { key: string; kind: 'patch'; id: string; diff: string }
     | { key: string; kind: 'agenda'; explanation: string | null; steps: AgendaStep[] }
     | { key: string; kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
+    | { key: string; kind: 'approval'; text: string }
     | { key: string; kind: 'usage'; usage: AgentUsage; costUsd: number | null }
     | { key: string; kind: 'raw'; provider: string; event: string; payload: unknown }
     | {
@@ -98,6 +105,7 @@
     const commands = new Map<string, Extract<Row, { kind: 'command' }>>();
     const tools = new Map<string, Extract<Row, { kind: 'tool' }>>();
     const patches = new Map<string, Extract<Row, { kind: 'patch' }>>();
+    const approvals = new Map<string, Extract<Row, { kind: 'approval' }>>();
     let agenda: Extract<Row, { kind: 'agenda' }> | null = null;
 
     /** The assistant or thinking row a delta should append to, or null when a new one is needed. */
@@ -235,6 +243,24 @@
           }
           break;
 
+        case 'approval_requested':
+          // Kept off-screen while pending because `SessionPane` renders the interactive card after
+          // the transcript. Remembering it here lets the resolution become a durable receipt at
+          // the protocol position where the session resumed.
+          approvals.set(event.id, {
+            key: `approval:${event.id}:${index}`,
+            kind: 'approval',
+            text: approvalReceipt(event.request),
+          });
+          break;
+
+        case 'approval_resolved': {
+          const row = approvals.get(event.id);
+          if (row) out.push(row);
+          approvals.delete(event.id);
+          break;
+        }
+
         case 'notice':
           out.push({
             key: `n${index}`,
@@ -288,14 +314,11 @@
           break;
 
         // Deliberately not drawn. `session_ready` and `turn_started` are state the pane header
-        // shows; a mid-turn `usage` is superseded by the one on `turn_finished`; approvals get
-        // their own card in the increment that can answer them, and `approval_resolved` only ever
-        // removes one; `skills_listed` is the composer's `/` menu, not a thing that happened.
+        // shows; a mid-turn `usage` is superseded by the one on `turn_finished`; `skills_listed` is
+        // the composer's `/` menu, not a thing that happened.
         case 'session_ready':
         case 'turn_started':
         case 'usage':
-        case 'approval_requested':
-        case 'approval_resolved':
         case 'skills_listed':
           break;
 
@@ -600,6 +623,33 @@
 
   const PROMPT_PREVIEW = 320;
 
+  /**
+   * The non-sensitive record left after a request is answered.
+   *
+   * `approval_resolved` deliberately carries no answer. Inventing "Allowed" from the command that
+   * follows would be wrong for denials, while retaining a free-form or secret answer in a display
+   * cache would be a privacy regression. The receipt therefore records only the fact the protocol
+   * can prove: which kind of request was answered.
+   */
+  function approvalReceipt(request: ApprovalRequest): string {
+    switch (request.kind) {
+      case 'command':
+        return 'Command request answered';
+      case 'file_change':
+        return 'File change request answered';
+      case 'permissions':
+        return 'Permission request answered';
+      case 'plan_review':
+        return 'Plan review answered';
+      case 'tool_input':
+        return `${request.tool} input supplied`;
+      case 'user_input':
+        return request.questions.length === 1
+          ? 'Question answered'
+          : `${request.questions.length} questions answered`;
+    }
+  }
+
   function promptPreview(text: string): string {
     const line = text.replace(/\s+/g, ' ').trim();
     return line.length > PROMPT_PREVIEW ? `${line.slice(0, PROMPT_PREVIEW - 1)}…` : line;
@@ -788,6 +838,8 @@
       >
         {row.text}
       </p>
+    {:else if row.kind === 'approval'}
+      <p class="c-transcript__approval-receipt">{row.text}</p>
     {:else if row.kind === 'usage'}
       <p class="c-transcript__usage">
         {tokens(row.usage)}{#if cost(row.costUsd)}&nbsp;· {cost(row.costUsd)}{/if}

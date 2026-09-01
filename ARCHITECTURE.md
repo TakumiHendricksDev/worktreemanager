@@ -625,8 +625,16 @@ overflow is a dialog rather than a column.
 **An orchestrator can answer its children's approvals.** A six-way fan-out otherwise costs six pane
 visits to clear six prompts, in panes that are not on screen to be visited. Nothing about an approval
 needed its pane to be visible — it lives on `pane.approvals` and `answer` takes a pane id — so the
-parent renders the oldest child's card beneath its own, captioned with whose it is, one at a time.
-Stacking them would bury the composer, which is the failure the card's own header exists to prevent.
+parent renders the oldest child's card in its transcript flow, captioned with whose it is, one at a
+time. Stacking them would bury the conversation the decision depends on.
+
+**Approval cards scroll with the transcript; only the way back is pinned.** Pinning the whole card
+above the composer made a large question or plan consume most of a split pane and hid the evidence
+needed to answer it safely. The active card now follows the activity that caused it. When it is
+entirely off-screen, a one-line “Jump to request” control occupies the fixed position instead, so a
+blocked session remains discoverable without taxing every scroll position. Focus follows a new card
+only when the reader was already at the transcript tail, and a resolved request leaves a compact
+“answered” receipt without retaining a possibly secret answer.
 
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 

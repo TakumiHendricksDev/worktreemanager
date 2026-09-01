@@ -2,14 +2,13 @@
   /**
    * A session asking permission before it does something.
    *
-   * # Why this cannot be scrolled past
+   * # Why this is an alert dialog without being a modal
    *
-   * The server does not continue the turn until it has a reply, so an unanswered card is a stalled
-   * session. A chip in the transcript would let the user scroll on and wonder why nothing is
-   * happening; this sits at the bottom of the pane, above the composer, and stays until answered.
-   * `role="alertdialog"` because that is what it is — a thing demanding a decision — without the
-   * scrim and focus trap of a real modal, which would be wrong for something the transcript behind
-   * it is the context for.
+   * The server does not continue the turn until it has a reply, so `role="alertdialog"` is honest:
+   * this is a thing demanding a decision. It still has no scrim or focus trap, because the
+   * transcript behind it is the evidence for that decision and must remain readable. `SessionPane`
+   * keeps the active card in that transcript and supplies the compact jump control that makes an
+   * off-screen request findable without pinning its entire body above the composer.
    *
    * # Why the verbs differ by request, and where `Edit…` went
    *
@@ -41,6 +40,7 @@
    * and it is the same shape as the plan's `Request changes` for the same reason — a refusal whose
    * whole purpose is to be read.
    */
+  import { untrack } from 'svelte';
   import type { ApprovalAnswer, ApprovalRequest } from '../ipc/types';
   import Markdown from './Markdown.svelte';
   import Button from './ui/Button.svelte';
@@ -49,12 +49,15 @@
   const {
     request,
     reading = false,
+    focusOnMount = true,
     onread,
     onanswer,
   }: {
     request: ApprovalRequest;
     /** True while the pane is showing the plan panel beside the transcript. */
     reading?: boolean;
+    /** False when mounting the inline card would pull a reader away from older transcript rows. */
+    focusOnMount?: boolean;
     /** Toggle that panel. The pane owns it, so it can sit beside the card rather than over it. */
     onread?: () => void;
     onanswer: (answer: ApprovalAnswer) => void;
@@ -115,9 +118,15 @@
     otherSelected = {};
     notes = '';
     changes = '';
-    queueMicrotask(() => {
-      card?.querySelector<HTMLElement>('button:not([disabled]), textarea, input')?.focus();
-    });
+    // `focusOnMount` is sampled for this request, not a reason to clear the form later if scrolling
+    // changes it. Tracking it here would make a jump back to the tail erase a half-written answer.
+    if (untrack(() => focusOnMount)) {
+      queueMicrotask(() => {
+        // Keep the pane's deliberate scroll position. The alert dialog itself is announced and Tab
+        // reaches its first input; focusing a bottom action would hide a tall request's beginning.
+        card?.focus({ preventScroll: true });
+      });
+    }
   });
 
   const complete = $derived.by(() => {
@@ -191,7 +200,13 @@
   }
 </script>
 
-<div class="c-approval" role="alertdialog" aria-label={heading} bind:this={card}>
+<div
+  class="c-approval"
+  role="alertdialog"
+  aria-label={heading}
+  tabindex="-1"
+  bind:this={card}
+>
   <p class="c-approval__ask" aria-live="assertive">{heading}</p>
 
   {#if request.kind === 'command'}

@@ -14,7 +14,7 @@
    */
   import { getCurrentWebview } from '@tauri-apps/api/webview';
   import { open } from '@tauri-apps/plugin-dialog';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
 
   import { commands } from '../ipc/commands';
   import { errorMessage, type AgentAttachment } from '../ipc/types';
@@ -79,6 +79,10 @@
   let scroller = $state<HTMLElement | null>(null);
   /** What is inside the scroller. Observed for height, which the scroller itself cannot report. */
   let content = $state<HTMLElement | null>(null);
+  /** The active request in the transcript, whether it belongs to this pane or a delegated child. */
+  let approvalNode = $state<HTMLElement | null>(null);
+  /** Whether any part of that request is currently visible in the transcript viewport. */
+  let approvalVisible = $state(true);
   let terminal = $state<ReturnType<typeof Terminal> | null>(null);
   /**
    * Whether the transcript is following its tail.
@@ -86,9 +90,10 @@
    * Recorded from a scroll listener rather than measured in the anchoring observer: by the time
    * that runs the DOM has grown, so measuring then answers "is it pinned *after* the append" —
    * which on first content is `scrollTop === 0` against a tall scroller and reads as "scrolled
-   * away". Not `$state`: nothing renders from it.
+   * away". This now renders the compact approval jump control as well as driving the anchor, so it
+   * is state rather than a private observer flag.
    */
-  let pinned = true;
+  let pinned = $state(true);
 
   /**
    * The provider id, or null for a shell.
@@ -190,14 +195,13 @@
    *
    * # Why one at a time, and after this pane's own
    *
-   * `ApprovalCard`'s header explains that an unanswered card is a stalled session, which is why it
-   * sits above the composer and cannot be scrolled past. Six of them stacked would bury the
-   * composer — the same failure in a new place. So this is a queue with a count, exactly as a
-   * single pane already treats its own approvals, and this pane's own question always outranks a
-   * child's: it is the one whose transcript is on screen.
+   * Six cards at once would bury the transcript — the same failure relaying was meant to solve. So
+   * this is a queue with a count, exactly as a single pane treats its own approvals, and this pane's
+   * own question always outranks a child's: it is the one whose transcript is on screen.
    */
   const delegated = $derived(blocking ? [] : sessions.delegatedApprovals(pane.session));
   const relayed = $derived(delegated[0] ?? null);
+  const approvalWaiting = $derived(blocking !== null || relayed !== null);
 
   /**
    * The plan a blocking approval is asking about, if that is what it is asking about.
@@ -418,6 +422,41 @@
   });
 
   /*
+   * Replace a pinned full-size card with a pinned one-line way back to it.
+   *
+   * Intersection rather than scroll arithmetic, because the card can change height without the
+   * transcript scrolling — selecting "Other", opening a plan or moving to the next queued request
+   * all do that. A zero threshold is intentional: while any of the request is visible, adding a
+   * second affordance for the same thing would be duplicate chrome.
+   */
+  $effect(() => {
+    const node = approvalNode;
+    const box = scroller;
+    if (!node || !box) {
+      approvalVisible = true;
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => (approvalVisible = entry?.isIntersecting ?? true),
+      { root: box, threshold: 0 },
+    );
+    observer.observe(node);
+
+    // A short request naturally lands against the bottom edge. A request taller than the viewport
+    // needs its beginning, not its action row, shown first. Run after ResizeObserver's tail anchor
+    // for this frame, then the resulting scroll event unpins the tall card while it is being read.
+    const frame = untrack(() => pinned)
+      ? requestAnimationFrame(() => node.scrollIntoView({ block: 'start' }))
+      : null;
+
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  });
+
+  /*
    * Move focus in when someone asks, and at no other time.
    *
    * Tracking `focusEpoch` alone is the design. An effect that also tracked the selection would fire
@@ -438,6 +477,19 @@
   function onScroll() {
     if (!scroller) return;
     pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32;
+  }
+
+  /** Return to the pending request without leaving focus on a control that disappears once shown. */
+  function jumpToApproval() {
+    const node = approvalNode;
+    if (!node) return;
+    pinned = true;
+    node.scrollIntoView({ block: 'nearest' });
+    requestAnimationFrame(() => {
+      node
+        .querySelector<HTMLElement>('[role="alertdialog"]')
+        ?.focus({ preventScroll: true });
+    });
   }
 
   /*
@@ -1184,53 +1236,75 @@
             <p class="c-pane__empty">Ask {label} something.</p>
           {/if}
           <AgentTranscript events={pane.events} />
+
+          {#if blocking}
+            <!--
+            In the document flow, immediately after the activity that caused it. The user can scroll
+            upward to inspect that activity without the request continuing to occupy half the pane;
+            the one-line jump control below appears if the whole card leaves the viewport.
+          -->
+            <div id="approval-{pane.id}" class="c-pane__approval" bind:this={approvalNode}>
+              <ApprovalCard
+                request={blocking.request}
+                focusOnMount={pinned}
+                reading={reading && plan !== null}
+                onread={() => (reading = !reading)}
+                onanswer={(answer) =>
+                  void sessions.answerAndKeep(
+                    pane.id,
+                    blocking.id,
+                    answer,
+                    blocking.request,
+                  )}
+              />
+            </div>
+          {:else if relayed}
+            <!-- A relayed request participates in this scroller but not `AgentTranscript`, because
+                 it is an inbox item from a different conversation rather than part of this one. -->
+            <div id="approval-{pane.id}" class="c-pane__relayed" bind:this={approvalNode}>
+              <p class="c-pane__relayed-from">
+                <SessionDot status={sessions.statusOfPane(relayed.pane)} />
+                <strong>{relayed.pane.agentTitle ?? 'A delegated agent'}</strong> needs you
+                {#if delegated.length > 1}
+                  <span class="c-pane__relayed-more">
+                    · {delegated.length - 1} more waiting
+                  </span>
+                {/if}
+                <Button
+                  variant="link"
+                  size="sm"
+                  title="Open this agent's own pane"
+                  onclick={() => sessions.showRelated(relayed.pane.id)}
+                >
+                  Open it
+                </Button>
+              </p>
+              <ApprovalCard
+                request={relayed.approval.request}
+                focusOnMount={pinned}
+                onanswer={(answer) =>
+                  void sessions.answerAndKeep(
+                    relayed.pane.id,
+                    relayed.approval.id,
+                    answer,
+                    relayed.approval.request,
+                  )}
+              />
+            </div>
+          {/if}
         </div>
       </div>
 
-      {#if blocking}
-        <!-- Above the composer and outside the scroller: the CLI does not continue the turn until this
-           is answered, so a card that could be scrolled away would stall the session silently. -->
-        <ApprovalCard
-          request={blocking.request}
-          reading={reading && plan !== null}
-          onread={() => (reading = !reading)}
-          onanswer={(answer) =>
-            void sessions.answerAndKeep(pane.id, blocking.id, answer, blocking.request)}
-        />
-      {/if}
-
-      {#if relayed}
-        <!-- A child's question, relayed. Captioned, because the card itself says nothing about
-             whose turn is stalled and answering the wrong agent's `rm -rf` is not a recoverable
-             misread. See `delegated` for why this is here at all. -->
-        <div class="c-pane__relayed">
-          <p class="c-pane__relayed-from">
-            <SessionDot status={sessions.statusOfPane(relayed.pane)} />
-            <strong>{relayed.pane.agentTitle ?? 'A delegated agent'}</strong> needs you
-            {#if delegated.length > 1}
-              <span class="c-pane__relayed-more">
-                · {delegated.length - 1} more waiting
-              </span>
-            {/if}
-            <Button
-              variant="link"
-              size="sm"
-              title="Open this agent's own pane"
-              onclick={() => sessions.showRelated(relayed.pane.id)}
-            >
-              Open it
-            </Button>
-          </p>
-          <ApprovalCard
-            request={relayed.approval.request}
-            onanswer={(answer) =>
-              void sessions.answerAndKeep(
-                relayed.pane.id,
-                relayed.approval.id,
-                answer,
-                relayed.approval.request,
-              )}
-          />
+      {#if approvalWaiting && !approvalVisible}
+        <div class="c-pane__approval-jump">
+          <Button
+            variant="neutral"
+            size="sm"
+            ariaControls="approval-{pane.id}"
+            onclick={jumpToApproval}
+          >
+            Approval waiting · Jump to request
+          </Button>
         </div>
       {/if}
 
@@ -1240,9 +1314,9 @@
 
       {#if pane.limit && !pane.ended}
         <!--
-        Here rather than as a transcript row, for the reason the approval card is: the transcript
-        scrolls, and an offer that has scrolled away is an offer nobody takes. The transcript gets a
-        `notice` row for the same moment, which is the durable record — this is the decision.
+        Fixed because this is an offer rather than the record of what happened: the transcript gets
+        a `notice` row for the same moment, while this copy disappears once it is taken or dismissed.
+        Letting the actionable copy scroll away would leave no way to continue the limited session.
       -->
         <div class="c-pane__limit">
           <Banner variant="warn">

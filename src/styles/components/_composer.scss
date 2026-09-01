@@ -192,6 +192,10 @@
  * rather than floating against the top of a two-line picker.
  */
 .c-composer__bar {
+  /* The small Button is the tallest control in this row: 11px type at 1.5 line-height, eight pixels
+     of vertical padding and its border round to 27px. Giving every quieter control that same box is
+     what aligns their centres without changing the narrow-pane wrapping rules below. */
+  --composer-control-height: 27px;
   display: flex;
   align-items: end;
   justify-content: space-between;
@@ -263,6 +267,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: var(--composer-control-height);
   padding: 3px var(--sp-1);
 }
 
@@ -271,7 +276,7 @@
   align-items: center;
   align-self: start;
   gap: var(--sp-1);
-  min-height: 22px;
+  min-height: var(--composer-control-height);
   padding: 3px var(--sp-1);
   border: 0;
   border-radius: var(--r-sm);
@@ -375,6 +380,12 @@
   margin-left: auto;
 }
 
+/* Explicit alongside the custom controls so a future change to the shared Button's small size is
+   visible here instead of silently bringing the staggered toolbar back. */
+.c-composer__send > .c-button {
+  min-height: var(--composer-control-height);
+}
+
 /* The shortcut. Quiet enough to be ignorable once learned, which is the whole life cycle of a
    keyboard hint. Hidden on a narrow pane rather than wrapping the button onto its own row. */
 .c-composer__hint {
@@ -402,7 +413,10 @@
 .c-composer__mic {
   display: flex;
   align-items: center;
+  /* Stays with Add and Context on the first line when the picker wraps internally. */
+  align-self: start;
   gap: var(--sp-1);
+  min-height: var(--composer-control-height);
   padding: 3px var(--sp-2);
   border: 0;
   border-radius: var(--r-sm);

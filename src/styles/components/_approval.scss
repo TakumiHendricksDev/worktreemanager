@@ -1,9 +1,9 @@
 /*
  * A session asking permission.
  *
- * Components layer, its own block rather than a `c-transcript__*` element, because it is not a row
- * of the transcript: it is pinned above the composer and outlives the scroll position. Splitting it
- * also means the transcript's row vocabulary and this card's states can grow independently.
+ * Components layer, its own block rather than a `c-transcript__*` element, because it is an
+ * interactive form rather than a durable transcript row. It can participate in the transcript's
+ * flow, while keeping its questions, payloads and actions independent from the transcript block.
  *
  * # Why the tint and not just a border
  *
@@ -18,7 +18,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  margin: 0 var(--sp-4) var(--sp-2);
+  margin: var(--sp-3) 0 0;
   padding: var(--sp-3);
   border: 1px solid var(--warn-line);
   border-radius: var(--r-md);
@@ -90,12 +90,12 @@
   background: var(--warn-line);
 }
 
+/* A transcript has one scroller already. Let a large question flow through it instead of putting a
+   second vertical scroller under the pointer; the compact jump control keeps the card recoverable. */
 .c-approval__questions {
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  max-height: min(42vh, 28rem);
-  overflow-y: auto;
 }
 
 .c-approval__question {

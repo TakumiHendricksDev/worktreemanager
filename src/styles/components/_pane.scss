@@ -197,11 +197,17 @@
 }
 
 /*
- * A delegated child's approval, shown in the session that delegated to it.
+ * An active approval inside the transcript's document flow.
  *
- * Geometry and a caption only — the card inside is the same `.c-approval` this pane renders for its
- * own questions, deliberately, because a decision that looks different depending on who is asking
- * is a decision people learn to read twice.
+ * The card owns its appearance; the pane contributes only a stable target for the compact jump
+ * control. No geometry is needed for a pane's own request because `.c-approval` has the same top
+ * rhythm as the transcript rows around it.
+ */
+.c-pane__approval {
+  min-width: 0;
+}
+
+/* A delegated child's approval, shown in the session that delegated to it.
  *
  * The caption is not decoration. The card says what is being asked and nothing about *who* is
  * asking, and a fan-out is precisely the situation where six agents are asking similar things at
@@ -209,8 +215,13 @@
  * card, in the reading order, before the verbs.
  */
 .c-pane__relayed {
-  flex: 0 0 auto;
-  padding: 0 var(--sp-3) var(--sp-2);
+  min-width: 0;
+  margin-top: var(--sp-3);
+}
+
+/* The caption already supplies the gap above the shared card. */
+.c-pane__relayed > .c-approval {
+  margin-top: 0;
 }
 
 .c-pane__relayed-from {
@@ -224,6 +235,15 @@
 
 .c-pane__relayed-more {
   color: var(--fg-subtle);
+}
+
+/* The only part of an approval that stays pinned. One line preserves discoverability while leaving
+   the transcript enough room to read the evidence the decision depends on. */
+.c-pane__approval-jump {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--sp-3) var(--sp-2);
 }
 
 /* The composer and its settings live in `_composer.scss`. They were `.c-pane__settings` and

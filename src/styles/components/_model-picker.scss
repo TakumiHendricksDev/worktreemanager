@@ -120,6 +120,7 @@
   align-items: center;
   gap: var(--sp-1);
   min-width: 0;
+  min-height: var(--composer-control-height, 27px);
   padding: 3px var(--sp-2);
   /* The selected value is the loudest thing in the trigger. Everything else in this row — the
      standing "Effort" word, the stale-list caveat — is subtle, so the hierarchy inside a pill runs
@@ -173,6 +174,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-1);
+  min-height: var(--composer-control-height, 27px);
   padding: 3px var(--sp-2);
   border: 0;
   border-radius: var(--r-sm);
