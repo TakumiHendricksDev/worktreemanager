@@ -127,7 +127,7 @@ pub fn claude_capability() -> AgentCapability {
             model("opus", "Opus 5", "The most capable tier", true),
             model("sonnet", "Sonnet 5", "Balanced capability and speed", false),
             model("haiku", "Haiku 4.5", "Fastest and cheapest", false),
-            model("fable", "Fable 5", "The newest tier", false),
+            model("fable", "Fable 5.1", "The newest tier", false),
             AgentModel {
                 // The one model whose meaning includes a mode: the CLI resolves `opusplan` to
                 // Opus only while `permissionMode == "plan"` and to Sonnet otherwise — read off
