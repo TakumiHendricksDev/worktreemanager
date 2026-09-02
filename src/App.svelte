@@ -33,6 +33,7 @@
   import { composerPrefs } from './lib/state/composer.svelte';
   import { dictation } from './lib/state/dictate.svelte';
   import { sessions } from './lib/state/sessions.svelte';
+  import { sessionAwareness } from './lib/state/session-awareness.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { workspace } from './lib/state/workspace.svelte';
 
@@ -108,6 +109,7 @@
       // into the moment a pane mounts, and reading this late would send the first Enter of the
       // session under the default rather than the chosen behaviour.
       await composerPrefs.init();
+      await sessionAwareness.init();
       await dictation.init();
       if (gone) return;
 

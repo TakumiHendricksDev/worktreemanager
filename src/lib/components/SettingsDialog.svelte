@@ -32,6 +32,7 @@
   import { composerPrefs, type SendKey } from '../state/composer.svelte';
   import { DESTINATION, dictation, type DictateMode } from '../state/dictate.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
+  import { sessionAwareness } from '../state/session-awareness.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -380,6 +381,29 @@
             {/each}
           </select>
         </Field>
+
+        <div class="o-stack">
+          <h3 class="c-section-heading">Agent coordination</h3>
+          <Choice
+            type="checkbox"
+            checked={sessionAwareness.enabled}
+            onchange={(enabled) => void sessionAwareness.setEnabled(enabled)}
+          >
+            Share worktree session awareness <span class="c-badge c-badge--accent"
+              >Beta</span
+            >
+          </Choice>
+          <p class="c-field__help">
+            When another agent session in the same worktree opens, closes, changes state, or
+            receives its first prompt, wtm adds one short coordination note to this
+            session’s next user turn. It shares only the provider, working/waiting/idle
+            state, and a shortened first-prompt label. It does not inspect replies, tool
+            output, or files, never shares full transcripts or session ids, and never
+            crosses into another worktree. Sessions opened while the beta is enabled can
+            refresh the same snapshot with <code>list_sessions</code>. wtm never interrupts
+            a running agent or starts a turn by itself.
+          </p>
+        </div>
 
         <!--
           Dictation. Off unless turned on, and the one control here that asks first — see

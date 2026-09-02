@@ -42,17 +42,33 @@ struct Bridge {
 impl Bridge {
     /// Start `wtm --mcp-bridge` with an agent roster in its environment.
     fn start(agents: &str) -> Self {
-        Self::spawn(agents, None)
+        Self::spawn(agents, None, false)
+    }
+
+    /// Start a bridge whose session-awareness tool was enabled at spawn time.
+    fn aware(agents: &str) -> Self {
+        Self::spawn(agents, None, true)
     }
 
     /// Start a bridge wired to a socket and a token, so a `tools/call` has somewhere to go.
     fn wired(agents: &str, socket: &std::path::Path, token: &str) -> Self {
-        Self::spawn(agents, Some((socket, token)))
+        Self::spawn(agents, Some((socket, token)), false)
     }
 
-    fn spawn(agents: &str, wiring: Option<(&std::path::Path, &str)>) -> Self {
+    /// Start an awareness-enabled bridge wired to a fake app.
+    fn wired_aware(agents: &str, socket: &std::path::Path, token: &str) -> Self {
+        Self::spawn(agents, Some((socket, token)), true)
+    }
+
+    fn spawn(agents: &str, wiring: Option<(&std::path::Path, &str)>, awareness: bool) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_wtm"));
-        command.arg("--mcp-bridge").env(handoff::AGENTS_ENV, agents);
+        command
+            .arg("--mcp-bridge")
+            .env(handoff::AGENTS_ENV, agents)
+            .env_remove(handoff::AWARENESS_ENV);
+        if awareness {
+            command.env(handoff::AWARENESS_ENV, "on");
+        }
 
         match wiring {
             Some((socket, token)) => {
@@ -194,6 +210,22 @@ fn the_bridge_offers_exactly_the_agents_it_was_told_about() {
             .contains(&serde_json::json!("prompt")),
         "a handoff with no prompt is not a handoff: {tool}"
     );
+}
+
+#[test]
+fn the_awareness_tool_is_advertised_only_to_sessions_started_with_the_beta_enabled() {
+    let mut disabled = Bridge::start("codex:Codex");
+    disabled.call(1, "initialize", &serde_json::json!({}));
+    let disabled = disabled.call(2, "tools/list", &serde_json::json!({}));
+    assert_eq!(disabled["result"]["tools"].as_array().unwrap().len(), 3);
+
+    let mut enabled = Bridge::aware("codex:Codex");
+    enabled.call(1, "initialize", &serde_json::json!({}));
+    let enabled = enabled.call(2, "tools/list", &serde_json::json!({}));
+    let tools = enabled["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 4, "the beta adds one bounded read-only tool");
+    assert_eq!(tools[3]["name"], "list_sessions");
+    assert_eq!(tools[3]["inputSchema"]["properties"], serde_json::json!({}));
 }
 
 #[test]
@@ -467,6 +499,34 @@ fn closing_children_reaches_the_app_as_an_action_carrying_only_the_token() {
         reply["result"]["content"][0]["text"],
         "Closed 3 delegated sessions."
     );
+}
+
+#[test]
+fn listing_sessions_reaches_the_app_as_a_read_only_action_with_no_target() {
+    // Like cleanup, scope comes entirely from the token. If a worktree or session id appeared in
+    // this request, model-authored input could turn the feature into a cross-worktree probe.
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("h.sock");
+    let app = fake_app(
+        &socket,
+        handoff::Response::ok("No other sessions.".to_owned()),
+    );
+
+    let mut bridge = Bridge::wired_aware("codex:Codex", &socket, "token-xyz");
+    bridge.call(1, "initialize", &serde_json::json!({}));
+    let reply = bridge.call(
+        2,
+        "tools/call",
+        &serde_json::json!({ "name": "list_sessions", "arguments": {} }),
+    );
+
+    let sent = app.join().expect("the fake app should not panic");
+    assert_eq!(sent.token, "token-xyz");
+    assert_eq!(sent.action, handoff::Action::ListSessions);
+    assert!(sent.agent.is_empty());
+    assert!(sent.prompt.is_empty());
+    assert!(sent.tasks.is_empty());
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
 }
 
 #[test]

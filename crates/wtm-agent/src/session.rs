@@ -133,6 +133,38 @@ impl AgentSession {
         run(&self.session, &self.host, &self.events, steps)
     }
 
+    /// Send a turn with context that belongs in the provider conversation but not in the user's
+    /// transcript bubble.
+    ///
+    /// This is deliberately a session concern rather than a fourth argument on [`Protocol::send_turn`].
+    /// Providers need to receive one ordinary text prompt so queued turns and attachments keep their
+    /// existing wire shape; the only distinction is presentational. Rewriting the already-produced
+    /// `UserEcho` preserves that distinction in one place and means another provider cannot
+    /// accidentally expose application metadata by forgetting to do it.
+    ///
+    /// # Errors
+    ///
+    /// If the session's stdin is gone.
+    pub fn send_turn_with_context(
+        &self,
+        text: &str,
+        attachments: &[AgentAttachment],
+        context: &str,
+    ) -> Result<(), ExecError> {
+        if context.is_empty() {
+            return self.send_turn(text, attachments);
+        }
+
+        let submitted = format!("{text}\n\n{context}");
+        let mut steps = self.driver.lock().send_turn(&submitted, attachments);
+        for step in &mut steps {
+            if let Step::Emit(AgentEvent::UserEcho { text: echoed }) = step {
+                text.clone_into(echoed);
+            }
+        }
+        run(&self.session, &self.host, &self.events, steps)
+    }
+
     /// Change the model, effort, mode or fast mode without restarting. `None` leaves one alone.
     ///
     /// # Errors
@@ -357,11 +389,14 @@ fn bound_transcript_event(event: &mut AgentEvent) {
     const OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
     match event {
-        AgentEvent::UserEcho { text } => bound_text(
-            text,
-            PROMPT_BYTES,
-            "\n\n… prompt truncated in the transcript; the agent received it in full …",
-        ),
+        AgentEvent::UserEcho { text } => {
+            strip_application_context(text);
+            bound_text(
+                text,
+                PROMPT_BYTES,
+                "\n\n… prompt truncated in the transcript; the agent received it in full …",
+            );
+        }
         AgentEvent::Patch { unified_diff, .. } => bound_text(
             unified_diff,
             OUTPUT_BYTES,
@@ -395,6 +430,21 @@ fn bound_transcript_event(event: &mut AgentEvent) {
         // Streaming prose and reasoning arrive in small deltas. Approvals intentionally remain
         // complete because the person deciding whether to apply a change must see the whole input.
         _ => {}
+    }
+}
+
+/// Remove wtm-owned turn context when a provider replays its persisted history.
+///
+/// The live send path already rewrites its synthetic echo, but resumed providers can later echo the
+/// exact text they stored. Keeping this at the shared transcript boundary is what makes the promise
+/// that coordination notes are not chat bubbles survive close-and-resume for every provider.
+fn strip_application_context(text: &mut String) {
+    const OPEN: &str = "\n\n<wtm_session_awareness>\n";
+    const CLOSE: &str = "</wtm_session_awareness>";
+    if text.ends_with(CLOSE)
+        && let Some(start) = text.rfind(OPEN)
+    {
+        text.truncate(start);
     }
 }
 
@@ -451,6 +501,23 @@ mod tests {
         };
         assert!(text.len() < 66 * 1024);
         assert!(text.contains("agent received it in full"));
+    }
+
+    #[test]
+    fn a_provider_replaying_history_does_not_expose_wtm_turn_context() {
+        let mut event = AgentEvent::UserEcho {
+            text: "fix the parser\n\n<wtm_session_awareness>\nCodex is working.\n</wtm_session_awareness>"
+                .to_owned(),
+        };
+
+        bound_transcript_event(&mut event);
+
+        assert_eq!(
+            event,
+            AgentEvent::UserEcho {
+                text: "fix the parser".to_owned()
+            }
+        );
     }
 
     #[test]

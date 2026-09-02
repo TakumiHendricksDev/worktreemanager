@@ -139,6 +139,42 @@ fn a_turn_reaches_the_pipe_and_is_echoed_to_the_transcript() {
     );
 }
 
+#[test]
+fn additional_context_reaches_the_agent_without_rewriting_the_users_message() {
+    // Coordination metadata belongs in the model's input, but showing it as if the user typed it
+    // would both clutter the transcript and turn an implementation detail into the session title.
+    // This test pins both halves because preserving only one would make the feature misleading.
+    let (session, fake, rec) = session();
+    handshake(&fake);
+
+    session
+        .send_turn_with_context(
+            "fix the parser",
+            &[],
+            "<wtm_session_awareness>Codex is working.</wtm_session_awareness>",
+        )
+        .expect("send");
+
+    let last: serde_json::Value = serde_json::from_str(fake.written().last().unwrap()).unwrap();
+    assert_eq!(
+        last["params"]["input"][0]["text"],
+        "fix the parser\n\n<wtm_session_awareness>Codex is working.</wtm_session_awareness>"
+    );
+    assert!(
+        rec.events.lock().contains(&AgentEvent::UserEcho {
+            text: "fix the parser".to_owned()
+        }),
+        "only the text the user submitted should appear in the transcript"
+    );
+    assert!(
+        !rec.events.lock().iter().any(|event| matches!(
+            event,
+            AgentEvent::UserEcho { text } if text.contains("wtm_session_awareness")
+        )),
+        "application context must not become a visible user message"
+    );
+}
+
 /// A sink that reads state its caller might already be holding — the shape the real one has.
 ///
 /// `try_lock` rather than `lock`, and that is not a detail: the point is to *detect* re-entrancy,

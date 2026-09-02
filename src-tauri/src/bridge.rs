@@ -66,6 +66,7 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 const TOOL: &str = "ask_agent";
 const SPAWN_TOOL: &str = "spawn_agents";
 const CLOSE_TOOL: &str = "close_agents";
+const LIST_TOOL: &str = "list_sessions";
 
 /// Where the socket lives.
 pub fn socket_path() -> Result<PathBuf, String> {
@@ -206,6 +207,7 @@ pub fn serve_stdio() {
     let mut stdout = std::io::stdout();
 
     let agents = agents_from_env();
+    let awareness = std::env::var(handoff::AWARENESS_ENV).as_deref() == Ok("on");
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -226,7 +228,7 @@ pub fn serve_stdio() {
 
         let reply = match method {
             "initialize" => Some(result(&id, &initialize(&params))),
-            "tools/list" => Some(result(&id, &tools(&agents))),
+            "tools/list" => Some(result(&id, &tools(&agents, awareness))),
             "tools/call" => Some(result(&id, &call(&params))),
             // `ping` is in the spec and costs one line. Everything else gets the standard
             // method-not-found rather than silence, so a client waiting on a reply is not wedged.
@@ -295,7 +297,7 @@ fn initialize(params: &Value) -> Value {
 /// `enum` on `agent` is the other half. Without it a model guesses an id — "codex-cli", "gpt" — and
 /// gets an error it has to recover from; with it the choice is closed and the labels tell it which is
 /// which.
-fn tools(agents: &[(String, String)]) -> Value {
+fn tools(agents: &[(String, String)], awareness: bool) -> Value {
     let ids: Vec<&str> = agents.iter().map(|(id, _)| id.as_str()).collect();
     let roster = agents
         .iter()
@@ -316,7 +318,7 @@ fn tools(agents: &[(String, String)]) -> Value {
     }
 
     let task_agent_schema = agent_schema.clone();
-    json!({
+    let mut listed = json!({
         "tools": [{
             "name": TOOL,
             "description":
@@ -420,88 +422,103 @@ fn tools(agents: &[(String, String)]) -> Value {
                  has started talking to one.",
             "inputSchema": { "type": "object", "properties": {} },
         }],
-    })
+    });
+    if awareness && let Some(entries) = listed["tools"].as_array_mut() {
+        entries.push(json!({
+            "name": LIST_TOOL,
+            "description":
+                "Return a lightweight snapshot of the other active coding-agent sessions in this \
+                 same worktree. It reports each provider, coarse state, and shortened first-prompt \
+                 label. It does not inspect replies, tool output, or files, never returns full \
+                 transcripts or session ids, and never includes sessions from another worktree. \
+                 Use it when concurrent edits may overlap or a fresh coordination check would \
+                 change your next step. Do not poll it or call it on every turn.",
+            "inputSchema": { "type": "object", "properties": {} },
+        }));
+    }
+    listed
 }
 
 /// Run a `tools/call` by asking the app.
 fn call(params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    if name != TOOL && name != SPAWN_TOOL && name != CLOSE_TOOL {
+    if name != TOOL && name != SPAWN_TOOL && name != CLOSE_TOOL && name != LIST_TOOL {
         return tool_error(&format!("no tool named `{name}`"));
     }
 
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-    let action = if name == CLOSE_TOOL {
-        handoff::Action::CloseChildren
-    } else {
-        handoff::Action::Delegate
+    let action = match name {
+        CLOSE_TOOL => handoff::Action::CloseChildren,
+        LIST_TOOL => handoff::Action::ListSessions,
+        _ => handoff::Action::Delegate,
     };
-    let (agent, prompt, model, effort, mode, tasks, concurrency) = if name == CLOSE_TOOL {
-        // Nothing to read: the token is the whole request. See `handoff::close_children` for why
-        // there is deliberately no session parameter to validate here.
-        (
-            String::new(),
-            String::new(),
-            None,
-            None,
-            None,
-            Vec::new(),
-            None,
-        )
-    } else if name == TOOL {
-        let prompt = arguments
-            .get("prompt")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
-        if prompt.trim().is_empty() {
-            return tool_error("`prompt` is required and must not be empty");
-        }
-        (
-            arguments
-                .get("agent")
+    let (agent, prompt, model, effort, mode, tasks, concurrency) =
+        if name == CLOSE_TOOL || name == LIST_TOOL {
+            // Nothing to read: the token is the whole request. See `handoff::close_children` for why
+            // there is deliberately no session parameter to validate here.
+            (
+                String::new(),
+                String::new(),
+                None,
+                None,
+                None,
+                Vec::new(),
+                None,
+            )
+        } else if name == TOOL {
+            let prompt = arguments
+                .get("prompt")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_owned(),
-            prompt,
-            arguments
-                .get("model")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            arguments
-                .get("effort")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            arguments
-                .get("mode")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            Vec::new(),
-            None,
-        )
-    } else {
-        let tasks = match arguments
-            .get("tasks")
-            .cloned()
-            .map(serde_json::from_value::<Vec<Task>>)
-        {
-            Some(Ok(tasks)) if !tasks.is_empty() => tasks,
-            Some(Err(error)) => return tool_error(&format!("`tasks` was invalid: {error}")),
-            _ => return tool_error("`tasks` is required and must not be empty"),
+                .to_owned();
+            if prompt.trim().is_empty() {
+                return tool_error("`prompt` is required and must not be empty");
+            }
+            (
+                arguments
+                    .get("agent")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                prompt,
+                arguments
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                arguments
+                    .get("effort")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                arguments
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                Vec::new(),
+                None,
+            )
+        } else {
+            let tasks = match arguments
+                .get("tasks")
+                .cloned()
+                .map(serde_json::from_value::<Vec<Task>>)
+            {
+                Some(Ok(tasks)) if !tasks.is_empty() => tasks,
+                Some(Err(error)) => return tool_error(&format!("`tasks` was invalid: {error}")),
+                _ => return tool_error("`tasks` is required and must not be empty"),
+            };
+            (
+                String::new(),
+                String::new(),
+                None,
+                None,
+                None,
+                tasks,
+                arguments
+                    .get("concurrency")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok()),
+            )
         };
-        (
-            String::new(),
-            String::new(),
-            None,
-            None,
-            None,
-            tasks,
-            arguments
-                .get("concurrency")
-                .and_then(Value::as_u64)
-                .and_then(|value| usize::try_from(value).ok()),
-        )
-    };
 
     let Ok(token) = std::env::var(handoff::TOKEN_ENV) else {
         return tool_error("this bridge was started without a session token");
@@ -587,10 +604,13 @@ mod tests {
 
     #[test]
     fn the_tool_list_offers_one_child_and_bounded_parallel_runs() {
-        let listed = tools(&[
-            ("claude".to_owned(), "Claude Code".to_owned()),
-            ("cursor".to_owned(), "Cursor Agent".to_owned()),
-        ]);
+        let listed = tools(
+            &[
+                ("claude".to_owned(), "Claude Code".to_owned()),
+                ("cursor".to_owned(), "Cursor Agent".to_owned()),
+            ],
+            false,
+        );
         let entries = listed["tools"]
             .as_array()
             .expect("tools/list must contain an array");
@@ -609,6 +629,19 @@ mod tests {
             entries[1]["inputSchema"]["properties"]["concurrency"]["maximum"],
             20
         );
+    }
+
+    #[test]
+    fn session_awareness_adds_one_parameterless_tool_only_when_enabled() {
+        let agents = [("codex".to_owned(), "Codex".to_owned())];
+        let disabled = tools(&agents, false);
+        let enabled = tools(&agents, true);
+
+        assert_eq!(disabled["tools"].as_array().map(Vec::len), Some(3));
+        assert_eq!(enabled["tools"].as_array().map(Vec::len), Some(4));
+        let tool = &enabled["tools"][3];
+        assert_eq!(tool["name"], LIST_TOOL);
+        assert_eq!(tool["inputSchema"]["properties"], json!({}));
     }
 
     #[test]
