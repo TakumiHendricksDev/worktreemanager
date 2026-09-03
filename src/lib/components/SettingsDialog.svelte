@@ -33,6 +33,7 @@
   import { DESTINATION, dictation, type DictateMode } from '../state/dictate.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { sessionAwareness } from '../state/session-awareness.svelte';
+  import { gameMode } from '../state/game-mode.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -381,6 +382,22 @@
             {/each}
           </select>
         </Field>
+
+        <div class="o-stack">
+          <h3 class="c-section-heading">Experimental</h3>
+          <Choice
+            type="checkbox"
+            checked={gameMode.enabled}
+            onchange={(enabled) => void gameMode.setEnabled(enabled)}
+          >
+            Turn on Game Mode <span class="c-badge c-badge--accent">Beta</span>
+          </Choice>
+          <p class="c-field__help">
+            Explore repositories as islands, worktrees as job sites, and agent sessions as
+            bots. Opening real work reveals the standard interface without closing or
+            restarting any session.
+          </p>
+        </div>
 
         <div class="o-stack">
           <h3 class="c-section-heading">Agent coordination</h3>

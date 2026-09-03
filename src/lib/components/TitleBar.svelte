@@ -29,9 +29,15 @@
   const {
     onaddproject,
     onsettings,
+    gameEnabled,
+    worldActive,
+    onworld,
   }: {
     onaddproject: () => void;
     onsettings: () => void;
+    gameEnabled: boolean;
+    worldActive: boolean;
+    onworld: () => void;
   } = $props();
 
   const themeIcons: Record<ThemeChoice, IconName> = {
@@ -130,6 +136,18 @@
   </div>
 
   <div class="c-titlebar__actions">
+    {#if gameEnabled}
+      <Button
+        variant={worldActive ? 'neutral' : 'quiet'}
+        size="sm"
+        onclick={onworld}
+        title={worldActive ? 'Open the standard workbench (⌘⇧G)' : 'Return to World (⌘⇧G)'}
+      >
+        <Icon name={worldActive ? 'terminal' : 'world'} size={13} />
+        {worldActive ? 'Workbench' : 'World'}
+      </Button>
+    {/if}
+
     <!--
       Kept beside Settings rather than absorbed into it. Cycling light and dark is the one
       appearance change people make several times a day — chasing the sun, or a screen share

@@ -35,6 +35,12 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Game Mode is a projection over this DOM, not a route away from it. Hiding instead of
+   unmounting preserves every live xterm and agent session while the world owns the window. */
+.c-shell__columns.is-world-hidden {
+  display: none;
+}
+
 /*
  * Once the rail is gone, its restore action stays attached to the edge it left through.
  * The small backplate distinguishes it from controls owned by whichever detail surface is open.

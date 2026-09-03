@@ -1,0 +1,391 @@
+/*
+ * Game Mode is an alternate view of the same worktree/session state. The renderer owns only
+ * the canvas; navigation and operations stay in Svelte so they retain WTM's normal controls,
+ * focus behaviour, theme tokens and accessible text.
+ */
+
+.c-game-world {
+  position: relative;
+  isolation: isolate;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.c-game-world.is-hidden {
+  display: none;
+}
+
+.c-game-world__viewport,
+.c-game-world__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.c-game-world__canvas {
+  display: block;
+  touch-action: none;
+  outline: none;
+}
+
+.c-game-world__toolbar {
+  position: absolute;
+  top: var(--sp-3);
+  right: calc(320px + var(--sp-5));
+  left: var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 38px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px);
+}
+
+.c-game-world__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 650;
+}
+
+.c-game-world__stats {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: var(--sp-3);
+  min-width: 0;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  white-space: nowrap;
+}
+
+.c-game-world__stats span,
+.c-game-world__stats button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.c-game-world__stats button {
+  color: inherit;
+}
+
+.c-game-world__stats button:hover {
+  color: var(--fg);
+}
+
+.c-game-world__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.c-game-world__panel {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  bottom: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  width: 304px;
+  padding: var(--sp-4);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(18px);
+}
+
+.c-game-world__back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  max-width: 100%;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-game-world__back:hover {
+  color: var(--fg);
+}
+
+.c-game-world__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.c-game-world__heading div {
+  min-width: 0;
+}
+
+.c-game-world__heading h2 {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--step-2);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-game-world__heading p {
+  margin-top: var(--sp-1);
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-game-world__avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  font-weight: 700;
+}
+
+.c-game-world__status,
+.c-game-world__facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-game-world__pip {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-subtle);
+}
+
+.c-game-world__pip--working,
+.c-game-world__pip--starting {
+  background: var(--info);
+}
+
+.c-game-world__pip--attention {
+  background: var(--warn);
+}
+
+.c-game-world__pip--failed {
+  background: var(--danger);
+}
+
+.c-game-world__pip--done {
+  background: var(--ok);
+}
+
+.c-game-world__pip--detached,
+.c-game-world__pip--ended {
+  opacity: 0.55;
+}
+
+.c-game-world__primary-actions,
+.c-game-world__secondary-actions,
+.c-game-world__panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.c-game-world__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 0;
+}
+
+.c-game-world__section h3 {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-game-world__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-height: 0;
+  overflow: auto;
+}
+
+.c-game-world__list button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  text-align: left;
+}
+
+.c-game-world__list button:hover {
+  background: var(--bg-hover);
+}
+
+.c-game-world__list small {
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-game-world__list p {
+  padding: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.45;
+}
+
+.c-game-world__island {
+  width: 14px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 3px 0 var(--accent-soft);
+  transform: rotate(-8deg);
+}
+
+.c-game-world__select {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-game-world__select select {
+  width: 100%;
+}
+
+.c-game-world__split-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.c-game-world__split-action select {
+  width: 72px;
+  border: 1px solid var(--border-strong);
+  border-left: 0;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--bg-elevated);
+  color: var(--fg);
+}
+
+.c-game-world__notice {
+  position: absolute;
+  top: calc(38px + var(--sp-5));
+  left: var(--sp-3);
+  width: min(560px, calc(100% - 360px));
+}
+
+.c-game-world__boot {
+  position: absolute;
+  top: 50%;
+  left: calc(50% - 150px);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  box-shadow: var(--shadow-sm);
+  transform: translate(-50%, -50%);
+}
+
+.c-game-world__spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: game-world-spin 700ms linear infinite;
+}
+
+.c-game-world__keys {
+  position: absolute;
+  bottom: var(--sp-3);
+  left: var(--sp-3);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  backdrop-filter: blur(10px);
+}
+
+.c-game-world__hint {
+  margin-top: auto;
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+  line-height: 1.45;
+}
+
+@keyframes game-world-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 980px) {
+  .c-game-world__toolbar {
+    right: var(--sp-3);
+  }
+
+  .c-game-world__stats {
+    display: none;
+  }
+
+  .c-game-world__panel {
+    top: calc(38px + var(--sp-5));
+    width: 288px;
+  }
+}
+
+@media (max-width: 720px) {
+  .c-game-world__tools > :not(:last-child) {
+    display: none;
+  }
+
+  .c-game-world__panel {
+    left: var(--sp-3);
+    width: auto;
+    max-height: 52%;
+    top: auto;
+  }
+
+  .c-game-world__keys {
+    display: none;
+  }
+}

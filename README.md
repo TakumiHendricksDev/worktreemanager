@@ -42,6 +42,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | ✅ | Voice dictation into the prompt composer — hold or tap the mic, audio goes to Deepgram Nova-3, transcript lands in the draft unsent. Off by default; the only feature that sends anything off your machine |
 | ✅ | Cross-model delegation from one chat: one visible child or a customizable run of up to 20 child agents, with per-child model/effort/mode and navigable session status |
 | ✅ | **Open in …** — a split button that hands the worktree to your editor, a terminal, the file manager, or a fresh Claude Code session; see [below](#open-in-) |
+| 🧪 | Optional **Game Mode** — repositories become islands, worktrees become job sites, agent sessions become bots, and shell sessions become consoles; see [below](#game-mode-beta) |
 | 🚧 | `[remove] strategy = "command"` — the native path is the default and the one that turns the branch prompt into a checkbox |
 | 🚧 | A command palette, and `notify`-based auto-refresh |
 
@@ -63,7 +64,8 @@ project's convention. With the variable unset the tests skip.
 [Install](#install) · [Updating](#updating-an-install-you-already-have) ·
 [Prerequisites](#prerequisites) · [Setup](#setup) ·
 [First run](#first-run) · [Registering a project](#registering-a-project) ·
-[Writing wtm.toml](#writing-wtmtoml) · [Open in …](#open-in-) · [Settings](#settings) ·
+[Writing wtm.toml](#writing-wtmtoml) · [Open in …](#open-in-) ·
+[Game Mode](#game-mode-beta) · [Settings](#settings) ·
 [Dev workflow](#dev-workflow) ·
 [Build & install](#build--install) · [Troubleshooting](#troubleshooting) ·
 [Logs](#logs) · [Dependencies](#dependencies) · [Architecture](#architecture)
@@ -400,19 +402,56 @@ Two things worth knowing:
   is currently a one-entry code change in `src-tauri/src/openers.rs` rather than something
   you can do from a config file.
 
+## Game Mode (Beta)
+
+Turn on **Game Mode** under **Settings → General → Experimental** to add a World view. It is
+off by default and does not change a project's config or start any process.
+
+The world is another projection of WTM's existing state:
+
+| World | WTM |
+| --- | --- |
+| Island | Registered repository |
+| Job site / building | Worktree |
+| Bot | Claude Code, Codex, or Cursor Agent session |
+| Console | Shell session |
+
+Click through an island, job, or bot to reach the same operations as the standard interface:
+open the workbench or a particular session, start an agent, open a shell, create or remove a
+worktree, inspect details, toggle a favorite, visit project links, open the database view, or
+hand the directory to Fork and the other configured openers.
+
+**World and Workbench are deliberately reversible.** The button in the title bar, or
+<kbd>⌘⇧G</kbd> / <kbd>Ctrl+Shift+G</kbd>, swaps between them. Opening real work from the world
+reveals the standard interface. It does not unmount the workbench, so live agent panes and
+shells keep their processes, terminal DOM, scrollback, and selection. Turning the beta off
+removes the World affordance and returns to the workbench.
+
+The world refreshes on entry, window focus, and WTM mutations; it does not poll repositories.
+Rendering stops while the workbench is visible. **World settings** controls quality, effects,
+environment, labels, framing, and reduced motion. If WebGL or a bundled model cannot load, the
+fallback offers the complete standard interface instead.
+
+The renderer is adapted from [Bot Crossing](https://github.com/jarrenrocks/bot-crossing),
+with its network server, scanners, polling, and HUD deliberately excluded. Three.js provides the
+renderer and Material Design Icons provides the tree-shaken status glyph paths. See
+[third-party notices](THIRD_PARTY_NOTICES.md) for the pinned source, licences, and CC0 model
+credits.
+
 ## Settings
 
 **⌘, on macOS, or the sliders button in the title bar.** Linux has no application menu, so
 there the button and `Ctrl+,` are the way in. Everything applies as you change it; there is
 no OK button.
 
-Three sections, all of them backed by keys that already existed in
-`~/.config/wtm/config.toml` and were previously reachable only by editing that file:
+Settings are organized into three sections and apply immediately. Most are backed by keys that
+were previously reachable only by editing `~/.config/wtm/config.toml`; experimental toggles are
+also persisted there:
 
 | Section | What is in it |
 | --- | --- |
 | Appearance | Colour palette, and light / dark / follow-the-system |
-| General | Which tool **Open in …** defaults to |
+| General | Send-key behavior, which tool **Open in …** defaults to, and optional betas including Game Mode |
 | Advanced | The `PATH` override, plus read-only diagnostics — the PATH wtm actually resolved, where it came from, and which of the common tools it can find |
 
 Advanced is where to look first when a project's commands work in your terminal and not in
@@ -600,6 +639,11 @@ Two things the config decides deliberately, both written down in [`deny.toml`](d
 
 One version is pinned rather than current: **TypeScript is held at `~6.0.3`** because
 `svelte-check@4.7.4` peers `^5 || ^6`. `latest` is 7.x and would break the type gate.
+
+The optional world uses **Three.js** and eight tree-shaken path exports from
+**Material Design Icons**. Its renderer code is adapted from the MIT-licensed Bot Crossing
+project, and its three bundled GLB model packs are CC0. The exact upstream commit, licences,
+and art sources are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Attack surface is deliberately small — worth knowing when judging the dependency list. wtm makes no
 network requests of its own: no HTTP client crate is in the tree, no `fetch`/XHR/WebSocket appears in

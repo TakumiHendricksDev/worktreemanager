@@ -13,6 +13,7 @@
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
+  import GameSurface from './lib/components/game/GameSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
   import RemoveWorktreeDialog from './lib/components/RemoveWorktreeDialog.svelte';
@@ -34,6 +35,8 @@
   import { dictation } from './lib/state/dictate.svelte';
   import { sessions } from './lib/state/sessions.svelte';
   import { sessionAwareness } from './lib/state/session-awareness.svelte';
+  import { gameMode } from './lib/state/game-mode.svelte';
+  import { gameWorld } from './lib/state/game-world.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { workspace } from './lib/state/workspace.svelte';
 
@@ -104,6 +107,7 @@
     let gone = false;
     void (async () => {
       await theme.init();
+      await gameMode.init();
 
       // Before `sessions.init` for the same reason `attention.init` is: a composer can be typed
       // into the moment a pane mounts, and reading this late would send the first Enter of the
@@ -208,6 +212,14 @@
         if (!target?.closest('#terminal-dock')) {
           event.preventDefault();
           void workspace.refreshWorktrees();
+        }
+      }
+
+      if (meta && event.shiftKey && event.key.toLowerCase() === 'g') {
+        if (gameMode.enabled && !document.querySelector('[aria-modal="true"]')) {
+          event.preventDefault();
+          if (gameMode.worldOpen) gameMode.openWorkbench();
+          else gameMode.openWorld();
         }
       }
 
@@ -352,15 +364,69 @@
     addError = null;
     showAddProject = true;
   }
+
+  /**
+   * Cross the one boundary between the world and real work.
+   *
+   * Project selection is awaited because it refreshes and resets the worktree selection. The
+   * explicit selection afterwards is the one that must stick, exactly like notification routing.
+   */
+  async function openGameJob(
+    projectId: string,
+    worktreeId: string,
+    destination: 'sessions' | 'database',
+  ): Promise<void> {
+    if (workspace.activeProjectId !== projectId) await workspace.selectProject(projectId);
+    workspace.select(worktreeId);
+    mainView = destination === 'database' ? 'database' : 'worktree';
+    gameMode.openWorkbench();
+    sessions.markSeen(worktreeId);
+  }
+
+  async function newGameWorktree(projectId: string): Promise<void> {
+    if (workspace.activeProjectId !== projectId) await workspace.selectProject(projectId);
+    mainView = 'new';
+    gameMode.openWorkbench();
+  }
+
+  async function removeGameWorktree(projectId: string, worktreeId: string): Promise<void> {
+    await openGameJob(projectId, worktreeId, 'sessions');
+    showRemove = true;
+  }
+
+  async function inspectGameWorktree(projectId: string, worktreeId: string): Promise<void> {
+    await openGameJob(projectId, worktreeId, 'sessions');
+    showInspector = true;
+  }
+
+  async function favoriteGameWorktree(
+    projectId: string,
+    worktreeId: string,
+  ): Promise<void> {
+    if (workspace.activeProjectId !== projectId) await workspace.selectProject(projectId);
+    workspace.select(worktreeId);
+    await workspace.toggleFavorite(worktreeId);
+    await gameWorld.refresh();
+  }
 </script>
 
 <div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
-  <TitleBar onaddproject={addProject} onsettings={() => (showSettings = true)} />
+  <TitleBar
+    onaddproject={addProject}
+    onsettings={() => (showSettings = true)}
+    gameEnabled={gameMode.enabled}
+    worldActive={gameMode.worldOpen}
+    onworld={() => {
+      if (gameMode.worldOpen) gameMode.openWorkbench();
+      else gameMode.openWorld();
+    }}
+  />
 
   <div
     class="c-shell__columns"
     class:is-dragging={dragging}
     class:is-sidebar-collapsed={sidebarCollapsed}
+    class:is-world-hidden={gameMode.worldOpen}
   >
     <aside class="c-shell__col" id="worktree-sidebar" hidden={sidebarCollapsed}>
       <Sidebar
@@ -516,6 +582,20 @@
       <DatabaseSurface visible={booted && mainView === 'database'} />
     </main>
   </div>
+
+  {#if gameMode.enabled}
+    <GameSurface
+      visible={booted && gameMode.worldOpen}
+      onstandard={() => gameMode.openWorkbench()}
+      onsettings={() => (showSettings = true)}
+      onaddproject={addProject}
+      onnavigate={openGameJob}
+      onnewworktree={newGameWorktree}
+      onremove={removeGameWorktree}
+      oninspect={inspectGameWorktree}
+      onfavorite={favoriteGameWorktree}
+    />
+  {/if}
 
   {#if showAddProject}
     <AddProjectDialog onclose={() => (showAddProject = false)} />

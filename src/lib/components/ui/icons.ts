@@ -63,7 +63,8 @@ export type IconName =
   | 'theme-dark'
   | 'bolt'
   | 'mic'
-  | 'warn';
+  | 'warn'
+  | 'world';
 
 export interface IconSpec {
   /** Drawn with `stroke: currentColor; fill: none`. */
@@ -181,6 +182,12 @@ export const icons: Record<IconName, IconSpec> = {
    * one prompt rather than as two unrelated strokes.
    */
   terminal: { stroke: 'M3.5 3.75 L7.75 8 L3.5 12.25 M9.25 12.25 L13 12.25' },
+  world: {
+    stroke:
+      'M8 1.75 A6.25 6.25 0 1 0 8 14.25 A6.25 6.25 0 1 0 8 1.75 ' +
+      'M1.75 8 H14.25 M8 1.75 C10.1 3.4 10.1 12.6 8 14.25 ' +
+      'M8 1.75 C5.9 3.4 5.9 12.6 8 14.25',
+  },
   // A circle with its leading half filled — the same "follows the system" idiom as `◐`, which
   // is the character it replaces.
   'theme-system': {

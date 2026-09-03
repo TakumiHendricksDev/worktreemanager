@@ -1,0 +1,12 @@
+/* Renderer preferences are a small extension of the ordinary Settings vocabulary. */
+
+.c-game-settings__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.c-game-settings__range {
+  width: 100%;
+  accent-color: var(--accent);
+}
