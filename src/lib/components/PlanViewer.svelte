@@ -22,10 +22,9 @@
    * # Deliberately not an outline
    *
    * No table of contents, no checkbox tracking, no diffing against the previous revision. The
-   * request was to read the plan cleanly; the parser already handles the headings, nested lists and
-   * fences that plans are actually made of, and a navigation tree for a document that fits in three
-   * screens is furniture. `markdown.ts`'s omissions apply — notably tables, which Claude plans do
-   * use occasionally and which will render as literal pipes. Worth fixing there rather than here.
+   * request was to read the plan cleanly; the parser already handles the headings, nested lists,
+   * tables and fences that plans are actually made of, and a navigation tree for a document that
+   * fits in three screens is furniture.
    */
   import type { Snippet } from 'svelte';
 

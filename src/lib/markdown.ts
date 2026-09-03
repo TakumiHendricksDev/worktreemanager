@@ -20,8 +20,8 @@
  *
  * # What it deliberately does not do
  *
- * Tables, footnotes, reference links, setext headings, HTML blocks. None has shown up in a reply
- * often enough to pay for itself, and the failure mode is that the source shows through as text.
+ * Footnotes, reference links, setext headings, HTML blocks. None has shown up in a reply often
+ * enough to pay for itself, and the failure mode is that the source shows through as text.
  */
 
 export type Span =
@@ -38,11 +38,14 @@ export interface ListItem {
   children: Block[];
 }
 
+export type TableAlignment = 'left' | 'center' | 'right' | null;
+
 export type Block =
   | { kind: 'paragraph'; spans: Span[] }
   | { kind: 'heading'; level: number; spans: Span[] }
   | { kind: 'code'; lang: string | null; text: string }
   | { kind: 'list'; ordered: boolean; start: number; items: ListItem[] }
+  | { kind: 'table'; header: Span[][]; alignments: TableAlignment[]; rows: Span[][][] }
   | { kind: 'quote'; blocks: Block[] }
   | { kind: 'rule' };
 
@@ -126,6 +129,13 @@ function blocks(lines: string[]): Block[] {
       continue;
     }
 
+    const table = readTable(lines, i);
+    if (table) {
+      out.push(table[0]);
+      i = table[1];
+      continue;
+    }
+
     if (QUOTE.test(line)) {
       const body: string[] = [];
       while (
@@ -152,7 +162,8 @@ function blocks(lines: string[]): Block[] {
     const text: string[] = [];
     while (i < lines.length) {
       const run = lines[i] ?? '';
-      if (run.trim() === '' || startsBlock(run)) break;
+      if (run.trim() === '' || startsBlock(run) || (text.length > 0 && readTable(lines, i)))
+        break;
       text.push(run.trim());
       i += 1;
     }
@@ -160,6 +171,111 @@ function blocks(lines: string[]): Block[] {
   }
 
   return out;
+}
+
+/** Read a GitHub-style table headed by a row and its delimiter row. */
+function readTable(lines: string[], from: number): [Block, number] | null {
+  const header = splitTableRow(lines[from] ?? '');
+  const delimiter = splitTableRow(lines[from + 1] ?? '');
+  if (!header || !delimiter || header.length !== delimiter.length) return null;
+
+  const alignments: TableAlignment[] = [];
+  for (const cell of delimiter) {
+    const alignment = tableAlignment(cell);
+    if (alignment === undefined) return null;
+    alignments.push(alignment);
+  }
+
+  const rows: Span[][][] = [];
+  let i = from + 2;
+  while (i < lines.length && (lines[i] ?? '').trim() !== '') {
+    const cells = splitTableRow(lines[i] ?? '');
+    if (!cells) break;
+    // GitHub tables pad short rows and ignore surplus cells. Doing that here keeps every row on the
+    // header's grid instead of making a streaming or slightly uneven model response malformed.
+    rows.push(header.map((_, column) => inline(cells[column] ?? '')));
+    i += 1;
+  }
+
+  return [
+    {
+      kind: 'table',
+      header: header.map(inline),
+      alignments,
+      rows,
+    },
+    i,
+  ];
+}
+
+/**
+ * Split pipes that belong to the table rather than escaped pipes or pipes inside inline code.
+ *
+ * The backslashes and backticks remain in the cells for `inline` to interpret. Keeping one parser
+ * responsible for inline syntax is what makes a table cell behave exactly like ordinary prose.
+ */
+function splitTableRow(line: string): string[] | null {
+  const source = line.trim();
+  const cells: string[] = [];
+  let cell = '';
+  let sawDivider = false;
+  let firstWasDivider = false;
+  let lastWasDivider = false;
+  let i = 0;
+
+  while (i < source.length) {
+    const char = source[i] ?? '';
+
+    if (char === '\\' && i + 1 < source.length) {
+      cell += source.slice(i, i + 2);
+      lastWasDivider = false;
+      i += 2;
+      continue;
+    }
+
+    if (char === '`') {
+      const marker = /^`+/.exec(source.slice(i))?.[0] ?? '`';
+      const close = source.indexOf(marker, i + marker.length);
+      if (close !== -1) {
+        cell += source.slice(i, close + marker.length);
+        lastWasDivider = false;
+        i = close + marker.length;
+        continue;
+      }
+    }
+
+    if (char === '|') {
+      if (i === 0) firstWasDivider = true;
+      cells.push(cell.trim());
+      cell = '';
+      sawDivider = true;
+      lastWasDivider = true;
+      i += 1;
+      continue;
+    }
+
+    cell += char;
+    lastWasDivider = false;
+    i += 1;
+  }
+
+  if (!sawDivider) return null;
+  cells.push(cell.trim());
+  if (firstWasDivider) cells.shift();
+  if (lastWasDivider) cells.pop();
+  return cells;
+}
+
+/** A delimiter cell such as `---`, `:---` or `---:`. */
+function tableAlignment(cell: string): TableAlignment | undefined {
+  const delimiter = cell.trim();
+  if (!/^:?-{3,}:?$/.test(delimiter)) return undefined;
+  const left = delimiter.startsWith(':');
+  const right = delimiter.endsWith(':');
+  if (left && right) return 'center';
+  if (right) return 'right';
+  if (left) return 'left';
+  return null;
 }
 
 function isFenceEnd(line: string, char: string, length: number): boolean {

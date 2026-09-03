@@ -97,6 +97,40 @@
           {/each}
         </ul>
       {/if}
+    {:else if block.kind === 'table'}
+      <!-- The wrapper owns overflow so a wide model-authored table scrolls inside its message
+           rather than widening the whole pane. The table stays semantic for screen-reader navigation. -->
+      <div class="c-markdown__table">
+        <table>
+          <thead>
+            <tr>
+              {#each block.header as cell, n (n)}
+                <th
+                  scope="col"
+                  class:c-markdown__cell--center={block.alignments[n] === 'center'}
+                  class:c-markdown__cell--right={block.alignments[n] === 'right'}
+                >
+                  {@render spans(cell)}
+                </th>
+              {/each}
+            </tr>
+          </thead>
+          <tbody>
+            {#each block.rows as row, n (n)}
+              <tr>
+                {#each row as cell, column (column)}
+                  <td
+                    class:c-markdown__cell--center={block.alignments[column] === 'center'}
+                    class:c-markdown__cell--right={block.alignments[column] === 'right'}
+                  >
+                    {@render spans(cell)}
+                  </td>
+                {/each}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {:else if block.kind === 'quote'}
       <blockquote>{@render flow(block.blocks)}</blockquote>
     {:else}

@@ -133,6 +133,51 @@
   pointer-events: none;
 }
 
+/*
+ * Tables are usually written for a document wider than an agent pane. Below the width at which two
+ * useful columns can coexist, the table keeps that reading width and this wrapper scrolls; above it,
+ * cells wrap normally so a verbose answer does not become one enormous horizontal line.
+ */
+.c-markdown__table {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.c-markdown__table table {
+  width: 100%;
+  min-width: 28rem;
+  border-collapse: collapse;
+  font-size: var(--step--1);
+  line-height: 1.5;
+  text-align: left;
+}
+
+.c-markdown__table th,
+.c-markdown__table td {
+  padding: var(--sp-2) var(--sp-3);
+  vertical-align: top;
+}
+
+.c-markdown__table th {
+  background: var(--bg-code);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.c-markdown__table td {
+  border-top: 1px solid var(--border);
+}
+
+.c-markdown__cell--center {
+  text-align: center;
+}
+
+.c-markdown__cell--right {
+  text-align: right;
+}
+
 .c-markdown blockquote {
   margin: 0;
   padding-left: var(--sp-3);
