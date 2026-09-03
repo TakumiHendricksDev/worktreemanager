@@ -78,7 +78,7 @@ tracing         = "0.1"
 postgres        = "0.19"
 postgres-native-tls = "0.5"
 native-tls      = "0.2"
-rusqlite        = { version = "0.38", features = ["bundled", "column_decltype"] }
+rusqlite        = { version = "0.40", features = ["bundled", "column_decltype"] }
 
 # external — macOS notification FFI, used by `wtm-notify` alone. Already in the
 # lockfile via Tauri's own mobile unions, so these pins add no version churn.
