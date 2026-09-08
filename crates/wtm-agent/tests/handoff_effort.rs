@@ -3,9 +3,9 @@
 //! # Why this is its own file
 //!
 //! Every case here is *cross*-provider, so it belongs in neither provider's mapping tests. The
-//! ladders are the ones documented in `capability.rs` and verified against `codex-cli 0.144.6`:
+//! ladders are the ones documented in `capability.rs` and verified against `codex-cli 0.153.4`:
 //! Claude offers a fixed `low…max` plus `ultracode`, Codex offers a per-model ladder that reaches
-//! `ultra` on `gpt-5.6-sol` and stops at `xhigh` on `gpt-5.5`.
+//! `ultra` on `gpt-6-astra` and stops at `xhigh` on `gpt-5.5`.
 //!
 //! # The two properties worth protecting
 //!

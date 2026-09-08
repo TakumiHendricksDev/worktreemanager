@@ -17,7 +17,7 @@
    * agent; see `Sessions.configure`.
    *
    * **The effort ladder belongs to the model, not the provider.** Codex reports six efforts for
-   * `gpt-5.6-sol` — including `ultra` — and four for `gpt-5.5`. A single effort list would therefore
+   * `gpt-6-astra` — including `ultra` — and four for `gpt-5.5`. A single effort list would therefore
    * offer rungs the selected model rejects, so changing the model changes the ladder, and picking a
    * model whose ladder lacks the current effort snaps to that model's own default.
    *

@@ -3,10 +3,11 @@
 //! # Why this is not one mechanism
 //!
 //! Codex **advertises** its models. `model/list` returns each one with the effort ladder it actually
-//! supports, and those ladders differ *within* the provider — verified against `codex-cli 0.144.6`:
+//! supports, and those ladders differ *within* the provider — verified against `codex-cli 0.153.4`:
 //!
 //! | model | efforts |
 //! |---|---|
+//! | `gpt-6-astra` | low, medium, high, xhigh, max, **ultra** |
 //! | `gpt-5.6-sol` | low, medium, high, xhigh, max, **ultra** |
 //! | `gpt-5.6-luna` | low, medium, high, xhigh, max |
 //! | `gpt-5.5` | low, medium, high, xhigh |
@@ -42,7 +43,7 @@ pub const CODEX_ULTRA: &str = "ultra";
 /// The rung wtm starts a session on when it gets to choose.
 ///
 /// **This is wtm's editorial answer, not either CLI's.** Both providers advertise a lower default —
-/// Claude's table said `high`, Codex's `model/list` says `medium` for `gpt-5.6-sol` — and neither is
+/// Claude's table said `high`, Codex's catalogue says `low` for `gpt-6-astra` — and neither is
 /// what someone driving several agents against a worktree wants: the whole point of the tool is
 /// running work that takes a while, so the depth that pays for itself is the one above the CLI's
 /// interactive default. Written down once, here, because the picker's seed and the spawn path both

@@ -941,7 +941,7 @@ pub struct AgentSpec {
     /// The effort a new session starts on.
     ///
     /// Also a free string, and for a sharper reason: the ladder is **per model**, so no enum could be
-    /// right for every one of them — `gpt-5.6-sol` offers `ultra` and `gpt-5.5` stops at `xhigh`.
+    /// right for every one of them — `gpt-6-astra` offers `ultra` and `gpt-5.5` stops at `xhigh`.
     #[serde(default)]
     pub effort: Option<String>,
     /// The approval or permission mode, in the provider's own spelling.

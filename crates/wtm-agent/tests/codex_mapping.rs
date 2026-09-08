@@ -9,12 +9,13 @@
 //!
 //! # Where these lines came from, and why it matters more than it sounds
 //!
-//! Every fixture below is a line captured from `codex-cli 0.144.6` on a real machine, pasted
-//! verbatim. That is not fastidiousness: the first version of this file used fixtures taken from
-//! a `codex exec --json` capture, and **`exec` and the app server serialize the same items
-//! differently** — `agent_message` against `agentMessage`. So every test passed against a spelling
-//! the app server never sends, and the bug only surfaced when a real turn showed
-//! `item/started:agentMessage` falling through to `Raw`.
+//! Protocol-event fixtures below are lines captured from `codex-cli 0.144.6` on a real machine,
+//! pasted verbatim. The model catalogue is a reduced capture from 0.153.4: it keeps every field the
+//! parser reads and drops fields the domain deliberately does not model. That is not fastidiousness:
+//! the first version of this file used fixtures taken from a `codex exec --json` capture, and
+//! **`exec` and the app server serialize the same items differently** — `agent_message` against
+//! `agentMessage`. So every test passed against a spelling the app server never sends, and the bug
+//! only surfaced when a real turn showed `item/started:agentMessage` falling through to `Raw`.
 //!
 //! Four details a fixture invented from the schema would have got wrong, each verified on the wire:
 //!
@@ -25,7 +26,8 @@
 //!   * `turn/completed` carries **no usage at all** — token counts come separately on
 //!     `thread/tokenUsage/updated`.
 //!
-//! If a fixture here is ever edited, capture the replacement rather than writing it.
+//! If a fixture here is ever edited, capture the replacement rather than writing it. Trimming a
+//! capture is fine only where the test says which fields it keeps.
 //!
 //! # No process, no host, no timing
 //!
@@ -1037,12 +1039,15 @@ fn a_failed_turn_completion_keeps_its_error() {
 #[test]
 fn the_model_list_reply_yields_per_model_effort_ladders() {
     // The fact the whole capability query exists for: the ladders differ *within* one provider.
-    // Captured from a real `model/list` — `gpt-5.6-sol` reaches `ultra`, `gpt-5.5` stops at `xhigh`.
+    // Reduced from a real 0.153.4 `model/list`: Astra and Sol reach `ultra`, while `gpt-5.5` stops
+    // at `xhigh`. Only fields `parse_models` reads remain, plus one older hidden entry to keep that
+    // filter under test.
     // A picker built on a single provider-wide list would offer rungs the selected model rejects.
     let reply: serde_json::Value = serde_json::from_str(
         r#"{"id":3,"result":{"data":[
-          {"id":"gpt-5.6-sol","model":"gpt-5.6-sol","displayName":"GPT-5.6-Sol","description":"","hidden":false,"isDefault":true,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low","description":"Fast"},{"reasoningEffort":"medium","description":"Balanced"},{"reasoningEffort":"high","description":"Deeper"},{"reasoningEffort":"xhigh","description":"Extra"},{"reasoningEffort":"max","description":"Maximum"},{"reasoningEffort":"ultra","description":"Maximum reasoning with automatic task delegation"}]},
-          {"id":"gpt-5.5","model":"gpt-5.5","displayName":"GPT-5.5","description":"","hidden":false,"isDefault":false,"defaultReasoningEffort":"xhigh","supportedReasoningEfforts":[{"reasoningEffort":"low","description":""},{"reasoningEffort":"medium","description":""},{"reasoningEffort":"high","description":""},{"reasoningEffort":"xhigh","description":""}]},
+          {"id":"gpt-6-astra","model":"gpt-6-astra","displayName":"GPT-6-Astra","description":"Our most capable model for complex, demanding work.","hidden":false,"isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low","description":"Fast responses with lighter reasoning"},{"reasoningEffort":"medium","description":"Balances speed and reasoning depth for everyday tasks"},{"reasoningEffort":"high","description":"Greater reasoning depth for complex problems"},{"reasoningEffort":"xhigh","description":"Extra high reasoning depth for complex problems"},{"reasoningEffort":"max","description":"Maximum reasoning depth for the hardest problems"},{"reasoningEffort":"ultra","description":"Maximum reasoning with automatic task delegation"}]},
+          {"id":"gpt-5.6-sol","model":"gpt-5.6-sol","displayName":"GPT-5.6-Sol","description":"Latest frontier agentic coding model.","hidden":false,"isDefault":false,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low","description":"Fast responses with lighter reasoning"},{"reasoningEffort":"medium","description":"Balances speed and reasoning depth for everyday tasks"},{"reasoningEffort":"high","description":"Greater reasoning depth for complex problems"},{"reasoningEffort":"xhigh","description":"Extra high reasoning depth for complex problems"},{"reasoningEffort":"max","description":"Maximum reasoning depth for the hardest problems"},{"reasoningEffort":"ultra","description":"Maximum reasoning with automatic task delegation"}]},
+          {"id":"gpt-5.5","model":"gpt-5.5","displayName":"GPT-5.5","description":"Frontier model for complex coding, research, and real-world work.","hidden":false,"isDefault":false,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low","description":"Fast responses with lighter reasoning"},{"reasoningEffort":"medium","description":"Balances speed and reasoning depth for everyday tasks"},{"reasoningEffort":"high","description":"Greater reasoning depth for complex problems"},{"reasoningEffort":"xhigh","description":"Extra high reasoning depth for complex problems"}]},
           {"id":"gpt-5.6-sol-wm","model":"gpt-5.6-sol-wm","displayName":"GPT-5.6-Sol-WM","description":"","hidden":true,"isDefault":false,"defaultReasoningEffort":"low","supportedReasoningEfforts":[]}
         ],"nextCursor":null}}"#,
     )
@@ -1052,16 +1057,31 @@ fn the_model_list_reply_yields_per_model_effort_ladders() {
 
     // The hidden one is dropped: the server marks what it does not want in a picker, and offering it
     // anyway would present something the user has no way to understand.
-    assert_eq!(models.len(), 2, "the hidden model must not be offered");
+    assert_eq!(models.len(), 3, "the hidden model must not be offered");
 
-    let sol = &models[0];
+    let astra = &models[0];
+    assert_eq!(astra.id, "gpt-6-astra");
+    assert_eq!(astra.label, "GPT-6-Astra");
+    assert_eq!(
+        astra.description.as_deref(),
+        Some("Our most capable model for complex, demanding work.")
+    );
+    assert!(astra.is_default);
+    assert_eq!(astra.default_effort.as_deref(), Some("low"));
+    let astra_ladder: Vec<&str> = astra.efforts.iter().map(|e| e.effort.as_str()).collect();
+    assert_eq!(
+        astra_ladder,
+        ["low", "medium", "high", "xhigh", "max", "ultra"]
+    );
+
+    let sol = &models[1];
     assert_eq!(sol.id, "gpt-5.6-sol");
     assert_eq!(sol.label, "GPT-5.6-Sol");
-    assert!(sol.is_default);
+    assert!(!sol.is_default);
     // The server's own word, faithfully. `prefer_effort` overrides this afterwards and on purpose —
     // see `capability::prefer_effort` for why the override is a second pass rather than part of the
     // parse. This assertion is what makes a CLI that changes its own defaults visible.
-    assert_eq!(sol.default_effort.as_deref(), Some("medium"));
+    assert_eq!(sol.default_effort.as_deref(), Some("low"));
     let ladder: Vec<&str> = sol.efforts.iter().map(|e| e.effort.as_str()).collect();
     assert_eq!(ladder, ["low", "medium", "high", "xhigh", "max", "ultra"]);
     assert_eq!(
@@ -1071,8 +1091,8 @@ fn the_model_list_reply_yields_per_model_effort_ladders() {
     );
 
     // Four rungs, not six. This is the assertion a hardcoded ladder would fail.
-    assert_eq!(models[1].efforts.len(), 4);
-    assert!(!models[1].efforts.iter().any(|e| e.effort == "ultra"));
+    assert_eq!(models[2].efforts.len(), 4);
+    assert!(!models[2].efforts.iter().any(|e| e.effort == "ultra"));
 }
 
 #[test]

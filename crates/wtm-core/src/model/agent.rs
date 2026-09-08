@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// A plain string, not an enum, and that is load-bearing. Codex's own schema calls this "a
 /// non-empty reasoning effort value advertised by the model" and the ladder genuinely differs
-/// between models of the same provider — `gpt-5.6-sol` offers `ultra`, `gpt-5.5` stops at
+/// between models of the same provider — `gpt-6-astra` offers `ultra`, `gpt-5.5` stops at
 /// `xhigh`. An enum here would either be wrong for some model or would have to be widened on
 /// every provider release, and neither is a thing the domain should own.
 pub type Effort = String;
@@ -386,7 +386,7 @@ pub enum NoticeLevel {
 /// One model a provider offers, and the effort ladder it actually supports.
 ///
 /// The ladder is per *model*, not per provider, because that is what the providers report:
-/// `model/list` gives `gpt-5.6-sol` six efforts including `ultra` and `gpt-5.5` four. A picker
+/// `model/list` gives `gpt-6-astra` six efforts including `ultra` and `gpt-5.5` four. A picker
 /// built on a per-provider ladder would offer rungs the selected model rejects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

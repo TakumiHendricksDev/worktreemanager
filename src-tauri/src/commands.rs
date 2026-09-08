@@ -2131,7 +2131,7 @@ const CURSOR_CAPABILITY_TIMEOUT_MS: u64 = 20_000;
 /// kills it.
 ///
 /// A short-lived process for a picker is worth it: the ladders genuinely differ between models of
-/// the same provider — `gpt-5.6-sol` reaches `ultra` where `gpt-5.5` stops at `xhigh` — so a
+/// the same provider — `gpt-6-astra` reaches `ultra` where `gpt-5.5` stops at `xhigh` — so a
 /// hardcoded list would offer rungs the selected model rejects.
 #[tauri::command]
 pub async fn agent_capability(app: AppState<'_>, agent_id: String) -> Reply<CapabilityView> {

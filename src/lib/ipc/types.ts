@@ -390,7 +390,7 @@ export interface EffortOption {
 /**
  * One model a provider offers, and the effort ladder **that model** supports.
  *
- * Per model, not per provider, because that is what the providers report: `gpt-5.6-sol` offers six
+ * Per model, not per provider, because that is what the providers report: `gpt-6-astra` offers six
  * efforts including `ultra` and `gpt-5.5` offers four. A picker built on a per-provider ladder would
  * offer rungs the selected model rejects.
  */
