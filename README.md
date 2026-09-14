@@ -390,9 +390,9 @@ element refs — the primary way an agent reads a page), `browser_click`, `brows
 `browser_console`, `browser_evaluate`, `browser_read_comments`, `browser_resolve_comment` and
 `browser_close`. Ask a session to "open the dev server and check the signup form" and a pane
 appears in the worktree; the element it acts on flashes, and the pane's header says who is driving.
-Each pane has an **Agents** toggle to pause that, Settings has a global switch, and an agent can
-close only the panes it opened. Everything an agent reads from a page arrives wrapped as untrusted
-web content — see ARCHITECTURE §6c for the whole trust story.
+Each pane has an **Agent access: on/off** toggle to allow or block that, Settings has a global
+switch, and an agent can close only the panes it opened. Everything an agent reads from a page
+arrives wrapped as untrusted web content — see ARCHITECTURE §6c for the whole trust story.
 
 **Comments.** Turn on **Comment** in the pane's toolbar (⌘⇧C), hover to see what you would pick,
 click an element and say what should change — "make this a blue button". A numbered pin stays on

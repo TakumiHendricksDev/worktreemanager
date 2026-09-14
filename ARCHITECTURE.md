@@ -370,7 +370,7 @@ re-read the truth from the webview, never as the truth.
 
 **What an agent may do is bounded the same way delegation is.** The token names the worktree, and
 a browser in another worktree answers exactly like one that does not exist. Each pane has an
-**Agents** toggle the user can turn off; one agent drives a pane at a time; every action marks the
+**Agent access** toggle the user can turn off; one agent drives a pane at a time; every action marks the
 pane as driven and flashes the element it touches, because the point of the pane is that the user
 can watch. An agent may close only the browsers it opened. Every result wraps page-derived text in
 a `<wtm_page_content>` fence whose closing tag is neutralised inside the body — the same move

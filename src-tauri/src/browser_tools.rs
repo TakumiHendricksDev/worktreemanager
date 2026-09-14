@@ -5,7 +5,7 @@
 //! Everything here is scoped by the caller's token, exactly as `ask_agent` is: the token names a
 //! worktree, and a tool can only see and act on browser panes in that worktree. A browser in another
 //! worktree answers with the same text as one that does not exist, so the tool cannot be used to
-//! probe. Within the worktree, each pane has an **Agents** toggle the user can turn off, and a tool
+//! probe. Within the worktree, each pane has an **Agent access** toggle the user can turn off, and a tool
 //! against a paused pane is refused with a message that names the toggle. One agent drives a pane
 //! at a time; a second caller is told who has it. Every action marks the pane as driven while it
 //! runs, which the frontend shows, and flashes the element it touches — the point of the pane is
@@ -453,7 +453,7 @@ fn driven(
     if !view.agent_access {
         return Err(
             "the user has paused agent access to this browser pane. Ask them to turn on \
-             \"Agents\" in the pane's toolbar, then try again."
+             \"Agent access\" in the pane's toolbar, then try again."
                 .to_owned(),
         );
     }

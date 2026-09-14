@@ -38,7 +38,12 @@
   import { untrack } from 'svelte';
 
   import { commands } from '../ipc/commands';
-  import type { BrowserComment, BrowserHistoryAction, BrowserView } from '../ipc/types';
+  import {
+    errorMessage,
+    type BrowserComment,
+    type BrowserHistoryAction,
+    type BrowserView,
+  } from '../ipc/types';
   import { browsers, type BrowserShortcut } from '../state/browsers.svelte';
   import { overlay } from '../state/overlay.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
@@ -72,8 +77,9 @@
   let typed = $state('');
   /** True while the address is being edited, so a page navigating underneath does not overwrite it. */
   let editing = $state(false);
-  /** What was wrong with the last address. Beside the field, not in the pane's status line. */
+  /** What failed in the toolbar. Kept beside the controls that caused it. */
   let problem = $state<string | null>(null);
+  let agentAccessPending = $state(false);
   /** The rectangle the native view is laid over. */
   let box = $state<HTMLElement | null>(null);
   /** The last picture of the page, shown while the native view is hidden. */
@@ -128,9 +134,18 @@
     });
   }
 
-  function toggleAgents(): void {
-    if (id === null || !view) return;
-    void commands.browserSetAgentAccess(id, !view.agentAccess).catch(() => {});
+  async function toggleAgents(): Promise<void> {
+    if (id === null || !view || agentAccessPending || runtimeOff !== null) return;
+    agentAccessPending = true;
+    problem = null;
+    try {
+      // The reply confirms the change even if the matching state event has not arrived yet.
+      browsers.apply(await commands.browserSetAgentAccess(id, !view.agentAccess));
+    } catch (error) {
+      problem = errorMessage(error);
+    } finally {
+      agentAccessPending = false;
+    }
   }
 
   function openExternally(): void {
@@ -541,16 +556,26 @@
         class:is-driving={(view?.agentDriving ?? null) !== null}
       >
         <Button
-          variant="quiet"
+          variant={view?.agentAccess && runtimeOff === null ? 'neutral' : 'quiet'}
           size="sm"
-          ariaPressed={view?.agentAccess ?? true}
-          disabled={blank}
-          title={(view?.agentAccess ?? true)
-            ? 'Agents in this worktree may read and drive this page. Click to pause that.'
-            : 'Agents are paused on this page. Click to allow them again.'}
-          onclick={toggleAgents}
+          ariaLabel="Allow agents to use this page"
+          ariaPressed={runtimeOff === null && (view?.agentAccess ?? false)}
+          disabled={blank || runtimeOff !== null || agentAccessPending}
+          title={runtimeOff ??
+            (blank
+              ? 'Open a page to control whether agents may use it.'
+              : view?.agentAccess
+                ? 'Agents in this worktree may read and interact with this page. Click to turn off access.'
+                : 'Agent access is off for this page. Click to allow agents to read and interact with it.')}
+          onclick={() => void toggleAgents()}
         >
-          Agents
+          Agent access{runtimeOff !== null
+            ? ': unavailable'
+            : view
+              ? view.agentAccess
+                ? ': on'
+                : ': off'
+              : ''}
         </Button>
         {#if view?.agentDriving}
           {view.agentDriving} is browsing
