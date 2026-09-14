@@ -9,6 +9,9 @@
 pub mod agent_bridge;
 pub mod app;
 pub mod bridge;
+pub mod browser;
+pub mod browser_bridge;
+pub mod browser_tools;
 pub mod commands;
 pub mod dictate;
 pub mod display;
@@ -252,6 +255,24 @@ pub fn run() {
             commands::list_background_tasks,
             commands::close_agent_session,
             commands::open_url,
+            commands::open_browser,
+            commands::close_browser,
+            commands::browser_navigate,
+            commands::browser_history,
+            commands::browser_set_bounds,
+            commands::browser_set_agent_access,
+            commands::browser_focus,
+            commands::browser_zoom,
+            commands::list_browsers,
+            commands::browser_available,
+            commands::browser_set_comment_mode,
+            commands::browser_list_comments,
+            commands::browser_update_comment,
+            commands::browser_remove_comment,
+            commands::browser_resolve_comment,
+            commands::browser_snapshot_png,
+            commands::browser_set_theme,
+            commands::browser_open_devtools,
             commands::list_openers,
             commands::open_in,
             commands::post_notification,

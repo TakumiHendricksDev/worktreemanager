@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# The second crate that cannot take `[lints] workspace = true`, and why there is one.
+#
+# The workspace forbids `unsafe_code`, and `forbid` cannot be overridden at a use
+# site. `wtm-notify` was the first carve-out; this is the second, for the same
+# mechanical reason and a different framework. The browser pane is a WKWebView
+# that Tauri creates, and Tauri's safe API stops exactly short of what an agent
+# runtime needs: a script that runs in an *isolated content world* the page cannot
+# see or tamper with, a message handler in that world so the page's CSP cannot
+# block the reply channel, evaluation *in* that world with a result, and a PNG
+# snapshot. wry exposes none of the four — its scripts and its IPC live in the
+# page world — so this crate calls WebKit directly through objc2, inside the
+# closure Tauri's `with_webview` runs on the main thread.
+#
+# The unsafe density is higher than `wtm-notify`'s and it is worth saying so:
+# every objc2-web-kit method is `unsafe fn` in 0.3, so `mac.rs` is a sequence of
+# one-line SAFETY comments rather than the two or three the notification arm
+# needed. Same lints table verbatim with `unsafe_code = "deny"`, same two-arm
+# facade, same uninhabited no-op type — see `lib.rs`.
+#
+# CONTRIBUTING.md calls a second such crate an open-an-issue-first change. This
+# is the maintainer's own decision, recorded in ARCHITECTURE.md §6c.
+# ─────────────────────────────────────────────────────────────────────────────
+[package]
+name = "wtm-webview"
+description = "Native WebKit calls the browser pane needs and Tauri does not expose: isolated-world scripts, message handlers, evaluation and snapshots."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-web-kit = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-core-foundation = { workspace = true }
+block2 = { workspace = true }
+
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# pedantic opt-outs — the workspace's own, kept in lockstep with the root table
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+
+dbg_macro = "deny"
+todo = "warn"
+unwrap_used = "warn"
+print_stdout = "warn"
+print_stderr = "warn"

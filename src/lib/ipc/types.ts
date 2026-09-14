@@ -103,6 +103,8 @@ export interface Worktree {
    * one at a time with `commands.revealEnvValue`.
    */
   env: string[];
+  /** The rendered `[browser] home` template, when the project declares one. */
+  browserHome: string | null;
 }
 
 export type DatabaseEngine = 'postgres' | 'mysql' | 'sqlite';
@@ -711,6 +713,104 @@ export interface SpawnedSession {
   parentSession: string | null;
   run: string | null;
   title: string | null;
+}
+
+/**
+ * One browser pane, as Rust sees it.
+ *
+ * The reply to `openBrowser`, a row of `listBrowsers`, and the payload of both `browser:state` and
+ * `browser:opened` — one shape, so the frontend mirrors it whole and never merges a delta.
+ */
+export interface BrowserView {
+  /** The webview label, `browser-…`. Never a session id. */
+  id: string;
+  project: string;
+  worktree: string;
+  url: string;
+  title: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  /** Whether agents may drive this pane. The per-pane toggle, on by default. */
+  agentAccess: boolean;
+  /** The agent session that opened it, when one did. */
+  openedBy: string | null;
+  commentMode: boolean;
+  /** The label of the agent acting on the page, while one is. */
+  agentDriving: string | null;
+}
+
+/** Where a browser's tile is, in this webview's CSS pixels. Logical units end to end. */
+export interface BrowserBounds {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export type BrowserHistoryAction = 'back' | 'forward' | 'reload' | 'stop';
+
+/** Emitted as `browser:closed`. `summary` is a sentence when the pane should say why it ended. */
+export interface BrowserClosed {
+  id: string;
+  summary: string | null;
+}
+
+/** Whether this build can show a browser pane, drive it, and why not when it cannot. */
+export interface BrowserAvailability {
+  /** Whether a pane can be shown at all. */
+  available: boolean;
+  /** Whether the runtime — agent tools, comments, snapshots — can be installed. macOS only, so far. */
+  runtime: boolean;
+  reason: string | null;
+}
+
+/** Where a comment's element was, in page coordinates, when the comment was made. */
+export interface BrowserAnchorRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** What a comment is attached to, as the page runtime described the element at the click. */
+export interface BrowserCommentAnchor {
+  selector: string;
+  tag: string;
+  role: string | null;
+  name: string | null;
+  text: string;
+  rect: BrowserAnchorRect | null;
+  url: string;
+  pageTitle: string;
+  nearestHeading: string | null;
+  styles: Record<string, string> | null;
+}
+
+/** One comment the user left on an element. `id` counts from one per browser. */
+export interface BrowserComment {
+  id: number;
+  text: string;
+  status: 'open' | 'resolved';
+  anchor: BrowserCommentAnchor;
+}
+
+/** Emitted as `browser:comments` — the whole list, never a delta. */
+export interface BrowserComments {
+  id: string;
+  comments: BrowserComment[];
+}
+
+/** Emitted as `browser:pick` — an element was picked in comment mode, or a pin was clicked. */
+export interface BrowserPick {
+  id: string;
+  commentId: number | null;
+}
+
+/** Emitted as `browser:shortcut` — a chord or gesture happened inside the page. */
+export interface BrowserShortcutEvent {
+  id: string;
+  action: string;
 }
 
 /** Emitted as `wtm:progress` while a pipeline runs. */

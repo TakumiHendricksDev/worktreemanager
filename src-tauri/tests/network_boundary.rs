@@ -49,6 +49,31 @@ fn the_webview_is_still_denied_every_network_destination() {
 }
 
 #[test]
+fn the_app_webviews_csp_is_untouched_by_the_browser_pane() {
+    // The browser pane shows arbitrary remote pages, and the tempting implementation was an
+    // `<iframe>` — which would have needed `frame-src` here and still lost to `X-Frame-Options`.
+    // It is a separate child webview instead, so this policy stays exactly what it was. The
+    // second assertion is the other door the same feature could have opened: Tauri's escape hatch
+    // for letting remote origins invoke commands, which the browser must never be given.
+    let conf = std::fs::read_to_string(repo_root().join("src-tauri/tauri.conf.json"))
+        .expect("tauri.conf.json");
+    let conf: serde_json::Value = serde_json::from_str(&conf).expect("valid JSON");
+    let csp = conf["app"]["security"]["csp"]
+        .as_str()
+        .expect("a content security policy");
+    assert!(
+        !csp.split(';').any(|d| d.trim().starts_with("frame-src")),
+        "the app webview frames nothing; the browser pane is a child webview, not an iframe"
+    );
+    assert!(
+        conf["app"]["security"]
+            .get("dangerousRemoteDomainIpcAccess")
+            .is_none(),
+        "no remote origin may invoke this app's commands, browser pane or not"
+    );
+}
+
+#[test]
 fn the_transcription_host_is_compiled_in_rather_than_configured() {
     // Read out of the source rather than asserted against the constant, because the failure being
     // prevented is not a wrong value — it is the constant being *replaced* by a field somebody can

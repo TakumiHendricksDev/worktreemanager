@@ -60,14 +60,39 @@ impl Bridge {
         Self::spawn(agents, Some((socket, token)), true)
     }
 
+    /// Start a bridge whose browser tools were enabled at spawn time, wired to a fake app.
+    fn wired_browsing(agents: &str, socket: &std::path::Path, token: &str) -> Self {
+        let mut bridge = Self::spawn_with(agents, Some((socket, token)), false, true);
+        bridge.call(1, "initialize", &serde_json::json!({}));
+        bridge
+    }
+
+    /// Start an unwired bridge with the browser tools on, for listing.
+    fn browsing(agents: &str) -> Self {
+        Self::spawn_with(agents, None, false, true)
+    }
+
     fn spawn(agents: &str, wiring: Option<(&std::path::Path, &str)>, awareness: bool) -> Self {
+        Self::spawn_with(agents, wiring, awareness, false)
+    }
+
+    fn spawn_with(
+        agents: &str,
+        wiring: Option<(&std::path::Path, &str)>,
+        awareness: bool,
+        browser: bool,
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_wtm"));
         command
             .arg("--mcp-bridge")
             .env(handoff::AGENTS_ENV, agents)
-            .env_remove(handoff::AWARENESS_ENV);
+            .env_remove(handoff::AWARENESS_ENV)
+            .env_remove(handoff::BROWSER_TOOLS_ENV);
         if awareness {
             command.env(handoff::AWARENESS_ENV, "on");
+        }
+        if browser {
+            command.env(handoff::BROWSER_TOOLS_ENV, "on");
         }
 
         match wiring {
@@ -610,4 +635,132 @@ fn calling_a_tool_this_server_does_not_have_is_a_tool_error() {
         &serde_json::json!({ "name": "run_anything", "arguments": {} }),
     );
     assert_eq!(reply["result"]["isError"], true, "{reply}");
+}
+
+#[test]
+fn the_browser_tools_are_advertised_only_to_sessions_started_with_them_on() {
+    // The same shape as the awareness gate: the app decides at spawn time, and a bridge started
+    // without the flag does not even know the names — so a model in a session without browser
+    // access cannot be told about tools it will be refused.
+    let mut without = Bridge::start("codex:Codex");
+    without.call(1, "initialize", &serde_json::json!({}));
+    let without = without.call(2, "tools/list", &serde_json::json!({}));
+    let base = without["result"]["tools"].as_array().unwrap().len();
+    assert_eq!(base, 3);
+
+    let mut with = Bridge::browsing("codex:Codex");
+    with.call(1, "initialize", &serde_json::json!({}));
+    let with = with.call(2, "tools/list", &serde_json::json!({}));
+    let tools = with["result"]["tools"].as_array().unwrap();
+    assert!(
+        tools.len() > base,
+        "the browser tools should be appended: {with}"
+    );
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    for expected in [
+        "browser_open",
+        "browser_list",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_screenshot",
+        "browser_click",
+        "browser_type",
+        "browser_read_comments",
+        "browser_close",
+    ] {
+        assert!(names.contains(&expected), "missing `{expected}`: {names:?}");
+    }
+    // The coordination tools keep their positions, which other tests pin.
+    assert_eq!(names[0], "ask_agent");
+    assert_eq!(names[1], "spawn_agents");
+    assert_eq!(names[2], "close_agents");
+
+    let refused = without_flag_call();
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+}
+
+/// A `browser_*` call against a bridge started without the flag is an unknown tool, not a
+/// forwarded request — proved by giving it no socket to reach.
+fn without_flag_call() -> serde_json::Value {
+    let mut bridge = Bridge::start("codex:Codex");
+    bridge.call(1, "initialize", &serde_json::json!({}));
+    bridge.call(
+        2,
+        "tools/call",
+        &serde_json::json!({ "name": "browser_snapshot", "arguments": {} }),
+    )
+}
+
+#[test]
+fn a_browser_click_reaches_the_app_as_a_browser_action_with_its_arguments_verbatim() {
+    // The bridge must not interpret browser arguments: the app owns the schemas, and a bridge that
+    // rewrote or dropped a field would be a second, drifting copy of them. So the whole `arguments`
+    // object has to arrive as it was sent, under the tool's name, with the token.
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("b.sock");
+    let app = fake_app(
+        &socket,
+        handoff::Response::ok("Clicked.\n\nBrowser: browser-1".to_owned()),
+    );
+
+    let mut bridge = Bridge::wired_browsing("codex:Codex", &socket, "token-b");
+    let arguments = serde_json::json!({
+        "browser": "browser-1",
+        "ref": "e12",
+        "modifiers": ["shift"],
+        "snapshot": false,
+    });
+    let reply = bridge.call(
+        2,
+        "tools/call",
+        &serde_json::json!({ "name": "browser_click", "arguments": arguments }),
+    );
+
+    let sent = app.join().expect("the fake app should not panic");
+    assert_eq!(sent.token, "token-b");
+    assert_eq!(sent.action, handoff::Action::Browser);
+    let call = sent.browser.expect("a browser action carries its call");
+    assert_eq!(call.tool, "browser_click");
+    assert_eq!(call.args, arguments, "arguments must cross untouched");
+
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    assert_eq!(reply["result"]["content"][0]["type"], "text");
+    assert!(
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Clicked."),
+        "{reply}"
+    );
+    assert_eq!(
+        reply["result"]["content"].as_array().unwrap().len(),
+        1,
+        "no image was returned, so no image block: {reply}"
+    );
+}
+
+#[test]
+fn a_screenshot_reaches_the_cli_as_an_image_block_beside_the_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("s.sock");
+    let app = fake_app(
+        &socket,
+        handoff::Response::with_image("Browser: browser-1".to_owned(), "iVBORw0KGgo=".to_owned()),
+    );
+
+    let mut bridge = Bridge::wired_browsing("codex:Codex", &socket, "token-s");
+    let reply = bridge.call(
+        2,
+        "tools/call",
+        &serde_json::json!({ "name": "browser_screenshot", "arguments": { "browser": "browser-1" } }),
+    );
+    let sent = app.join().unwrap();
+    assert_eq!(sent.browser.unwrap().tool, "browser_screenshot");
+
+    let content = reply["result"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2, "text and image: {reply}");
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["data"], "iVBORw0KGgo=");
+    assert_eq!(content[1]["mimeType"], "image/png");
 }

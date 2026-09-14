@@ -17,6 +17,7 @@
    * Branch and dirty state stay inline because they are the two facts you glance at; the rest moved
    * into the Details dialog.
    */
+  import { browsers } from '../state/browsers.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { commands } from '../ipc/commands';
   import { INSPECTOR_SHORTCUT, SHELL_SHORTCUT } from '../state/sessions.svelte';
@@ -199,6 +200,17 @@
       onclick={() => void sessions.focusOrOpenShell(projectId, worktree.id)}
     >
       <Icon name="terminal" size={13} /> Shell
+    </Button>
+
+    <Button
+      variant="quiet"
+      size="sm"
+      title={browsers.unavailable ?? 'Open a browser pane in this worktree'}
+      disabled={browsers.unavailable !== null}
+      onclick={() =>
+        void sessions.openBrowser(projectId, worktree.id, worktree.browserHome)}
+    >
+      <Icon name="globe" size={13} /> Browser
     </Button>
 
     <OpenInButton {projectId} worktreeId={worktree.id} />

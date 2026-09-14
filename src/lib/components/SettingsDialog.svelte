@@ -32,6 +32,7 @@
   import { composerPrefs, type SendKey } from '../state/composer.svelte';
   import { DESTINATION, dictation, type DictateMode } from '../state/dictate.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
+  import { browserTools } from '../state/browser-tools.svelte';
   import { sessionAwareness } from '../state/session-awareness.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Banner from './ui/Banner.svelte';
@@ -384,6 +385,19 @@
 
         <div class="o-stack">
           <h3 class="c-section-heading">Agent coordination</h3>
+          <Choice
+            type="checkbox"
+            checked={browserTools.enabled}
+            onchange={(enabled) => void browserTools.setEnabled(enabled)}
+          >
+            Agents may use browser panes
+          </Choice>
+          <p class="c-field__help">
+            Agents in a worktree can open browser panes there, read pages as an outline,
+            click and type in them, take screenshots, and read the comments you leave in a
+            pane’s comment mode. Every pane also has its own Agents toggle. Applies to
+            sessions started after the change.
+          </p>
           <Choice
             type="checkbox"
             checked={sessionAwareness.enabled}

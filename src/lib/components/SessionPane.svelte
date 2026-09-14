@@ -25,6 +25,7 @@
   import { STATUS_WORD, type PaneStatus } from '../status';
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
   import AgentTranscript from './AgentTranscript.svelte';
+  import BrowserPane from './BrowserPane.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import Markdown from './Markdown.svelte';
   import ModelPicker from './ModelPicker.svelte';
@@ -84,6 +85,7 @@
   /** Whether any part of that request is currently visible in the transcript viewport. */
   let approvalVisible = $state(true);
   let terminal = $state<ReturnType<typeof Terminal> | null>(null);
+  let browserPane = $state<ReturnType<typeof BrowserPane> | null>(null);
   /**
    * Whether the transcript is following its tail.
    *
@@ -102,9 +104,11 @@
    * `pane.kind` through a `$props()` getter, so TypeScript will not carry a narrowing across one.
    */
   const provider = $derived(pane.kind.kind === 'agent' ? pane.kind.provider : null);
+  /** The kind, for the sites that tell a shell from a browser — `provider` is null for both. */
+  const kind = $derived(pane.kind.kind);
 
   const label = $derived.by(() => {
-    if (provider === null) return 'Shell';
+    if (provider === null) return sessions.labelOf(pane);
     return sessions.options.find((o) => o.id === provider)?.label ?? provider;
   });
 
@@ -466,11 +470,32 @@
   $effect(() => {
     if (sessions.focusEpoch === 0) return;
     if (sessions.focusTarget !== pane.id) return;
-    if (provider === null) terminal?.focus();
+    if (kind === 'shell') terminal?.focus();
+    else if (kind === 'browser') browserPane?.focus();
     else composer?.focus();
   });
 
   let composer = $state<HTMLTextAreaElement | null>(null);
+
+  /*
+   * Text handed in from outside — a browser pane's comments — appended to the draft.
+   *
+   * The `seenDraft` guard is load-bearing: appending reads `draft`, so without it this effect would
+   * depend on the draft and re-append on every keystroke. `untrack` keeps the read out of the
+   * dependency set for the same reason.
+   */
+  let seenDraft = 0;
+  $effect(() => {
+    const epoch = sessions.draftEpoch;
+    const request = sessions.draftTarget;
+    if (epoch === seenDraft || request === null || request.paneId !== pane.id) return;
+    seenDraft = epoch;
+    untrack(() => {
+      const gap = draft === '' || /\s$/.test(draft) ? '' : '\n\n';
+      draft = `${draft}${gap}${request.text}`;
+      composer?.focus();
+    });
+  });
   /** The composer card. The drop target's bounds — see the drag-drop effect for why it is needed. */
   let form = $state<HTMLElement | null>(null);
 
@@ -1151,20 +1176,34 @@
             variant="quiet"
             size="sm"
             icon="sm"
-            title={provider === null
+            title={kind === 'shell'
               ? 'Open another shell to the right'
-              : 'Split this session to the right'}
-            ariaLabel={provider === null ? 'New shell to the right' : 'Split right'}
+              : kind === 'browser'
+                ? 'Open another browser to the right'
+                : 'Split this session to the right'}
+            ariaLabel={kind === 'shell'
+              ? 'New shell to the right'
+              : kind === 'browser'
+                ? 'New browser to the right'
+                : 'Split right'}
             onclick={() =>
-              void (provider === null
+              void (kind === 'shell'
                 ? sessions.openShell(pane.projectId, pane.worktreeId, 'right', pane.id)
-                : sessions.openAgent(
-                    pane.projectId,
-                    pane.worktreeId,
-                    provider,
-                    'right',
-                    pane.id,
-                  ))}
+                : kind === 'browser'
+                  ? sessions.openBrowser(
+                      pane.projectId,
+                      pane.worktreeId,
+                      null,
+                      'right',
+                      pane.id,
+                    )
+                  : sessions.openAgent(
+                      pane.projectId,
+                      pane.worktreeId,
+                      provider ?? '',
+                      'right',
+                      pane.id,
+                    ))}
           >
             <Icon name="split-right" size={13} />
           </Button>
@@ -1183,7 +1222,7 @@
       </div>
     </header>
 
-    {#if pane.detached && provider !== null}
+    {#if pane.detached && kind === 'agent'}
       <!--
       Restored from the last run with nothing behind it yet.
 
@@ -1218,7 +1257,11 @@
           {/if}
         </div>
       </div>
-    {:else if provider === null}
+    {:else if kind === 'browser'}
+      <div class="c-pane__body c-pane__body--browser">
+        <BrowserPane bind:this={browserPane} {pane} {visible} />
+      </div>
+    {:else if kind === 'shell'}
       <div class="c-pane__body c-pane__body--terminal">
         <Terminal
           bind:this={terminal}
@@ -1709,10 +1752,12 @@
   <Dialog title="Restart session?" onclose={() => (confirmRestart = false)}>
     {#snippet body()}
       <p>
-        Restarting clears this pane's visible {provider === null
+        Restarting clears this pane's visible {kind === 'shell'
           ? 'terminal scrollback'
-          : 'chat'}
-        {#if provider !== null}
+          : kind === 'browser'
+            ? 'page'
+            : 'chat'}
+        {#if kind === 'agent'}
           . The provider conversation will remain available under “Pick up where you left
           off”
         {/if}.
@@ -1738,8 +1783,12 @@
   >
     {#snippet body()}
       <p>
-        Closing ends this {provider === null ? 'shell' : 'conversation'} and removes the pane.
-        {#if provider !== null}
+        Closing ends this {kind === 'shell'
+          ? 'shell'
+          : kind === 'browser'
+            ? 'browser'
+            : 'conversation'} and removes the pane.
+        {#if kind === 'agent'}
           Delegated children and any side question are closed with it.
         {/if}
       </p>

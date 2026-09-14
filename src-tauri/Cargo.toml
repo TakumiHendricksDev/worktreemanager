@@ -29,7 +29,12 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # The only crate that knows Tauri exists. Everything below it is framework-free.
-tauri      = { version = "2", features = ["macos-private-api"] }
+#
+# `unstable` is the child-webview API — `Window::add_child`, `Webview::set_bounds` — which is how
+# the browser pane puts a second, real webview over a tile (see `browser.rs`). Tauri calls it
+# unstable because the API may change between minor versions, not because it misbehaves; the
+# version is pinned exactly in `Cargo.lock`, so a bump is a reviewed diff rather than a surprise.
+tauri      = { version = "2", features = ["macos-private-api", "unstable"] }
 # The native folder picker behind "Browse…" in Add a repository. The one capability this app
 # grants beyond its own commands: it returns a path the user chose by hand, and nothing else —
 # no directory listing, no read. That path is then validated by the same `git rev-parse` a
@@ -48,6 +53,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 wtm-core   = { workspace = true }
 wtm-notify = { workspace = true }
+# The browser pane's native half: isolated-world scripts, message handlers, evaluation and
+# snapshots, which Tauri does not expose. Fenced FFI like `wtm-notify`; see its Cargo.toml header.
+wtm-webview = { workspace = true }
 wtm-config = { workspace = true }
 wtm-exec   = { workspace = true }
 wtm-agent  = { workspace = true }

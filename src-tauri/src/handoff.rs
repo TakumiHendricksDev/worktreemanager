@@ -73,6 +73,11 @@ pub const AGENTS_ENV: &str = "WTM_HANDOFF_AGENTS";
 /// bridges that were already running.
 pub const AWARENESS_ENV: &str = "WTM_SESSION_AWARENESS";
 
+/// Set to `on` when the session gets the `browser_*` tools — the preference is on and the build has
+/// the native runtime. Read by the bridge to decide whether to *list* them; the app re-checks the
+/// live preference on every call regardless.
+pub const BROWSER_TOOLS_ENV: &str = "WTM_BROWSER_TOOLS";
+
 /// The name the bridge is registered under, and therefore the prefix the model sees.
 ///
 /// A tool call shows up as `mcp__wtm__ask_agent`. Short, because it is read in a transcript.
@@ -106,10 +111,24 @@ pub enum Action {
     CloseChildren,
     /// Describe other live agent sessions in the caller's worktree.
     ListSessions,
+    /// One of the `browser_*` tools. Which one, and with what, rides in [`Request::browser`].
+    Browser,
+}
+
+/// A browser tool call, carried through the socket untouched.
+///
+/// The arguments are the model's JSON as the CLI delivered it. The bridge does not validate them —
+/// it would need a copy of every schema to do so — and the app, which owns the schemas, does.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserCall {
+    pub tool: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
 }
 
 /// What the bridge asks the app to do.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Request {
     /// Which session is asking. Resolves to a project and a worktree.
@@ -134,6 +153,10 @@ pub struct Request {
     /// Maximum simultaneously running children. Clamped to the task count and hard limit.
     #[serde(default)]
     pub concurrency: Option<usize>,
+    /// The browser tool call, when `action` is [`Action::Browser`]. Absent on every other request,
+    /// and absent from every request an older bridge sends — which still deserializes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserCall>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -165,6 +188,12 @@ pub struct Response {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A picture to go with the text — a screenshot — as base64. Only the browser tools set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// The picture's media type. Always PNG today, carried so the bridge never has to assume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 impl Response {
@@ -173,6 +202,19 @@ impl Response {
             ok: true,
             text: Some(text),
             error: None,
+            image: None,
+            mime: None,
+        }
+    }
+
+    /// Text and a PNG, base64-encoded. The bridge turns it into a text block and an image block.
+    pub fn with_image(text: String, png_base64: String) -> Self {
+        Self {
+            ok: true,
+            text: Some(text),
+            error: None,
+            image: Some(png_base64),
+            mime: Some("image/png".to_owned()),
         }
     }
 
@@ -181,6 +223,8 @@ impl Response {
             ok: false,
             text: None,
             error: Some(error.into()),
+            image: None,
+            mime: None,
         }
     }
 }
@@ -603,6 +647,12 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
     match request.action {
         Action::CloseChildren => return close_children(handle, app, &request.token),
         Action::ListSessions => return list_sessions(app, &request.token),
+        Action::Browser => {
+            return match &request.browser {
+                Some(call) => crate::browser_tools::run(handle, app, &request.token, call),
+                None => Response::failed("a browser request has to name a tool"),
+            };
+        }
         Action::Delegate => {}
     }
     let tasks = if request.tasks.is_empty() {
@@ -977,6 +1027,10 @@ fn close_children(handle: &tauri::AppHandle, app: &Arc<App>, token: &str) -> Res
     // The frontend holds a pane per child and nothing else would tell it these are gone —
     // `close_agent` emits nothing, and an exit event arrives per session at best.
     crate::agent_bridge::announce_released(handle, &closed);
+    // Browsers a child opened go with the child, as its own children do.
+    for session in &closed {
+        crate::browser::close_opened_by(handle, app, session);
+    }
 
     tracing::info!(
         parent,
@@ -1461,5 +1515,53 @@ mod tests {
         assert_eq!(failed["ok"], false);
         assert_eq!(failed["error"], "nope");
         assert!(failed.get("text").is_none(), "{failed}");
+    }
+
+    #[test]
+    fn a_browser_request_round_trips_its_tool_and_arguments_as_camel_case_json() {
+        let request = Request {
+            token: "t".to_owned(),
+            action: Action::Browser,
+            browser: Some(BrowserCall {
+                tool: "browser_click".to_owned(),
+                args: serde_json::json!({ "ref": "e12", "browser": "browser-1" }),
+            }),
+            ..Request::default()
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""action":"browser""#), "{json}");
+        assert!(
+            json.contains(r#""browser":{"tool":"browser_click""#),
+            "{json}"
+        );
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.action, Action::Browser);
+        assert_eq!(back.browser.unwrap().args["ref"], "e12");
+    }
+
+    #[test]
+    fn a_request_without_an_action_or_browser_field_is_still_a_delegation() {
+        // What every older bridge sends: no `action`, no `browser`.
+        let back: Request =
+            serde_json::from_str(r#"{"token":"t","agent":"codex","prompt":"hi"}"#).unwrap();
+        assert_eq!(back.action, Action::Delegate);
+        assert!(back.browser.is_none());
+        assert_eq!(back.prompt, "hi");
+    }
+
+    #[test]
+    fn a_response_with_an_image_carries_its_mime_and_a_plain_one_carries_neither_key() {
+        let plain = serde_json::to_string(&Response::ok("text".to_owned())).unwrap();
+        assert!(
+            !plain.contains("image") && !plain.contains("mime"),
+            "{plain}"
+        );
+        let pictured = Response::with_image("Browser: b".to_owned(), "iVBORw0KGgo=".to_owned());
+        let json = serde_json::to_string(&pictured).unwrap();
+        assert!(json.contains(r#""image":"iVBORw0KGgo=""#), "{json}");
+        assert!(json.contains(r#""mime":"image/png""#), "{json}");
+        let back: Response = serde_json::from_str(&json).unwrap();
+        assert!(back.ok);
+        assert_eq!(back.mime.as_deref(), Some("image/png"));
     }
 }

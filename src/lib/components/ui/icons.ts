@@ -48,6 +48,9 @@ export type IconName =
   | 'chevron-right'
   | 'check'
   | 'close'
+  | 'comment'
+  | 'external'
+  | 'globe'
   | 'file'
   | 'grip'
   | 'star'
@@ -110,6 +113,20 @@ export const icons: Record<IconName, IconSpec> = {
       'A1.75 1.75 0 0 1 8 2.25 Z M3.75 7.25 A4.25 4.25 0 0 0 12.25 7.25 M8 11.5 V14',
   },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
+  /** A speech bubble with its tail at the lower left: a comment left *on* something. */
+  comment: { stroke: 'M2.5 3.25 H13.5 V10.25 H7.5 L4.5 12.75 V10.25 H2.5 Z' },
+  /** A box with an arrow leaving its top-right corner — open elsewhere. */
+  external: {
+    stroke: 'M7 3.5 H3.5 V12.5 H12.5 V9 M9.25 3.5 H12.5 V6.75 M12.5 3.5 L7.5 8.5',
+  },
+  /*
+   * A globe: a circle, its equator and one meridian. Three strokes rather than the usual five
+   * because at 1.5 stroke on a 16 grid a second meridian closes the gaps into a blob.
+   */
+  globe: {
+    stroke:
+      'M8 1.75 A6.25 6.25 0 1 0 8 14.25 A6.25 6.25 0 1 0 8 1.75 M1.75 8 H14.25 M8 1.75 C5.6 4.5 5.6 11.5 8 14.25',
+  },
   /** A triangle, the same shape warnings already used as a `!` glyph in preflight lists. */
   warn: { stroke: 'M8 3 L13.25 13.25 H2.75 Z M8 6.75 V10 M8 11.5 V12.25' },
   file: { stroke: 'M4 1.75 H9.25 L12 4.5 V14.25 H4 Z M9.25 1.75 V4.5 H12' },

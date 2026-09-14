@@ -34,6 +34,8 @@
   import { dictation } from './lib/state/dictate.svelte';
   import { sessions } from './lib/state/sessions.svelte';
   import { sessionAwareness } from './lib/state/session-awareness.svelte';
+  import { browserTools } from './lib/state/browser-tools.svelte';
+  import { browsers } from './lib/state/browsers.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { workspace } from './lib/state/workspace.svelte';
 
@@ -110,6 +112,8 @@
       // session under the default rather than the chosen behaviour.
       await composerPrefs.init();
       await sessionAwareness.init();
+      await browsers.init();
+      await browserTools.init();
       await dictation.init();
       if (gone) return;
 

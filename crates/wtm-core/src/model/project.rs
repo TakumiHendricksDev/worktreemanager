@@ -104,6 +104,10 @@ pub struct Project {
     #[serde(default)]
     pub display: DisplaySpec,
 
+    /// The `[browser]` table: what a new browser pane in this repository opens on.
+    #[serde(default)]
+    pub browser: BrowserSpec,
+
     /// Database connections this repository offers, keyed by a stable id.
     ///
     /// A map rather than `[[database]]` for the same reason agents are keyed: config tables
@@ -800,6 +804,19 @@ pub struct DisplaySpec {
     pub tables: Vec<DisplayTable>,
 }
 
+/// The `[browser]` table.
+///
+/// One field, and a template rather than a URL, because the interesting address is the one only a
+/// worktree knows: `http://localhost:{{ env.WEB_PORT }}` for a project that allocates a port per
+/// worktree. Rendered in the same context as `[[display.link]]`, so anything a link can say a home
+/// page can say. Absent means the pane opens on its empty state and offers the display links.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserSpec {
+    #[serde(default)]
+    pub home: Option<String>,
+}
+
 // ───────────────────────────── databases ─────────────────────────────
 
 /// One database connection recipe.
@@ -1160,6 +1177,7 @@ mod tests {
             setup: None,
             remove: RemoveSpec::default(),
             display: DisplaySpec::default(),
+            browser: BrowserSpec::default(),
             database: BTreeMap::new(),
             actions: Vec::new(),
             agent: BTreeMap::new(),

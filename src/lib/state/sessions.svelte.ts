@@ -22,6 +22,11 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 import { commands } from '../ipc/commands';
 import {
+  type BrowserClosed,
+  type BrowserComments,
+  type BrowserPick,
+  type BrowserShortcutEvent,
+  type BrowserView,
   errorMessage,
   type AgentAttachment,
   type AgentEvent,
@@ -43,6 +48,7 @@ import {
 import { statusOf, worse, type PaneStatus } from '../status';
 import { transferPrompt } from '../transfer';
 import { attention, type Announceable, type Announcement } from './attention.svelte';
+import { asShortcut, browsers } from './browsers.svelte';
 import {
   insert,
   move,
@@ -134,7 +140,11 @@ const SESSION_WAIT_STEP_MS = 50;
  */
 const MAX_EARLY_EVENTS = 64;
 
-export type SessionKind = { kind: 'shell' } | { kind: 'agent'; provider: string };
+export type SessionKind =
+  | { kind: 'shell' }
+  | { kind: 'agent'; provider: string }
+  /** A browser pane. Its facts live in `browsers.svelte.ts`, keyed by `Pane.session`. */
+  | { kind: 'browser' };
 
 /**
  * Store `next` under `key`, or `null` when that would change nothing.
@@ -186,6 +196,14 @@ export interface Pane {
   kind: SessionKind;
   /** Backend session id. Null between asking and being told. */
   session: string | null;
+  /**
+   * A browser pane's address; null for the other kinds and for an empty browser.
+   *
+   * Kind-specific the way `providerSession` is for an agent, and on the pane rather than only in
+   * the `browsers` store because `remember` writes it and `materialise` reads it before any webview
+   * exists to have a view. It follows the page: a link clicked inside the browser updates it.
+   */
+  url: string | null;
   /** Agent transcript. Empty for a shell, whose transcript lives in its xterm instance. */
   events: AgentEvent[];
   /** Approximate retained size, maintained with `events` so the hot path never rescans the log. */
@@ -363,6 +381,8 @@ interface StoredPane {
    * in the pane it was in rather than appending a new one.
    */
   session: string | null;
+  /** A browser pane's address, so it can be reloaded. Absent for the other kinds. */
+  url?: string | null;
   /** What a restored agent pane resumes. Null for a shell, which has nothing to resume. */
   providerSession: string | null;
   /**
@@ -421,6 +441,16 @@ function storedWorktrees(): string[] {
       .map((key) => key.slice(SURFACE_PREFIX.length));
   } catch {
     return [];
+  }
+}
+
+/** The host of a page address, for a pane title before the page has one. Null for an empty pane. */
+function hostOf(url: string | null): string | null {
+  if (url === null || url === '' || url === 'about:blank') return null;
+  try {
+    return new URL(url).host || null;
+  } catch {
+    return null;
   }
 }
 
@@ -599,10 +629,16 @@ class Sessions {
     return [...grouped.values()];
   }
 
-  /** Catalogue label, or the raw provider id, or "Shell". */
+  /** Catalogue label, or the raw provider id, or "Shell" — or, for a browser, the page. */
   labelOf(pane: Pane): string {
     const kind = pane.kind;
-    if (kind.kind !== 'agent') return 'Shell';
+    if (kind.kind === 'shell') return 'Shell';
+    if (kind.kind === 'browser') {
+      // The title once the page has one, its host until then, and "Browser" for an empty pane —
+      // the same three-step fallback a browser's own tab strip uses.
+      const view = browsers.viewOf(pane.session);
+      return view?.title.trim() || hostOf(view?.url ?? pane.url) || 'Browser';
+    }
     return (
       this.options.find((option) => option.id === kind.provider)?.label ?? kind.provider
     );
@@ -729,12 +765,35 @@ class Sessions {
     const offReleased = await listen<{ sessions: string[] }>('agent:released', (e) => {
       this.dropReleased(e.payload.sessions);
     });
+    const offBrowserState = await listen<BrowserView>('browser:state', (e) => {
+      this.noteBrowserState(e.payload);
+    });
+    const offBrowserOpened = await listen<BrowserView>('browser:opened', (e) => {
+      this.adoptBrowser(e.payload);
+    });
+    const offBrowserClosed = await listen<BrowserClosed>('browser:closed', (e) => {
+      this.dropBrowser(e.payload);
+    });
+    const offBrowserComments = await listen<BrowserComments>('browser:comments', (e) => {
+      browsers.setComments(e.payload.id, e.payload.comments);
+    });
+    const offBrowserPick = await listen<BrowserPick>('browser:pick', (e) => {
+      browsers.notePick(e.payload.id, e.payload.commentId);
+    });
+    const offBrowserShortcut = await listen<BrowserShortcutEvent>(
+      'browser:shortcut',
+      (e) => {
+        const action = asShortcut(e.payload.action);
+        if (action !== null) browsers.noteShortcut(e.payload.id, action);
+      },
+    );
 
     await this.refreshOptions();
 
-    const [shells, agents] = await Promise.all([
+    const [shells, agents, liveBrowsers] = await Promise.all([
       commands.listTerminals().catch(() => []),
       commands.listAgentSessions().catch(() => []),
+      commands.listBrowsers().catch(() => []),
     ]);
 
     // Asked for up front so a picker is filled before anyone opens one. Not awaited: for Codex this
@@ -761,6 +820,12 @@ class Sessions {
         agent.providerSession,
       );
     }
+    // Only after a *reload*: a browser has no process to outlive a quit, so after a relaunch this
+    // list is empty and `materialise` reloads the remembered addresses instead.
+    for (const view of liveBrowsers) {
+      browsers.apply(view);
+      await this.adopt({ kind: 'browser' }, view.project, view.worktree, view.id);
+    }
 
     return () => {
       offAgent();
@@ -769,6 +834,12 @@ class Sessions {
       offPtyExit();
       offSpawned();
       offReleased();
+      offBrowserState();
+      offBrowserOpened();
+      offBrowserClosed();
+      offBrowserComments();
+      offBrowserPick();
+      offBrowserShortcut();
     };
   }
 
@@ -1390,6 +1461,7 @@ class Sessions {
         // `adopt` append the still-running shell as a second pane, then `materialise` spawned a new
         // shell for this supposedly detached one. Every reload therefore multiplied terminals.
         pane.session = stored.session;
+        pane.url = stored.url ?? null;
         pane.providerSession = stored.providerSession;
         pane.model = stored.model;
         pane.effort = stored.effort;
@@ -1399,7 +1471,9 @@ class Sessions {
         // Re-numbered in stored order, which is the order they were announced in — so a restored
         // rail reads the same as the one that was written, without the ordinals being persisted.
         this.numberRun(pane.run);
-        pane.detached = true;
+        // A browser remembered with no address has nothing to fill, so it comes back as the empty
+        // pane it was rather than as a detached one waiting on `materialise`.
+        pane.detached = !(stored.kind.kind === 'browser' && !stored.url);
         panes.push(pane);
       }
       layouts[worktreeId] = layout;
@@ -1425,23 +1499,31 @@ class Sessions {
   }
 
   /**
-   * Fill in a restored worktree's shells, once it is the one being looked at.
+   * Fill in a restored worktree's shells and browsers, once it is the one being looked at.
    *
    * Called from the selection effect rather than from `restore`, so a launch with six remembered
    * worktrees spawns nothing until one of them is opened. Agents are deliberately left alone: they
-   * render an offer to resume, and which conversation to resume is a choice.
+   * render an offer to resume, and which conversation to resume is a choice. A browser is not — a
+   * page reload has nothing to decide, which puts it with the shells.
    */
   async materialise(projectId: string, worktreeId: string): Promise<void> {
     const waiting = this.panesIn(worktreeId).filter(
-      (pane) => pane.detached && pane.kind.kind === 'shell',
+      (pane) =>
+        pane.detached &&
+        (pane.kind.kind === 'shell' || (pane.kind.kind === 'browser' && pane.url !== null)),
     );
     for (const pane of waiting) {
-      // Checked per shell rather than once, because each one that spawns changes the answer. A
+      // Checked per pane rather than once, because each one that spawns changes the answer. A
       // refusal leaves the pane detached and sets `atCapacity`, which is the same way every other
       // over-cap request is reported.
       if (!this.canFill(worktreeId)) return;
       pane.detached = false;
-      await this.fillShell(pane, projectId, worktreeId);
+      if (pane.kind.kind === 'browser') {
+        const problem = await this.fillBrowser(pane, pane.url ?? '');
+        if (problem !== null) pane.error = problem;
+      } else {
+        await this.fillShell(pane, projectId, worktreeId);
+      }
     }
   }
 
@@ -1560,6 +1642,7 @@ class Sessions {
       worktreeId,
       kind,
       session: null,
+      url: null,
       events: [],
       eventBytes: 0,
       approvals: [],
@@ -1893,6 +1976,189 @@ class Sessions {
     }
   }
 
+  /**
+   * Open a browser pane. Empty unless given an address.
+   *
+   * An empty pane costs no WebContent process — the webview is created by the first address typed
+   * into it — so opening one is as cheap as a tile, and the cap that matters is the per-worktree one
+   * Rust enforces when the address arrives.
+   */
+  async openBrowser(
+    projectId: string,
+    worktreeId: string,
+    url: string | null = null,
+    placement: Placement = 'right',
+    beside?: string,
+  ): Promise<void> {
+    if (browsers.unavailable !== null) {
+      this.error = browsers.unavailable;
+      return;
+    }
+    if (!this.hasRoom(worktreeId)) return;
+
+    const pane = this.blank({ kind: 'browser' }, projectId, worktreeId);
+    pane.url = url;
+    this.panes = [...this.panes, pane];
+    this.place(worktreeId, pane.id, placement, beside);
+    if (url !== null) {
+      const problem = await this.fillBrowser(pane, url);
+      const live = this.paneById(pane.id);
+      if (live && problem !== null) live.error = problem;
+    }
+  }
+
+  /**
+   * Give a browser pane its webview, pointed at `url`. The second half of `openBrowser`.
+   *
+   * Returns the refusal rather than recording it, because the two callers disagree about where it
+   * belongs: `materialise` has nowhere but the pane's error to put it, while an address typed into
+   * the empty state wants it beside the field, not as a failed pane.
+   */
+  private async fillBrowser(pane: Pane, url: string): Promise<string | null> {
+    pane.url = url;
+    pane.error = null;
+    try {
+      const view = await commands.openBrowser({
+        projectId: pane.projectId,
+        worktreeId: pane.worktreeId,
+        url,
+      });
+      browsers.apply(view);
+      await this.claimOrClose(pane.id, view.id, 'browser');
+      this.error = null;
+      return null;
+    } catch (e) {
+      return errorMessage(e);
+    }
+  }
+
+  /**
+   * Point a browser pane at an address, creating its webview if it has none yet.
+   *
+   * Returns the refusal, if any, for the address bar to show. A mistyped URL is a thing to correct
+   * in the field, not a failed pane.
+   */
+  async navigateBrowser(paneId: string, url: string): Promise<string | null> {
+    const pane = this.paneById(paneId);
+    if (!pane || pane.kind.kind !== 'browser') return null;
+    if (pane.session === null) {
+      if (!this.canFill(pane.worktreeId)) return AT_CAPACITY;
+      return this.fillBrowser(pane, url);
+    }
+    try {
+      const view = await commands.browserNavigate(pane.session, url);
+      browsers.apply(view);
+      pane.url = view.url;
+      this.remember(pane.worktreeId);
+      return null;
+    } catch (e) {
+      return errorMessage(e);
+    }
+  }
+
+  /** Rust's word on a browser: mirror it, and follow the page's address. */
+  private noteBrowserState(view: BrowserView): void {
+    browsers.apply(view);
+    const pane = this.paneBySession(view.id);
+    if (!pane) return;
+    // The status dot's "working" is a page loading, which is the nearest thing a browser has to a
+    // turn in flight.
+    pane.working = view.loading;
+    // The remembered address follows the page, not the last thing typed: a link clicked inside the
+    // browser is a navigation nobody typed, and a restored pane should come back where it *was*.
+    if (pane.url !== view.url) {
+      pane.url = view.url;
+      this.remember(pane.worktreeId);
+    }
+  }
+
+  /**
+   * Show a pane for a browser Rust opened on its own — an agent asked for one.
+   *
+   * Ignores the pane cap for the reason `adoptSpawned` does: the webview already exists, and a
+   * refusal here would leave it running with nothing on screen able to reach it.
+   */
+  private adoptBrowser(view: BrowserView): void {
+    browsers.apply(view);
+    if (this.paneBySession(view.id)) return;
+
+    const pane = this.blank({ kind: 'browser' }, view.project, view.worktree);
+    pane.url = view.url;
+    this.panes = [...this.panes, pane];
+    const live = this.paneById(pane.id);
+    if (live) this.claimSession(live, view.id);
+    this.place(view.worktree, pane.id, 'right');
+    this.clearCapacity();
+  }
+
+  /**
+   * The mirror of `adoptBrowser`: a browser Rust closed.
+   *
+   * With a reason, the pane stays and says so, the way a shell that exited does — Restart reopens
+   * the address. Without one it was an ordinary close, and the pane simply goes.
+   */
+  private dropBrowser(closed: BrowserClosed): void {
+    browsers.forget(closed.id);
+    const pane = this.paneBySession(closed.id);
+    if (!pane) return;
+    if (closed.summary !== null) {
+      pane.ended = closed.summary;
+      pane.working = false;
+      return;
+    }
+    this.panes = this.panes.filter((p) => p.id !== pane.id);
+    this.layouts = {
+      ...this.layouts,
+      [pane.worktreeId]: remove(this.layoutFor(pane.worktreeId), pane.id),
+    };
+    if (this.focused[pane.worktreeId] === pane.id) {
+      const survivors = panesOf(this.layoutFor(pane.worktreeId));
+      this.focused = { ...this.focused, [pane.worktreeId]: survivors.at(-1) ?? null };
+    }
+    this.clearCapacity();
+    this.remember(pane.worktreeId);
+  }
+
+  /**
+   * The `focusEpoch` idiom for the composer: a counter the pane tracks and a plain target it reads.
+   *
+   * The draft is `SessionPane`'s own state — dictation and `/skills` already write it from inside
+   * — and moving it here for one outside writer would be the tail wagging the dog. So the store
+   * carries a request and the pane appends.
+   */
+  draftEpoch = $state(0);
+  draftTarget: { paneId: string; text: string } | null = null;
+
+  /** Put text into an agent pane's composer without sending it, and bring the pane forward. */
+  insertDraft(paneId: string, text: string): void {
+    const pane = this.paneById(paneId);
+    if (!pane || pane.kind.kind !== 'agent') return;
+    this.draftTarget = { paneId, text };
+    this.draftEpoch += 1;
+    this.focus(pane.worktreeId, paneId);
+  }
+
+  /**
+   * The agent pane a worktree's browser comments should be drafted into.
+   *
+   * The focused pane when it is an agent's, else the first agent tile in visual order — the one
+   * the user is most likely looking at — and null when the worktree has no live agent at all.
+   */
+  draftTargetIn(worktreeId: string): Pane | null {
+    const agents = this.panesIn(worktreeId).filter(
+      (pane) => pane.kind.kind === 'agent' && pane.sideOf === null && !pane.detached,
+    );
+    if (agents.length === 0) return null;
+    const focused = this.focused[worktreeId] ?? null;
+    const chosen = agents.find((pane) => pane.id === focused);
+    if (chosen) return chosen;
+    for (const id of panesOf(this.layoutFor(worktreeId))) {
+      const tiled = agents.find((pane) => pane.id === id);
+      if (tiled) return tiled;
+    }
+    return agents[0] ?? null;
+  }
+
   focus(worktreeId: string, paneId: string): void {
     this.focused = { ...this.focused, [worktreeId]: paneId };
     this.focusTarget = paneId;
@@ -2140,10 +2406,12 @@ class Sessions {
     if (pane.session) {
       try {
         if (pane.kind.kind === 'shell') await commands.closeTerminal(pane.session);
+        else if (pane.kind.kind === 'browser') await commands.closeBrowser(pane.session);
         else await commands.closeAgentSession(pane.session);
       } catch (e) {
         this.error = errorMessage(e);
       }
+      if (pane.kind.kind === 'browser') browsers.forget(pane.session);
     }
 
     this.panes = this.panes.filter((p) => p.id !== paneId);
@@ -2172,11 +2440,13 @@ class Sessions {
     if (pane.session && pane.ended === null) {
       try {
         if (pane.kind.kind === 'shell') await commands.closeTerminal(pane.session);
+        else if (pane.kind.kind === 'browser') await commands.closeBrowser(pane.session);
         else await commands.closeAgentSession(pane.session);
       } catch {
         /* Already gone is the ordinary case here. */
       }
     }
+    if (pane.kind.kind === 'browser' && pane.session) browsers.forget(pane.session);
 
     pane.generation += 1;
     pane.session = null;
@@ -2221,6 +2491,16 @@ class Sessions {
     }
 
     this.focus(pane.worktreeId, pane.id);
+
+    if (pane.kind.kind === 'browser') {
+      // A fresh webview at the same address, or nothing at all for an empty pane — which is what a
+      // restart of an empty browser can honestly mean.
+      if (pane.url !== null) {
+        const problem = await this.fillBrowser(pane, pane.url);
+        if (problem !== null) pane.error = problem;
+      }
+      return;
+    }
 
     try {
       const session =
@@ -2274,6 +2554,9 @@ class Sessions {
       if (!pane.session) continue;
       if (pane.kind.kind === 'shell') {
         void commands.closeTerminal(pane.session).catch(() => {});
+      } else if (pane.kind.kind === 'browser') {
+        browsers.forget(pane.session);
+        void commands.closeBrowser(pane.session).catch(() => {});
       } else {
         void commands.closeAgentSession(pane.session).catch(() => {});
       }
@@ -2313,6 +2596,7 @@ class Sessions {
         projectId: pane.projectId,
         kind: pane.kind,
         session: pane.session,
+        url: pane.url,
         providerSession: pane.providerSession,
         model: pane.model,
         effort: pane.effort,
@@ -2332,7 +2616,7 @@ class Sessions {
   private async claimOrClose(
     paneId: string,
     session: string,
-    kind: 'shell' | 'agent',
+    kind: SessionKind['kind'],
   ): Promise<void> {
     const live = this.paneById(paneId);
     if (live) {
@@ -2341,6 +2625,7 @@ class Sessions {
     }
     try {
       if (kind === 'shell') await commands.closeTerminal(session);
+      else if (kind === 'browser') await commands.closeBrowser(session);
       else await commands.closeAgentSession(session);
     } catch {
       /* Already gone is the ordinary case here. */

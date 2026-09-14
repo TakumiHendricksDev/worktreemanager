@@ -37,6 +37,7 @@
    * is what `resize` walks — and `handlesOf` now hands that path over with the frame it needs, so
    * nothing has to re-derive it. An id would be a second thing to keep in step with the shape.
    */
+  import { overlay } from '../state/overlay.svelte';
   import { sessions } from '../state/sessions.svelte';
   import {
     handlesOf,
@@ -179,6 +180,8 @@
       if (!moving) {
         if (Math.hypot(m.clientX - origin.x, m.clientY - origin.y) < ARM) return;
         moving = true;
+        // A browser pane's native view would paint over the drop indicator otherwise.
+        overlay.paneDrag = true;
       }
       if (!dragBox || dragPaneId === null) return;
       zone = zoneAt(rects, dragBox, m.clientX, m.clientY, dragPaneId);
@@ -195,6 +198,7 @@
       const target = commit && moving ? zone : null;
       const paneId = dragPaneId;
       moving = false;
+      overlay.paneDrag = false;
       zone = null;
       dragPaneId = null;
       dragBox = null;

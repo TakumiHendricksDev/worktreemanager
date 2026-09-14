@@ -79,6 +79,13 @@ const KEEP_FINISHED_SESSIONS: usize = 4;
 /// The opt-in gate for sharing a bounded session roster with agents in one worktree.
 pub const SESSION_AWARENESS_PREF: &str = "ui.session_awareness";
 
+/// Whether agents get the `browser_*` tools. On unless set to `off`.
+///
+/// On by default where session awareness is opt-in, and the difference is deliberate: awareness
+/// shares facts about *other* panes, while a browser an agent drives is a pane of its own that the
+/// user can see, pause per pane, or close. See ARCHITECTURE §6c.
+pub const BROWSER_TOOLS_PREF: &str = "ui.browser_tools";
+
 /// One terminal-dock shell and what it belongs to.
 struct ShellEntry {
     project: String,
@@ -496,6 +503,9 @@ pub struct App {
     /// minted while a session's config is built — and read on the socket thread. One owner for both
     /// is what keeps that from needing a channel.
     pub handoff: crate::handoff::Hub,
+    /// Browser panes. Its own struct, like `handoff`, because it is consulted from the main thread's
+    /// page-load callbacks as well as from commands — see `browser.rs` for the lock discipline.
+    pub browsers: crate::browser::Host,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
     /// Where the resume list lives, and the lock that serializes writes to it.
     ///
@@ -593,6 +603,7 @@ impl App {
             os_tokens: wtm_exec::os_tokens(),
             shells: parking_lot::Mutex::new(BTreeMap::new()),
             handoff: crate::handoff::Hub::default(),
+            browsers: crate::browser::Host::default(),
             dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             sessions_file: sessions_file.clone(),
@@ -1345,6 +1356,16 @@ impl App {
             .flatten()
             .as_deref()
             == Some("on")
+    }
+
+    /// Whether agents in this app get the `browser_*` tools. See [`BROWSER_TOOLS_PREF`].
+    pub fn browser_tools_enabled(&self) -> bool {
+        self.config
+            .user_pref(BROWSER_TOOLS_PREF)
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some("off")
     }
 
     /// Other live, non-ephemeral agent sessions in exactly one worktree.

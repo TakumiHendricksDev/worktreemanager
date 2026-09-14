@@ -60,17 +60,20 @@ a `Clock` port so they are testable at a fixed instant.
 `unwrap()` on every lock.
 
 **`unsafe` is `forbid`den**, workspace-wide. This is why the project depends on `nix` rather
-than `libc`. One crate sits outside the workspace table for a mechanical reason: `forbid`
-cannot be relaxed by the crate it applies to, so `wtm-notify` — which exists to fence the
-objc2 FFI a click-navigating macOS notification needs — restates that table verbatim with
-`unsafe_code = "deny"`. Its `Cargo.toml` header names the safe wrappers that were rejected and
-why. A second such crate is an open-an-issue-first change.
+than `libc`. Two crates sit outside the workspace table for a mechanical reason: `forbid`
+cannot be relaxed by the crate it applies to, so `wtm-notify` — which fences the objc2 FFI a
+click-navigating macOS notification needs — and `wtm-webview` — which fences the WebKit calls
+the browser pane's isolated-world runtime needs — each restate that table verbatim with
+`unsafe_code = "deny"`. Their `Cargo.toml` headers name the safe wrappers that were rejected and
+why. A third such crate is an open-an-issue-first change.
 
 **The webview cannot reach the network.** Rust has two explicit routes: dictation sends audio to a
 compiled-in host through `curl`, and the database viewer connects to a target shown by the config
 trust prompt after the user clicks Connect. `src-tauri/tests/network_boundary.rs` pins the CSP, the
 fixed transcription host, and the absence of a linked HTTP client. A new kind of egress, or reaching
-for `reqwest`, is an open-an-issue-first change — ARCHITECTURE §6a records the boundary.
+for `reqwest`, is an open-an-issue-first change — ARCHITECTURE §6a records the boundary. Browser
+panes are a *separate* webview with their own origin and no capabilities; §6c records what keeps a
+page in one out of the app.
 
 **`wtm-core` must compile for `wasm32-unknown-unknown`.** That is not because anyone runs it
 in a browser; it is a mechanical proof that the domain has no operating-system dependency. If

@@ -22,6 +22,7 @@
   import { onMount, untrack } from 'svelte';
 
   import type { Brief } from '../ipc/types';
+  import { browsers } from '../state/browsers.svelte';
   import { AT_CAPACITY, sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import AgentsDialog from './AgentsDialog.svelte';
@@ -283,6 +284,23 @@
               )}
           >
             Shell
+          </Button>
+          <!-- Opens on the project's `[browser] home` when it declares one, else on the empty state
+               that offers the worktree's links. Disabled with the reason where a build cannot show
+               one at all, the way an uninstalled agent is. -->
+          <Button
+            variant="neutral"
+            size="sm"
+            title={browsers.unavailable ?? 'Open a browser pane in this worktree'}
+            disabled={browsers.unavailable !== null}
+            onclick={() =>
+              void sessions.openBrowser(
+                workspace.activeProjectId ?? '',
+                workspace.selected?.id ?? '',
+                workspace.selected?.browserHome ?? null,
+              )}
+          >
+            Browser
           </Button>
         </div>
         {#if resumable.length > 0}

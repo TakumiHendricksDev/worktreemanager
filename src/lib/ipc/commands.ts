@@ -21,6 +21,11 @@ import type {
   AgentSession,
   BackgroundTask,
   Brief,
+  BrowserAvailability,
+  BrowserBounds,
+  BrowserComment,
+  BrowserHistoryAction,
+  BrowserView,
   ApprovalAnswer,
   Capability,
   CreateOutcome,
@@ -383,6 +388,57 @@ export const commands = {
 
   /** Opens an http/https URL. The scheme is validated in Rust — see `open_url`. */
   openUrl: (url: string) => invoke<void>('open_url', { url }),
+
+  // ── browser panes ──
+  /**
+   * Put a real webview over a tile. Born hidden; `browserSetBounds` is what shows it.
+   *
+   * Refused at the caps (four per worktree, eight in all) with `kind: 'browserCap'`, and for a
+   * URL that is not http(s) with `kind: 'badUrl'` — the same rule `openUrl` applies.
+   */
+  openBrowser: (args: { projectId: string; worktreeId: string; url?: string | null }) =>
+    invoke<BrowserView>('open_browser', args),
+  closeBrowser: (id: string) => invoke<void>('close_browser', { id }),
+  browserNavigate: (id: string, url: string) =>
+    invoke<BrowserView>('browser_navigate', { id, url }),
+  browserHistory: (id: string, action: BrowserHistoryAction) =>
+    invoke<void>('browser_history', { id, action }),
+  /**
+   * Where the tile is, or `null` to hide the browser.
+   *
+   * The native view floats above every DOM element, so the pane sends this on every geometry
+   * change and `null` whenever anything would need to paint over it — see `BrowserPane.svelte`.
+   */
+  browserSetBounds: (id: string, bounds: BrowserBounds | null) =>
+    invoke<void>('browser_set_bounds', { id, bounds }),
+  browserSetAgentAccess: (id: string, enabled: boolean) =>
+    invoke<BrowserView>('browser_set_agent_access', { id, enabled }),
+  browserFocus: (id: string) => invoke<void>('browser_focus', { id }),
+  browserZoom: (id: string, factor: number) => invoke<void>('browser_zoom', { id, factor }),
+  /** Every live browser, for adopting after a webview reload. */
+  listBrowsers: (worktreeId?: string) =>
+    invoke<BrowserView[]>('list_browsers', { worktreeId: worktreeId ?? null }),
+  browserAvailable: () => invoke<BrowserAvailability>('browser_available'),
+  /** Comment mode: a click in the page picks an element instead of acting on it. */
+  browserSetCommentMode: (id: string, enabled: boolean) =>
+    invoke<BrowserView>('browser_set_comment_mode', { id, enabled }),
+  browserListComments: (id: string) =>
+    invoke<BrowserComment[]>('browser_list_comments', { id }),
+  browserUpdateComment: (id: string, commentId: number, text: string) =>
+    invoke<BrowserComment[]>('browser_update_comment', { id, commentId, text }),
+  browserRemoveComment: (id: string, commentId: number) =>
+    invoke<BrowserComment[]>('browser_remove_comment', { id, commentId }),
+  browserResolveComment: (id: string, commentId: number, resolved: boolean) =>
+    invoke<BrowserComment[]>('browser_resolve_comment', { id, commentId, resolved }),
+  /**
+   * A PNG of the page as shown, base64. Refused while the pane is hidden — there is nothing to
+   * capture — so the pane asks *before* it hides.
+   */
+  browserSnapshotPng: (id: string) => invoke<string>('browser_snapshot_png', { id }),
+  /** The app's colours, for the pins and popover the runtime draws inside the page. */
+  browserSetTheme: (id: string, tokens: Record<string, string>) =>
+    invoke<void>('browser_set_theme', { id, tokens }),
+  browserOpenDevtools: (id: string) => invoke<void>('browser_open_devtools', { id }),
 
   // ── notifications ──
   /**

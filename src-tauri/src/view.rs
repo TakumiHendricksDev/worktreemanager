@@ -171,6 +171,9 @@ pub struct WorktreeView {
     /// Key names from the project's declared display source, for the Env tab. Names only —
     /// see [`EnvKeys`].
     pub env: EnvKeys,
+    /// The rendered `[browser] home` template, when the project declares one and it rendered to
+    /// something. What a new browser pane here opens on.
+    pub browser_home: Option<String>,
 }
 
 /// One configured database as the connection picker needs it.
@@ -609,6 +612,7 @@ mod tests {
             links: vec![],
             table: vec![],
             env: Vec::new(),
+            browser_home: None,
         };
         let json = serde_json::to_value(&view).unwrap();
         let object = json.as_object().unwrap();
@@ -879,6 +883,7 @@ mod tests {
             actions: vec![],
             agent: std::collections::BTreeMap::new(),
             guards: wtm_core::model::GuardSpec::default(),
+            browser: wtm_core::model::BrowserSpec::default(),
         };
         let view = project_view(&project);
         assert_eq!(view.name, "webapp");
@@ -952,6 +957,34 @@ pub struct AgentSessionView {
     pub provider: String,
     /// Empty until the provider's handshake has named the conversation.
     pub provider_session: String,
+}
+
+/// One browser pane, as the window sees it.
+///
+/// The same struct is the reply to `open_browser`, the row in `list_browsers` and the payload of
+/// `browser:state`, so the frontend has one shape to mirror and never merges a delta. Fields the
+/// native bridge fills in later (`comment_mode`, `agent_driving`) are here from the start so the
+/// TypeScript mirror does not change shape between phases.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserView {
+    /// The webview label. Starts with `browser::LABEL_PREFIX`; never a session id.
+    pub id: String,
+    pub project: String,
+    pub worktree: String,
+    pub url: String,
+    pub title: String,
+    pub loading: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    /// Whether agents may drive this pane. The per-pane toggle, on by default.
+    pub agent_access: bool,
+    /// The agent session that opened it, when one did.
+    pub opened_by: Option<String>,
+    pub comment_mode: bool,
+    /// The label of the agent currently acting on the page, while one is.
+    pub agent_driving: Option<String>,
 }
 
 /// A stored plan.

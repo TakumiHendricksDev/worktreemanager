@@ -322,6 +322,82 @@ mapping tests are the regression boundary.
 
 ---
 
+## 6c. The embedded browser: a second webview, and what it may not do
+
+A browser pane shows a real web page inside a tile — the project's dev server, usually — that the
+user can click through, that an agent in the same worktree can read and drive through MCP tools,
+and that the user can leave element-anchored comments on. Four decisions carry it.
+
+**It is a second webview, not Gecko and not an iframe.** The request was for Firefox's engine, and
+that is not buildable: Mozilla ships no desktop embedding API for Gecko (GeckoView is
+Android-only), Servo is not web-compatible enough for arbitrary pages, and driving an installed
+Firefox over WebDriver BiDi cannot render *inside* a pane. An `<iframe>` in the app webview would
+need `frame-src` widened — the policy `network_boundary.rs` pins — and would still lose to any site
+sending `X-Frame-Options`. So the pane is a Tauri **child webview**: a WKWebView the app already
+links, laid over the tile's rectangle, with its own origin, storage and network access. That needs
+Tauri's `unstable` feature, which is accepted because the version is pinned exactly in `Cargo.lock`
+and the API surface used is small and lives in one file, `browser.rs`.
+
+**The frontend's one job for it is geometry.** A native view paints above every DOM element: it is
+not clipped by the tile, does not honour `display: none`, and sits above the dialog scrim. So
+`BrowserPane.svelte` measures its placeholder and tells Rust where the view is, in logical pixels,
+on every change — and tells it *nothing is there* whenever something would need to paint over the
+page: an inactive worktree, a dialog, a pane being dragged. The `overlay` store is where every such
+condition registers, so a new overlay kind hides every browser without being taught about them.
+Before hiding, the pane takes a PNG of the page and shows that in the placeholder; while hidden,
+WebKit paints nothing, which is also why `browser_screenshot` refuses a hidden pane rather than
+returning a black image.
+
+**Three fences keep a page out of the app.** Tauri refuses IPC from a remote origin unless a
+capability grants `remote`, and none does. The capability lists `windows: ["main"]`, and the child
+*lives in* the main window — so a child that ever loaded a **local** origin would inherit
+`core:default`, which is why `navigation_allowed` is an allowlist of `http`, `https` and `about:`
+and not a denylist of `tauri:`. And no capability names a `browser-*` label. `capability_set.rs`
+pins the first and third; the second is a unit test, and the spike that preceded the feature
+confirmed both by trying: a page's `invoke` was refused, and `location.href = 'tauri://localhost'`
+went nowhere.
+
+**The runtime lives where the page cannot reach it.** Agents read the page through a script wtm
+installs in an isolated `WKContentWorld` — a scope that shares the DOM but none of the page's
+globals, so a page cannot redefine `querySelectorAll` to lie to an agent, and whose message handler
+a page's CSP does not govern. Reaching that world takes four WebKit calls wry does not expose, which
+is why there is a second fenced FFI crate, `wtm-webview`, shaped like `wtm-notify`: the workspace
+lints table with `unsafe_code = "deny"`, a macOS arm and an uninhabited no-op arm, and a handle that
+lives only inside Tauri's `with_webview` closure so nothing `!Send` is ever stored. Its `Cargo.toml`
+header records why no safe wrapper would do. The one script in the *page* world, `page-hook.js`,
+captures console output and History API calls, and everything it says is treated as a prompt to
+re-read the truth from the webview, never as the truth.
+
+**What an agent may do is bounded the same way delegation is.** The token names the worktree, and
+a browser in another worktree answers exactly like one that does not exist. Each pane has an
+**Agents** toggle the user can turn off; one agent drives a pane at a time; every action marks the
+pane as driven and flashes the element it touches, because the point of the pane is that the user
+can watch. An agent may close only the browsers it opened. Every result wraps page-derived text in
+a `<wtm_page_content>` fence whose closing tag is neutralised inside the body — the same move
+`normalized_peer_title` makes for `</wtm_session_awareness>` — and the system-prompt paragraph the
+session was started with says the same thing, because a tool's description is read when the tool is
+chosen and page content lands after.
+
+**On §6a's rule.** "Nothing leaves the machine without a direct user action" is unchanged for the
+app webview, whose CSP this feature does not touch. A browser pane reaches the network by
+definition, when the user types an address or when an agent the user allowed navigates one — and
+an agent that can already run `curl` in a shell here is not newly empowered by a browser it drives
+visibly, which is the argument §6b already makes for `ask_agent`.
+
+**Comments are Rust's, drawn by the runtime, listed by Svelte.** Pins and the comment popover have
+to be drawn *on the page*, and only the runtime can draw there; the list of comments can be Svelte,
+because it sits beside the native view rather than over it. Rust owns the comments both of them
+show, in memory, per browser — they are feedback on a live page, not a document, and they die with
+the pane. "Send" drafts them into the focused agent's composer rather than sending, so the user
+reads what the agent is about to be told; `browser_read_comments` lets an agent pull them itself.
+
+**Linux.** The pane works wherever Tauri has a child-webview API, which includes WebKitGTK. The
+runtime does not yet: `wtm-webview`'s no-op arm reports it absent, the tools are not advertised to
+sessions there, and the comment controls say why they are off. A `webkit2gtk` arm is all safe Rust
+and is the contained follow-up.
+
+---
+
 ## 5a. Two things the real repository taught us
 
 Both were found by running against a real repository rather than by reasoning, and both are the kind of
@@ -681,3 +757,7 @@ decision, and it belongs written down rather than discovered in eighteen months.
   failure modes — a pop conflict in a brand-new worktree — and rarely used. Config can express it later
   as a post-create step.
 - **Code signing and notarization.** Personal tool; see the README for what it would take.
+- **Embedding Gecko.** There is no desktop embedding API for it — GeckoView is Android-only — and
+  the alternatives that use Mozilla's JavaScript engine (Servo) or a real Firefox process
+  (WebDriver BiDi) either do not render arbitrary pages or cannot render inside a pane. The browser
+  pane is the platform WebKit the app already links; §6c records the reasoning.

@@ -249,6 +249,15 @@ pub fn worktree_view(
 
     let table = build_tables(project, &sources, engine, &ctx);
 
+    // Same context as the links, so `{{ env.WEB_PORT }}` resolves per worktree. A template that
+    // fails or renders empty simply means "no home", the same fallback a link takes.
+    let browser_home = project
+        .browser
+        .home
+        .as_ref()
+        .and_then(|template| engine.render("browser.home", template, &ctx).ok())
+        .filter(|url| !url.trim().is_empty());
+
     // The Env tab shows the first source, which is the one `env.*` aliases.
     //
     // Keys only. Values are dropped here, before the view is serialized, so none of them
@@ -285,6 +294,7 @@ pub fn worktree_view(
         links,
         table,
         env,
+        browser_home,
     }
 }
 

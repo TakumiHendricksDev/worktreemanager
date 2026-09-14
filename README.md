@@ -42,6 +42,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | ✅ | Voice dictation into the prompt composer — hold or tap the mic, audio goes to Deepgram Nova-3, transcript lands in the draft unsent. Off by default; the only feature that sends anything off your machine |
 | ✅ | Cross-model delegation from one chat: one visible child or a customizable run of up to 20 child agents, with per-child model/effort/mode and navigable session status |
 | ✅ | **Open in …** — a split button that hands the worktree to your editor, a terminal, the file manager, or a fresh Claude Code session; see [below](#open-in-) |
+| ✅ | **Browser panes** — a real web page tiled beside your sessions, driveable by the agents in that worktree, with element-anchored comments you can hand to an agent; see [below](#browser-panes) |
 | 🚧 | `[remove] strategy = "command"` — the native path is the default and the one that turns the branch prompt into a checkbox |
 | 🚧 | A command palette, and `notify`-based auto-refresh |
 
@@ -63,7 +64,7 @@ project's convention. With the variable unset the tests skip.
 [Install](#install) · [Updating](#updating-an-install-you-already-have) ·
 [Prerequisites](#prerequisites) · [Setup](#setup) ·
 [First run](#first-run) · [Registering a project](#registering-a-project) ·
-[Writing wtm.toml](#writing-wtmtoml) · [Open in …](#open-in-) · [Settings](#settings) ·
+[Writing wtm.toml](#writing-wtmtoml) · [Browser panes](#browser-panes) · [Open in …](#open-in-) · [Settings](#settings) ·
 [Dev workflow](#dev-workflow) ·
 [Build & install](#build--install) · [Troubleshooting](#troubleshooting) ·
 [Logs](#logs) · [Dependencies](#dependencies) · [Architecture](#architecture)
@@ -360,6 +361,60 @@ than a policy that has to be kept correct.
 `cargo test -p wtm-app --test env_masking` proves it, against a repo whose `.env` is nothing
 but credentials. It runs as part of `just check` — it no longer needs a real checkout, because
 the guarantee no longer depends on the data.
+
+## Browser panes
+
+A browser pane is a real web page — the platform's WebKit, the same engine the app itself runs on —
+tiled beside your shells and agent sessions in a worktree. Open one from the empty surface's
+**Browser** button, the worktree bar, or a pane's Split control; type an address (a bare
+`localhost:5173` gets `http://`, anything else `https://`), or pick one of the worktree's
+`[[display.link]]` URLs from the empty state. The pane has Back, Forward, Reload, an address bar
+(⌘L), and opens the page in your real browser on request. It follows its tile when you split,
+drag or resize, disappears while a dialog is up or another worktree is selected, and comes back
+after a relaunch at the address it was on.
+
+A project can name where a new pane should start:
+
+```toml
+[browser]
+home = "http://localhost:{{ env.WEB_PORT }}"   # rendered per worktree, like a display link
+```
+
+**Agents can use it.** Every agent session in the worktree gets `mcp__wtm__browser_*` tools:
+`browser_open`, `browser_list`, `browser_navigate`, `browser_snapshot` (the page as an outline with
+element refs — the primary way an agent reads a page), `browser_click`, `browser_type`,
+`browser_fill_form`, `browser_select_option`, `browser_press_key`, `browser_hover`,
+`browser_scroll`, `browser_wait_for`, `browser_screenshot`, `browser_get_content`,
+`browser_console`, `browser_evaluate`, `browser_read_comments`, `browser_resolve_comment` and
+`browser_close`. Ask a session to "open the dev server and check the signup form" and a pane
+appears in the worktree; the element it acts on flashes, and the pane's header says who is driving.
+Each pane has an **Agents** toggle to pause that, Settings has a global switch, and an agent can
+close only the panes it opened. Everything an agent reads from a page arrives wrapped as untrusted
+web content — see ARCHITECTURE §6c for the whole trust story.
+
+**Comments.** Turn on **Comment** in the pane's toolbar (⌘⇧C), hover to see what you would pick,
+click an element and say what should change — "make this a blue button". A numbered pin stays on
+the element, the comments list opens beside the page, and **Send N to Claude** drafts them into the
+focused agent's composer with the element, its text and a CSS selector, for you to read and send.
+Agents can also fetch them with `browser_read_comments` and mark them resolved.
+
+**What has been verified, and how.** On macOS, driven from the app's own log rather than by a
+hand on the mouse: a pane opened through the store's ordinary path is placed exactly over its tile
+and moves with the layout; an agent-opened pane is adopted into the worktree; a pane is restored
+after a relaunch and reloads its address; a remote page's attempt to `invoke` the app is refused
+and its attempt to navigate onto `tauri://localhost` goes nowhere; and the tool sequence
+open → snapshot → click (which navigated) → screenshot → console → evaluate → content → comments →
+history → close ran against a live page and returned what it should. Not yet exercised by a person:
+comment mode's in-page pins and popover, the comments panel, the hide-behind-a-dialog placeholder,
+and the keyboard chords — all wired, none clicked. Not verified at all: Linux. The pane itself
+should work there; the agent tools and comments need the native WebKit bridge, which so far has a
+macOS arm only, and the controls say so.
+
+**Limits worth knowing.** Clicks and keys an agent sends are synthesized DOM events, not OS input:
+links, buttons, checkboxes, and framework handlers all work, but a native `<select>` popup, a file
+chooser, or a `window.open` that needs a real user gesture will not (use `browser_select_option`
+for selects). Downloads and popups are handed to your default browser and the same pane
+respectively. Four browser panes per worktree, eight in all — each is a WebContent process.
 
 ## Open in …
 

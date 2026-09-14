@@ -97,3 +97,44 @@ fn every_permission_is_described_in_the_files_own_description() {
         );
     }
 }
+
+/// The capability file as parsed JSON, for the tests that ask about keys other than `permissions`.
+fn capability() -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities/default.json");
+    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+#[test]
+fn the_capability_file_grants_nothing_to_a_browser_webview() {
+    // A browser pane is a child webview showing arbitrary remote pages, inside the main window. Tauri
+    // resolves a capability by *window* label as well as by webview label, so the child would
+    // inherit `core:default` the moment it stood at a local origin — `browser.rs` keeps it on
+    // http(s) for exactly that reason. This pins the other two fences: no `remote` origin is ever
+    // granted, and no `webviews` glob names a `browser-*` label.
+    let config = capability();
+    assert!(
+        config.get("remote").is_none(),
+        "a `remote` key would let a page in the browser pane invoke this app's commands"
+    );
+    if let Some(webviews) = config.get("webviews").and_then(Value::as_array) {
+        for label in webviews {
+            let label = label.as_str().unwrap();
+            assert!(
+                label != "*" && !label.starts_with("browser"),
+                "`webviews` names `{label}`, which a browser pane's webview would match"
+            );
+        }
+    }
+    assert_eq!(
+        config["windows"],
+        serde_json::json!(["main"]),
+        "the capability must stay scoped to the one window this app has"
+    );
+    for permission in permissions() {
+        assert!(
+            !permission.starts_with("core:webview:"),
+            "`{permission}` would let the frontend create or steer webviews; browser panes are \
+             made by Rust alone"
+        );
+    }
+}

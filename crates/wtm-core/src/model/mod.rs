@@ -33,9 +33,9 @@ pub use plan::{
     PreflightItem, PreflightSeverity, Remedy, SessionId, TrackMode,
 };
 pub use project::{
-    ActionSpec, AgentSpec, BranchScope, CommandSpec, ComputedSpec, Concurrency, ConditionalArgs,
-    CreateSpec, CwdBase, DatabaseAccess, DatabaseEngine, DatabaseEnvironment, DatabaseScope,
-    DatabaseSpec, DatabaseTls, DirBase, DisplayBadge, DisplayLink, DisplaySource,
+    ActionSpec, AgentSpec, BranchScope, BrowserSpec, CommandSpec, ComputedSpec, Concurrency,
+    ConditionalArgs, CreateSpec, CwdBase, DatabaseAccess, DatabaseEngine, DatabaseEnvironment,
+    DatabaseScope, DatabaseSpec, DatabaseTls, DirBase, DisplayBadge, DisplayLink, DisplaySource,
     DisplaySourceKind, DisplaySpec, DisplayTable, ExistingBranchBehavior, ExistingBranchMatch,
     FieldDefault, FieldKind, FieldSpec, ForbidRule, GuardSpec, LookupErrorPolicy, LookupFormat,
     LookupMapping, LookupSpec, McpServerSpec, NamingSpec, OnFailure, OptionsParse, OptionsSource,

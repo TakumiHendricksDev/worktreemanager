@@ -87,11 +87,11 @@ web:
 # hand-wrapped tables and annotated code blocks in README/ARCHITECTURE.
 fmt:
     cargo fmt --all
-    {{ pmx }} prettier --write "src/**/*.{ts,svelte,css,scss}" "*.json"
+    {{ pmx }} prettier --write "src/**/*.{ts,svelte,css,scss}" "src-tauri/runtime/*.js" "*.json"
 
 fmt-check:
     cargo fmt --all --check
-    {{ pmx }} prettier --check "src/**/*.{ts,svelte,css,scss}" "*.json"
+    {{ pmx }} prettier --check "src/**/*.{ts,svelte,css,scss}" "src-tauri/runtime/*.js" "*.json"
 
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings

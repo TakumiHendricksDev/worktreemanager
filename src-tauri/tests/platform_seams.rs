@@ -38,6 +38,13 @@ const ALLOWED: &[(&str, &str)] = &[
          `xdg-open` elsewhere; there is no portable name and no runtime way to choose.",
     ),
     (
+        "crates/wtm-webview/src/lib.rs",
+        "`WKContentWorld` / `WKUserScript` / `WKScriptMessageHandler` — WebKit's content-world \
+         API does not exist off macOS, so the other arm cannot compile. Same shape as \
+         `wtm-notify`: the facade keeps both arms building and the no-op arm's Handle is \
+         uninhabited, which is the type-level proof the branch is total.",
+    ),
+    (
         "crates/wtm-notify/src/lib.rs",
         "`UNUserNotificationCenter` — the framework does not exist off macOS, so the other \
          arm cannot compile. The facade keeps both arms building on both runners and this is \

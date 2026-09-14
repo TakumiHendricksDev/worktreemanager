@@ -10,6 +10,7 @@ members = [
   "crates/wtm-db",
   "crates/wtm-render",
   "crates/wtm-notify",
+  "crates/wtm-webview",
   "crates/wtm-testkit",
   "src-tauri",
 ]
@@ -45,6 +46,7 @@ wtm-dictate = { path = "crates/wtm-dictate" }
 wtm-db      = { path = "crates/wtm-db" }
 wtm-render  = { path = "crates/wtm-render" }
 wtm-notify  = { path = "crates/wtm-notify" }
+wtm-webview = { path = "crates/wtm-webview" }
 wtm-testkit = { path = "crates/wtm-testkit" }
 wtm-app     = { path = "src-tauri" }
 
@@ -86,7 +88,10 @@ objc2                    = "0.6"
 objc2-foundation         = { version = "0.3", default-features = false, features = [
   "std",
   "NSBundle",
+  "NSData",
+  "NSDictionary",
   "NSError",
+  "NSGeometry",
   "NSObject",
   "NSString",
 ] }
@@ -102,6 +107,36 @@ objc2-user-notifications = { version = "0.3", default-features = false, features
   "UNNotificationTrigger",
 ] }
 block2                   = "0.6"
+
+# external — macOS WebKit FFI, used by `wtm-webview` alone. Both crates are already in the
+# lockfile through wry, which is the engine every Mac build runs on; the feature lists below are
+# a subset of wry's own plus the content-world and snapshot APIs it does not use.
+objc2-web-kit            = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "objc2-app-kit",
+  "objc2-core-foundation",
+  "WKContentWorld",
+  "WKFrameInfo",
+  "WKNavigation",
+  "WKScriptMessage",
+  "WKScriptMessageHandler",
+  "WKSnapshotConfiguration",
+  "WKUserContentController",
+  "WKUserScript",
+  "WKWebView",
+  "WKWebViewConfiguration",
+] }
+objc2-app-kit            = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSBitmapImageRep",
+  "NSImage",
+  "NSImageRep",
+] }
+objc2-core-foundation    = { version = "0.3", default-features = false, features = [
+  "std",
+  "CFCGTypes",
+] }
 
 # dev
 tempfile          = "3"

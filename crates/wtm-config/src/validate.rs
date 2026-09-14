@@ -638,6 +638,19 @@ mod tests {
     }
 
     #[test]
+    fn a_project_without_a_browser_table_has_no_home_and_one_with_it_does() {
+        // `[browser]` is optional end to end: absent means the pane opens on its empty state, and
+        // the built-in defaults declare none, so a zero-config repo must deserialize without it.
+        assert!(project_from("").browser.home.is_none());
+        let project = project_from("[browser]\nhome = 'http://localhost:{{ env.PORT }}'\n");
+        assert_eq!(
+            project.browser.home.as_deref(),
+            Some("http://localhost:{{ env.PORT }}")
+        );
+        check("[browser]\nhome = 'http://localhost:3000'\n").expect("a home URL validates");
+    }
+
+    #[test]
     fn the_built_in_defaults_are_valid() {
         // If the shipped defaults do not validate, every zero-config repo is broken.
         check("").expect("built-in defaults must validate");

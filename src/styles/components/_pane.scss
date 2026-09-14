@@ -175,6 +175,15 @@
   padding: var(--sp-2);
 }
 
+/* A browser's toolbar and page fill the body edge to edge: the page is a native view laid over the
+   rectangle, so any padding here would be a gutter the page could not paint into. */
+.c-pane__body--browser {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
 /* Geometry only: the limit banner sits between the scroller and the composer, and `.c-banner` is
    full-bleed by design, so all this contributes is the gutter the two neighbours have. */
 .c-pane__limit {

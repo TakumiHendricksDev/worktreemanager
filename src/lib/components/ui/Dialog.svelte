@@ -1,4 +1,6 @@
 <script lang="ts" module>
+  import { overlay } from '../../state/overlay.svelte';
+
   /**
    * Mounted dialogs, oldest first. Escape and the focus trap belong only to the last entry:
    * two window listeners cannot coordinate via `stopPropagation`.
@@ -10,12 +12,17 @@
     const id = nextDialog;
     nextDialog += 1;
     stack.push(id);
+    // Told here rather than derived from `stack`, which is a plain array on purpose: a browser
+    // pane's native view has to hide while any modal is up, and this pair is the one place every
+    // modal passes through. See `overlay.svelte.ts`.
+    overlay.modals = stack.length;
     return id;
   }
 
   function unregisterDialog(id: number): void {
     const index = stack.lastIndexOf(id);
     if (index >= 0) stack.splice(index, 1);
+    overlay.modals = stack.length;
   }
 
   function topDialog(): number | undefined {

@@ -45,6 +45,7 @@ fn project() -> Project {
         setup: None,
         remove: wtm_core::model::RemoveSpec::default(),
         display: wtm_core::model::DisplaySpec::default(),
+        browser: wtm_core::model::BrowserSpec::default(),
         database: BTreeMap::new(),
         actions: vec![],
         agent: BTreeMap::new(),

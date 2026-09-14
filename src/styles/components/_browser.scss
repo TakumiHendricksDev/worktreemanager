@@ -1,0 +1,272 @@
+/*
+ * A browser pane: a toolbar, the rectangle a native webview is laid over, and the empty state.
+ *
+ * Components layer — it paints a toolbar strip, a hairline, a loading bar and an empty-state
+ * card. The one thing it does not paint is the page: that is a *native* child webview Rust
+ * positions over `.c-browser__view`, above every element in this document. Nothing in this file
+ * can style it, and nothing in this file can sit on top of it, which is why the toolbar is beside
+ * the view rather than floating over it and why there is no `z-index` here.
+ *
+ * `.c-browser__view` is deliberately plain: its job is to have a box `getBoundingClientRect()` can
+ * measure. Its background shows for the frame between the pane appearing and the view being
+ * placed, and for as long as the view is hidden behind a dialog.
+ */
+
+/*
+ * A row: the page's column, and the comments beside it. Beside and not over, because nothing in
+ * this document can be painted over the native view — see the component's header.
+ */
+.c-browser {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-browser__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-browser__toolbar {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+/*
+ * The loading indicator is the toolbar's own bottom edge, because the page — where a browser would
+ * normally draw one — is not ours to draw on. The width is indeterminate by design: WebKit reports
+ * progress to the native view, not to this document, and a bar that pretended otherwise would lie.
+ */
+.c-browser__toolbar.is-loading::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--info);
+  opacity: 0.8;
+}
+
+.c-browser__nav {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.c-browser__address {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.c-browser__address.is-editing {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--r-md);
+}
+
+/* Problems with an address belong beside the field, not in the pane's status line. */
+.c-browser__problem {
+  flex: 0 0 auto;
+  font-size: var(--step--2);
+  color: var(--danger);
+}
+
+.c-browser__agent {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}
+
+.c-browser__agent.is-driving {
+  color: var(--info);
+}
+
+.c-browser__view {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+/* The last picture of the page, for the frames the native view is hidden. */
+.c-browser__frozen {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+}
+
+.c-browser__comment-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/* Comment mode is a state the whole pane is in, and its edge says so without covering the page. */
+.c-browser.is-commenting .c-browser__view {
+  box-shadow: inset 0 0 0 2px var(--accent-soft);
+}
+
+/*
+ * The comments, beside the page. A share of the pane rather than a fixed width, capped, with no
+ * splitter — the same decisions `.c-pane__aside` records for the plan panel, and for the same
+ * reasons.
+ */
+.c-browser__comments {
+  flex: 0 0 clamp(14rem, 30%, 22rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.c-browser__comments-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-browser__comments-title {
+  margin: 0;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-browser__comments-empty {
+  margin: 0;
+  padding: var(--sp-3);
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+}
+
+.c-browser__comment-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-browser__comment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.c-browser__comment.is-resolved {
+  opacity: 0.6;
+}
+
+.c-browser__comment.is-picked {
+  border-color: var(--accent);
+}
+
+.c-browser__comment-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-browser__comment-n {
+  flex: 0 0 auto;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--fg-on-accent);
+  background: var(--accent);
+}
+
+.c-browser__comment-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.c-browser__comment-text {
+  margin: 0;
+  font-size: var(--step--1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-browser__comment-edit {
+  width: 100%;
+  resize: vertical;
+  font-size: var(--step--1);
+}
+
+.c-browser__comment-actions {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.c-browser__comments-foot {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.c-browser__empty {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  place-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  overflow: auto;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.c-browser__empty-form {
+  display: flex;
+  gap: var(--sp-2);
+  width: min(100%, 36rem);
+}
+
+.c-browser__links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+}
