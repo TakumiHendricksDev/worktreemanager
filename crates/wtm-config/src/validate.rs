@@ -639,8 +639,7 @@ mod tests {
 
     #[test]
     fn a_project_without_a_browser_table_has_no_home_and_one_with_it_does() {
-        // `[browser]` is optional end to end: absent means the pane opens on its empty state, and
-        // the built-in defaults declare none, so a zero-config repo must deserialize without it.
+        // The built-in defaults declare no home, so a zero-config repo must deserialize without it.
         assert!(project_from("").browser.home.is_none());
         let project = project_from("[browser]\nhome = 'http://localhost:{{ env.PORT }}'\n");
         assert_eq!(

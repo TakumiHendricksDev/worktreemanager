@@ -207,8 +207,7 @@
       size="sm"
       title={browsers.unavailable ?? 'Open a browser pane in this worktree'}
       disabled={browsers.unavailable !== null}
-      onclick={() =>
-        void sessions.openBrowser(projectId, worktree.id, worktree.browserHome)}
+      onclick={() => void sessions.openBrowser(projectId, worktree.id)}
     >
       <Icon name="globe" size={13} /> Browser
     </Button>

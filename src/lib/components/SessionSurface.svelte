@@ -285,9 +285,8 @@
           >
             Shell
           </Button>
-          <!-- Opens on the project's `[browser] home` when it declares one, else on the empty state
-               that offers the worktree's links. Disabled with the reason where a build cannot show
-               one at all, the way an uninstalled agent is. -->
+          <!-- Disabled with the reason where a build cannot show one at all, the way an
+               uninstalled agent is. -->
           <Button
             variant="neutral"
             size="sm"
@@ -297,7 +296,6 @@
               void sessions.openBrowser(
                 workspace.activeProjectId ?? '',
                 workspace.selected?.id ?? '',
-                workspace.selected?.browserHome ?? null,
               )}
           >
             Browser

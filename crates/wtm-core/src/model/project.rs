@@ -809,7 +809,8 @@ pub struct DisplaySpec {
 /// One field, and a template rather than a URL, because the interesting address is the one only a
 /// worktree knows: `http://localhost:{{ env.WEB_PORT }}` for a project that allocates a port per
 /// worktree. Rendered in the same context as `[[display.link]]`, so anything a link can say a home
-/// page can say. Absent means the pane opens on its empty state and offers the display links.
+/// page can say. Absent falls back to the first visible, openable HTTP(S) display link in
+/// declaration order, or the empty state when no such link exists.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserSpec {

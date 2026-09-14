@@ -231,7 +231,7 @@ pub fn worktree_view(
         })
         .collect();
 
-    let links = project
+    let links: Vec<_> = project
         .display
         .links
         .iter()
@@ -240,23 +240,38 @@ pub fn worktree_view(
             let url = engine
                 .render("display.link.value", &link.value, &ctx)
                 .ok()?;
-            (!url.trim().is_empty()).then(|| LinkView {
-                label: link.label.clone(),
-                url,
+            (!url.trim().is_empty()).then(|| {
+                (
+                    LinkView {
+                        label: link.label.clone(),
+                        url,
+                    },
+                    link.open,
+                )
             })
         })
         .collect();
 
     let table = build_tables(project, &sources, engine, &ctx);
 
-    // Same context as the links, so `{{ env.WEB_PORT }}` resolves per worktree. A template that
-    // fails or renders empty simply means "no home", the same fallback a link takes.
+    // Repository order supplies the default without guessing from a link label or an env key.
+    // Use only rendered, visible, openable web links so missing setup cannot select a broken URL.
     let browser_home = project
         .browser
         .home
         .as_ref()
         .and_then(|template| engine.render("browser.home", template, &ctx).ok())
-        .filter(|url| !url.trim().is_empty());
+        .filter(|url| !url.trim().is_empty())
+        .or_else(|| {
+            links
+                .iter()
+                .find(|(link, open)| {
+                    *open
+                        && crate::browser::parse_target(&link.url)
+                            .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+                })
+                .map(|(link, _)| link.url.clone())
+        });
 
     // The Env tab shows the first source, which is the one `env.*` aliases.
     //
@@ -291,7 +306,7 @@ pub fn worktree_view(
         issue_key: extract_issue_key(worktree),
         favorite,
         badges,
-        links,
+        links: links.into_iter().map(|(link, _)| link).collect(),
         table,
         env,
         browser_home,

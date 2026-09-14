@@ -171,8 +171,8 @@ pub struct WorktreeView {
     /// Key names from the project's declared display source, for the Env tab. Names only —
     /// see [`EnvKeys`].
     pub env: EnvKeys,
-    /// The rendered `[browser] home` template, when the project declares one and it rendered to
-    /// something. What a new browser pane here opens on.
+    /// The rendered `[browser] home`, falling back to the first visible, openable HTTP(S) display
+    /// link in repository order. What a new browser pane here opens on.
     pub browser_home: Option<String>,
 }
 

@@ -103,7 +103,7 @@ export interface Worktree {
    * one at a time with `commands.revealEnvValue`.
    */
   env: string[];
-  /** The rendered `[browser] home` template, when the project declares one. */
+  /** The rendered `[browser] home`, or the first visible, openable HTTP(S) display link. */
   browserHome: string | null;
 }
 

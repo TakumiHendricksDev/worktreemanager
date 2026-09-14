@@ -366,14 +366,16 @@ the guarantee no longer depends on the data.
 
 A browser pane is a real web page — the platform's WebKit, the same engine the app itself runs on —
 tiled beside your shells and agent sessions in a worktree. Open one from the empty surface's
-**Browser** button, the worktree bar, or a pane's Split control; type an address (a bare
+**Browser** button, the worktree bar, or a pane's Split control. New panes open the first visible,
+openable HTTP(S) `[[display.link]]` in repository order, with templates resolved for that worktree.
+Without an available link, the pane starts empty; type an address (a bare
 `localhost:5173` gets `http://`, anything else `https://`), or pick one of the worktree's
 `[[display.link]]` URLs from the empty state. The pane has Back, Forward, Reload, an address bar
 (⌘L), and opens the page in your real browser on request. It follows its tile when you split,
 drag or resize, disappears while a dialog is up or another worktree is selected, and comes back
 after a relaunch at the address it was on.
 
-A project can name where a new pane should start:
+A project can override where new panes start with `[browser].home`:
 
 ```toml
 [browser]

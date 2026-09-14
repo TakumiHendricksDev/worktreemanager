@@ -49,6 +49,7 @@ import { statusOf, worse, type PaneStatus } from '../status';
 import { transferPrompt } from '../transfer';
 import { attention, type Announceable, type Announcement } from './attention.svelte';
 import { asShortcut, browsers } from './browsers.svelte';
+import { workspace } from './workspace.svelte';
 import {
   insert,
   move,
@@ -1977,7 +1978,7 @@ class Sessions {
   }
 
   /**
-   * Open a browser pane. Empty unless given an address.
+   * Open a browser pane at the worktree's default unless given an address.
    *
    * An empty pane costs no WebContent process — the webview is created by the first address typed
    * into it — so opening one is as cheap as a tile, and the cap that matters is the per-worktree one
@@ -1996,6 +1997,12 @@ class Sessions {
     }
     if (!this.hasRoom(worktreeId)) return;
 
+    // Resolve here so the bar, empty surface and Split control share the repository's default.
+    url ??=
+      workspace.activeProjectId === projectId
+        ? (workspace.worktrees.find((worktree) => worktree.id === worktreeId)
+            ?.browserHome ?? null)
+        : null;
     const pane = this.blank({ kind: 'browser' }, projectId, worktreeId);
     pane.url = url;
     this.panes = [...this.panes, pane];
