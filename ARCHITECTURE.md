@@ -394,7 +394,9 @@ reads what the agent is about to be told; `browser_read_comments` lets an agent 
 **Linux.** The pane works wherever Tauri has a child-webview API, which includes WebKitGTK. The
 runtime does not yet: `wtm-webview`'s no-op arm reports it absent, the tools are not advertised to
 sessions there, and the comment controls say why they are off. A `webkit2gtk` arm is all safe Rust
-and is the contained follow-up.
+and is the contained follow-up. Tauri exposes different native handle types on the two platforms,
+so `browser::native_handle` is the composition root's single compile-time seam for attaching the
+bridge: WKWebView pointers on macOS, `None` elsewhere. The adapter stays independent of Tauri.
 
 ---
 

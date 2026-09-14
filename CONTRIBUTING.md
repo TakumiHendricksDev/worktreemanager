@@ -79,12 +79,12 @@ page in one out of the app.
 in a browser; it is a mechanical proof that the domain has no operating-system dependency. If
 your change makes that check fail, the logic belongs in an adapter.
 
-**`#[cfg(target_os = …)]` is capped at two files**, enforced by
+**`#[cfg(target_os = …)]` is restricted to declared platform seams**, enforced by
 `src-tauri/tests/platform_seams.rs`. A platform seam is warranted only where the other
 platform's code cannot compile or cannot be expressed. `open` vs `xdg-open` qualifies;
 `fs::metadata("/Applications/Zed.app")` does not — it compiles everywhere and answers
 correctly everywhere. Prefer data, or a runtime `cfg!()`, so both arms stay under test on both
-runners. If you genuinely need a third seam, add it to that test's `ALLOWED` list *with the
+runners. If you genuinely need another seam, add it to that test's `ALLOWED` list *with the
 reason written next to it*.
 
 **No project-specific identifiers**, enforced by `src-tauri/tests/repo_hygiene.rs`. wtm is

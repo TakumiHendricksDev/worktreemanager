@@ -740,7 +740,7 @@ fn install(handle: &AppHandle, app: &Arc<App>, webview: &tauri::Webview) {
         (handle.clone(), Arc::clone(app), label.clone());
     let (page_handle, page_app, page_label) = (handle.clone(), Arc::clone(app), label.clone());
     let queued = webview.with_webview(move |platform| {
-        let Some(native) = Handle::attach(platform.inner(), platform.controller()) else {
+        let Some(native) = native_handle(&platform) else {
             tracing::debug!(%label, "no native webview to install the browser runtime into");
             return;
         };
@@ -759,6 +759,19 @@ fn install(handle: &AppHandle, app: &Arc<App>, webview: &tauri::Webview) {
     }
 }
 
+// Tauri exposes incompatible native APIs: WebKitGTK's `inner` is an object, and it has no
+// `controller`. The bridge accepts WKWebView pointers only, so a runtime check cannot make
+// these calls portable. Keep this conversion here so the FFI adapter need not depend on Tauri.
+#[cfg(target_os = "macos")]
+fn native_handle(platform: &tauri::webview::PlatformWebview) -> Option<Handle> {
+    Handle::attach(platform.inner(), platform.controller())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_handle(_platform: &tauri::webview::PlatformWebview) -> Option<Handle> {
+    None
+}
+
 /// Ask the webview itself whether Back and Forward mean anything, after a load finished.
 ///
 /// Runs on the main thread already (a page-load callback), where `with_webview` executes inline.
@@ -766,7 +779,7 @@ fn refresh_history(webview: &tauri::Webview) {
     let handle = webview.app_handle().clone();
     let label = webview.label().to_owned();
     let queued = webview.with_webview(move |platform| {
-        let Some(native) = Handle::attach(platform.inner(), platform.controller()) else {
+        let Some(native) = native_handle(&platform) else {
             return;
         };
         let (back, forward) = native.history();
@@ -1030,7 +1043,7 @@ fn dispatch(webview: &tauri::Webview, request: u64, method: &str, args: &Value) 
         serde_json::to_string(args).unwrap_or_else(|_| "{}".to_owned())
     );
     let queued = webview.with_webview(move |platform| {
-        if let Some(native) = Handle::attach(platform.inner(), platform.controller()) {
+        if let Some(native) = native_handle(&platform) {
             // The reply travels through the message handler, not the evaluation result, so the
             // receiver `evaluate` hands back is dropped on purpose.
             drop(native.evaluate(&World::Isolated(WORLD.to_owned()), &js));
@@ -1059,7 +1072,7 @@ pub fn snapshot_png(
     let webview = webview_of(handle, id)?;
     let (tx, rx) = mpsc::channel();
     let queued = webview.with_webview(move |platform| {
-        let reply = Handle::attach(platform.inner(), platform.controller())
+        let reply = native_handle(&platform)
             .map(|native| native.snapshot(rect.map(|r| (r.x, r.y, r.w, r.h))));
         let _ = tx.send(reply);
     });

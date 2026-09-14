@@ -16,7 +16,7 @@
 //!
 //! If you are here because this test went red: adding a seam is allowed, but it is a
 //! decision. Add the file to `ALLOWED` **with the reason written next to it**, the way the
-//! two below are.
+//! entries below are.
 
 // Same justification as `repo_hygiene.rs`: asking git for its own file list is not app code
 // and does not need a timeout, a sanitized environment or a tracing span.
@@ -36,6 +36,12 @@ const ALLOWED: &[(&str, &str)] = &[
         "src-tauri/src/openers.rs",
         "`OPENER` — the OS's hand-this-to-the-default-handler front end. `open` on macOS, \
          `xdg-open` elsewhere; there is no portable name and no runtime way to choose.",
+    ),
+    (
+        "src-tauri/src/browser.rs",
+        "`native_handle` — Tauri exposes WKWebView pointers on macOS but a WebKitGTK object \
+         and no controller method on Linux. The conversion cannot compile across targets; \
+         the composition root owns it so the native FFI adapter need not depend on Tauri.",
     ),
     (
         "crates/wtm-webview/src/lib.rs",
