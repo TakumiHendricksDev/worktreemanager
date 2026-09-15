@@ -571,6 +571,30 @@ per-session directories and cargo collects them lazily. It is a cache, so the de
 rebuild of the workspace crates and nothing else — but it is worth knowing before concluding the
 build itself got slower, because on a disk at 92% it genuinely had.
 
+**The slowest part of `just check` is not cargo, and not this repo.** After a full rebuild the
+gate took ~19 minutes at 22% CPU, while the test run it is waiting on takes under 8 seconds.
+`cargo build` printed `Finished` and then nothing happened for minutes.
+
+What is actually happening: nextest enumerates tests by executing each test binary with `--list`,
+there are ~38 of them, and macOS runs its binary-validation machinery against them. Caught in the
+act, `syspolicyd` was at 76% CPU and `XprotectService` at 47% while eighteen `--list` processes
+sat at 0.0% CPU waiting on them.
+
+What is measured is the stall and its cause; the trigger is *not* simply "each binary once".
+The clearest reproduction was a bare `cargo nextest run --workspace` that rebuilt **nothing** —
+zero `Compiling` lines — and reported `818 tests run: 818 passed` in **7.9 seconds**, having taken
+about ten minutes of wall clock to get there, with `syspolicyd` at 124% throughout. A warm target
+directory buys no immunity.
+
+The useful part is the diagnosis: **when the gate goes quiet and your own processes are at 0% CPU,
+look at `syspolicyd` before you look at cargo.** A stall at 0% CPU is someone else's work. A
+release is the worst case, because bumping the version relinks the whole workspace at once. None
+of it is paid in CI, where a runner builds once on a machine that is then thrown away.
+
+Adding the terminal to System Settings → Privacy & Security → Developer Tools is the documented
+way to exempt locally built binaries from that scan. **Untested here** — recorded as the next
+thing to try, not as a fix that worked.
+
 Rejected, with reasons recorded in `.cargo/config.toml` so they don't get re-added:
 
 - **`lld`/`mold` as the linker.** That advice is copied from Linux threads. On Apple silicon the system
