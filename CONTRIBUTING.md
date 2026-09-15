@@ -151,7 +151,15 @@ record of *why* the code looks the way it does, so it is worth writing properly.
 
 - Branch off `main`.
 - Keep the change focused. Unrelated cleanups are welcome, in their own commits.
-- Make sure `just check` passes. All four CI checks must be green before a PR can merge.
+- Make sure `just check` passes. All four CI checks must be green before a PR can merge:
+  `rust (workspace)`, `frontend`, `build .app (macos)`, `licenses + advisories`.
+
+  Those four strings are also the required status checks in the `main` branch ruleset, which
+  lives in GitHub's settings and not in this repository — so **renaming a job in `ci.yml`, or
+  removing one, means editing the ruleset too.** Miss it and PRs queue forever against a check
+  that can never report, with nothing in the diff to explain why. Dropping the Linux build is
+  what taught us this; `build .app (macos)` carries an explicit `name:` in `ci.yml` for the
+  same reason.
 - Describe what you verified by hand, and what you did not. "I did not open the browser pane" is
   useful information, not an admission — nothing in CI launches the app, so a claim that the UI
   still looks right can only come from someone saying they looked.
