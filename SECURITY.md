@@ -76,8 +76,7 @@ Worth stating because it narrows the surface considerably:
 
   The mechanical portions are enforced by `src-tauri/tests/network_boundary.rs`, which runs in `just check`.
   (`Cargo.lock` lists `reqwest` because a lockfile is the union of every platform; `cargo tree -i
-  reqwest --target aarch64-apple-darwin` — or the Linux target — reports nothing. See
-  ARCHITECTURE.md §6a.)
+  reqwest --target aarch64-apple-darwin` reports nothing. See ARCHITECTURE.md §6a.)
 - **No `unsafe`.** `unsafe_code = "forbid"` workspace-wide.
 - **No shell.** Every command is an argv array handed to `execve`; there is no string that
   gets parsed by `sh`.

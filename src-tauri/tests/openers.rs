@@ -227,9 +227,10 @@ fn an_opener_offered_via_an_application_bundle_really_has_one_on_disk() {
     // two sources — a shim on `PATH` and an installed `.app` — and only the first is under
     // the test's control, so this asserts the second was not invented.
     //
-    // The loop body does not execute on Linux, where no bundle can resolve. That is stated
-    // rather than hidden: the assertion is real on macOS and vacuous elsewhere, which is
-    // the price of `.app` detection being filesystem data instead of a `#[cfg]`.
+    // The loop body only executes where a bundle can resolve, so the assertion is real on
+    // macOS and vacuous on a host without `/Applications`. That is stated rather than
+    // hidden: it is the price of `.app` detection being filesystem data instead of a
+    // `#[cfg]`, and the trade is worth it — see `tests/platform_seams.rs`.
     let h = Harness::with_programs(&[]);
 
     for entry in h.resolved() {

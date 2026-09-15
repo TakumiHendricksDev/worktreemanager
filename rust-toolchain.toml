@@ -13,11 +13,11 @@
 [toolchain]
 channel    = "1.97.1"
 components = ["rustfmt", "clippy"]
-# No host target listed, deliberately. rustup always installs the host's own target
-# with the toolchain, so naming `aarch64-apple-darwin` bought nothing on the Mac that
-# needs it while costing every Linux build a ~40 MB std download of a target it will
-# never compile for. `x86_64-apple-darwin` is likewise absent: `just build-universal`
-# is rare enough that the README tells you to `rustup target add` it first.
+# No host target listed, deliberately: rustup always installs the host's own target with
+# the toolchain, so naming `aarch64-apple-darwin` here would restate what rustup already
+# did. `x86_64-apple-darwin` is likewise absent — `just build-universal` is rare enough
+# that the README tells you to `rustup target add` it first, and listing it would put a
+# ~40 MB std download in front of every fresh clone to serve the rarest recipe.
 targets    = [
   # Not for shipping — this is the target for `cargo core-wasm`, which
   # mechanically proves wtm-core has no OS-specific dependencies.

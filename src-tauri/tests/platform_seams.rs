@@ -1,18 +1,24 @@
 //! Platform differences must stay data, not compile-time branches.
 //!
-//! Supporting Linux was done on one governing principle: **macOS is the unattributed
-//! default and Linux is the explicit override**, expressed wherever possible as *data* that
-//! both targets compile. A `#[cfg(target_os)]` is the opposite — it deletes one arm before
-//! the compiler ever sees it, so half the code is untested on whichever runner is executing
-//! and neither half can be exercised from a unit test.
+//! The governing principle is that **macOS is the unattributed default and anything else is
+//! an explicit override**, expressed wherever possible as *data* that every target compiles.
+//! A `#[cfg(target_os)]` is the opposite — it deletes one arm before the compiler ever sees
+//! it, so that arm is untested on whichever runner is executing and neither arm can be
+//! exercised from a unit test.
 //!
-//! The principle was a paragraph in a design document, which is to say it was a promise.
-//! This makes it a lint. A seam is warranted only where the other platform's code **cannot
-//! compile or cannot be expressed** — a constant with no portable spelling, a syscall that
-//! does not exist. `open` vs `xdg-open` qualifies: there is no portable name and no runtime
-//! way to pick one. `fs::metadata("/Applications/Zed.app")` does not; it compiles
-//! everywhere and answers correctly everywhere, which is why the opener catalogue's macOS
-//! table stays under test on a Linux CI runner.
+//! This outlived the Linux build it was written for, and deliberately. wtm ships on macOS
+//! only (ARCHITECTURE.md §9 records why the Linux target went away), so the non-mac arms
+//! below are unreachable as shipped — but the reason to keep them is the same reason the
+//! rule exists: an untaken arm that still *compiles* is one the type checker keeps honest,
+//! and the alternative is `#[cfg]`s spreading back through the call sites. The number the
+//! lint watches is the number of files that branch at all, and dropping a platform is not a
+//! licence to raise it.
+//!
+//! A seam is warranted only where the other platform's code **cannot compile or cannot be
+//! expressed** — a constant with no portable spelling, a syscall that does not exist. `open`
+//! vs `xdg-open` qualifies: there is no portable name and no runtime way to pick one.
+//! `fs::metadata("/Applications/Zed.app")` does not; it compiles everywhere and answers
+//! correctly everywhere, which is why the opener catalogue stays testable as plain data.
 //!
 //! If you are here because this test went red: adding a seam is allowed, but it is a
 //! decision. Add the file to `ALLOWED` **with the reason written next to it**, the way the

@@ -391,12 +391,12 @@ show, in memory, per browser — they are feedback on a live page, not a documen
 the pane. "Send" drafts them into the focused agent's composer rather than sending, so the user
 reads what the agent is about to be told; `browser_read_comments` lets an agent pull them itself.
 
-**Linux.** The pane works wherever Tauri has a child-webview API, which includes WebKitGTK. The
-runtime does not yet: `wtm-webview`'s no-op arm reports it absent, the tools are not advertised to
-sessions there, and the comment controls say why they are off. A `webkit2gtk` arm is all safe Rust
-and is the contained follow-up. Tauri exposes different native handle types on the two platforms,
-so `browser::native_handle` is the composition root's single compile-time seam for attaching the
-bridge: WKWebView pointers on macOS, `None` elsewhere. The adapter stays independent of Tauri.
+**Off macOS.** `browser::native_handle` is the composition root's single compile-time seam for
+attaching the bridge — WKWebView pointers on macOS, `None` elsewhere — and `wtm-webview`'s no-op
+arm reports the runtime absent, which un-advertises the tools and makes the comment controls say
+why they are off. wtm ships on macOS only, so nothing exercises that arm today. It is kept rather
+than deleted because it is what lets both halves of the facade keep compiling and keeps the
+uninhabited-`Handle` proof in §6c honest; the alternative is a `#[cfg]` around every call site.
 
 ---
 
@@ -447,7 +447,8 @@ are their corresponding boundary.
 licence policy to buy a dictation button. And shelling out is what §9 already argues for with
 `git2`: `curl` uses the system trust store and honours the user's proxy configuration. PostgreSQL
 TLS is a different boundary: its protocol driver uses `native-tls`, kept inside `wtm-db`, and does
-not provide arbitrary HTTP. The cost is a system OpenSSL build dependency on Linux.
+not provide arbitrary HTTP — on macOS that resolves to Secure Transport, so it adds no build
+dependency.
 
 Verified rather than assumed, and cheap to re-verify.
 
@@ -457,11 +458,12 @@ wtm does not build. Ask cargo about a real target instead:
 
 ```bash
 cargo tree -i reqwest --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin
-cargo tree -i reqwest --manifest-path src-tauri/Cargo.toml --target x86_64-unknown-linux-gnu
+cargo tree -i reqwest --manifest-path src-tauri/Cargo.toml --target x86_64-apple-darwin
 ```
 
-Both answer "nothing to print". (This is the same union-of-all-platforms property that
-`deny.toml` records for `cargo deny`.)
+Both answer "nothing to print" — both targets, because `just build-universal` compiles the second.
+(This is the same union-of-all-platforms property that `deny.toml`'s `[graph] targets` pins down
+for `cargo deny`.)
 
 **Nothing is logged.** No `tracing` call carries an environment value. Note that
 `Runner::run_inner` opens a span with the argv at `debug` level, so a config that
@@ -519,7 +521,34 @@ so the first `cargo` invocation downloads ~350 MB. Bump quarterly.
 
 ### Build performance — what actually helps, and what is cargo cult
 
-The one measure that matters on a Tauri project is **not building debuginfo for the dependency tree**:
+**Measure the critical path, not the total.** `cargo build --timings` is the whole tool here, and on
+this project it said something specific: a cold release build saturated 16 cores for its first 30
+seconds, working through the ~550 units of the dependency graph, and then spent the remaining two
+minutes compiling exactly one crate — `wtm-app` — with nothing left to overlap it. 75% of a 152s wall
+clock was one crate on one core. Anything that shortens the parallel head is worth nothing; anything that shortens `wtm-app` is
+worth almost the whole saving. Two things did:
+
+| cold release build (16-core M-series) | wall | `wtm` binary |
+|---|---|---|
+| `crate-type = ["staticlib","cdylib","rlib"]`, `codegen-units = 1` | 152s | 15.96 MB |
+| drop `staticlib` + `cdylib` | 127s | 15.96 MB |
+| `codegen-units = 16` only | 83s | 19.64 MB |
+| **both — what ships now** | **62s** | 19.64 MB |
+
+- **`crate-type` was three artifacts, two of them dead.** Tauri's template asks for `staticlib` and
+  `cdylib` because iOS and Android link against them. This app has no mobile target, and each one was
+  a full codegen of the largest crate plus an archive or link of everything behind it — one of them
+  produced a 174 MB `libwtm_app_lib.a` that nothing read. `src-tauri/Cargo.toml` records the reasoning
+  at the declaration.
+- **`codegen-units = 1` was the single worst setting in the repo,** and it is also the one most
+  likely to be re-added by someone optimising in good faith: it *is* the standard release advice. The
+  advice is about the binary, and it buys a few percent of runtime for a serialised codegen of every
+  crate in the profile. On an app that spends its life blocked on `git` subprocesses and on the user,
+  the runtime side of that trade has nothing to bite on, while the build side is paid on every CI run
+  and every release. The cost of taking it is 3.7 MB of binary. `Cargo.toml` records the trade.
+
+**Not building debuginfo for the dependency tree**, which was the first thing this section ever said
+and is still true:
 
 ```toml
 [profile.dev.package."*"]
@@ -530,6 +559,18 @@ opt-level = 1
 Full DWARF across ~800 crates dominates link time and pushes `target/` past 6 GB, and you never step
 into `objc2-app-kit`.
 
+**`bun run build` is `vite build` alone.** It used to be `svelte-check && vite build`, which put a
+7-second typecheck in front of every `tauri build` — including `just run` and `just install-app`.
+Typechecking cannot change the emitted bundle, and `just lint` and the CI `frontend` job both already
+run it, so in the bundle path it was duplicated work. The type gate did not move; it just stopped
+being on the critical path of producing an artifact.
+
+**`target/` grows without bound and nothing prunes it.** `target/debug/incremental` was measured at
+49 GB inside a 73 GB `target/`; deleting it took the tree to 34 GB. Incremental caches accumulate
+per-session directories and cargo collects them lazily. It is a cache, so the delete costs one warm
+rebuild of the workspace crates and nothing else — but it is worth knowing before concluding the
+build itself got slower, because on a disk at 92% it genuinely had.
+
 Rejected, with reasons recorded in `.cargo/config.toml` so they don't get re-added:
 
 - **`lld`/`mold` as the linker.** That advice is copied from Linux threads. On Apple silicon the system
@@ -538,6 +579,9 @@ Rejected, with reasons recorded in `.cargo/config.toml` so they don't get re-add
 - **`target-cpu=native`.** This is a distributable `.app`; baking in the build machine's ISA produces a
   binary that SIGILLs on an older Mac, for zero benefit in an app that spends its life waiting on git.
 - **`jobs = N`.** Cargo's default is correct.
+- **`lto = false`.** Measured, and it is a *loss*: 66s against 62s, for 0.5 MB of binary. Thin LTO's
+  cross-crate deduplication more than pays for itself, and it is also what recovers most of what
+  `codegen-units = 16` gives up. Thin LTO stays.
 
 ### Lints as the quality gate
 
@@ -607,8 +651,7 @@ terminals in layout, and xterm's DOM renderer writes real DOM rows on every chun
 would pay full layout for five invisible ones, and it invents a stacking context in an app where nothing
 outside `settings/_config.scss` sets a `z-index`. `content-visibility: hidden` is worse in a specific
 way: it keeps the box but skips the subtree, so a fit would measure something the browser is not laying
-out, and WebKitGTK is a first-class target here and gained it very late. `display: none` costs nothing to
-lay out and its 0×0 `ResizeObserver` fire doubles as the signal that a pane came back.
+out. `display: none` costs nothing to lay out and its 0×0 `ResizeObserver` fire doubles as the signal that a pane came back.
 
 That last point is why `Terminal.svelte` guards its fit on a non-zero box. `FitAddon.proposeDimensions`
 floors its answer at two columns by one row rather than declining, so an unguarded fit on a displayed
@@ -759,6 +802,17 @@ decision, and it belongs written down rather than discovered in eighteen months.
   failure modes — a pop conflict in a brand-new worktree — and rarely used. Config can express it later
   as a post-create step.
 - **Code signing and notarization.** Personal tool; see the README for what it would take.
+- **A Linux build.** There was one, through v1.2.0: CI compiled the workspace against WebKitGTK and
+  published an AppImage. It was removed because nothing on the far end justified it. No person ever
+  launched it — CI proved it linked and bundled, which is not the same claim — and the parts a Linux
+  user would actually meet were the least finished parts of the app: no application menu, no native
+  notification centre, and a browser pane whose agent tools and comments need a WebKit bridge that
+  only has a macOS arm. Against that, it was a standing tax: a second bundler with its own
+  `strip`/AppImage failure modes, a GTK toolchain to keep installable on a runner, and `wtm-app`
+  having to keep compiling on a platform nobody ran, which came due as its own commits. Platform
+  differences stay expressed as *runtime data* (§ the `platform_seams.rs` lint), so the code did not
+  gain `#[cfg]`s when the target went away — which is also what would make adding it back a
+  contained change rather than an archaeology exercise.
 - **Embedding Gecko.** There is no desktop embedding API for it — GeckoView is Android-only — and
   the alternatives that use Mozilla's JavaScript engine (Servo) or a real Firefox process
   (WebDriver BiDi) either do not render arbitrary pages or cannot render inside a pane. The browser

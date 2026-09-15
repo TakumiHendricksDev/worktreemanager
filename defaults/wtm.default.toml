@@ -80,8 +80,12 @@ warn_if_unmerged = true
 
 # `$SHELL` is what actually gets used; the fallback is the floor for the rare session
 # that does not set it. `/bin/bash` rather than `/bin/sh` because this is a shell a
-# person types into and `dash` has no line editing — and rather than `/bin/zsh`, which
-# is the macOS default but frequently absent on Linux.
+# person types into and `sh` is not guaranteed to have line editing.
+#
+# Not `/bin/zsh`, even though that is the macOS default and macOS is the only platform
+# wtm ships on: this value is a *floor* for a session whose `$SHELL` is unset, and a
+# floor should be the least surprising thing that works rather than the most local one.
+# Anyone who wants zsh already has `$SHELL` set, and this line never runs for them.
 [[action]]
 id = "shell"
 label = "Open shell"

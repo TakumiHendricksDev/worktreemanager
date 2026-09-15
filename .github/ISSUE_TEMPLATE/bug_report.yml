@@ -43,7 +43,6 @@ body:
       label: Platform
       options:
         - macOS (Apple silicon)
-        - Linux (AppImage)
         - Built from source
     validations:
       required: true

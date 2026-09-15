@@ -10,13 +10,13 @@ The one genuinely useful section is "Verified by hand"; see below for why.
 ## Verified by hand
 
 <!--
-CI proves the code compiles, lints and passes tests on both platforms. It proves nothing
-about whether the app looks right or whether anything actually launched — nothing in CI
-runs the app.
+CI proves the code compiles, lints, passes tests and bundles into a .app. It proves
+nothing about whether the app looks right or whether anything actually launched —
+nothing in CI runs the app.
 
-So: what did you actually try? And what did you not? "I did not test this on Linux" is
-useful information rather than an admission — nobody has, and saying so is much better
-than leaving it ambiguous.
+So: what did you actually try? And what did you not? "I did not click through the
+browser pane" is useful information rather than an admission, and much better than
+leaving it ambiguous.
 -->
 
 ## Checklist

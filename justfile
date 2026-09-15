@@ -14,20 +14,16 @@ export PATH := env("HOME") + "/.cargo/bin:" + env("HOME") + "/.bun/bin:" + env("
 pm  := "bun"
 pmx := "bun x"
 
-# The bundle this OS installs, and the "hand it to the default handler" front end.
-# Two one-liners here keep the recipes below from each having to know about platforms;
-# only the recipes whose *bodies* genuinely differ get [macos]/[linux] attributes.
-bundles  := if os() == "macos" { "app" } else { "appimage" }
-opener   := if os() == "macos" { "open" } else { "xdg-open" }
-
-# linuxdeploy carries its own `strip`, built against a binutils too old to know
-# `.relr.dyn` (SHT_RELR). A distribution that links its system libraries with packed
-# relative relocations — Arch today, others as binutils spreads — therefore fails every
-# strip call linuxdeploy makes while filling the AppDir, and bundling dies having only
-# said `failed to run linuxdeploy`. Stripping sheds debug symbols from bundled system
-# libraries and nothing else, so declining it costs bundle size alone. Empty on macOS,
-# whose bundler never invokes linuxdeploy at all.
-no_strip := if os() == "macos" { "" } else { "NO_STRIP=1" }
+# wtm is a macOS application and this file no longer carries [macos]/[linux]
+# attributes.
+#
+# They were not dropped to save lines. The reason they existed was that a bare
+# [macos] recipe makes `just build-dmg` on the wrong host report "Justfile does not
+# contain recipe 'build-dmg'", which reads as a broken justfile rather than as a
+# recipe that does not apply — so every macOS-only recipe needed a [linux] twin
+# whose whole job was to print a better error. With one platform there is no wrong
+# host to write a twin for: `just doctor` says macOS-only in its first line, which
+# is one statement in one place instead of six.
 
 default:
     @just --list --unsorted
@@ -119,45 +115,23 @@ audit:
 
 # Ship one clean, tested main commit, publish its GitHub artifacts, and update the Homebrew cask.
 # The tap waits for the release build because its sha256 is derived from the built macOS zip.
-[macos]
 release version:
     @bash scripts/release.sh "{{ version }}"
 
-[linux]
-release version:
-    @just _err "release is macOS-only (it verifies the .app before updating Homebrew)"
-    @exit 1
-
 # ─────────────────────────────── build ───────────────────────────────
 
-# The installable bundle for this OS: .app on macOS, AppImage on Linux. Fast, and
-# triggers no permission prompts on either.
+# The installable .app. Fast, and triggers no macOS permission prompts.
 build:
-    {{ no_strip }} {{ pmx }} tauri build --bundles {{ bundles }}
+    {{ pmx }} tauri build --bundles app
 
 # Requires: rustup target add x86_64-apple-darwin  (roughly doubles build time)
-[macos]
 build-universal:
     {{ pmx }} tauri build --bundles app --target universal-apple-darwin
 
 # WARNING: DMG bundling drives Finder over AppleScript, so macOS shows an
 # Automation permission prompt the first time. Not CI-friendly.
-[macos]
 build-dmg:
     {{ pmx }} tauri build --bundles dmg
-
-# Stubs so the macOS-only recipes fail with a reason. Without them just reports
-# "Justfile does not contain recipe 'build-dmg'", which reads as a broken justfile
-# rather than as a recipe that does not apply here.
-[linux]
-build-universal:
-    @just _err "build-universal is macOS-only (it builds a universal Mach-O binary)"
-    @exit 1
-
-[linux]
-build-dmg:
-    @just _err "build-dmg is macOS-only — 'just build' produces an AppImage"
-    @exit 1
 
 # Run the app from the built bundle, so it activates like a real app rather than
 # launching behind whatever window has focus.
@@ -165,38 +139,21 @@ build-dmg:
 # The lsregister step is not superstition: rebuilding over the same bundle path leaves
 # LaunchServices holding a stale record, and `open` then fails with a bare
 # "error -600" that looks like the app is broken. Re-registering costs nothing.
-[macos]
 run: build
     @just _register
     open "target/release/bundle/macos/Worktree Manager.app"
 
-# Linux has neither problem: no LaunchServices record to go stale, and no
-# activation quirk — the WM raises whatever was just launched.
-[linux]
-run: build
-    "target/release/bundle/appimage/Worktree Manager"*.AppImage
-
-[macos]
 _register:
     @/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
         -f "target/release/bundle/macos/Worktree Manager.app" 2>/dev/null || true
 
 # Install the built .app into /Applications.
-[macos]
 install-app: build
     rm -rf "/Applications/Worktree Manager.app"
     cp -R "target/release/bundle/macos/Worktree Manager.app" /Applications/
     @/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
         -f "/Applications/Worktree Manager.app" 2>/dev/null || true
     @just _ok "installed to /Applications — open it from Spotlight"
-
-# Install the AppImage onto PATH. Deliberately not writing a .desktop entry: the
-# AppImage carries one, and whether to integrate it with the menu is the user's call.
-[linux]
-install-app: build
-    install -Dm755 "target/release/bundle/appimage/Worktree Manager"*.AppImage \
-        "$HOME/.local/bin/wtm"
-    @just _ok "installed to ~/.local/bin/wtm — make sure that is on your PATH"
 
 # ───────────────────────────── utilities ─────────────────────────────
 
@@ -208,9 +165,9 @@ install-app: build
 # The CLI rasterises SVG directly, so nothing here needs a rasterizer installed.
 #
 # It also emits an .ico, Windows tiles, and Android and iOS trees. This app bundles app/dmg
-# on macOS and an AppImage on Linux and has no mobile target, so those are deleted rather
-# than committed. What survives is the four files `bundle.icon` names in tauri.conf.json,
-# plus `icon.png` and `icon-1024.png` as the rasters other tools ask for.
+# and has no mobile target, so those are deleted rather than committed. What survives is
+# the four files `bundle.icon` names in tauri.conf.json, plus `icon.png` and
+# `icon-1024.png` as the rasters other tools ask for.
 #
 # The 1024 pass is separate, and second, because `--png` suppresses the default set.
 icon:
@@ -228,7 +185,7 @@ logs:
 
 # Open the user config in $EDITOR.
 config:
-    ${EDITOR:-{{ opener }}} "${XDG_CONFIG_HOME:-$HOME/.config}/wtm/config.toml"
+    ${EDITOR:-open} "${XDG_CONFIG_HOME:-$HOME/.config}/wtm/config.toml"
 
 # Install a config into a repo's git dir as `wtm.local.toml`.
 #

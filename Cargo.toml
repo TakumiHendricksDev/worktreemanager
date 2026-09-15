@@ -192,8 +192,30 @@ opt-level = 1
 
 [profile.release]
 lto           = "thin"
-codegen-units = 1
 strip         = "symbols"
+# 16 — cargo's own release default — and NOT 1, which is what this said.
+#
+# `codegen-units = 1` is the standard advice for a release profile, and it is advice about
+# the *binary*: one unit per crate lets LLVM see a whole crate at once, which is worth a
+# few percent of runtime and a little size. The cost is that codegen within a crate stops
+# being parallel, and on this project that cost lands in the worst possible place — on
+# `wtm-app`, the largest crate and the last one in the graph, where there is no other work
+# left to overlap it with. It was 75% of a cold release build on a 16-core machine.
+#
+# Measured, cold, release, with the `crate-type` fix in src-tauri/Cargo.toml also applied:
+#
+#     codegen-units = 1    127s    binary 15.96 MB
+#     codegen-units = 16     62s   binary 19.64 MB
+#
+# So: 2x faster to build, 3.7 MB larger to ship. Worth it here and probably not worth it
+# elsewhere — the reason it is worth it here is that wtm is an app that spends its life
+# blocked on `git` subprocesses and on the user, so intra-crate optimisation has nothing
+# to bite on, while the build cost is paid on every CI run and every release.
+#
+# `lto = "thin"` stays, and is measured too: turning it off made the build *slower* (66s)
+# and the binary only 0.5 MB smaller, because thin LTO's cross-crate deduplication pays
+# for itself. Cross-crate inlining also recovers most of what codegen-units gives up.
+codegen-units = 16
 
 # `panic = "abort"` is deliberately NOT set, and that is a correction rather than an omission.
 #

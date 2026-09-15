@@ -24,8 +24,14 @@
 
 :root[data-platform='linux'] {
   /* No vibrancy to reveal, and no guarantee of a compositing WM, so the window
-     is opaque and paints its own background. Pairs with `transparent: false` in
-     tauri.linux.conf.json — change one and the other is wrong. */
+     is opaque and paints its own background.
+
+     Unreachable as shipped: wtm builds for macOS only, so `data-platform` is
+     never set to `linux` by a real run (index.html explains why the fallback
+     direction is the mac one). Kept because it is the whole reason the tokens
+     above are tokens — deleting it would leave three layers of indirection
+     serving a single value. If a Linux build ever returns, the window config it
+     needs is `transparent: false`, and this block is what pairs with it. */
   --under-window: var(--bg);
   /* The window manager draws the controls, on the right, outside the webview.
      There is nothing to reserve, so this is an ordinary leading inset. */

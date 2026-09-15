@@ -17,7 +17,7 @@
 //! The two exceptions are Tauri's own `core:*`, which are not a plugin and whose contents are the
 //! framework version already pinned in `Cargo.lock`.
 //!
-//! A lint, not a promise — the same shape as `platform_config.rs` and `repo_hygiene.rs`.
+//! A lint, not a promise — the same shape as `repo_hygiene.rs`.
 
 #![allow(clippy::unwrap_used)]
 

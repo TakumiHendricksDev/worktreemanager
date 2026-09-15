@@ -341,10 +341,10 @@ fn is_executable(path: &Path) -> bool {
 /// Where macOS keeps application bundles.
 ///
 /// **Not** behind `#[cfg(target_os = "macos")]`, deliberately, and that is the point
-/// worth reading. These directories simply do not exist on Linux, so the probe below
-/// answers `None` there without a compile-time branch — which means a unit test on
-/// *either* platform exercises the real code path, and the macOS half of the opener
-/// catalogue stays under test on a Linux CI runner.
+/// worth reading. These directories simply do not exist off macOS, so the probe below
+/// answers `None` there without a compile-time branch — which means the test can inject
+/// roots and exercise the real code path on any host, rather than one arm of it being
+/// invisible to the compiler on whichever machine happens to be running.
 ///
 /// The rule this follows: a `#[cfg(target_os)]` is warranted only where the other
 /// platform's code cannot compile or cannot be expressed. `open` vs `xdg-open`
@@ -454,9 +454,9 @@ fn home_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    /// Roots are injected so this runs identically on Linux, where none of the real
-    /// `APP_DIRS` exist. That is the whole reason the probe is data rather than a
-    /// `#[cfg]`: the macOS behaviour stays under test on a Linux CI runner.
+    /// Roots are injected rather than probed, so the assertion is about the lookup and
+    /// not about what happens to be installed on the machine running it. That is the whole
+    /// reason the probe is data rather than a `#[cfg]`.
     #[test]
     fn an_application_bundle_is_found_by_name_in_a_directory_that_holds_one() {
         let dir = tempfile::tempdir().unwrap();

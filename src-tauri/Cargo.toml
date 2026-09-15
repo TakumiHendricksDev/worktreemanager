@@ -10,10 +10,21 @@ repository.workspace   = true
 publish.workspace      = true
 
 [lib]
-# Tauri's own convention: the app lives in a library so integration tests and the
-# (future) mobile entry point can both use it, with a thin binary on top.
+# Tauri's own convention: the app lives in a library so integration tests and the thin
+# binary in `src/main.rs` can both use it.
 name       = "wtm_app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# `rlib` alone. Tauri's template ships `["staticlib", "cdylib", "rlib"]` because those are
+# what a mobile target links against — `staticlib` for iOS, `cdylib` for Android — and this
+# app has neither: there is no `tauri::mobile_entry_point`, `src-tauri/gen` holds desktop
+# schemas only, and `just icon` deletes the mobile icon trees rather than committing them.
+#
+# They were not free. Each is a full codegen of this crate plus an archive or link of the
+# whole ~800-crate graph behind it, and because they hang off the last crate in the graph
+# they land on the critical path with nothing else left to run in parallel. Measured on a
+# cold release build: dropping them took it from 152s to 127s on its own, and the dead
+# `libwtm_app_lib.a` they produced was 174 MB of `target/`. See ARCHITECTURE.md § Build
+# performance.
+crate-type = ["rlib"]
 
 # The binary name must match `mainBinaryName` in tauri.conf.json, or bundling cannot
 # find what it built. Without this it would default to the package name, `wtm-app`.
@@ -43,10 +54,10 @@ tauri-plugin-dialog = "2"
 
 # Notifications, for a session that needs an answer while the window is in the background — but
 # only as the *fallback* poster. The primary path is `wtm-notify`, whose native center carries a
-# navigation payload a click delivers back; this plugin covers the places that center cannot
-# exist (Linux, and unbundled dev runs, where `UNUserNotificationCenter` refuses a process with
-# no bundle id). Its JS API is unused and its capability grants are gone — the webview reaches
-# notifications only through this app's own `post_notification` command.
+# navigation payload a click delivers back; this plugin covers the case that center cannot exist:
+# an unbundled dev run, where `UNUserNotificationCenter` refuses a process with no bundle id.
+# Its JS API is unused and its capability grants are gone — the webview reaches notifications
+# only through this app's own `post_notification` command.
 #
 # A dependency rather than four lines of DOM because the webview's own `Notification` API does not
 # exist in WKWebView, which is the engine every Mac build runs on.

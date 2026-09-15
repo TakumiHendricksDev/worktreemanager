@@ -2,10 +2,10 @@
 
 # wtm — Worktree Manager
 
-A desktop app for managing git worktrees across projects — macOS and Linux. Worktrees are tabs down the left, details and a
-live terminal on the right, and the **New Worktree** form is defined by each project itself in a
-`wtm.toml` — including dropdowns populated by your own shell commands (branch lists, Jira issues via
-`acli`, anything that prints to stdout).
+A desktop app for managing git worktrees across projects on macOS. Worktrees are tabs down the left,
+details and a live terminal on the right, and the **New Worktree** form is defined by each project
+itself in a `wtm.toml` — including dropdowns populated by your own shell commands (branch lists, Jira
+issues via `acli`, anything that prints to stdout).
 
 The app knows nothing about `just`, Jira, Docker, or any particular repo. It reads git and it runs the
 commands your config declares. A repo with heavy worktree tooling and a bare library with none are the
@@ -16,8 +16,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 ![screenshot](docs/screenshot.png)
 <!-- placeholder: 1180×760 @2x, light + dark side by side -->
 
-**Status:** personal tool, not distributed. macOS 13+ (Apple silicon, unsigned `.app`) and Linux
-(x86-64 AppImage, WebKitGTK 2.42+ / glibc 2.39+ — Ubuntu 24.04, Fedora 39+, Debian 13).
+**Status:** personal tool, not distributed. macOS 13+, Apple silicon, unsigned `.app`.
 
 ### What works today
 
@@ -94,16 +93,6 @@ as of Homebrew 6 the flag is rejected and the `HOMEBREW_CASK_OPTS` path is dead 
 a cask for an unsigned app has no supported opt-out left. If you would rather macOS made
 the call, take the zip below instead of the tap.
 
-### Linux (x86-64, WebKitGTK 2.42+, glibc 2.39+)
-
-```bash
-gh release download --repo TakumiHendricksDev/worktreemanager --pattern '*.AppImage'
-chmod +x wtm-*-linux-x86_64.AppImage
-./wtm-*-linux-x86_64.AppImage
-```
-
-Ubuntu 24.04, Fedora 39+ or Debian 13. No signing to work around, and nothing to install.
-
 ### Updating an install you already have
 
 ```bash
@@ -119,16 +108,16 @@ the quarantine bypass, so nothing about Gatekeeper needs doing a second time.
 checking against the [latest release](https://github.com/TakumiHendricksDev/worktreemanager/releases/latest)
 if a feature you expect is missing.
 
-On Linux, download the new AppImage over the old one. **There is no in-app updater on
-either platform** and no update check — wtm will not tell you a new version exists.
+**There is no in-app updater** and no update check — wtm will not tell you a new version
+exists.
 
 To remove it: `brew uninstall --cask wtm`, or `brew uninstall --zap --cask wtm` to take
 `~/.config/wtm` (your preferences, trust decisions and log) with it.
 
 ### Or the raw artifacts
 
-Both are on the [releases page](https://github.com/TakumiHendricksDev/worktreemanager/releases)
-with SHA-256 checksums. Fetch the macOS zip with `curl` or `gh` rather than a browser —
+The zip is on the [releases page](https://github.com/TakumiHendricksDev/worktreemanager/releases)
+with a SHA-256 checksum. Fetch it with `curl` or `gh` rather than a browser —
 browsers set the quarantine attribute, the CLI does not, so a CLI download of an unsigned
 app opens without any of the above applying.
 
@@ -141,34 +130,17 @@ Everything from here on is about building it yourself.
 | Tool | Version | Install |
 |---|---|---|
 | macOS | 13+, Apple silicon | — |
-| …or Linux | WebKitGTK 2.42+, glibc 2.39+ | Ubuntu 24.04, Fedora 39+, Debian 13 |
-| Xcode Command Line Tools *(macOS)* | any | `xcode-select --install` |
-| GTK/WebKit dev packages *(Linux)* | — | see below |
+| Xcode Command Line Tools | any | `xcode-select --install` |
 | Rust | pinned to 1.97.1 by `rust-toolchain.toml` | see below — **rustup, not a package manager** |
-| Node | 20.19+ / 22.12+ | `brew install node`, or nodesource on Linux |
+| Node | 20.19+ / 22.12+ | `brew install node` |
 | bun | 1.x | `curl -fsSL https://bun.sh/install \| bash` |
 | `just` *(optional)* | 1.50+ | only needed by projects whose config calls it |
 | `acli` *(optional)* | any | Atlassian CLI — only for Jira-backed form fields |
 | `gh`, `docker` *(optional)* | any | only if a project's config uses them |
-| `sox` *(optional)* | any | dictation only — `brew install sox`, or your distribution's package |
-| `curl` *(optional)* | any | dictation only — already present on macOS and every mainstream distribution |
+| `sox` *(optional)* | any | dictation only — `brew install sox` |
+| `curl` *(optional)* | any | dictation only — already present on macOS |
 
-**macOS: full Xcode is not required.** Command Line Tools is enough for desktop Tauri.
-
-**Linux: install Tauri's build dependencies first**, or the build dies with *"The system library
-glib-2.0 required by crate glib-sys was not found"*, which says nothing about how to fix it:
-
-```bash
-sudo apt-get install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-  librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file
-```
-
-`just doctor` checks each of these by name and prints that line if any are missing.
-
-The WebKitGTK floor is real, not conservative: the UI uses `color-mix()` (WebKitGTK 2.40) and
-`:has()` (2.42) with no fallbacks, so on an older webview the sidebar and every tinted banner
-lose their backgrounds outright rather than degrading. The glibc floor follows from building
-the AppImage on Ubuntu 24.04.
+**Full Xcode is not required.** Command Line Tools is enough for desktop Tauri.
 
 Install Rust:
 
@@ -408,9 +380,7 @@ and its attempt to navigate onto `tauri://localhost` goes nowhere; and the tool 
 open → snapshot → click (which navigated) → screenshot → console → evaluate → content → comments →
 history → close ran against a live page and returned what it should. Not yet exercised by a person:
 comment mode's in-page pins and popover, the comments panel, the hide-behind-a-dialog placeholder,
-and the keyboard chords — all wired, none clicked. Not verified at all: Linux. The pane itself
-should work there; the agent tools and comments need the native WebKit bridge, which so far has a
-macOS arm only, and the controls say so.
+and the keyboard chords — all wired, none clicked.
 
 **Limits worth knowing.** Clicks and keys an agent sends are synthesized DOM events, not OS input:
 links, buttons, checkboxes, and framework handlers all work, but a native `<select>` popup, a file
@@ -459,8 +429,7 @@ Two things worth knowing:
 
 ## Settings
 
-**⌘, on macOS, or the sliders button in the title bar.** Linux has no application menu, so
-there the button and `Ctrl+,` are the way in. Everything applies as you change it; there is
+**⌘, or the sliders button in the title bar.** Everything applies as you change it; there is
 no OK button.
 
 Three sections, all of them backed by keys that already existed in
@@ -514,15 +483,15 @@ just check      # everything CI runs — do this before pushing
 just audit      # licenses + RUSTSEC advisories
 just doctor     # what's installed, and the PATH the app will actually use
 just icon       # redraw src-tauri/icons from assets/brand/wtm-icon.svg
-just release 0.9.1  # test, tag, publish, and update the Homebrew tap (macOS)
+just release 0.9.1  # test, tag, publish, and update the Homebrew tap
 ```
 
 `just release <version>` starts only from a clean, up-to-date `main`. It updates every version
 field, runs `just check` and `just audit`, pushes the release commit, and waits for CI before
-creating the tag. The tag starts the macOS and Linux release build; after both artifacts pass their
-checksums and the macOS bundle inspection, the command publishes the draft and pushes the verified
-macOS checksum to `TakumiHendricksDev/homebrew-tap`. A stopped command can be run again with the
-same version to resume completed stages safely.
+creating the tag. The tag starts the release build; after the artifact passes its checksum and the
+bundle inspection — right version, right minimum OS, an arm64 Mach-O inside — the command publishes
+the draft and pushes the verified checksum to `TakumiHendricksDev/homebrew-tap`. A stopped command
+can be run again with the same version to resume completed stages safely.
 
 Commits are signed through the 1Password SSH agent (`commit.gpgsign=true` globally), so 1Password must
 be running and unlocked or the commit will hang waiting on Touch ID.
@@ -536,20 +505,21 @@ git add -A && git commit -m "Initial commit"
 ## Build & install
 
 ```bash
-just build         # the bundle for this OS  (~2 min warm, 5–12 min cold)
+just build         # the .app  (~35 s warm, ~70 s cold)
 just run           # build, then launch it
-just install-app   # build, then install it
-just build-dmg     # macOS only ⚠️ prompts for Finder Automation permission the first time
+just install-app   # build, then install it to /Applications
+just build-dmg     # ⚠️ prompts for Finder Automation permission the first time
 ```
 
-`build` produces whatever this platform installs — a `.app` under
-`target/release/bundle/macos/` on macOS, an AppImage under
-`target/release/bundle/appimage/` on Linux — and `install-app` puts it where that platform
-expects: `/Applications`, or `~/.local/bin/wtm`. The macOS-only recipes exist on Linux too, and
-fail with a reason rather than "no such recipe".
+`build` produces `target/release/bundle/macos/Worktree Manager.app`, and `install-app` copies it
+into `/Applications` and re-registers it with LaunchServices.
 
-CI builds both on every push and uploads the AppImage as an artifact, so the Linux binary is
-downloadable without building it.
+Warm is ~35s no matter how little you changed, because `tauri build` regenerates the context
+`wtm-app` compiles against on every run, so that one crate always recompiles. That number used to be
+minutes; ARCHITECTURE.md § Build performance has the measurements and what moved them.
+
+CI builds the same bundle on every push, so a break in bundling is caught without anyone
+building it by hand.
 
 **The build is unsigned, by design** — this is a personal tool.
 
@@ -561,32 +531,6 @@ downloadable without building it.
   leaves the recipient approving it under Privacy & Security.
 - Universal binary: `rustup target add x86_64-apple-darwin && just build-universal`. Roughly doubles
   build time.
-
-### The Linux build has never been run by a human
-
-Worth stating plainly. CI proves the Linux build compiles, passes every test, links against
-WebKitGTK and produces an AppImage — but nothing in CI *launches* the app, and it was developed on
-a Mac. The window chrome is platform-conditional by construction (native WM decorations, no
-traffic-light gutter, opaque window) and none of that has been looked at on a real desktop.
-
-One data point since this was written: it launches and renders correctly on Hyprland with an
-NVIDIA GPU, but only after `WEBKIT_DISABLE_DMABUF_RENDERER=1` — without it the window is blank.
-See [Troubleshooting](#troubleshooting). Nothing else on the list below has been checked.
-
-If you are the first to run it, this is the list worth walking:
-
-- [ ] It launches, and the window is not black or transparent-with-garbage (needs a compositor check)
-- [ ] The title bar reads as deliberate — no dead space on the left where the traffic lights aren't
-- [ ] Light/dark toggles, and "system" follows the desktop theme
-- [ ] Fonts look right, and terminal columns line up in a worktree's Terminal action
-- [ ] A `[[display.link]]` opens in a browser (this is the `xdg-open` path)
-- [ ] Starring a worktree, creating one, and removing one all work
-- [ ] **Open in …** lists the editors you actually have, and disabled rows name the missing
-      command. `Terminal` picks a real emulator, and it opens *in the worktree* — that arm
-      relies on cwd inheritance rather than each emulator's own flag, and it has never run
-- [ ] An editor launched from **Open in …** is still running two minutes later. This is the
-      one that would catch a regression in `launch_detached`: the JetBrains shims stay in the
-      foreground for the IDE's lifetime, so a deadline on that spawn would kill the editor
 
 ## Troubleshooting
 
@@ -604,9 +548,6 @@ If you are the first to run it, this is the list worth walking:
 | Dictation inserts nothing and says nothing was recorded | The microphone is muted or another application holds it. wtm records perfect silence happily and the service accepts it. | Check the input device in System Settings → Sound, and that no other app is recording. |
 | The transcription key is rejected | The key is for a different Deepgram project, or was pasted with surrounding whitespace | Re-paste it in Settings → Advanced. wtm trims it, but a key copied with a line break from a terminal can pick up more than whitespace. |
 | The app window opens behind another app | A bare binary launched from a shell does not activate | Use `just run`, or `open "…/Worktree Manager.app"` — a bundled app activates properly |
-| Linux: the window opens but stays blank, with `Failed to create GBM buffer … Invalid argument` on stderr | WebKitGTK's DMABUF renderer cannot allocate through the proprietary NVIDIA driver under a Wayland compositor. The webview process starts, gets no rendering surface, and paints nothing. | `WEBKIT_DISABLE_DMABUF_RENDERER=1 wtm`. To make it stick across launcher clicks too, set it in the `.desktop` entry rather than your shell profile — a GUI launch never reads `.zshrc`. |
-| Linux: `just build` fails with `failed to run linuxdeploy` after Rust compiles cleanly | linuxdeploy's bundled `strip` is too old to parse `.relr.dyn`, which Arch and other packed-relative-relocation distributions emit in every system library | `just build` passes `NO_STRIP=1` for exactly this. If you invoke `tauri build` directly, set it yourself. |
-| Linux: the AppImage logs `GStreamer element appsink not found` | Cosmetic. `linuxdeploy-plugin-gstreamer` bundles a partial GStreamer into the AppDir and repoints the plugin path inside the mount, where `appsink` is absent — your system packages are fine. | Ignore it unless you play media in the webview. `just dev` uses the system GStreamer and won't show it. |
 | `open` fails with `error -600` | Rebuilding over the same bundle path leaves LaunchServices holding a stale record | `just run` re-registers the bundle first. By hand: `lsregister -f "…/Worktree Manager.app"` |
 | `@tauri-apps/cli` "cli-darwin-arm64 not found" | bun didn't resolve the platform-specific optional dependency | `rm -rf node_modules bun.lock && bun install` |
 | Setup command hangs forever with no output | The project's command is prompting on stdin, and a `confirm()`-style helper can loop forever on EOF rather than giving up. | Every captured command has a mandatory timeout; PTY commands are interactive — answer in the Terminal tab, or Cancel. Add the command to `[[guards.forbid]]` so it can't be run again. |
@@ -645,15 +586,13 @@ Two things the config decides deliberately, both written down in [`deny.toml`](d
   right call and what this gate relies on.
 - **`unmaintained` is scoped to crates this workspace chose.** Seventeen unmaintained advisories
   come through Tauri: `unic-*` via `urlpattern`, whose advisory says outright that no safe upgrade
-  exists, and ten gtk-rs crates that Tauri pulls on Linux. Denying those would mean a permanent
-  seventeen-ID ignore list, which is where a real advisory goes to hide. If *we* add an
-  unmaintained crate, it still fails.
+  exists. Denying those would mean a permanent ignore list by advisory ID, which is where a real
+  advisory goes to hide. If *we* add an unmaintained crate, it still fails.
 
-  That gtk clause used to say those crates "never enter the macOS dependency graph". True, and
-  beside the point twice over: wtm ships a Linux build now, and `deny.toml` has no `[targets]`
-  filter, so cargo-deny has been evaluating the union of all platforms — and seeing them — the
-  whole time. The scoping above is what was already absorbing them; nothing changed when Linux
-  was added.
+  The count used to be seventeen, ten of them gtk-rs crates Tauri pulls on Linux. Those are gone
+  now — not because the dependency tree changed but because `deny.toml` names `[targets]`, so
+  cargo-deny evaluates the two Apple targets this app is built for instead of the union of every
+  platform in the lockfile. A lockfile is a union; a shipped binary is not.
 
 One version is pinned rather than current: **TypeScript is held at `~6.0.3`** because
 `svelte-check@4.7.4` peers `^5 || ^6`. `latest` is 7.x and would break the type gate.

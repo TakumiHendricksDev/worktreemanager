@@ -59,7 +59,7 @@ version="${1:-}"
 readonly version
 readonly tag="v$version"
 
-[ "$(uname -s)" = "Darwin" ] || die "release verification is macOS-only"
+[ "$(uname -s)" = "Darwin" ] || die "wtm is built, verified and shipped on macOS only"
 for command in cargo git gh just ruby shasum unzip ditto plutil lipo; do
     require "$command"
 done
@@ -110,6 +110,36 @@ replace_once(
 )
 RUBY
 
+    # Undo the version write if anything between here and the push fails.
+    #
+    # Without this, a `just check` failure — a flaky test is enough, and this repo has one
+    # that probes a real third-party CLI — leaves four version fields edited and
+    # uncommitted. The next run then dies on the clean-tree assertion at the top of this
+    # script, which reports "commit or stash every change before releasing" and says
+    # nothing about the release that half-happened.
+    #
+    # Two different failures reach this handler and they want different advice, so it asks
+    # the tree which one happened instead of assuming the common one: still-dirty means
+    # nothing was committed and reverting is safe, while clean means the commit landed and
+    # only the push failed, where discarding work silently would be the wrong move.
+    revert_version() {
+        local files="Cargo.toml Cargo.lock package.json src-tauri/tauri.conf.json"
+        # Deliberate word splitting below: `files` is a list of paths, not one path.
+        # shellcheck disable=SC2086
+        if [ -n "$(git status --porcelain -- $files)" ]; then
+            # shellcheck disable=SC2086
+            git checkout -- $files 2>/dev/null || true
+            printf '\033[1;33m!\033[0m %s\n' \
+                "reverted the version bump; nothing was committed" >&2
+            printf '  %s\n' "fix the failure above, then re-run the same command" >&2
+        else
+            printf '\033[1;33m!\033[0m %s\n' \
+                "the release commit was made but not pushed" >&2
+            printf '  %s\n' "push it yourself, or 'git reset --hard origin/main', then re-run" >&2
+        fi
+    }
+    trap revert_version EXIT
+
     step "running the local release gates"
     just check
     just audit
@@ -131,6 +161,10 @@ RUBY
         -m "Set every application and workspace package version to $version." \
         -m "Verified with just check and just audit."
     git push origin main
+    # Past the point of no return; the version bump is committed and pushed. Any later
+    # failure is resumable by re-running with the same version, which is what the branch
+    # below is for.
+    trap - EXIT
 else
     ok "source metadata is already $version; resuming the release"
 fi
@@ -161,17 +195,23 @@ step "downloading and verifying release artifacts"
 gh release download "$tag" --repo "$repo" --dir "$dist"
 
 mac_zip="$dist/wtm-$version-macos-arm64.zip"
-linux_image="$dist/wtm-$version-linux-x86_64.AppImage"
 mac_checksums="$dist/checksums-macos-arm64.txt"
-linux_checksums="$dist/checksums-linux-x86_64.txt"
-for asset in "$mac_zip" "$linux_image" "$mac_checksums" "$linux_checksums"; do
+for asset in "$mac_zip" "$mac_checksums"; do
     [ -s "$asset" ] || die "release asset missing or empty: $(basename "$asset")"
 done
 (
     cd "$dist"
     shasum -a 256 -c "$(basename "$mac_checksums")"
-    shasum -a 256 -c "$(basename "$linux_checksums")"
 )
+
+# The release is exactly two assets now, so assert that rather than only checking the two
+# we name. A third file appearing — a stale AppImage from a re-run, a bundle target someone
+# turned back on in tauri.conf.json — means the workflow published something this script
+# has not verified, and the tap is about to point at a release nobody checked.
+published="$(cd "$dist" && ls | LC_ALL=C sort | tr '\n' ' ')"
+expected="checksums-macos-arm64.txt wtm-$version-macos-arm64.zip "
+[ "$published" = "$expected" ] || \
+    die "unexpected release assets: got [$published] want [$expected]"
 
 unzip -Z1 "$mac_zip" | grep '^Worktree Manager\.app/' >/dev/null || \
     die "the macOS zip does not contain Worktree Manager.app at its root"

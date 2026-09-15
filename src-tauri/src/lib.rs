@@ -29,8 +29,14 @@ use app::App;
 ///
 /// The frontend needs this for one reason: window chrome. On macOS the traffic lights
 /// are drawn *inside* the webview's rect, so the title strip must reserve a gutter for
-/// them; on Linux the window manager draws its controls on the right, outside the
-/// webview entirely, and that gutter would be 76px of dead space.
+/// them; under a window manager that draws its controls outside the webview, that gutter
+/// would be 76px of dead space.
+///
+/// wtm ships on macOS only, so in practice this always answers `macos` — and that is the
+/// point rather than an argument for deleting it. The value flows into `data-platform`,
+/// which `settings/_platform.scss` keys the chrome tokens off, and the fallback direction
+/// is *towards* the macOS layout (see `index.html`). Reporting the platform honestly is
+/// what makes "the mac layout cannot regress" a property of the code rather than a claim.
 ///
 /// That is a first-paint fact, so it cannot arrive over IPC — a `#[tauri::command]`
 /// resolves a frame or two late and the window would visibly reflow on every launch,
@@ -76,12 +82,11 @@ pub const SETTINGS_EVENT: &str = "wtm:settings";
 ///
 /// # No `#[cfg]`, per `tests/platform_seams.rs`
 ///
-/// Every item here compiles on both platforms — the four macOS-specific ones (`services`,
-/// `hide`, `hide_others`, `show_all`) are documented as unsupported rather than gated, so
-/// they no-op elsewhere. What is genuinely macOS-only is *installing* the result, because
-/// GTK renders a menu as a bar inside the window and the Linux build deliberately has none.
-/// That decision is a runtime check in [`run`], which keeps this function under test on
-/// either runner.
+/// Every item here compiles everywhere — the four macOS-specific ones (`services`, `hide`,
+/// `hide_others`, `show_all`) are documented as unsupported rather than gated, so they
+/// no-op elsewhere. What is genuinely macOS-only is *installing* the result, which is a
+/// runtime check in [`run`] rather than a `#[cfg]`, so this function is reachable from a
+/// plain unit test instead of only from a real app launch.
 fn build_menu<R: tauri::Runtime>(
     handle: &tauri::AppHandle<R>,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
@@ -152,17 +157,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // No capability entry, deliberately: since notifications went native (see `notifier`),
         // the webview never talks to this plugin — it is the Rust-side *fallback* for posting
-        // where `wtm-notify` has no notification center to attach to (Linux, and unbundled dev
-        // runs). No `#[cfg]`: it compiles everywhere and no-ops where there is no daemon.
+        // where `wtm-notify` has no notification center to attach to, which on macOS means an
+        // unbundled dev run. No `#[cfg]`: it compiles everywhere and no-ops where there is no
+        // daemon.
         .plugin(tauri_plugin_notification::init())
         .setup(|handle| {
             // A runtime check rather than `#[cfg]`, the same way `platform_plugin` reads
-            // `std::env::consts::OS`: both arms compile, so `build_menu` stays under test on
-            // a Linux runner. See `tests/platform_seams.rs` for why that is a rule here.
+            // `std::env::consts::OS`: both arms compile, so `build_menu` is reachable from a
+            // unit test. See `tests/platform_seams.rs` for why that is a rule here.
             //
-            // Only the *install* is conditional. On GTK a menu becomes a bar inside the
-            // window, and this app's Linux build is an ordinary decorated window with none —
-            // there the title bar's gear and Ctrl-, are the whole story.
+            // Only the *install* is conditional, and it stays conditional even though wtm
+            // now ships on macOS alone: an application menu is a macOS concept, and the
+            // title bar's gear is the affordance that does not assume one.
             if std::env::consts::OS == "macos" {
                 handle.set_menu(build_menu(handle.handle())?)?;
             }
@@ -181,7 +187,7 @@ pub fn run() {
 
             // The notification center, for the same reason: a click has to be emitted at the
             // window, so attaching needs an `AppHandle`. Where there is no center to attach to
-            // (Linux, unbundled dev runs), `notifier` falls back to the plugin above.
+            // — an unbundled dev run — `notifier` falls back to the plugin above.
             notifier::install(handle.handle());
             Ok(())
         })

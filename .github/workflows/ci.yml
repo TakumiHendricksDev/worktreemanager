@@ -5,8 +5,8 @@ on:
     branches: [main]
   pull_request:
 
-# A new push supersedes an in-flight run on the same ref. macOS runners are the
-# expensive ones; don't pay for results nobody will read.
+# A new push supersedes an in-flight run on the same ref. Don't pay for results
+# nobody will read.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,14 +18,13 @@ env:
   CARGO_INCREMENTAL: 0
   # Deliberately no `RUSTFLAGS: -D warnings` here.
   #
-  # It would be redundant and, on one path, actively harmful. `cargo clippy … -- -D
-  # warnings` below already denies both clippy and rustc lints across every target of
-  # exactly our crates, and cargo passes `--cap-lints allow` to registry dependencies
-  # *after* command-line lint levels, so a warning inside `glib-sys` could never fail
-  # the build regardless. But macro-expanded code is not capped, and
-  # `tauri::generate_context!` expands a great deal of Tauri-authored code into
-  # `wtm-app` — which is the one way third-party text could hard-fail our build, and it
-  # only shows up on the Linux/release expansion nobody had compiled before.
+  # It would be redundant. `cargo clippy … -- -D warnings` below already denies both
+  # clippy and rustc lints across every target of exactly our crates, and cargo passes
+  # `--cap-lints allow` to registry dependencies *after* command-line lint levels, so a
+  # warning inside a dependency could never fail the build regardless. Macro-expanded
+  # code is not capped — `tauri::generate_context!` expands a great deal of
+  # Tauri-authored code into `wtm-app` — but the `app` job below compiles exactly that
+  # expansion in the release profile, which is where it would surface.
   #
   # Keeping the flag on the clippy invocation rather than in the environment also keeps
   # this workflow, `.cargo/config.toml`'s `lint` alias, the justfile and bacon.toml
@@ -33,42 +32,25 @@ env:
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
-  # Lint and test the whole workspace on Linux, which is ~10x cheaper than a
-  # macOS runner. This includes `wtm-app`, so it needs the WebKitGTK toolchain —
-  # keeping it in buys the 40 composition-root tests, the only end-to-end cover
-  # of the wiring, for a few minutes of the cheapest compute available.
+  # Lint and test the whole workspace on the platform the app actually ships to.
   #
-  # Pinned to a concrete release rather than `ubuntu-latest`: the apt package
-  # names below are only guaranteed for a known distro, and `latest` rolls.
+  # This used to run on ubuntu, which is ~10x cheaper per minute — a real saving
+  # when the repo shipped a Linux build and that leg had to be proved anyway. It
+  # does not any more, and running it on Linux would mean keeping `wtm-app`
+  # compiling against WebKitGTK for the sake of the runner rather than for the
+  # sake of a user — a bill that came due as recently as 87490b1, "Fix Linux
+  # compilation of the browser native bridge". This repo is public, so macOS
+  # minutes are free; the move costs a weaker runner and buys every gate running
+  # against the toolchain that actually ships.
   # ───────────────────────────────────────────────────────────────────────────
   rust:
     name: rust (workspace)
-    runs-on: ubuntu-24.04
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
 
-      # Tauri v2's Linux prerequisites, verbatim from its docs. `libssl-dev` and
-      # `libxdo-dev` are not actually in this project's dependency graph, but
-      # tracking the upstream list is one fewer thing to re-derive at the next
-      # Tauri bump, and they cost seconds.
-      #
-      # No bun and no `vite build` here: `generate_context!` only demands
-      # `frontendDist` when `custom-protocol` is on, and no crate in this
-      # workspace declares a `[features]` table, so `--all-features` cannot turn
-      # it on. Add one (the old v1 idiom) and this job starts needing `dist/`.
-      - name: System dependencies (Tauri v2 / WebKitGTK)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev \
-            libssl-dev \
-            build-essential curl wget file
-
       - name: Install toolchain
-        # rust-toolchain.toml is authoritative; this action reads it.
+        # rust-toolchain.toml is authoritative; rustup reads it.
         run: |
           rustup show active-toolchain
           rustup component add rustfmt clippy
@@ -90,6 +72,8 @@ jobs:
       - name: wtm-core is OS-agnostic
         run: cargo check -p wtm-core --target wasm32-unknown-unknown
 
+  # Stays on ubuntu: it compiles no Rust, so the runner's OS is invisible to it
+  # and the cheap one is the right one.
   frontend:
     name: frontend
     runs-on: ubuntu-latest
@@ -97,53 +81,34 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun x prettier --check "src/**/*.{ts,svelte,css,scss}" "*.json"
+      # Exactly the globs `just fmt-check` uses. They had drifted: CI omitted
+      # `src-tauri/runtime/*.js`, so a badly formatted runtime script was green here
+      # and red under `just check`. Two lists that must agree should be one list;
+      # until they are, they at least get changed together.
+      - run: bun x prettier --check "src/**/*.{ts,svelte,css,scss}" "src-tauri/runtime/*.js" "*.json"
       - run: bun run check
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Prove the app actually links and bundles, on each platform it ships to.
+  # Prove the app actually links and bundles.
   #
-  # A matrix rather than two jobs so the per-OS difference lives in data instead
-  # of in `if:`s threaded through every step. `name:` is set explicitly to keep
-  # the macOS check name stable for anyone with a branch rule on it.
+  # Separate from `rust` rather than appended to it: the two use different cargo
+  # profiles and so share no artifacts, and as separate jobs they run at the same
+  # time instead of one after the other.
+  #
+  # `name:` is set explicitly to keep the check name stable for anyone with a
+  # branch rule on it.
   # ───────────────────────────────────────────────────────────────────────────
   app:
-    name: build ${{ matrix.label }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      # An AppImage bundling flake must not cancel the macOS leg, which is the
-      # one that gates shipping.
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            label: .app (macos)
-            bundles: app
-            artifact: ''
-          - os: ubuntu-24.04
-            label: AppImage (linux)
-            bundles: appimage
-            artifact: target/release/bundle/appimage/*.AppImage
+    name: build .app (macos)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-
-      - name: System dependencies (Tauri v2 / WebKitGTK)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev \
-            libssl-dev \
-            build-essential curl wget file
 
       - uses: oven-sh/setup-bun@v2
       - run: rustup show active-toolchain
 
-      # Restore but do not save on PRs. Two release-profile Tauri trees are ~2 GB
-      # each against a 10 GB per-repo budget, and thrashing that evicts the `rust`
+      # Restore but do not save on PRs. A release-profile Tauri tree is ~2 GB
+      # against a 10 GB per-repo budget, and thrashing that evicts the `rust`
       # job's cache — which is the one people wait on.
       - uses: Swatinem/rust-cache@v2
         with:
@@ -151,19 +116,7 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - run: bun x tauri build --bundles ${{ matrix.bundles }}
-        env:
-          # linuxdeploy is itself an AppImage and the runners have no FUSE, so it
-          # has to unpack rather than mount itself. Free to set, and it removes a
-          # whole class of "works locally, fails in CI" from the bundling step.
-          APPIMAGE_EXTRACT_AND_RUN: 1
-
-      - uses: actions/upload-artifact@v7
-        if: matrix.artifact != ''
-        with:
-          name: wtm-appimage
-          path: ${{ matrix.artifact }}
-          if-no-files-found: error
+      - run: bun x tauri build --bundles app
 
   supply-chain:
     name: licenses + advisories

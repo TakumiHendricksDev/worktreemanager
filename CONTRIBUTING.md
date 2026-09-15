@@ -15,8 +15,7 @@ paragraph than in a rejected pull request.
 
 You need [Rust](https://rustup.rs) (the version in `rust-toolchain.toml` is pinned exactly and
 rustup will install it for you), [bun](https://bun.sh), and [just](https://just.systems).
-On Linux you also need the WebKitGTK development packages — see
-[Prerequisites](README.md#prerequisites).
+wtm is a macOS application; the full list is in [Prerequisites](README.md#prerequisites).
 
 ```bash
 just setup     # installs frontend deps and the pre-commit hook
@@ -152,10 +151,10 @@ record of *why* the code looks the way it does, so it is worth writing properly.
 
 - Branch off `main`.
 - Keep the change focused. Unrelated cleanups are welcome, in their own commits.
-- Make sure `just check` passes. All five CI checks must be green before a PR can merge.
-- Describe what you verified by hand, and what you did not. "I did not test this on Linux" is
-  useful information, not an admission — nobody has, and saying so is better than implying
-  otherwise.
+- Make sure `just check` passes. All four CI checks must be green before a PR can merge.
+- Describe what you verified by hand, and what you did not. "I did not open the browser pane" is
+  useful information, not an admission — nothing in CI launches the app, so a claim that the UI
+  still looks right can only come from someone saying they looked.
 
 ## Licensing
 
