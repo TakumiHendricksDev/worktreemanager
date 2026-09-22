@@ -69,9 +69,9 @@ const LADDER: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 ///
 /// # The labels carry versions and the ids deliberately do not
 ///
-/// `Opus 5` rather than `Opus`, because "Opus" alone does not say which one you are about to spend
-/// money on, and the tier names have outlived several models. That does give up some of what the
-/// alias-first scheme bought: the *label* now needs a hand-bump when the next tier ships, even
+/// `Opus 5.5` rather than `Opus`, because "Opus" alone does not say which one you are about to
+/// spend money on, and the tier names have outlived several models. That does give up some of what
+/// the alias-first scheme bought: the *label* now needs a hand-bump when the next tier ships, even
 /// though the id it names will keep resolving correctly. It is disclosed rather than hidden —
 /// `models_are_live: false` puts "as of this build" on the control itself, which is exactly the
 /// caveat this trade-off needs.
@@ -120,12 +120,12 @@ pub fn claude_capability() -> AgentCapability {
 
     AgentCapability {
         // Aliases first, deliberately: each resolves to the current model of its tier, so this list
-        // stays true across releases in a way a list of dated ids would not. Opus 4.8 is the one
-        // pinned id, and the exception is the point: no alias reaches it — `opus` now means the
-        // current tier — so offering the previous generation at all means naming it. Hand-remove
-        // when the CLI drops the id.
+        // stays true across releases in a way a list of dated ids would not. Opus 5 and Opus 4.8
+        // are the pinned ids, and the exception is the point: no alias reaches either — `opus`
+        // resolves to Opus 5.5 as of CLI 2.1.280 — so offering an earlier generation at all means
+        // naming it. Hand-remove each when the CLI drops the id.
         models: vec![
-            model("opus", "Opus 5", "The most capable tier", true),
+            model("opus", "Opus 5.5", "The most capable tier", true),
             model("sonnet", "Sonnet 5", "Balanced capability and speed", false),
             model("haiku", "Haiku 4.5", "Fastest and cheapest", false),
             model("fable", "Fable 5.1", "The newest tier", false),
@@ -137,15 +137,21 @@ pub fn claude_capability() -> AgentCapability {
                 implied_mode: Some("plan".to_owned()),
                 ..model(
                     "opusplan",
-                    "Opus 5 (plan) / Sonnet 5",
+                    "Opus 5.5 (plan) / Sonnet 5",
                     "Opus while planning, Sonnet to execute; picking it switches the pane to Plan mode",
                     false,
                 )
             },
             model(
+                "claude-opus-5",
+                "Opus 5",
+                "The previous Opus generation",
+                false,
+            ),
+            model(
                 "claude-opus-4-8",
                 "Opus 4.8",
-                "The previous Opus generation",
+                "The generation before Opus 5",
                 false,
             ),
         ],

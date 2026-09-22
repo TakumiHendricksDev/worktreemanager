@@ -811,13 +811,13 @@ fn the_compiled_capability_is_honest_about_being_compiled() {
 
     // Aliases rather than dated ids: each resolves to the current model of its tier, so this list
     // ages far better than `claude-opus-4-5-20251101` would. The *labels* carry a version and the
-    // ids do not, which is the trade the capability's own docs explain. `claude-opus-4-8` is the
-    // one deliberate exception — no alias reaches the previous generation, so offering it at all
-    // means pinning it.
+    // ids do not, which is the trade the capability's own docs explain. `claude-opus-5` and
+    // `claude-opus-4-8` are the deliberate exceptions — no alias reaches an earlier generation, so
+    // offering one at all means pinning it.
     let ids: Vec<&str> = capability.models.iter().map(|m| m.id.as_str()).collect();
     assert!(ids.contains(&"opus") && ids.contains(&"sonnet") && ids.contains(&"haiku"));
     assert!(ids.contains(&"fable") && ids.contains(&"opusplan"));
-    assert!(ids.contains(&"claude-opus-4-8"));
+    assert!(ids.contains(&"claude-opus-5") && ids.contains(&"claude-opus-4-8"));
 
     // The rungs, the same for every model — the opposite of the other provider, where the ladder is
     // per model. The first five are `--help`'s own list; `ultracode` is last because the CLI's
