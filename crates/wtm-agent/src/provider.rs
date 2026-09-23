@@ -161,6 +161,27 @@ pub trait Protocol: Send {
     /// The user submitted a turn.
     fn send_turn(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step>;
 
+    /// The user wants this message to reach the turn that is running now, not the next one.
+    ///
+    /// Four things every implementation owes, because the composer's queue is built on them:
+    ///
+    ///   * **With no turn running, this is [`Self::send_turn`].** The composer decides to steer
+    ///     from `turn_started`/`turn_finished` it heard a moment ago, and the turn can end in
+    ///     between. The driver is the only place that knows which happened, so it decides.
+    ///   * **The echo waits for the provider to take the message.** A `UserEcho` emitted on write
+    ///     lands wherever the stream happens to be — mid-sentence in the reply, usually — and the
+    ///     transcript splits the answer around it. Echoed at the point the provider consumed it, it
+    ///     sits where the agent actually read it.
+    ///   * **The turn does not finish while a steered message is unanswered.** A `TurnFinished`
+    ///     with a message still pending tells the composer the session is idle, and it sends the
+    ///     next queued message into a provider that is about to start another turn on its own.
+    ///   * **A steered message is never silently lost.** If the provider refuses it or drops it,
+    ///     it is carried into the next turn instead.
+    ///
+    /// No default. What "mid-turn" means is a property of the protocol — see
+    /// `AgentCapability::steers_mid_turn` — and a default would be a guess on a provider's behalf.
+    fn steer(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step>;
+
     /// The user changed the model, effort or mode on a session that is already running.
     ///
     /// `None` means "leave that one alone", so the caller can change either without knowing the

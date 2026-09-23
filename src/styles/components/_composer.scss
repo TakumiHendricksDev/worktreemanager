@@ -34,7 +34,8 @@
   padding: var(--sp-2) var(--sp-3) var(--sp-3);
 }
 
-.c-pane__foot > .c-context {
+.c-pane__foot > .c-context,
+.c-pane__foot > .c-queue {
   margin-bottom: var(--sp-2);
 }
 

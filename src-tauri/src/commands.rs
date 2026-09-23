@@ -1780,6 +1780,28 @@ pub async fn send_turn(
     .await
 }
 
+/// Hand a message to the turn a session is running, rather than to the next one.
+///
+/// Its own command rather than a flag on `send_turn`, because the two mean different things to
+/// every provider — see `Protocol::steer` — and a boolean argument is how one quietly becomes the
+/// other. No peer note either: that is context for the head of a turn, and this is the middle of one.
+#[tauri::command]
+pub async fn steer_turn(
+    app: AppState<'_>,
+    session: String,
+    text: String,
+    attachments: Vec<wtm_core::model::AgentAttachment>,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        app.with_agent(&session, |agent| agent.steer(&text, &attachments))
+            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+        app.remember_staged_attachments(&session, &attachments);
+        Ok(())
+    })
+    .await
+}
+
 const MAX_AGENT_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
 
 /// Read a file the user picked or dropped and prepare it for both agent transports.
@@ -2295,6 +2317,8 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
         modes: Vec::new(),
         models_are_live: true,
         supports_fast: false,
+        // `turn/steer`. See `CodexProtocol::steer`.
+        steers_mid_turn: true,
     })
 }
 

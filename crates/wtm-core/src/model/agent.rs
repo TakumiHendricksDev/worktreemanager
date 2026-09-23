@@ -486,4 +486,12 @@ pub struct AgentCapability {
     /// service's configuration and going stale silently. The refusal is observable instead: see
     /// `wtm_agent::claude`, where the CLI reports the live state on every turn.
     pub supports_fast: bool,
+    /// True when a message sent during a turn reaches that turn without stopping it.
+    ///
+    /// Claude Code takes a mid-turn user message at its next step, and Codex has `turn/steer` for
+    /// exactly this. ACP runs one prompt at a time, so Cursor's driver steers by cancelling the
+    /// prompt and sending a new one — the message still arrives, but the step in progress is
+    /// lost. That is worth saying on the control before it is pressed rather than discovering
+    /// afterwards, and saying it needs to know which kind of provider this is.
+    pub steers_mid_turn: bool,
 }

@@ -238,6 +238,15 @@ export const commands = {
   sendTurn: (session: string, text: string, attachments: AgentAttachment[] = []) =>
     invoke<void>('send_turn', { session, text, attachments }),
 
+  /**
+   * Hand a message to the turn that is running rather than the next one.
+   *
+   * The provider echoes it when it takes it, not now — see `Protocol::steer` — and a session that
+   * turns out to have finished in the meantime simply starts a turn with it.
+   */
+  steerTurn: (session: string, text: string, attachments: AgentAttachment[] = []) =>
+    invoke<void>('steer_turn', { session, text, attachments }),
+
   /** Read a file explicitly picked or dropped into the composer. */
   prepareAgentAttachment: (path: string) =>
     invoke<AgentAttachment>('prepare_agent_attachment', { path }),

@@ -245,6 +245,7 @@ pub fn run() {
             commands::open_agent_session,
             commands::open_agent_side_session,
             commands::send_turn,
+            commands::steer_turn,
             commands::prepare_agent_attachment,
             commands::stage_agent_attachment,
             commands::configure_session,

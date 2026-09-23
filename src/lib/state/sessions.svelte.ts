@@ -184,6 +184,30 @@ export interface PendingApproval {
   request: ApprovalRequest;
 }
 
+/**
+ * A message written while its session was busy, waiting to be sent.
+ *
+ * On the pane rather than in `SessionPane`, because what empties the queue is `record` hearing a
+ * turn finish — a `listen()` callback that knows nothing about components — and because a queue
+ * held in a component would be lost the moment its worktree tab was switched away and back.
+ */
+export interface QueuedTurn {
+  /** This window's own id, for the list's key and for acting on one entry. */
+  id: string;
+  text: string;
+  attachments: AgentAttachment[];
+  /**
+   * Handed to the running turn with "Send now", and not yet taken.
+   *
+   * Kept in the list until the provider echoes it, rather than dropped on click, because the echo
+   * can be minutes away: Claude reads a steer at the next tool boundary, and a test run is one tool
+   * call. A message that left the queue without appearing in the transcript would read as lost.
+   */
+  steered: boolean;
+  /** Open for editing. Nothing is sent past an entry being edited, since order is the point. */
+  editing: boolean;
+}
+
 export interface Pane {
   /**
    * This window's own id for the pane, stable from the moment it is created.
@@ -227,6 +251,17 @@ export interface Pane {
   working: boolean;
   /** The most recent submitted turn completed, maintained beside `working` for child status UI. */
   lastTurnFinished: boolean;
+  /** What was written while a turn ran, oldest first, sent one per turn. See `enqueue`. */
+  queue: QueuedTurn[];
+  /**
+   * The queue has stopped sending by itself: Stop was pressed, the turn failed or hit a limit, or
+   * the session ended.
+   *
+   * Each is a moment when sending the next message unasked would be wrong — Stop most of all, which
+   * is the user saying "not that" — so the queue waits, visibly, for them to send an entry or write
+   * a new one. Nothing is discarded: the entries are the user's own words and stay editable.
+   */
+  queueHeld: boolean;
   /**
    * A turn finished, or a session failed, while this pane's worktree was not the selected one.
    *
@@ -353,6 +388,7 @@ export type AgentRun = {
 };
 
 let nextPaneId = 0;
+let nextQueuedId = 0;
 
 /** How many of these panes have a process behind them, or are on their way to one. */
 function running(panes: readonly Pane[]): number {
@@ -1650,6 +1686,8 @@ class Sessions {
       usage: null,
       working: false,
       lastTurnFinished: false,
+      queue: [],
+      queueHeld: false,
       unseen: false,
       ready: false,
       ended: null,
@@ -2284,6 +2322,146 @@ class Sessions {
   }
 
   /**
+   * Hold a message until the running turn is over, and return its id in the queue.
+   *
+   * # Why not just send it
+   *
+   * The composer used to let ⌘⏎ through mid-turn, straight to `sendTurn`, and what happened next
+   * depended on the provider with nothing on screen to say which: Claude's CLI folded the message
+   * into the turn or ran it afterwards, Codex refused a second `turn/start`, and either way the pane
+   * could lose track of whether it was working. A queue is one behaviour for every provider, and it
+   * is visible — what is waiting can be read, changed or taken back, which a message already
+   * written down a pipe cannot be.
+   *
+   * # Why one message per turn
+   *
+   * Rather than everything waiting joined into one: each entry is a separate thing the user said,
+   * with its own attachments, and answering "also do X" and "and Y" as a single turn would be the
+   * app doing something the list on screen did not show.
+   *
+   * Writing to a paused queue resumes it. The new message joins the back and the front starts
+   * moving, which is the order the list shows — and "carry on" is the only sensible reading of
+   * writing more to it.
+   */
+  enqueue(paneId: string, text: string, attachments: AgentAttachment[]): string | null {
+    const pane = this.paneById(paneId);
+    if (!pane) return null;
+    nextQueuedId += 1;
+    const id = `queued-${nextQueuedId}`;
+    pane.queue = [...pane.queue, { id, text, attachments, steered: false, editing: false }];
+    pane.queueHeld = false;
+    void this.drain(paneId);
+    return id;
+  }
+
+  /**
+   * "Send now": hand a queued message to the running turn rather than waiting for it to end.
+   *
+   * With nothing running it is simply next — moved to the front and sent — because there is no turn
+   * to steer into and the user has said this one is wanted now. Either way the queue resumes, for
+   * the reason `enqueue` gives.
+   *
+   * Marked before the round trip rather than after it, so the turn finishing in between cannot
+   * send this same entry a second time from the front of the queue.
+   */
+  async steerQueued(paneId: string, itemId: string): Promise<void> {
+    const pane = this.paneById(paneId);
+    const item = pane?.queue.find((entry) => entry.id === itemId);
+    if (!pane || !item || item.steered) return;
+    item.editing = false;
+    pane.queueHeld = false;
+    if (!pane.working || !pane.session) {
+      pane.queue = [item, ...pane.queue.filter((entry) => entry.id !== itemId)];
+      void this.drain(paneId);
+      return;
+    }
+    item.steered = true;
+    try {
+      await commands.steerTurn(pane.session, item.text, item.attachments);
+    } catch (e) {
+      this.error = errorMessage(e);
+      const live = this.paneById(paneId)?.queue.find((entry) => entry.id === itemId);
+      if (live) live.steered = false;
+    }
+  }
+
+  /** Take a message back before it goes. A steered one has already gone, so it stays. */
+  removeQueued(paneId: string, itemId: string): void {
+    const pane = this.paneById(paneId);
+    if (!pane) return;
+    pane.queue = pane.queue.filter((entry) => entry.id !== itemId || entry.steered);
+    // A pause with nothing left to pause is a label with nothing under it.
+    if (pane.queue.every((entry) => entry.steered)) pane.queueHeld = false;
+    // It may have been the edit the queue was waiting on.
+    void this.drain(paneId);
+  }
+
+  /** Open or close an entry for editing. Closing one can free the queue, so it tries to move. */
+  editQueued(paneId: string, itemId: string, editing: boolean): void {
+    const item = this.paneById(paneId)?.queue.find((entry) => entry.id === itemId);
+    if (!item || item.steered) return;
+    item.editing = editing;
+    if (!editing) void this.drain(paneId);
+  }
+
+  /**
+   * Replace an entry's text where it stands.
+   *
+   * In place, because its position is part of what was asked. Emptied with nothing attached, it is
+   * removed — the composer will not send an empty message, and the queue should not either.
+   */
+  rewriteQueued(paneId: string, itemId: string, text: string): void {
+    const item = this.paneById(paneId)?.queue.find((entry) => entry.id === itemId);
+    if (!item || item.steered) return;
+    const trimmed = text.trim();
+    if (trimmed === '' && item.attachments.length === 0) {
+      this.removeQueued(paneId, itemId);
+      return;
+    }
+    item.text = trimmed;
+    this.editQueued(paneId, itemId, false);
+  }
+
+  /** Panes with a queued send in flight. Not `$state`: only `drain` reads it, to refuse a second. */
+  private readonly draining = new Set<string>();
+
+  /**
+   * Send the next queued message, if the pane is free to take one.
+   *
+   * Called after everything that can free the queue — a turn finishing, an edit closing, an entry
+   * removed, a paused queue resumed — and a no-op whenever it is not free, so no caller has to know
+   * the conditions. The entry stays in the list until the send is accepted, which is what keeps the
+   * composer queueing behind it rather than sending past it during the round trip.
+   */
+  private async drain(paneId: string): Promise<void> {
+    const pane = this.paneById(paneId);
+    if (!pane || pane.working || pane.queueHeld || this.draining.has(paneId)) return;
+    const next = pane.queue.find((entry) => !entry.steered);
+    if (!next || next.editing) return;
+    this.draining.add(paneId);
+    try {
+      const sent = await this.send(paneId, next.text, next.attachments);
+      const live = this.paneById(paneId);
+      if (!live) return;
+      if (sent) live.queue = live.queue.filter((entry) => entry.id !== next.id);
+      // Kept, and paused, so a refusal is not retried into a loop and the words survive it.
+      else live.queueHeld = true;
+    } finally {
+      this.draining.delete(paneId);
+    }
+  }
+
+  /**
+   * Stop sending by itself, for the reason `Pane.queueHeld` gives.
+   *
+   * Only when something is waiting: a pause with nothing in it would outlive the moment it was
+   * about and greet the next message typed.
+   */
+  private holdQueue(pane: Pane): void {
+    if (pane.queue.some((entry) => !entry.steered)) pane.queueHeld = true;
+  }
+
+  /**
    * Fork a live conversation for `/btw` without adding either side of the exchange to its log.
    *
    * The hidden pane is intentional: it reuses the ordinary event/session plumbing, but has no
@@ -2346,6 +2524,10 @@ class Sessions {
   async interrupt(paneId: string): Promise<void> {
     const pane = this.paneById(paneId);
     if (!pane?.session) return;
+    // Before the turn's own end arrives, which is what would otherwise send the next entry — into
+    // the session the user has just told to stop. What was already steered is left alone: it has
+    // been sent, and both CLIs that take one run it after an interrupt.
+    this.holdQueue(pane);
     try {
       await commands.interruptTurn(pane.session);
     } catch (e) {
@@ -2469,6 +2651,11 @@ class Sessions {
     pane.ready = false;
     pane.ended = null;
     pane.error = null;
+    // Kept, because they are the user's words and not the old process's; paused, because they were
+    // written for a conversation this has just cleared. A steer went to a process that is gone, so
+    // it is unsent again rather than waiting on an echo that cannot come.
+    for (const entry of pane.queue) entry.steered = false;
+    this.holdQueue(pane);
     // The offer belonged to a conversation that no longer exists. A restarted session may well hit
     // the same limit on its first turn, and then it says so again.
     pane.limit = null;
@@ -2715,13 +2902,23 @@ class Sessions {
       if (pane.sideOf !== null && pane.session) {
         void commands.closeAgentSession(pane.session);
       }
+      // Every steer into this turn has been taken by now or never will be — each driver holds the
+      // finish back until it is (`Protocol::steer`) — so what is left of them is only clutter.
+      if (pane.queue.length > 0) {
+        pane.queue = pane.queue.filter((entry) => !entry.steered);
+        void this.drain(pane.id);
+      }
     } else if (event.kind === 'failed') {
       pane.working = false;
+      this.holdQueue(pane);
       if (pane.sideOf === null && attention.announce('failed', announceable(pane))) {
         pane.unseen = true;
       }
     } else if (event.kind === 'limit_reached') {
       pane.working = false;
+      // The next message would meet the same limit, and a queue that emptied itself into one would
+      // throw away everything in it for a single refusal.
+      this.holdQueue(pane);
       pane.limit = { message: event.message, resetsAt: event.resetsAt };
       if (pane.sideOf === null && attention.announce('limit', announceable(pane))) {
         pane.unseen = true;
@@ -2738,6 +2935,14 @@ class Sessions {
       }
     } else if (event.kind === 'approval_resolved') {
       pane.approvals = pane.approvals.filter((a) => a.id !== event.id);
+    } else if (event.kind === 'user_echo' && pane.queue.length > 0) {
+      // A steer is echoed when the provider takes it, so this is the moment it leaves the queue
+      // and becomes part of the transcript. Matched on text, which is what the driver echoes back
+      // verbatim; only steered entries are candidates, so a queued twin still waiting is left be.
+      const taken = pane.queue.findIndex(
+        (entry) => entry.steered && entry.text === event.text,
+      );
+      if (taken >= 0) pane.queue = pane.queue.filter((_, index) => index !== taken);
     } else if (event.kind === 'skills_listed') {
       // Replaced, not merged: a provider that answers twice is correcting itself, and a skill
       // deleted from disk should leave the list rather than linger because it was once there.
@@ -2825,6 +3030,9 @@ class Sessions {
     if (pane.sideOf === null && attention.offScreen(pane.worktreeId)) pane.unseen = true;
     // An approval nobody can answer any more would sit on screen forever.
     pane.approvals = [];
+    // A steer the process never took is unsent again, for a Restart to deliver. See `restart`.
+    for (const entry of pane.queue) entry.steered = false;
+    this.holdQueue(pane);
   }
 }
 

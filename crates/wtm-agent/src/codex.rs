@@ -195,6 +195,31 @@ struct CodexProtocol {
     /// Cached because `turn/completed` reports none — verified on the wire — so without this a
     /// finished turn shows a row of zeros. `thread/tokenUsage/updated` is the only source.
     usage: Usage,
+    /// The `turn/start` whose reply has not arrived.
+    ///
+    /// Between writing a `turn/start` and `turn/started` there is a turn on its way and no id for
+    /// it, and a carried steer that started a second one in that window would be refused. The reply
+    /// arrives first and carries the id — observed on 0.154.0 — so it closes the window early.
+    start_id: Option<i64>,
+    /// Steered messages not yet in the turn, by the `clientUserMessageId` each was sent with.
+    ///
+    /// The server hands that id back as the `clientId` of the `userMessage` item it adds to the
+    /// turn, at the point the model reads it — after a running command finishes, in the capture
+    /// this was written against. That item is where the echo goes. See [`Protocol::steer`] for why
+    /// it is not emitted on write.
+    steers: BTreeMap<String, (String, Vec<AgentAttachment>)>,
+    /// Which `turn/steer` request carried which steer, until its reply.
+    steer_requests: BTreeMap<i64, String>,
+    /// Steered messages owed a turn of their own once the running one ends.
+    ///
+    /// Two routes here, both verified on 0.154.0. The server refuses a steer when no turn is active
+    /// — `-32600 "no active turn to steer"`, the race where the turn ended while the message was on
+    /// its way — or when the turn is not steerable, which the schema says is `review` and
+    /// `compact`. And it **drops** an accepted steer when the turn is interrupted before reaching
+    /// it: `turn/completed` with `interrupted`, no `userMessage` item, no follow-up turn. Claude's
+    /// CLI runs such a message next instead, and a steered message is one the user has already
+    /// sent, so this is what keeps the two providers saying the same thing about it.
+    carried: Vec<(String, Vec<AgentAttachment>)>,
 }
 
 /// One server-initiated request the user has not answered yet.
@@ -309,6 +334,10 @@ impl CodexProtocol {
             queued: Vec::new(),
             pending: BTreeMap::new(),
             usage: Usage::default(),
+            start_id: None,
+            steers: BTreeMap::new(),
+            steer_requests: BTreeMap::new(),
+            carried: Vec::new(),
         }
     }
 
@@ -377,21 +406,11 @@ impl CodexProtocol {
     }
 
     fn turn_frame(&mut self, text: &str, attachments: &[AgentAttachment]) -> Option<Step> {
+        self.turn_frame_for(&turn_input(text, attachments))
+    }
+
+    fn turn_frame_for(&mut self, input: &[Value]) -> Option<Step> {
         let thread = self.thread_id.clone()?;
-        let mut input = Vec::new();
-        if !text.is_empty() {
-            input.push(json!({ "type": "text", "text": text }));
-        }
-        for attachment in attachments {
-            if attachment.mime.starts_with("image/") {
-                input.push(json!({ "type": "localImage", "path": attachment.path }));
-            } else {
-                input.push(json!({
-                    "type": "text",
-                    "text": format!("Attached file `{}` is available at `{}`.", attachment.name, attachment.path),
-                }));
-            }
-        }
         let mut params = json!({
             "threadId": thread,
             "input": input,
@@ -414,8 +433,41 @@ impl CodexProtocol {
             params["approvalsReviewer"] = json!(reviewer);
             params["sandboxPolicy"] = policy;
         }
-        let (_, step) = self.request("turn/start", &params);
+        let (id, step) = self.request("turn/start", &params);
+        self.start_id = Some(id);
         Some(step)
+    }
+
+    /// Start a turn for everything carried, if nothing else is running or on its way.
+    ///
+    /// One turn for all of them rather than one each: the server runs one turn at a time, and every
+    /// message here was meant for the turn that has just ended, so they belong together.
+    fn flush_carried(&mut self) -> Vec<Step> {
+        if self.carried.is_empty() || self.active_turn_id.is_some() || self.start_id.is_some() {
+            return Vec::new();
+        }
+        let mut steps = Vec::new();
+        let mut input = Vec::new();
+        for (text, attachments) in std::mem::take(&mut self.carried) {
+            steps.extend(attachment_steps(&attachments));
+            steps.push(Step::Emit(AgentEvent::UserEcho { text: text.clone() }));
+            input.extend(turn_input(&text, &attachments));
+        }
+        steps.extend(self.turn_frame_for(&input));
+        steps
+    }
+
+    /// A `userMessage` item carrying one of this driver's steers: the point to echo it.
+    fn on_steer_item(&mut self, params: &Value) -> Option<Vec<Step>> {
+        let item = params.get("item")?;
+        if item.get("type").and_then(Value::as_str) != Some("userMessage") {
+            return None;
+        }
+        let client = item.get("clientId").and_then(Value::as_str)?;
+        let (text, attachments) = self.steers.remove(client)?;
+        let mut steps = attachment_steps(&attachments);
+        steps.push(Step::Emit(AgentEvent::UserEcho { text }));
+        Some(steps)
     }
 
     /// Ask the app server what this worktree can be asked to do by name.
@@ -437,6 +489,31 @@ impl CodexProtocol {
 
     /// A reply to one of our requests.
     fn on_reply(&mut self, id: i64, message: &Value) -> Vec<Step> {
+        if Some(id) == self.start_id {
+            self.start_id = None;
+            // Ahead of `turn/started`, and Stop needs this id as much as a steer does.
+            if let Some(turn) = message.pointer("/result/turn/id").and_then(Value::as_str) {
+                self.active_turn_id = Some(turn.to_owned());
+            }
+        }
+
+        // Checked before the error arm below, because a refused steer is not a failed session: the
+        // message goes into the next turn instead. See `carried`.
+        if let Some(client) = self.steer_requests.remove(&id) {
+            let refused = message.get("error").is_some();
+            // Accepted into a turn that has already ended without reaching it. The item would have
+            // arrived before `turn/completed` if it was ever going to, so it was dropped.
+            let orphaned = !refused && self.active_turn_id.is_none();
+            if !(refused || orphaned) {
+                return Vec::new();
+            }
+            let Some(steer) = self.steers.remove(&client) else {
+                return Vec::new();
+            };
+            self.carried.push(steer);
+            return self.flush_carried();
+        }
+
         if let Some(error) = message.get("error") {
             // A refused `skills/list` is not a failed session. It is a composer convenience nobody
             // is blocked on, and an app server too old to know the method answers with an error —
@@ -548,6 +625,7 @@ impl CodexProtocol {
             "turn/started" => {
                 let turn = turn_id(params);
                 self.active_turn_id = (!turn.is_empty()).then(|| turn.clone());
+                self.start_id = None;
                 AgentEvent::TurnStarted { turn }
             }
             "turn/completed" => {
@@ -555,8 +633,36 @@ impl CodexProtocol {
                 // Turns do not overlap on one thread. Clear unconditionally so a malformed or
                 // newer completion payload cannot leave Stop targeting a turn that already ended.
                 self.active_turn_id = None;
+
+                // Accepted and never delivered: the server has dropped them. A steer whose reply is
+                // still on its way is left for that reply to settle — see `on_reply` — and either
+                // answer means a turn for it, which is why it holds the finish below as well.
+                let (awaiting, answered): (Vec<_>, Vec<_>) = self
+                    .steers
+                    .keys()
+                    .cloned()
+                    .partition(|client| self.steer_requests.values().any(|c| c == client));
+                for client in answered {
+                    if let Some(steer) = self.steers.remove(&client) {
+                        self.carried.push(steer);
+                    }
+                }
+
+                let mut steps = Vec::new();
                 if let Some(detail) = params.get("turn").and_then(provider_error_message) {
-                    return vec![Step::Emit(limit_or_failure(&detail))];
+                    steps.push(Step::Emit(limit_or_failure(&detail)));
+                    // Carried anyway. The message was sent before the turn failed and is not about
+                    // why it failed, and a second refusal says more than a silently lost message.
+                    steps.extend(self.flush_carried());
+                    return steps;
+                }
+                // Straight into the next turn, and *instead of* finishing this one: a finish tells
+                // the composer the session is idle, and it would send its own next message into a
+                // turn that is already starting. The meter still moves.
+                if !self.carried.is_empty() || !awaiting.is_empty() {
+                    steps.push(Step::Emit(AgentEvent::Usage(self.usage)));
+                    steps.extend(self.flush_carried());
+                    return steps;
                 }
                 AgentEvent::TurnFinished {
                     turn,
@@ -598,7 +704,12 @@ impl CodexProtocol {
             // from the notification: it reports *that* something changed, and the list is what the
             // menu needs.
             "skills/changed" => return vec![self.ask_for_skills(true)],
-            "item/started" | "item/completed" => return Self::on_item(method, params),
+            "item/started" | "item/completed" => {
+                if let Some(steps) = self.on_steer_item(params) {
+                    return steps;
+                }
+                return Self::on_item(method, params);
+            }
             "item/commandExecution/outputDelta" => AgentEvent::CommandOutput {
                 id: text("itemId"),
                 chunk: text("chunk"),
@@ -782,6 +893,11 @@ impl Protocol for CodexProtocol {
     }
 
     fn send_turn(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
+        // A second message during a turn is a steer, whatever the caller called it — the server
+        // runs one turn at a time, so a second `turn/start` would only be refused.
+        if self.phase == Phase::Ready && self.active_turn_id.is_some() {
+            return self.steer(text, attachments);
+        }
         if self.phase == Phase::Ready {
             let mut steps = attachment_steps(attachments);
             steps.push(Step::Emit(AgentEvent::UserEcho {
@@ -812,6 +928,34 @@ impl Protocol for CodexProtocol {
             text: text.to_owned(),
         }));
         steps
+    }
+
+    /// `turn/steer`: the input joins the running turn at the model's next step.
+    ///
+    /// `expectedTurnId` is a required precondition rather than a courtesy — the server refuses a
+    /// steer aimed at a turn that is no longer the active one — which is what makes the refusal in
+    /// `on_reply` a reliable signal that the message has to be carried instead.
+    fn steer(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
+        let (Some(thread), Some(turn)) = (self.thread_id.clone(), self.active_turn_id.clone())
+        else {
+            return self.send_turn(text, attachments);
+        };
+        // A uuid rather than a counter: the server keeps this on the item in the thread's history,
+        // and a resumed thread's second process would otherwise mint ids its first one used.
+        let client = format!("wtm-steer-{}", uuid::Uuid::new_v4());
+        let (id, step) = self.request(
+            "turn/steer",
+            &json!({
+                "threadId": thread,
+                "expectedTurnId": turn,
+                "clientUserMessageId": client,
+                "input": turn_input(text, attachments),
+            }),
+        );
+        self.steers
+            .insert(client.clone(), (text.to_owned(), attachments.to_vec()));
+        self.steer_requests.insert(id, client);
+        vec![step]
     }
 
     /// Change the model or the mode on a running thread.
@@ -1269,6 +1413,25 @@ fn append_notes(answers: &mut BTreeMap<String, Vec<String>>, notes: Option<&str>
     if let Some((_, values)) = answers.iter_mut().next_back() {
         values.push(format!("Notes: {notes}"));
     }
+}
+
+/// A message as `turn/start` and `turn/steer` both take it.
+fn turn_input(text: &str, attachments: &[AgentAttachment]) -> Vec<Value> {
+    let mut input = Vec::new();
+    if !text.is_empty() {
+        input.push(json!({ "type": "text", "text": text }));
+    }
+    for attachment in attachments {
+        if attachment.mime.starts_with("image/") {
+            input.push(json!({ "type": "localImage", "path": attachment.path }));
+        } else {
+            input.push(json!({
+                "type": "text",
+                "text": format!("Attached file `{}` is available at `{}`.", attachment.name, attachment.path),
+            }));
+        }
+    }
+    input
 }
 
 fn attachment_steps(attachments: &[AgentAttachment]) -> Vec<Step> {

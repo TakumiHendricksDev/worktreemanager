@@ -1,0 +1,102 @@
+/*
+ * What a pane has waiting to be sent, stacked on the composer that wrote it.
+ *
+ * Components layer, in the shell `.c-context` already uses — an elevated card in the pane's foot —
+ * because it is the same kind of thing: a fact about the next turn, shown where the turn is
+ * written. Its own block rather than a `.c-context` modifier, because a list of rows you act on is
+ * not a readout, and the two would grow apart the first time either needed something.
+ *
+ * No colour of its own on the phrases. They wear `.c-status--*`, which loads after this partial,
+ * so a tone here would either lose to it or need a longer selector to win — and the words already
+ * carry the state, as `settings/_semantic.scss` requires.
+ */
+.c-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--step--1);
+}
+
+.c-queue__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  font-size: var(--step--2);
+}
+
+/* Scrolls rather than pushing the composer off the bottom of a quarter-height pane — the same
+   bound the skills list takes, for the same reason. */
+.c-queue__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 14em;
+  overflow-y: auto;
+}
+
+/* Wraps, so on a narrow pane the actions drop under the text instead of squeezing it to a word
+   per line — and so the editor can take the whole row with its buttons beneath it. */
+.c-queue__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: var(--sp-1) var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+}
+
+/* Sent and not yet read. The info role, which is what "under way, nothing for you to do" already
+   means everywhere else a status is drawn. */
+.c-queue__item.is-steered {
+  border-color: var(--info-line);
+  background: var(--info-soft);
+}
+
+.c-queue__body {
+  display: flex;
+  flex: 1 1 12rem;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Three lines, then cut. Edit shows the rest, and a queue of pasted stack traces would otherwise
+   be a scroller inside a scroller. */
+.c-queue__text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-queue__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--step--2);
+}
+
+.c-queue__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* Worn beside `.c-textarea`, which is the bordered control an edit wants; this only fits it to the
+   row. It wins at equal specificity because `input` sorts ahead of `queue` in `main.scss`. */
+.c-queue__edit {
+  flex: 1 1 100%;
+  max-height: 12em;
+  font-size: var(--step--1);
+}

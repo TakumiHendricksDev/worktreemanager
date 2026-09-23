@@ -122,6 +122,19 @@ struct CursorProtocol {
     /// again. So Auto is a wtm policy: the picker shows it, the wire stays on `agent`, and
     /// permission cards are answered with allow-once. Clarification questions still surface.
     auto_approve: bool,
+    /// Steered messages waiting for the cancelled prompt to come back.
+    ///
+    /// ACP runs one `session/prompt` at a time and has no way to add to one in flight, so the only
+    /// route into a running turn is to cancel it and prompt again. The spec obliges the agent to
+    /// answer a cancelled prompt with `stopReason: "cancelled"`, and that reply is the moment the
+    /// next prompt may go — which is why these are sent from `on_reply` rather than beside the
+    /// cancel.
+    carried: Vec<(String, Vec<AgentAttachment>)>,
+    /// A steer has cancelled the running prompt and its reply has not arrived.
+    ///
+    /// Not `!carried.is_empty()`: a plain send made during a prompt waits in `carried` too, without
+    /// cancelling anything, and a steer after it still has to.
+    cancelling: bool,
 }
 
 struct Pending {
@@ -160,7 +173,36 @@ impl CursorProtocol {
             effort_config_id: None,
             instructions_sent: false,
             auto_approve,
+            carried: Vec::new(),
+            cancelling: false,
         }
+    }
+
+    /// Prompt with everything carried, once no prompt is in flight.
+    ///
+    /// One prompt for all of them: each was meant for the turn that was cancelled to make room, so
+    /// they belong together, and ACP would refuse a second prompt beside the first anyway. Echoed
+    /// one by one, because they were sent one by one.
+    fn flush_carried(&mut self) -> Vec<Step> {
+        if self.carried.is_empty() || !self.prompt_ids.is_empty() {
+            return Vec::new();
+        }
+        let mut steps = Vec::new();
+        let mut texts = Vec::new();
+        let mut attachments = Vec::new();
+        for (text, files) in std::mem::take(&mut self.carried) {
+            steps.extend(attachment_steps(&files));
+            steps.push(Step::Emit(AgentEvent::UserEcho { text: text.clone() }));
+            if !text.is_empty() {
+                texts.push(text);
+            }
+            attachments.extend(files);
+        }
+        steps.extend(
+            self.prompt_frame(&texts.join("\n\n"), &attachments)
+                .unwrap_or_default(),
+        );
+        steps
     }
 
     fn request(&mut self, method: &str, params: &Value) -> (i64, Step) {
@@ -295,14 +337,25 @@ impl CursorProtocol {
     }
 
     fn on_reply(&mut self, id: i64, message: &Value) -> Vec<Step> {
+        // Taken before the error arm, so a refused prompt stops counting as in flight. It used to
+        // stay in the map, which nothing noticed until steering asked whether a prompt was running.
+        let prompt = self.prompt_ids.remove(&id);
+        if prompt.is_some() {
+            self.cancelling = false;
+        }
         if let Some(error) = message.get("error") {
             let detail = error
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("Cursor rejected an ACP request");
-            return vec![Step::Emit(AgentEvent::Failed {
+            let mut steps = vec![Step::Emit(AgentEvent::Failed {
                 message: detail.to_owned(),
             })];
+            // The prompt is over either way, and a steered message is not about why it failed.
+            if prompt.is_some() {
+                steps.extend(self.flush_carried());
+            }
+            return steps;
         }
         let result = message.get("result").cloned().unwrap_or(Value::Null);
 
@@ -365,7 +418,13 @@ impl CursorProtocol {
             }
             return steps;
         }
-        if let Some(turn) = self.prompt_ids.remove(&id) {
+        if let Some(turn) = prompt {
+            // Cancelled to make room for a steer. Prompting again *instead of* finishing, because
+            // a finish tells the composer the session is idle and it would send its own next
+            // message into the prompt this is about to start.
+            if !self.carried.is_empty() {
+                return self.flush_carried();
+            }
             return vec![Step::Emit(AgentEvent::TurnFinished {
                 turn,
                 usage: Usage::default(),
@@ -688,6 +747,12 @@ impl Protocol for CursorProtocol {
     }
 
     fn send_turn(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
+        // A turn sent during a prompt waits for it, uncancelled. ACP refuses a second prompt beside
+        // the first, and unlike a steer, a plain send says nothing about wanting the first stopped.
+        if self.phase == Phase::Ready && !self.prompt_ids.is_empty() {
+            self.carried.push((text.to_owned(), attachments.to_vec()));
+            return Vec::new();
+        }
         let mut steps = attachment_steps(attachments);
         steps.push(Step::Emit(AgentEvent::UserEcho {
             text: text.to_owned(),
@@ -700,6 +765,21 @@ impl Protocol for CursorProtocol {
             self.queued.push((text.to_owned(), attachments.to_vec()));
         }
         steps
+    }
+
+    /// Cancel the running prompt and send this once it has come back. See `carried`.
+    fn steer(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
+        if self.phase != Phase::Ready || self.prompt_ids.is_empty() {
+            return self.send_turn(text, attachments);
+        }
+        self.carried.push((text.to_owned(), attachments.to_vec()));
+        // Cancelled once. A second steer before the reply joins the first rather than cancelling
+        // the prompt that is about to replace the one already going.
+        if std::mem::replace(&mut self.cancelling, true) {
+            Vec::new()
+        } else {
+            self.interrupt()
+        }
     }
 
     fn reconfigure(
@@ -1159,6 +1239,8 @@ pub fn parse_capability(reply: &Value) -> AgentCapability {
         },
         models_are_live: true,
         supports_fast: false,
+        // One prompt at a time, so a steer has to cancel the running one. See `CursorProtocol::steer`.
+        steers_mid_turn: false,
     }
 }
 

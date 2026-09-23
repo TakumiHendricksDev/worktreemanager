@@ -27,6 +27,7 @@
   import AgentTranscript from './AgentTranscript.svelte';
   import BrowserPane from './BrowserPane.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
+  import ComposerQueue from './ComposerQueue.svelte';
   import Markdown from './Markdown.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import SideQuestion from './SideQuestion.svelte';
@@ -169,6 +170,24 @@
       : status === 'ended'
         ? pane.ended
         : STATUS_WORD[status],
+  );
+
+  /**
+   * Whether a message written now waits rather than goes.
+   *
+   * The queue counts as well as the turn, so a message written behind a queue cannot overtake it —
+   * which it would the moment the turn ended and the pane read idle before the queue had moved.
+   */
+  const busy = $derived(pane.working || pane.queue.length > 0);
+
+  /**
+   * Whether "Send now" reaches the turn without stopping it. See `Capability.steersMidTurn`.
+   *
+   * False until the capability says otherwise: of the two ways this sentence can be wrong, telling
+   * someone a steer will not stop the turn when it does is the one that costs them work.
+   */
+  const steersMidTurn = $derived(
+    provider !== null && sessions.capabilities[provider]?.steersMidTurn === true,
   );
 
   /** The oldest unanswered approval. One at a time, in arrival order. */
@@ -591,7 +610,13 @@
     else await beginDictation();
   }
 
-  async function submit(event: Event) {
+  /**
+   * Send what is in the composer — or, while the session is busy, queue it.
+   *
+   * `steer` is ⇧⌘⏎: queued and immediately sent on, the composer's own route to what "Send now" does
+   * for an entry already waiting. With nothing running it is an ordinary send.
+   */
+  async function submit(event: Event, steer = false) {
     event.preventDefault();
     const text = draft.trim();
     if ((!text && attachments.length === 0) || sending) return;
@@ -690,6 +715,21 @@
     }
 
     /*
+     * Queued rather than sent while the session is busy. Local commands above still act at once —
+     * a `/context` has no reason to wait for a turn — and `/btw` opens its own session.
+     *
+     * Cleared straight away, unlike a send below: nothing can refuse a message into the queue,
+     * and the queue is where it can still be edited.
+     */
+    if (busy) {
+      const queued = sessions.enqueue(pane.id, text, attachments);
+      draft = '';
+      attachments = [];
+      if (steer && queued !== null) void sessions.steerQueued(pane.id, queued);
+      return;
+    }
+
+    /*
      * The draft is held until the turn is accepted, not cleared on the way out.
      *
      * Clearing first destroyed the message whenever `send` could not deliver it, which was every
@@ -709,6 +749,10 @@
   /*
    * ⌘⏎ always sends. Whether a *bare* Enter also sends is `composerPrefs.sendKey`.
    *
+   * "Sends" meaning submits: while the session is busy the message is queued instead, and ⇧⌘⏎
+   * queues it and steers it straight into the running turn. Shift, because ⇧⏎ is already the
+   * newline and ⌥ is taken by the IME exclusions below, and because it is ⌘⏎ said more urgently.
+   *
    * The default is still ⌘⏎-only, because an agent prompt is routinely several lines — a stack
    * trace, a diff, a list of files — and a composer where Enter submits makes pasting one an
    * accident. But that is an argument about what a particular person pastes, not a universal one,
@@ -726,7 +770,7 @@
    */
   function onKeydown(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-      void submit(event);
+      void submit(event, event.shiftKey);
       return;
     }
 
@@ -1497,6 +1541,11 @@
           </section>
         {/if}
 
+        {#if pane.queue.length > 0}
+          <!-- Last before the card, so what is waiting sits directly on top of what wrote it. -->
+          <ComposerQueue {pane} {label} {steersMidTurn} />
+        {/if}
+
         <form class="c-composer" bind:this={form} onsubmit={(event) => void submit(event)}>
           {#if suggestions.length > 0}
             <!-- First child, so the card grows *upward* around it and the message stays where the
@@ -1553,7 +1602,9 @@
           <textarea
             class="c-composer__input"
             bind:this={composer}
-            placeholder="Ask {label}… — paste or @ files, / for commands"
+            placeholder={busy
+              ? `Queue a message for ${label}…`
+              : `Ask ${label}… — paste or @ files, / for commands`}
             aria-label="Message {label}"
             bind:value={draft}
             oninput={noteCaret}
@@ -1674,9 +1725,14 @@
 
               This is the one place that wants the raw field. `attention` outranks `working` in the
               status vocabulary — correctly, because a blocked pane is waiting on you rather than
-              thinking — but a turn *is* still in flight while an approval is unanswered, so keying the
-              control off the status would flip it from Stop back to Send mid-turn, offering to send a
-              second message into a session that cannot take one.
+              thinking — but a turn *is* still in flight while an approval is unanswered, so keying
+              Stop off the status would take it away mid-turn, exactly while the turn is waiting on
+              a decision the user might rather not make.
+
+              Stop *beside* the submit button rather than instead of it. It used to replace Send,
+              which was right while a message written mid-turn had nowhere good to go; now it goes
+              into the queue, so the button stays where the pointer already is and says what it
+              will do.
             -->
               {#if pane.working}
                 <Button
@@ -1686,24 +1742,26 @@
                 >
                   Stop
                 </Button>
-              {:else}
-                <!-- The shortcut lives here rather than in the placeholder, where it was competing
-                   with the prompt for the one line of text a user reads before typing. It follows
-                   the setting because a hint that names the wrong key is worse than no hint. -->
-                <span class="c-composer__hint" aria-hidden="true">
-                  {composerPrefs.sendKey === 'enter' ? '↵' : '⌘↵'}
-                </span>
-                <Button
-                  variant="accent"
-                  size="sm"
-                  type="submit"
-                  disabled={(draft.trim().length === 0 && attachments.length === 0) ||
-                    pane.ended !== null ||
-                    sending}
-                >
-                  {sending ? 'Sending…' : 'Send'}
-                </Button>
               {/if}
+              <!-- The shortcut lives here rather than in the placeholder, where it was competing
+                 with the prompt for the one line of text a user reads before typing. It follows
+                 the setting because a hint that names the wrong key is worse than no hint. -->
+              <span class="c-composer__hint" aria-hidden="true">
+                {composerPrefs.sendKey === 'enter' ? '↵' : '⌘↵'}
+              </span>
+              <Button
+                variant="accent"
+                size="sm"
+                type="submit"
+                title={busy
+                  ? `Queue — sends when ${label} is free. ⇧⌘↵ sends it now.`
+                  : undefined}
+                disabled={(draft.trim().length === 0 && attachments.length === 0) ||
+                  pane.ended !== null ||
+                  sending}
+              >
+                {sending ? 'Sending…' : busy ? 'Queue' : 'Send'}
+              </Button>
               {#if copiedReply}
                 <span class="c-status--ok">Copied the last reply.</span>
               {/if}

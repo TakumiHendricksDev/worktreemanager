@@ -1453,3 +1453,254 @@ fn a_successful_result_stays_silent_about_failure_and_still_reports_its_tokens()
         other => panic!("expected TurnFinished, got {other:?}"),
     }
 }
+
+// ── Steering ───────────────────────────────────────────────────────────────────────────────────
+//
+// Captured from `claude 2.1.280`, with `haiku`, by writing a second user message three seconds into
+// a turn. Two shapes, and the difference between them is the whole reason steering needs the
+// lifecycle frames: with a tool call in flight the CLI folds the message into the running turn
+// after the tool result and ends with one `result`; during a turn that is only text, it ends the
+// turn first and runs the message as a second one. The `command_lifecycle` lines only appear for a
+// message that carried a `uuid`, which is why only a steer gets one.
+
+/// The `uuid` a steer was written with — minted by the driver, so read back off the frame.
+fn steer_id(steps: &[Step]) -> String {
+    let frames = writes(steps);
+    assert_eq!(frames.len(), 1, "a steer is one frame: {frames:?}");
+    frames[0]["uuid"]
+        .as_str()
+        .expect("a steer must carry a uuid for its lifecycle to be reported")
+        .to_owned()
+}
+
+fn lifecycle(id: &str, state: &str) -> String {
+    format!(
+        r#"{{"type":"command_lifecycle","command_uuid":"{id}","state":"{state}","uuid":"559c55d6-a3cf-4ba1-b122-7bbda49a424e","session_id":"s"}}"#
+    )
+}
+
+/// The first of the two `result`s in the text-only capture.
+const FIRST_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":false,"num_turns":1,"stop_reason":"end_turn","session_id":"s","total_cost_usd":0.0113833,"usage":{"input_tokens":10,"cache_creation_input_tokens":3922,"cache_read_input_tokens":17893,"output_tokens":348},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":10,"outputTokens":348,"contextWindow":200000}}}"#;
+
+/// The second — `usage` is this turn's alone, `modelUsage` and the cost are the session's so far.
+const SECOND_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":false,"num_turns":1,"stop_reason":"end_turn","session_id":"s","total_cost_usd":0.0193948,"usage":{"input_tokens":10,"cache_creation_input_tokens":2675,"cache_read_input_tokens":21815,"output_tokens":94},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":20,"outputTokens":442,"contextWindow":200000}}}"#;
+
+/// What Stop produces. No `result` text, and `is_error` set, which on its own reads as a failure.
+const INTERRUPTED_RESULT: &str = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"duration_api_ms":0,"stop_reason":null,"num_turns":2,"session_id":"s","total_cost_usd":0,"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0},"modelUsage":{},"terminal_reason":"aborted_streaming","errors":["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"]}"#;
+
+const INIT: &str = r#"{"type":"system","subtype":"init","session_id":"s","model":"claude-haiku-4-5-20251001","permissionMode":"default","tools":[],"slash_commands":[],"skills":[]}"#;
+
+fn finished(steps: &[Step]) -> bool {
+    events(steps)
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TurnFinished { .. }))
+}
+
+fn started(steps: &[Step]) -> bool {
+    events(steps)
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TurnStarted { .. }))
+}
+
+fn echoes(steps: &[Step]) -> Vec<&str> {
+    events(steps)
+        .into_iter()
+        .filter_map(|e| match e {
+            AgentEvent::UserEcho { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_steer_during_a_tool_call_is_echoed_where_the_cli_took_it_and_ends_with_the_turn() {
+    let mut d = driver();
+    d.send_turn("run sleep 6", &[]);
+
+    let steered = d.steer("also end with PINEAPPLE", &[]);
+    // Nothing on screen yet. The reply is mid-stream, and an echo here would split it in two.
+    assert_eq!(events(&steered), Vec::<&AgentEvent>::new());
+    let id = steer_id(&steered);
+
+    assert!(events(&d.on_line(&lifecycle(&id, "queued"))).is_empty());
+    // The tool result the steer was folded behind, then `started` — the point it was read.
+    d.on_line(
+        r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":"first-done","is_error":false}]},"parent_tool_use_id":null,"session_id":"s"}"#,
+    );
+    let taken = d.on_line(&lifecycle(&id, "started"));
+    assert_eq!(echoes(&taken), vec!["also end with PINEAPPLE"]);
+    assert!(
+        !started(&taken),
+        "folded into the running turn, so no second turn starts"
+    );
+    assert!(events(&d.on_line(&lifecycle(&id, "completed"))).is_empty());
+
+    // One `result` in this shape, and nothing still queued, so it is the end of the turn.
+    assert!(finished(&d.on_line(FIRST_RESULT)));
+}
+
+#[test]
+fn a_steer_into_a_text_only_turn_holds_the_turn_open_until_the_cli_has_run_it() {
+    // The shape that breaks a naive driver: the first `result` arrives while the steer is still
+    // queued. Finishing there tells the composer the session is idle, and it sends its own next
+    // message into a CLI that is about to start another turn.
+    let mut d = driver();
+    d.send_turn("write a story", &[]);
+    let id = steer_id(&d.steer("then write PINEAPPLE", &[]));
+    d.on_line(&lifecycle(&id, "queued"));
+
+    let first = d.on_line(FIRST_RESULT);
+    assert!(
+        !finished(&first),
+        "a steer is still queued, so this is not the end of the turn: {first:?}"
+    );
+    assert!(
+        events(&first)
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Usage(_))),
+        "the meter still moves while the turn is held open"
+    );
+
+    let taken = d.on_line(&lifecycle(&id, "started"));
+    assert_eq!(echoes(&taken), vec!["then write PINEAPPLE"]);
+    // Its own `init`, which is the CLI's turn and not a new one as far as the pane is concerned.
+    assert!(!started(&d.on_line(INIT)));
+
+    let last = d.on_line(SECOND_RESULT);
+    match events(&last).last().expect("TurnFinished") {
+        AgentEvent::TurnFinished {
+            usage, cost_usd, ..
+        } => {
+            // Both sub-turns' tokens, because each `usage` covers only its own.
+            assert_eq!(usage.tokens_in, 20);
+            assert_eq!(usage.tokens_out, 348 + 94);
+            assert_eq!(usage.cached, 17_893 + 21_815);
+            // The cost is already the session's running total, so the last one is used as it is.
+            assert_eq!(*cost_usd, Some(0.019_394_8));
+        }
+        other => panic!("expected TurnFinished, got {other:?}"),
+    }
+}
+
+#[test]
+fn stop_ends_a_claude_turn_the_way_it_ends_every_other_providers() {
+    // `error_during_execution` with `is_error` and no reason. Codex and Cursor end an interrupted
+    // turn as a plain finish; this used to be a red "the turn failed and the CLI gave no reason"
+    // row, and a pane whose status said failed, after every press of Stop.
+    let mut d = driver();
+    d.send_turn("write a story", &[]);
+    d.interrupt();
+
+    let stopped = d.on_line(INTERRUPTED_RESULT);
+    assert!(
+        !events(&stopped).iter().any(|e| matches!(
+            e,
+            AgentEvent::Failed { .. } | AgentEvent::LimitReached { .. }
+        )),
+        "Stop is not a failure: {stopped:?}"
+    );
+    assert!(finished(&stopped));
+}
+
+#[test]
+fn the_same_result_without_a_stop_is_still_a_failure() {
+    // The exemption is for the `result` that answers Stop, not for the shape. An error during
+    // execution that nobody asked for is exactly what the failure row is there to report.
+    let mut d = driver();
+    d.send_turn("write a story", &[]);
+    let failed = d.on_line(INTERRUPTED_RESULT);
+    assert!(
+        events(&failed)
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Failed { .. }))
+    );
+}
+
+#[test]
+fn a_steer_queued_when_stop_is_pressed_still_runs_and_the_pane_stays_busy_for_it() {
+    // Captured: the CLI answers the interrupt with `still_queued: [<uuid>]`, ends the turn, and then
+    // runs the steered message as its own. The pane has to stay busy through that, or it reads as
+    // idle while the agent works.
+    let mut d = driver();
+    d.send_turn("write a story", &[]);
+    let id = steer_id(&d.steer("reply with PINEAPPLE", &[]));
+    d.on_line(&lifecycle(&id, "queued"));
+    d.interrupt();
+    d.on_line(
+        &format!(r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"int-1","response":{{"still_queued":["{id}"]}}}}}}"#),
+    );
+
+    let stopped = d.on_line(INTERRUPTED_RESULT);
+    assert!(
+        !finished(&stopped),
+        "the steer is still to run: {stopped:?}"
+    );
+
+    assert_eq!(
+        echoes(&d.on_line(&lifecycle(&id, "started"))),
+        vec!["reply with PINEAPPLE"]
+    );
+    d.on_line(INIT);
+    assert!(finished(&d.on_line(SECOND_RESULT)));
+}
+
+#[test]
+fn a_steer_after_the_turn_has_ended_is_just_the_next_turn() {
+    // The composer decided to steer from events it heard a moment ago; the turn can end in between.
+    // Only the driver knows which happened, so a steer into nothing announces a turn like any send.
+    let mut d = driver();
+    d.send_turn("hello", &[]);
+    d.on_line(FIRST_RESULT);
+
+    let late = d.steer("and another thing", &[]);
+    assert_eq!(echoes(&late), vec!["and another thing"]);
+    assert!(started(&late));
+    assert!(
+        writes(&late)[0].get("uuid").is_none(),
+        "an ordinary turn needs no lifecycle"
+    );
+}
+
+#[test]
+fn a_second_send_during_a_turn_is_steered_rather_than_announcing_a_second_turn() {
+    // A second `TurnStarted` for a message the CLI may fold into the first turn is a turn that
+    // never gets its own `result`, and the pane would go idle while the CLI was still working.
+    let mut d = driver();
+    d.send_turn("first", &[]);
+    let second = d.send_turn("second", &[]);
+    assert!(!started(&second));
+    assert!(echoes(&second).is_empty(), "echoed when the CLI takes it");
+    steer_id(&second);
+}
+
+#[test]
+fn a_cli_that_never_acknowledges_a_steer_cannot_hold_the_turn_open_forever() {
+    // `command_lifecycle` is what a queued steer is proved by. A CLI too old to send it would
+    // otherwise pin the pane at "working" for good — so an unacknowledged steer is echoed when the
+    // turn ends, and the turn the CLI then runs it as announces itself on its `init`.
+    let mut d = driver();
+    d.send_turn("write a story", &[]);
+    d.steer("then PINEAPPLE", &[]);
+
+    let ended = d.on_line(FIRST_RESULT);
+    assert_eq!(echoes(&ended), vec!["then PINEAPPLE"]);
+    assert!(finished(&ended));
+
+    assert!(started(&d.on_line(INIT)), "the CLI's own turn for it");
+    assert!(finished(&d.on_line(SECOND_RESULT)));
+    // And an `init` nobody is owed after that is not a turn.
+    assert!(!started(&d.on_line(INIT)));
+}
+
+#[test]
+fn a_lifecycle_for_a_message_this_driver_did_not_steer_draws_nothing() {
+    // Not a `Raw` row: the type is known, the message is simply not ours.
+    let mut d = driver();
+    assert!(
+        d.on_line(&lifecycle(
+            "33333333-3333-4333-8333-333333333333",
+            "started"
+        ))
+        .is_empty()
+    );
+}

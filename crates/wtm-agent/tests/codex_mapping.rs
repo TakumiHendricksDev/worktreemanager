@@ -1114,6 +1114,7 @@ fn preferring_a_rung_leaves_a_model_whose_ladder_lacks_it_on_its_own_default() {
         modes: wtm_agent::codex_modes(),
         models_are_live: true,
         supports_fast: false,
+        steers_mid_turn: true,
     };
     wtm_agent::prefer_effort(&mut capability);
 
@@ -1418,4 +1419,188 @@ fn skills_driver() -> Box<dyn Protocol> {
     driver.on_line(r#"{"id":1,"result":{"userAgent":"wtm"}}"#);
     driver.on_line(r#"{"id":2,"result":{"thread":{"id":"t","cwd":"/tmp/worktree"}}}"#);
     driver
+}
+
+// ── Steering ───────────────────────────────────────────────────────────────────────────────────
+//
+// Captured from `codex-cli 0.154.0`: a turn running `sleep 8`, steered three seconds in, then run to
+// completion or interrupted a second after the steer. The thread id is `ready_driver`'s rather than
+// the capture's; the `clientId` is whatever the driver minted, substituted in; ids and shapes are
+// otherwise as the server sent them.
+
+const TURN: &str = "01a0cebe-ae2c-7da0-ae4e-e8ef744cdf7f";
+
+fn request_id(frame: &serde_json::Value) -> i64 {
+    frame["id"].as_i64().expect("a request carries an id")
+}
+
+/// Send a turn and answer it as the server does, up to `turn/started`.
+fn running_turn(d: &mut Box<dyn Protocol>) {
+    let sent = d.send_turn("run sleep 8", &[]);
+    let start = request_id(&writes(&sent)[0]);
+    d.on_line(&format!(
+        r#"{{"id":{start},"result":{{"turn":{{"id":"{TURN}","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}}}}"#
+    ));
+    d.on_line(&format!(
+        r#"{{"method":"turn/started","params":{{"threadId":"019fd37c-f1e4-7a22-81e7-02200fd6d127","turn":{{"id":"{TURN}","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":1790174998,"completedAt":null,"durationMs":null}}}},"emittedAtMs":1790174998068}}"#
+    ));
+}
+
+fn steered_item(method: &str, client: &str) -> String {
+    format!(
+        r#"{{"method":"{method}","params":{{"item":{{"type":"userMessage","id":"01a0cebe-e58b-7703-bcfd-41bc7a9f7bea","clientId":"{client}","content":[{{"type":"text","text":"Also: end your reply with the word PINEAPPLE.","text_elements":[]}}]}},"threadId":"019fd37c-f1e4-7a22-81e7-02200fd6d127","turnId":"{TURN}","startedAtMs":1790175012235}},"emittedAtMs":1790175012235}}"#
+    )
+}
+
+fn completed(status: &str) -> String {
+    format!(
+        r#"{{"method":"turn/completed","params":{{"threadId":"019fd37c-f1e4-7a22-81e7-02200fd6d127","turn":{{"id":"{TURN}","items":[],"itemsView":"notLoaded","status":"{status}","error":null,"startedAt":1790175016,"completedAt":1790175020,"durationMs":4017}}}},"emittedAtMs":1790175020702}}"#
+    )
+}
+
+fn finished(steps: &[Step]) -> bool {
+    events(steps)
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TurnFinished { .. }))
+}
+
+fn echoes(steps: &[Step]) -> Vec<&str> {
+    events(steps)
+        .into_iter()
+        .filter_map(|e| match e {
+            AgentEvent::UserEcho { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_steer_names_the_running_turn_and_is_echoed_from_the_item_carrying_its_client_id() {
+    let mut d = ready_driver();
+    running_turn(&mut d);
+
+    let steered = d.steer("Also: end your reply with the word PINEAPPLE.", &[]);
+    // Nothing yet: the echo waits for the item, which lands after the running command finishes.
+    assert_eq!(events(&steered), Vec::<&AgentEvent>::new());
+    let frame = &writes(&steered)[0];
+    assert_eq!(frame["method"], "turn/steer");
+    assert_eq!(
+        frame["params"]["threadId"],
+        "019fd37c-f1e4-7a22-81e7-02200fd6d127"
+    );
+    // A required precondition, not a courtesy. It is also what makes a refusal mean "carry this".
+    assert_eq!(frame["params"]["expectedTurnId"], TURN);
+    assert_eq!(
+        frame["params"]["input"][0]["text"],
+        "Also: end your reply with the word PINEAPPLE."
+    );
+    let client = frame["params"]["clientUserMessageId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let accepted = d.on_line(&format!(
+        r#"{{"id":{},"result":{{"turnId":"{TURN}"}}}}"#,
+        request_id(frame)
+    ));
+    assert!(accepted.is_empty(), "{accepted:?}");
+
+    let taken = d.on_line(&steered_item("item/started", &client));
+    assert_eq!(
+        echoes(&taken),
+        vec!["Also: end your reply with the word PINEAPPLE."]
+    );
+    // The same item completing is not a second echo.
+    assert!(
+        d.on_line(&steered_item("item/completed", &client))
+            .is_empty()
+    );
+
+    assert!(finished(&d.on_line(&completed("completed"))));
+}
+
+#[test]
+fn the_turn_start_reply_makes_a_turn_steerable_before_turn_started_arrives() {
+    // The reply carries the turn id and lands first. Without reading it, a steer in that window
+    // found no turn and was sent as a second `turn/start` into a thread already running one.
+    let mut d = ready_driver();
+    let sent = d.send_turn("run sleep 8", &[]);
+    d.on_line(&format!(
+        r#"{{"id":{},"result":{{"turn":{{"id":"{TURN}","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}}}}"#,
+        request_id(&writes(&sent)[0])
+    ));
+    let steered = d.steer("and this", &[]);
+    assert_eq!(writes(&steered)[0]["method"], "turn/steer");
+}
+
+#[test]
+fn a_steer_the_server_refuses_for_want_of_a_turn_becomes_the_next_turn_instead() {
+    // Captured: `-32600 "no active turn to steer"`, the race where the turn ended while the steer
+    // was on its way. A failed row there would have been a lost message with an error beside it.
+    let mut d = ready_driver();
+    running_turn(&mut d);
+    let steered = d.steer("and this", &[]);
+    let id = request_id(&writes(&steered)[0]);
+
+    let ended = d.on_line(&completed("completed"));
+    assert!(
+        !finished(&ended),
+        "a steer still awaiting its reply is owed a turn either way: {ended:?}"
+    );
+
+    let refused = d.on_line(&format!(
+        r#"{{"error":{{"code":-32600,"message":"no active turn to steer"}},"id":{id}}}"#
+    ));
+    assert!(
+        !events(&refused)
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Failed { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(echoes(&refused), vec!["and this"]);
+    let frame = &writes(&refused)[0];
+    assert_eq!(frame["method"], "turn/start");
+    assert_eq!(frame["params"]["input"][0]["text"], "and this");
+}
+
+#[test]
+fn a_steer_an_interrupt_drops_is_carried_into_the_next_turn_rather_than_lost() {
+    // Captured: accepted, then Stop a second later — `turn/completed` with `interrupted`, no
+    // `userMessage` item, and no turn after it. Claude's CLI runs such a message next; carrying it
+    // is what keeps the two providers saying the same thing about a message already sent.
+    let mut d = ready_driver();
+    running_turn(&mut d);
+    let steered = d.steer("reply with PINEAPPLE", &[]);
+    d.on_line(&format!(
+        r#"{{"id":{},"result":{{"turnId":"{TURN}"}}}}"#,
+        request_id(&writes(&steered)[0])
+    ));
+    d.interrupt();
+
+    let stopped = d.on_line(&completed("interrupted"));
+    assert!(
+        !finished(&stopped),
+        "finishing here would let the composer send into the turn this starts: {stopped:?}"
+    );
+    assert_eq!(echoes(&stopped), vec!["reply with PINEAPPLE"]);
+    let frame = &writes(&stopped)[0];
+    assert_eq!(frame["method"], "turn/start");
+    assert_eq!(frame["params"]["input"][0]["text"], "reply with PINEAPPLE");
+}
+
+#[test]
+fn a_steer_with_no_turn_running_is_an_ordinary_turn() {
+    let mut d = ready_driver();
+    let steered = d.steer("hello", &[]);
+    assert_eq!(echoes(&steered), vec!["hello"]);
+    assert_eq!(writes(&steered)[0]["method"], "turn/start");
+}
+
+#[test]
+fn a_second_send_during_a_turn_is_steered_rather_than_started() {
+    // The server runs one turn at a time, so a second `turn/start` could only be refused.
+    let mut d = ready_driver();
+    running_turn(&mut d);
+    let second = d.send_turn("second", &[]);
+    assert_eq!(writes(&second)[0]["method"], "turn/steer");
 }

@@ -459,3 +459,131 @@ fn the_live_capability_preserves_cursor_model_effort_and_mode_labels() {
         capability.modes
     );
 }
+
+// ── Steering ───────────────────────────────────────────────────────────────────────────────────
+//
+// Not captured: `cursor-agent` was not installed where these were written. The reply shape is
+// ACP's own — a cancelled `session/prompt` answers `{"stopReason":"cancelled"}` — and the driver
+// reads only the id off it, so what these pin is the order of frames rather than a spelling.
+
+fn session() -> SessionRequest {
+    SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        ..SessionRequest::default()
+    }
+}
+
+fn prompt_id(steps: &[Step]) -> i64 {
+    writes(steps)
+        .iter()
+        .find(|frame| frame["method"] == "session/prompt")
+        .and_then(|frame| frame["id"].as_i64())
+        .expect("a session/prompt frame")
+}
+
+fn echoes(steps: &[Step]) -> Vec<&str> {
+    events(steps)
+        .into_iter()
+        .filter_map(|e| match e {
+            AgentEvent::UserEcho { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_steer_cancels_the_running_prompt_and_prompts_again_once_it_has_come_back() {
+    // ACP runs one prompt at a time and has no way to add to one in flight. The next prompt may
+    // only go once the cancelled one has answered, which is why it is not written beside the cancel.
+    let mut d = opened_driver(&session());
+    let first = prompt_id(&d.send_turn("write a story", &[]));
+
+    let steered = d.steer("stop and write PINEAPPLE", &[]);
+    let frames = writes(&steered);
+    assert_eq!(frames.len(), 1, "{frames:?}");
+    assert_eq!(frames[0]["method"], "session/cancel");
+    assert!(echoes(&steered).is_empty());
+
+    let back = d.on_line(&format!(
+        r#"{{"jsonrpc":"2.0","id":{first},"result":{{"stopReason":"cancelled"}}}}"#
+    ));
+    assert!(
+        !events(&back)
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TurnFinished { .. })),
+        "finishing would let the composer send into the prompt this starts: {back:?}"
+    );
+    assert_eq!(echoes(&back), vec!["stop and write PINEAPPLE"]);
+    let next = prompt_id(&back);
+    assert_eq!(
+        writes(&back)[0]["params"]["prompt"][0]["text"],
+        "stop and write PINEAPPLE"
+    );
+
+    let done = d.on_line(&format!(
+        r#"{{"jsonrpc":"2.0","id":{next},"result":{{"stopReason":"end_turn"}}}}"#
+    ));
+    assert!(
+        events(&done)
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TurnFinished { .. }))
+    );
+}
+
+#[test]
+fn two_steers_before_the_cancel_comes_back_cancel_once_and_prompt_once() {
+    let mut d = opened_driver(&session());
+    let first = prompt_id(&d.send_turn("write a story", &[]));
+    d.steer("one", &[]);
+    assert!(
+        writes(&d.steer("two", &[])).is_empty(),
+        "a second cancel would land on the prompt about to replace the first"
+    );
+
+    let back = d.on_line(&format!(
+        r#"{{"jsonrpc":"2.0","id":{first},"result":{{"stopReason":"cancelled"}}}}"#
+    ));
+    assert_eq!(echoes(&back), vec!["one", "two"]);
+    let prompts = writes(&back)
+        .into_iter()
+        .filter(|frame| frame["method"] == "session/prompt")
+        .collect::<Vec<_>>();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0]["params"]["prompt"][0]["text"], "one\n\ntwo");
+}
+
+#[test]
+fn a_plain_send_during_a_prompt_waits_for_it_without_cancelling_anything() {
+    // Unlike a steer, a send says nothing about wanting the running prompt stopped.
+    let mut d = opened_driver(&session());
+    let first = prompt_id(&d.send_turn("write a story", &[]));
+    assert!(writes(&d.send_turn("and then this", &[])).is_empty());
+
+    let back = d.on_line(&format!(
+        r#"{{"jsonrpc":"2.0","id":{first},"result":{{"stopReason":"end_turn"}}}}"#
+    ));
+    assert_eq!(echoes(&back), vec!["and then this"]);
+    prompt_id(&back);
+}
+
+#[test]
+fn a_steer_with_no_prompt_running_is_an_ordinary_prompt() {
+    let mut d = opened_driver(&session());
+    let steered = d.steer("hello", &[]);
+    assert_eq!(echoes(&steered), vec!["hello"]);
+    prompt_id(&steered);
+}
+
+#[test]
+fn a_refused_prompt_stops_counting_as_running() {
+    // It used to stay in the in-flight map. Nothing noticed until steering asked whether a prompt
+    // was running — and a steer that cancels a prompt nobody is running waits forever for its reply.
+    let mut d = opened_driver(&session());
+    let first = prompt_id(&d.send_turn("hello", &[]));
+    d.on_line(&format!(
+        r#"{{"jsonrpc":"2.0","id":{first},"error":{{"code":-32603,"message":"model unavailable"}}}}"#
+    ));
+    let steered = d.steer("try again", &[]);
+    assert_eq!(echoes(&steered), vec!["try again"]);
+    prompt_id(&steered);
+}

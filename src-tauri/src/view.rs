@@ -683,6 +683,8 @@ mod tests {
             json.get("supports_fast").is_none(),
             "must not emit snake_case"
         );
+        // Read by the composer's queue to say whether "Send now" stops the turn to get in.
+        assert_eq!(json.get("steersMidTurn"), Some(&serde_json::json!(true)));
 
         let model = &json["models"][0];
         assert!(model.get("isDefault").is_some(), "{model:?}");
@@ -1042,6 +1044,8 @@ pub struct CapabilityView {
     pub models_are_live: bool,
     /// True where the provider has a high-speed mode, so the picker can offer the control.
     pub supports_fast: bool,
+    /// True where a steered message reaches the running turn without stopping it.
+    pub steers_mid_turn: bool,
 }
 
 impl From<wtm_core::model::AgentCapability> for CapabilityView {
@@ -1051,6 +1055,7 @@ impl From<wtm_core::model::AgentCapability> for CapabilityView {
             modes: value.modes,
             models_are_live: value.models_are_live,
             supports_fast: value.supports_fast,
+            steers_mid_turn: value.steers_mid_turn,
         }
     }
 }

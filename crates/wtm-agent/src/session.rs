@@ -165,6 +165,16 @@ impl AgentSession {
         run(&self.session, &self.host, &self.events, steps)
     }
 
+    /// Hand a message to the running turn rather than waiting for it to end.
+    ///
+    /// # Errors
+    ///
+    /// If the session's stdin is gone.
+    pub fn steer(&self, text: &str, attachments: &[AgentAttachment]) -> Result<(), ExecError> {
+        let steps = self.driver.lock().steer(text, attachments);
+        run(&self.session, &self.host, &self.events, steps)
+    }
+
     /// Change the model, effort, mode or fast mode without restarting. `None` leaves one alone.
     ///
     /// # Errors

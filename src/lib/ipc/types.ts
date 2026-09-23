@@ -478,6 +478,14 @@ export interface Capability {
    * word means something and the check does not have to be repeated per provider.
    */
   supportsFast: boolean;
+  /**
+   * True where a message steered into a running turn reaches it without stopping it.
+   *
+   * Claude and Codex take one at the next step. Cursor's protocol runs one prompt at a time, so its
+   * steer cancels the prompt and sends a new one — the queue's "Send now" says so before it is
+   * pressed, which is what this is for.
+   */
+  steersMidTurn: boolean;
 }
 
 /**

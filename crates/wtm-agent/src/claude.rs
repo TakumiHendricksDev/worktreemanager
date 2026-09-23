@@ -566,6 +566,37 @@ struct Pending {
     suggestions: Value,
 }
 
+/// Where the UI's turn stands.
+///
+/// One state rather than two flags, because the second only ever meant something during the first:
+/// Stop is only "pending" while there is a turn for it to stop.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum TurnState {
+    #[default]
+    Idle,
+    Running,
+    /// Stop was pressed and the `result` answering it has not arrived.
+    ///
+    /// That `result` is `error_during_execution` with `is_error` set and no text, which on its own
+    /// is indistinguishable from a real failure. Codex and Cursor both end an interrupted turn as a
+    /// plain finish; without this Claude alone reported every Stop as "the turn failed and the CLI
+    /// gave no reason" — and the pane as failed, which is also what the composer's queue pauses on.
+    Stopping,
+}
+
+/// A message handed to a running turn, waiting for the CLI to take it.
+struct Steer {
+    text: String,
+    attachments: Vec<AgentAttachment>,
+    /// The CLI has said `queued` for it.
+    ///
+    /// Which is also the proof that this CLI reports a lifecycle at all. A `result` that arrives
+    /// while a steer is queued means another turn is coming; one that arrives while a steer was
+    /// never acknowledged means a CLI too old to say, and holding the turn open for it would hold
+    /// it open forever. See [`ClaudeProtocol::on_result`].
+    queued: bool,
+}
+
 #[derive(Default)]
 struct ClaudeProtocol {
     /// Visible messages recovered from Claude's durable JSONL when this is a resume.
@@ -583,6 +614,41 @@ struct ClaudeProtocol {
     /// not be silenced by an earlier one that did. See [`Self::on_assistant`].
     streamed: bool,
     turn: u64,
+    /// Between the `TurnStarted` this driver announced and the `TurnFinished` that closes it.
+    ///
+    /// What the UI has been told, not what the CLI is doing — the two differ exactly when a
+    /// steered message is waiting, which is when a turn is held open across a `result`. See
+    /// [`Protocol::steer`] for why.
+    state: TurnState,
+    /// Steered messages the CLI has not started on, by the `uuid` each was written with.
+    ///
+    /// # Why the uuid is the whole mechanism
+    ///
+    /// A user message written during a turn goes one of two ways, and nothing on the ordinary
+    /// stream says which. Captured on 2.1.280: with a tool call in flight the CLI folds it into the
+    /// running turn after the tool result, and the turn ends with one `result`; during a turn that
+    /// is only text, the turn ends first and the message runs as a second one, with its own
+    /// `init` and its own `result`. A driver that cannot tell them apart either finishes the turn
+    /// while the CLI is still working or holds it open forever.
+    ///
+    /// Giving the frame a `uuid` makes the CLI report it: `command_lifecycle` with `queued`,
+    /// `started` — at the exact point it was consumed, in both cases — and `completed`. That
+    /// is where the echo goes, and a steer still `queued` when a `result` arrives is a turn the
+    /// CLI has yet to run. It survives an interrupt as well: the CLI answers one with
+    /// `still_queued` and runs the message next, so Stop does not strand it either.
+    steers: BTreeMap<String, Steer>,
+    /// Steers written to a CLI that never acknowledged them, echoed when the turn ended.
+    ///
+    /// The fallback for a CLI too old to emit `command_lifecycle`. It will still run the message,
+    /// as its own turn, and this is what lets that turn's `init` announce itself — scoped to that
+    /// case, because an `init` the driver did not expect could otherwise make a pane look busy.
+    carried: usize,
+    /// Token counts from a `result` that did not end the turn, owed to the one that does.
+    ///
+    /// `usage` on a `result` is that sub-turn's alone — verified against two back to back, where
+    /// the second reported 94 output tokens after the first's 348 — so a turn held open across two
+    /// of them has to add them up to say what it billed.
+    held_usage: Usage,
     /// The prompt footprint of the most recent request, for the context meter.
     ///
     /// Cached because `result.usage` is the wrong number for it: the CLI sums usage over *every*
@@ -605,6 +671,145 @@ impl ClaudeProtocol {
     /// A stable-enough turn label. Claude reports no turn id of its own, so this counts them.
     fn turn_label(&self) -> String {
         self.turn.to_string()
+    }
+
+    /// Open a turn, as far as the UI is concerned.
+    fn in_turn(&self) -> bool {
+        self.state != TurnState::Idle
+    }
+
+    fn begin_turn(&mut self) -> AgentEvent {
+        self.state = TurnState::Running;
+        self.turn += 1;
+        AgentEvent::TurnStarted {
+            turn: self.turn_label(),
+        }
+    }
+
+    /// The end of one of the CLI's turns — which is the end of the UI's turn only if nothing
+    /// steered into it is still waiting.
+    fn on_result(&mut self, message: &Value) -> Vec<Step> {
+        let usage = message.get("usage");
+        let field = |key: &str| {
+            usage
+                .and_then(|u| u.get(key))
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+        };
+        let mut steps = Vec::new();
+
+        // Answered either way: a turn held open past this `result` is running the steer, and a
+        // genuine failure in it is not Stop's to excuse.
+        let interrupted = self.state == TurnState::Stopping
+            && message.get("subtype").and_then(Value::as_str) == Some("error_during_execution");
+        if self.state == TurnState::Stopping {
+            self.state = TurnState::Running;
+        }
+
+        /*
+         * A turn that failed says so here, and this used to read straight past it.
+         *
+         * `is_error` is `true` and `result` carries the reason, while `subtype` stays `"success"` —
+         * the subtype describes the *shape* of the reply, not the outcome, so matching on it is not
+         * an alternative. Ignoring both is how an expired OAuth session presented as a pane with a
+         * message in it, a usage row of zeros, and no explanation of any kind.
+         *
+         * Before the finish, not after: the failure is the reason the turn ended, so it reads above
+         * the row that closes it. Except after Stop, which is not a failure — see `TurnState::Stopping`.
+         */
+        if !interrupted && message.get("is_error").and_then(Value::as_bool) == Some(true) {
+            let reason = message
+                .get("result")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("the turn failed and the CLI gave no reason");
+            // A limit is a different event from a failure because it has a different remedy — see
+            // `AgentEvent::LimitReached`. This is the route a real exhaustion arrives by;
+            // `rate_limit_event` below is the structured one, whose limit-reached shape nobody has
+            // captured.
+            steps.push(Step::Emit(limit_or_failure(reason)));
+        }
+
+        // Before the finish for the same reason a failure is: it explains something about the turn
+        // that just ran, so it reads above the row that closes it.
+        if let Some(notice) = self.fast_mode_notice(message) {
+            steps.push(Step::Emit(notice));
+        }
+
+        let usage = Usage {
+            // Over this sub-turn's round trips, plus any earlier sub-turn this turn was held open
+            // across: what was billed. See `held_usage`.
+            tokens_in: self.held_usage.tokens_in + field("input_tokens"),
+            tokens_out: self.held_usage.tokens_out + field("output_tokens"),
+            cached: self.held_usage.cached + field("cache_read_input_tokens"),
+            // *Not* cumulative, and not derived from the fields above. See
+            // [`ClaudeProtocol::context_used`] for why summing them is wrong.
+            context_used: self.context_used,
+            context_window: context_window_of(message),
+        };
+
+        // The CLI has a steered message it has not started, so it is about to run another turn.
+        // Finishing here would tell the composer the session is idle. The meter still moves.
+        if self.steers.values().any(|steer| steer.queued) {
+            self.held_usage = Usage {
+                context_used: 0,
+                context_window: None,
+                ..usage
+            };
+            steps.push(Step::Emit(AgentEvent::Usage(usage)));
+            return steps;
+        }
+
+        // Steers this CLI never acknowledged: it has no lifecycle to report, and holding the turn
+        // for one would hold it forever. Said now so the message is not missing from the
+        // transcript, and `carried` lets the turn it runs as announce itself.
+        let unacknowledged = std::mem::take(&mut self.steers);
+        self.carried += unacknowledged.len();
+        for steer in unacknowledged.into_values() {
+            steps.extend(echo(&steer.text, &steer.attachments));
+        }
+
+        self.state = TurnState::Idle;
+        self.held_usage = Usage::default();
+        steps.push(Step::Emit(AgentEvent::TurnFinished {
+            turn: self.turn_label(),
+            usage,
+            // Claude reports real currency, where Codex reports none. Surfaced rather than
+            // normalized away, because the number is genuinely available on one side.
+            cost_usd: message.get("total_cost_usd").and_then(Value::as_f64),
+        }));
+        steps
+    }
+
+    /// Where a steered message is in the CLI's own queue.
+    fn on_lifecycle(&mut self, message: &Value) -> Vec<Step> {
+        let Some(id) = message.get("command_uuid").and_then(Value::as_str) else {
+            return Vec::new();
+        };
+        match message.get("state").and_then(Value::as_str) {
+            Some("queued") => {
+                if let Some(steer) = self.steers.get_mut(id) {
+                    steer.queued = true;
+                }
+                Vec::new()
+            }
+            Some("started") => {
+                let Some(steer) = self.steers.remove(id) else {
+                    return Vec::new();
+                };
+                let mut steps = Vec::new();
+                // A steer is only written inside a turn and the turn is held open while one is
+                // queued, so this is belt and braces — but a message running with the pane
+                // reading idle is the exact failure this whole mechanism exists to prevent.
+                if !self.in_turn() {
+                    steps.push(Step::Emit(self.begin_turn()));
+                }
+                steps.extend(echo(&steer.text, &steer.attachments));
+                steps
+            }
+            // `completed` follows the turn's own end and says nothing that `result` did not.
+            _ => Vec::new(),
+        }
     }
 
     /// Say so when fast mode was asked for and the CLI reports it is not on.
@@ -1001,6 +1206,14 @@ impl Protocol for ClaudeProtocol {
                         steps.push(Step::Emit(AgentEvent::SkillsListed { skills }));
                     }
                     steps.push(Step::Ready);
+                    // Every turn opens with an `init`, and none arrives before the first message —
+                    // so one the driver did not announce is the CLI running a message it had
+                    // queued. Only trusted for a steer an old CLI never acknowledged, because that
+                    // is the one case where this driver knows such a turn is owed.
+                    if !self.in_turn() && self.carried > 0 {
+                        self.carried -= 1;
+                        steps.push(Step::Emit(self.begin_turn()));
+                    }
                     steps
                 }
                 // Recognised, and deliberately not shown.
@@ -1110,66 +1323,10 @@ impl Protocol for ClaudeProtocol {
                     _ => Vec::new(),
                 }
             }
-            "result" => {
-                let usage = message.get("usage");
-                let field = |key: &str| {
-                    usage
-                        .and_then(|u| u.get(key))
-                        .and_then(Value::as_u64)
-                        .unwrap_or_default()
-                };
-                let mut steps = Vec::new();
-
-                /*
-                 * A turn that failed says so here, and this used to read straight past it.
-                 *
-                 * `is_error` is `true` and `result` carries the reason, while `subtype` stays
-                 * `"success"` — the subtype describes the *shape* of the reply, not the outcome, so
-                 * matching on it is not an alternative. Ignoring both is how an expired OAuth
-                 * session presented as a pane with a message in it, a usage row of zeros, and no
-                 * explanation of any kind.
-                 *
-                 * Before the finish, not after: the failure is the reason the turn ended, so it
-                 * reads above the row that closes it.
-                 */
-                if message.get("is_error").and_then(Value::as_bool) == Some(true) {
-                    let reason = message
-                        .get("result")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("the turn failed and the CLI gave no reason");
-                    // A limit is a different event from a failure because it has a different
-                    // remedy — see `AgentEvent::LimitReached`. This is the route a real exhaustion
-                    // arrives by; `rate_limit_event` below is the structured one, whose
-                    // limit-reached shape nobody has captured.
-                    steps.push(Step::Emit(limit_or_failure(reason)));
-                }
-
-                // Before the finish for the same reason a failure is: it explains something about
-                // the turn that just ran, so it reads above the row that closes it.
-                if let Some(notice) = self.fast_mode_notice(&message) {
-                    steps.push(Step::Emit(notice));
-                }
-
-                steps.push(Step::Emit(AgentEvent::TurnFinished {
-                    turn: self.turn_label(),
-                    usage: Usage {
-                        // Cumulative over the turn, which is what a cost row wants: these three
-                        // are what was billed.
-                        tokens_in: field("input_tokens"),
-                        tokens_out: field("output_tokens"),
-                        cached: field("cache_read_input_tokens"),
-                        // *Not* cumulative, and not derived from the fields above. See
-                        // [`ClaudeProtocol::context_used`] for why summing them is wrong.
-                        context_used: self.context_used,
-                        context_window: context_window_of(&message),
-                    },
-                    // Claude reports real currency, where Codex reports none. Surfaced rather than
-                    // normalized away, because the number is genuinely available on one side.
-                    cost_usd: message.get("total_cost_usd").and_then(Value::as_f64),
-                }));
-                steps
-            }
+            "result" => self.on_result(&message),
+            // The lifecycle of a message sent with a `uuid`, which only a steer is. See
+            // [`ClaudeProtocol::steers`]; any other uuid is not this driver's and says nothing.
+            "command_lifecycle" => self.on_lifecycle(&message),
             /*
              * The CLI's own rate-limit telemetry, which is mostly reassurance.
              *
@@ -1219,64 +1376,40 @@ impl Protocol for ClaudeProtocol {
     }
 
     fn send_turn(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
-        self.turn += 1;
-        let mut content = Vec::new();
-        if !text.is_empty() {
-            content.push(json!({ "type": "text", "text": text }));
+        // A second message during a turn is a steer, whatever the caller called it. Sent as a turn
+        // it would announce a second `TurnStarted` for a turn that may never get its own `result`,
+        // and the pane would go idle when the first one ended while the CLI was still working.
+        if self.in_turn() {
+            return self.steer(text, attachments);
         }
-        for attachment in attachments {
-            if matches!(
-                attachment.mime.as_str(),
-                "image/jpeg" | "image/png" | "image/gif" | "image/webp"
-            ) {
-                content.push(json!({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": attachment.mime,
-                        "data": attachment.data_base64,
-                    }
-                }));
-            } else {
-                content.push(json!({
-                    "type": "text",
-                    "text": format!("Attached file `{}` is available at `{}`.", attachment.name, attachment.path),
-                }));
-            }
-        }
-
-        let message_content = if attachments.is_empty() {
-            json!(text)
-        } else {
-            Value::Array(content)
-        };
-        let mut steps = if attachments.is_empty() {
-            Vec::new()
-        } else {
-            vec![Step::Emit(AgentEvent::Attachments {
-                attachments: attachments.to_vec(),
-            })]
-        };
-        steps.extend([
-            Step::Emit(AgentEvent::UserEcho {
-                text: text.to_owned(),
-            }),
-            // Claude announces no turn start of its own, so this is where one exists. Emitted
-            // rather than inferred from the first delta, so the composer can show "working…"
-            // during the seconds before any token arrives.
-            Step::Emit(AgentEvent::TurnStarted {
-                turn: self.turn_label(),
-            }),
-            Step::Write(
-                json!({
-                    "type": "user",
-                    "message": { "role": "user", "content": message_content },
-                    "parent_tool_use_id": null,
-                })
-                .to_string(),
-            ),
-        ]);
+        let mut steps = echo(text, attachments);
+        // Claude announces no turn start of its own, so this is where one exists. Emitted rather
+        // than inferred from the first delta, so the composer can show "working…" during the
+        // seconds before any token arrives.
+        steps.push(Step::Emit(self.begin_turn()));
+        steps.push(user_frame(text, attachments, None));
         steps
+    }
+
+    /// Write the message now, and echo it when the CLI says it took it.
+    ///
+    /// Nothing is emitted here. The echo is owed at `command_lifecycle: started`, which is after
+    /// the tool result it was folded behind or at the head of the turn it runs as — see
+    /// [`ClaudeProtocol::steers`] for the two cases and how they were told apart.
+    fn steer(&mut self, text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
+        if !self.in_turn() {
+            return self.send_turn(text, attachments);
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        self.steers.insert(
+            id.clone(),
+            Steer {
+                text: text.to_owned(),
+                attachments: attachments.to_vec(),
+                queued: false,
+            },
+        );
+        vec![user_frame(text, attachments, Some(&id))]
     }
 
     fn answer(&mut self, id: &str, answer: &ApprovalAnswer) -> Vec<Step> {
@@ -1384,6 +1517,11 @@ impl Protocol for ClaudeProtocol {
     }
 
     fn interrupt(&mut self) -> Vec<Step> {
+        // Only while a turn is running, so a Stop that races the turn's own end cannot excuse the
+        // *next* turn's genuine failure.
+        if self.state == TurnState::Running {
+            self.state = TurnState::Stopping;
+        }
         // A control *request* from us to the CLI, which is the one direction that channel runs in
         // both ways. The id is ours to choose and the reply is not interesting.
         vec![Self::control_request(&json!({ "subtype": "interrupt" }))]
@@ -1404,6 +1542,65 @@ impl Protocol for ClaudeProtocol {
             })
             .collect()
     }
+}
+
+/// The transcript's copy of a user message: its attachments, then its text.
+fn echo(text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
+    let mut steps = Vec::new();
+    if !attachments.is_empty() {
+        steps.push(Step::Emit(AgentEvent::Attachments {
+            attachments: attachments.to_vec(),
+        }));
+    }
+    steps.push(Step::Emit(AgentEvent::UserEcho {
+        text: text.to_owned(),
+    }));
+    steps
+}
+
+/// A user message frame, carrying a `uuid` when the lifecycle of this one has to be followed.
+///
+/// Only steers get one. An ordinary turn needs no lifecycle — its `result` is the whole story — and
+/// a uuid would add three `command_lifecycle` lines to every turn for nothing to read them.
+fn user_frame(text: &str, attachments: &[AgentAttachment], id: Option<&str>) -> Step {
+    let content = if attachments.is_empty() {
+        json!(text)
+    } else {
+        let mut blocks = Vec::new();
+        if !text.is_empty() {
+            blocks.push(json!({ "type": "text", "text": text }));
+        }
+        for attachment in attachments {
+            if matches!(
+                attachment.mime.as_str(),
+                "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+            ) {
+                blocks.push(json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": attachment.mime,
+                        "data": attachment.data_base64,
+                    }
+                }));
+            } else {
+                blocks.push(json!({
+                    "type": "text",
+                    "text": format!("Attached file `{}` is available at `{}`.", attachment.name, attachment.path),
+                }));
+            }
+        }
+        Value::Array(blocks)
+    };
+    let mut frame = json!({
+        "type": "user",
+        "message": { "role": "user", "content": content },
+        "parent_tool_use_id": null,
+    });
+    if let Some(id) = id {
+        frame["uuid"] = json!(id);
+    }
+    Step::Write(frame.to_string())
 }
 
 /// A one-line summary of a tool call, for the transcript's tool row.
