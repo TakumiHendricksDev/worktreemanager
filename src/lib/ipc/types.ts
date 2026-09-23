@@ -847,7 +847,7 @@ export interface Doctor {
 /**
  * A palette declared in `[ui.palettes]`.
  *
- * Only ever the user's own. The six built-ins live in the stylesheet as CSS custom
+ * Only ever the user's own. The nine built-ins live in the stylesheet as CSS custom
  * properties and never cross this boundary — see `PALETTES` in `state/theme.svelte.ts`
  * for the list the picker shows alongside these.
  *

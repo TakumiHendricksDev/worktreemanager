@@ -2,8 +2,9 @@
  * Appearance: which palette, and light or dark.
  *
  * Two independent axes. `data-palette` picks the hue, `data-theme` picks the mode, and
- * every one of the six palettes works in both — so "follow the system" keeps meaning what
- * it meant before palettes existed.
+ * every one of the nine palettes works in both — so "follow the system" keeps meaning what
+ * it meant before palettes existed. How dark dark mode goes belongs to the palette rather
+ * than being a third axis here: see `depth` in `settings/_palettes.scss`.
  *
  * Four rules make this work without a flash of the wrong colours:
  *
@@ -36,7 +37,8 @@ export type Resolved = 'light' | 'dark';
  * in `settings/_palettes.scss` must agree; nothing checks that they do, so an id added in
  * one place and not the other renders as the default with no error.
  */
-export type BuiltInPalette = 'pine' | 'clay' | 'slate' | 'harbor' | 'plum' | 'rose';
+export type BuiltInPalette =
+  'pine' | 'clay' | 'slate' | 'harbor' | 'plum' | 'rose' | 'paper' | 'fog' | 'dusk';
 
 export const BUILT_IN_PALETTES: { id: BuiltInPalette; name: string }[] = [
   { id: 'pine', name: 'Pine' },
@@ -45,6 +47,9 @@ export const BUILT_IN_PALETTES: { id: BuiltInPalette; name: string }[] = [
   { id: 'harbor', name: 'Harbor' },
   { id: 'plum', name: 'Plum' },
   { id: 'rose', name: 'Rose' },
+  { id: 'paper', name: 'Paper' },
+  { id: 'fog', name: 'Fog' },
+  { id: 'dusk', name: 'Dusk' },
 ];
 
 export const DEFAULT_PALETTE: BuiltInPalette = 'pine';
@@ -95,6 +100,19 @@ class ThemeStore {
   customPalettes = $state<Palette[]>([]);
   /** Surfaced by the shell's banner. A palette that fails to save must say so. */
   error = $state<string | null>(null);
+
+  /**
+   * Bumped every time the tokens on `<html>` change: mode, palette, or a custom palette's
+   * values being reloaded.
+   *
+   * For the two consumers that copy computed colours out of CSS rather than referencing
+   * them — xterm, and the runtime inside a browser pane — and so cannot follow a custom
+   * property on their own. They used to watch `resolved`, which was nearly enough while
+   * every palette shared one lightness: a palette switch left the terminal with the old
+   * palette's accent, and nobody noticed. With the soft palettes it left a near-black
+   * terminal inside a charcoal window.
+   */
+  applied = $state(0);
 
   constructor() {
     // Trust what index.html already decided, so construction never causes a repaint.
@@ -225,6 +243,8 @@ class ThemeStore {
 
     this.cache(THEME_KEY, this.choice);
     this.cache(PALETTE_KEY, effective);
+
+    this.applied++;
 
     // Keep the native chrome in step with the content.
     void getCurrentWindow()

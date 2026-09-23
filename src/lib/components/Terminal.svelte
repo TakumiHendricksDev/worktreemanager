@@ -281,10 +281,10 @@
     refit();
   });
 
-  // Re-theme in place when the window theme changes, rather than tearing the terminal down
-  // and losing the transcript.
+  // Re-theme in place when the appearance changes, rather than tearing the terminal down
+  // and losing the transcript. `applied` rather than `resolved`: see its doc comment.
   $effect(() => {
-    void theme.resolved;
+    void theme.applied;
     if (!ready || !term) return;
     term.options.theme = paletteFrom(document.documentElement);
   });

@@ -446,11 +446,16 @@ wtm. See [the PATH problem](#the-path-problem).
 
 ### Palettes
 
-Six ship with the app: **Pine** (the default), **Clay** (the terracotta wtm wore before
+Nine ship with the app: **Pine** (the default), **Clay** (the terracotta wtm wore before
 v0.4), **Slate** (near-neutral, for no colour at all), **Harbor**, **Plum** and **Rose**.
 Each works in both light and dark.
 
-If none of them suit, declare your own. It appears in the picker beside the built-in six:
+The last three, **Paper**, **Fog** and **Dusk**, are softer. In dark mode they sit on
+charcoal (about `#232323`) rather than near-black, and their accents are quieter. Paper
+is cream and warm grey with an ink-blue accent, Fog is a cool blue-grey, and Dusk is
+lavender. Pick one of these if the other six feel harsh over a long session.
+
+If none of them suit, declare your own. It appears in the picker beside the built-in nine:
 
 ```toml
 [ui.palettes.nord]
@@ -463,7 +468,8 @@ brand  = ["#88c0d0", "#81a1c1", "#5e81ac", "#4c688f"]
 `hue` and `chroma` are all the neutral ramp needs — every surface, border and text colour in
 the app is derived from them in oklch, at lightness values fixed by the stylesheet. That is
 what keeps a hand-written palette as readable as the built-in ones: you choose the hue, and
-the contrast ratios are not yours to get wrong.
+the contrast ratios are not yours to get wrong. A custom palette uses the lightness of the
+original six, so its dark mode is the deep one.
 
 `brand` is the accent, from lightest to darkest. **Dark mode uses the first two and light
 mode the last two**, so pick the first pair to read against near-black and the last pair

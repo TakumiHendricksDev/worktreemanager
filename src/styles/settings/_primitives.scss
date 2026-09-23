@@ -11,7 +11,7 @@
  * It is also what keeps the two modes from drifting — there is no component holding a
  * hard-coded grey that only looks right in one of them.
  *
- * It is also what made the rebrand off Claude's orange a two-file edit, and what makes six
+ * It is also what made the rebrand off Claude's orange a two-file edit, and what makes nine
  * user-switchable palettes possible without a component knowing there is more than one.
  *
  * These are CSS custom properties and must stay that way. A Sass variable is resolved at
@@ -23,6 +23,99 @@
  * ramp below is not defined here at all — it comes from `_palettes.scss`, which is the file
  * a new palette is added to.
  */
+
+@use 'sass:map';
+
+/*
+ * The neutral ramp's lightness, at two depths. A palette picks one by name — see `depth` in
+ * `_palettes.scss` — and still cannot write a lightness of its own.
+ *
+ * `deep` is the original, and its dark end is very nearly black: Pine's dark `--bg` measures
+ * #050b07 and the terminal on it #020402. That is crisp on a bright display at noon and a
+ * hole in the screen at night, which is the complaint that produced `soft`. It lifts the dark
+ * end to where most editors sit: `--bg` around #232323, the terminal around #1a1a1a.
+ *
+ * # Why two fixed ramps rather than a lightness per palette
+ *
+ * The argument in the `:root` block below still holds. Fixed lightness is the only thing
+ * standing between a new colour and a contrast ratio nobody measured, and a per-palette
+ * lightness would bring that problem back with every palette added. Two ramps is two things
+ * to measure, and both were measured across every palette that uses them.
+ *
+ * # What `soft` moves, and what that costs light mode
+ *
+ * Only the steps dark mode stands on, but three of those are shared: 900 is light mode's ink,
+ * and 400 and 500 are its subtle and muted text. So light-mode text in a soft palette is a
+ * charcoal rather than a near-black. That is intended, and 15:1 on `--bg` still. 400 and 500
+ * were nudged up so dark-mode muted text holds 5.2:1 on the lifted surfaces. Light-mode muted
+ * text pays for that, 5.6 → 5.2 on `--bg` and 4.6 on hover, still over 4.5 everywhere.
+ *
+ * What does not hold is dark-mode `--fg-subtle`, at 2.9:1 against 3.4 on `deep`. That is
+ * where light mode's subtle text has always been (2.6), so it is not a new floor. It is still
+ * the number to look at first if 500 moves again.
+ *
+ * `status` is for a status colour this ramp puts at risk, the same idea as a palette's
+ * `status` key. The lifted `--bg-elevated` took `--red-400` to 4.36:1, so `soft` carries a
+ * red three points lighter at the same hue: 4.9 on elevated, 5.5 on `--bg`. It lives here
+ * rather than in each palette because the ramp caused it, and a soft palette that forgot to
+ * repeat the fix would fail with nothing to say so.
+ */
+$depths: (
+  'deep': (
+    'steps': (
+      50: 0.982,
+      100: 0.963,
+      150: 0.94,
+      200: 0.911,
+      300: 0.842,
+      400: 0.687,
+      500: 0.503,
+      700: 0.297,
+      800: 0.222,
+      850: 0.176,
+      900: 0.14,
+      950: 0.098,
+    ),
+  ),
+  'soft': (
+    'steps': (
+      50: 0.982,
+      100: 0.963,
+      150: 0.94,
+      200: 0.911,
+      300: 0.842,
+      400: 0.7,
+      500: 0.52,
+      700: 0.385,
+      800: 0.335,
+      850: 0.292,
+      900: 0.255,
+      950: 0.218,
+    ),
+    'status': (
+      'red-400': #e87876,
+    ),
+  ),
+);
+
+/* For a palette that names no depth: the original six, and every custom palette from
+   `config.toml`, which has no way to name one. */
+$default-depth: 'deep';
+
+@mixin depth($name) {
+  $d: map.get($depths, $name);
+
+  @each $step, $l in map.get($d, 'steps') {
+    --gray-l-#{$step}: #{$l};
+  }
+
+  /* Guarded for the same reason as the palette mixin's `status`. */
+  @if map.has-key($d, 'status') {
+    @each $token, $value in map.get($d, 'status') {
+      --#{$token}: #{$value};
+    }
+  }
+}
 
 :root {
   /*
@@ -41,11 +134,12 @@
    * step of one ramp was nudged, that palette would quietly stop matching the others.
    *
    * Writing it in oklch moves lightness out of the palette's hands. `L` and the chroma
-   * *shape* are fixed here, once; a palette contributes a hue angle and one multiplier. So
-   * every palette has identical lightness at every step by construction, which is what makes
-   * the contrast ratios the semantic layer depends on impossible to break by adding a colour.
-   * The L values are the measured lightness of the hand-tuned green ramp this replaced, so
-   * Pine came through the change looking like itself.
+   * *shape* are fixed in this file; a palette contributes a hue angle, one multiplier, and a
+   * choice between the two depths in `$depths` above. So every palette at a given depth has
+   * identical lightness at every step by construction, which is what makes the contrast
+   * ratios the semantic layer depends on impossible to break by adding a colour. The `deep`
+   * values are the measured lightness of the hand-tuned green ramp this replaced, so Pine
+   * came through the change looking like itself.
    *
    * The chroma multiplier exists because equal chroma is not equal saturation across hues —
    * a yellow-green at 0.02 reads far stronger than a blue does. Slate runs it near zero,
@@ -55,18 +149,40 @@
    * fields and elevated surfaces in light mode, where anything but white reads as dirty.
    */
   --gray-0: #ffffff;
-  --gray-50: oklch(0.982 calc(0.006 * var(--palette-chroma)) var(--palette-hue));
-  --gray-100: oklch(0.963 calc(0.008 * var(--palette-chroma)) var(--palette-hue));
-  --gray-150: oklch(0.94 calc(0.01 * var(--palette-chroma)) var(--palette-hue));
-  --gray-200: oklch(0.911 calc(0.013 * var(--palette-chroma)) var(--palette-hue));
-  --gray-300: oklch(0.842 calc(0.018 * var(--palette-chroma)) var(--palette-hue));
-  --gray-400: oklch(0.687 calc(0.025 * var(--palette-chroma)) var(--palette-hue));
-  --gray-500: oklch(0.503 calc(0.026 * var(--palette-chroma)) var(--palette-hue));
-  --gray-700: oklch(0.297 calc(0.02 * var(--palette-chroma)) var(--palette-hue));
-  --gray-800: oklch(0.222 calc(0.017 * var(--palette-chroma)) var(--palette-hue));
-  --gray-850: oklch(0.176 calc(0.016 * var(--palette-chroma)) var(--palette-hue));
-  --gray-900: oklch(0.14 calc(0.014 * var(--palette-chroma)) var(--palette-hue));
-  --gray-950: oklch(0.098 calc(0.011 * var(--palette-chroma)) var(--palette-hue));
+  --gray-50: oklch(var(--gray-l-50) calc(0.006 * var(--palette-chroma)) var(--palette-hue));
+  --gray-100: oklch(
+    var(--gray-l-100) calc(0.008 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-150: oklch(
+    var(--gray-l-150) calc(0.01 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-200: oklch(
+    var(--gray-l-200) calc(0.013 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-300: oklch(
+    var(--gray-l-300) calc(0.018 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-400: oklch(
+    var(--gray-l-400) calc(0.025 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-500: oklch(
+    var(--gray-l-500) calc(0.026 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-700: oklch(
+    var(--gray-l-700) calc(0.02 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-800: oklch(
+    var(--gray-l-800) calc(0.017 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-850: oklch(
+    var(--gray-l-850) calc(0.016 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-900: oklch(
+    var(--gray-l-900) calc(0.014 * var(--palette-chroma)) var(--palette-hue)
+  );
+  --gray-950: oklch(
+    var(--gray-l-950) calc(0.011 * var(--palette-chroma)) var(--palette-hue)
+  );
 
   /*
    * Status colours, shared by every palette.

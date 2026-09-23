@@ -1,16 +1,18 @@
 /*
  * Theme tokens, layer 1b: the palettes.
  *
- * This is the file you add a colour scheme to, and the only one. A palette is four numbers
- * and four hex values:
+ * This is the file you add a colour scheme to, and the only one. A palette is two numbers,
+ * four hex values, and optionally a depth:
  *
  *   hue      the neutral ramp's hue angle, in oklch degrees
  *   chroma   how much of it to use — 1 is the reference, Slate runs at a third
  *   brand    the accent ramp: 300, 400, 500, 600
+ *   depth    optional, `deep` or `soft`; how dark dark mode goes. `deep` when absent
  *   status   optional, for a brand that lands on top of a status colour
  *
  * Everything else — thirteen neutral steps, both light and dark, every semantic role — falls
- * out of those. `_primitives.scss` explains why lightness lives there rather than here.
+ * out of those. `_primitives.scss` explains why lightness lives there rather than here, and
+ * why a palette may choose between two ramps of it but not write its own.
  *
  * The dark modes take brand 400 and 300 for accent and hover; light takes 500 and 600. So
  * 300 and 400 must read against a near-black surface and 500 and 600 against a near-white
@@ -28,16 +30,19 @@
  *
  * User-defined palettes from `config.toml` cannot be here — they are not known at build
  * time. They set the same six properties inline on `<html>`, which beats every selector
- * here, so they render through this exact path rather than a parallel one.
+ * here, so they render through this exact path rather than a parallel one. They cannot name
+ * a depth, so they render at `primitives.$default-depth`.
  */
 
 @use 'sass:list';
 @use 'sass:map';
+@use 'primitives';
 
 /*
  * Ordered, and the order is what Settings renders. Pine first because it is the default;
  * Clay second because it is what the app wore before this and the people most likely to go
- * looking for a palette are the ones who want it back.
+ * looking for a palette are the ones who want it back. The soft three last and together, so
+ * they read as a row of their own: in a three-column picker they are one.
  */
 $palettes: (
   'pine': (
@@ -128,6 +133,44 @@ $palettes: (
       #8d2c4e,
     ),
   ),
+  'paper': (
+    /*
+     * The soft three start here. Same contract as the six above, at the lifted `soft`
+     * depth, and with an accent quieter than theirs: they exist for long sessions, and a loud
+     * accent on a soft ground undoes the point of the ground.
+     *
+     * Paper is the plain one: cream and warm charcoal, close to neutral, with an ink-blue
+     * accent. Its hue and chroma are a compromise between its two modes. The ramp's chroma
+     * shape is heavier at the dark end, so the amount that makes light mode read as paper
+     * rather than white makes dark mode read as khaki. At 90° and 0.7 it did. 75° and 0.55
+     * is where dark mode is charcoal and light mode is still cream.
+     */
+    'hue': 75,
+    'chroma': 0.55,
+    'depth': 'soft',
+    /* Ink, at oklch hue 268. That is 20° from `--info`, which is close, and measures ΔE 5.9
+       against it in dark mode — about where Rose sits against `--danger` (5.7), which has
+       never needed a push. Harbor needed one at 3.5. So no `status` key here. */
+    'brand': (#b2c3ef, #95abe3, #415796, #2f4178),
+  ),
+  'fog': (
+    /* Cool blue-grey with a frost accent, for anyone who finds Paper too warm. The accent is
+       teal rather than blue so it stays clear of `--info` (ΔE 10.6), which is also what keeps
+       it from being Harbor at a different depth. */
+    'hue': 235,
+    'chroma': 1,
+    'depth': 'soft',
+    'brand': (#a0dae0, #7bc6ce, #286f76, #1c565d),
+  ),
+  'dusk': (
+    /* Grey with a violet undertone and a lavender accent. Plum's neighbour in hue, but 14°
+       bluer, and in dark mode paler and a third less saturated, so the two read as different
+       palettes rather than as one at two depths. */
+    'hue': 290,
+    'chroma': 0.9,
+    'depth': 'soft',
+    'brand': (#c8bff5, #afa2e8, #634fa3, #4d3a85),
+  ),
 );
 
 $default: 'pine';
@@ -135,6 +178,9 @@ $default: 'pine';
 @mixin palette($p) {
   --palette-hue: #{map.get($p, 'hue')};
   --palette-chroma: #{map.get($p, 'chroma')};
+
+  /* Before `status`, so a palette's own override wins over one its depth brought. */
+  @include primitives.depth(map.get($p, 'depth') or primitives.$default-depth);
 
   $brand: map.get($p, 'brand');
   --brand-300: #{list.nth($brand, 1)};
@@ -160,6 +206,18 @@ $default: 'pine';
  */
 :root {
   @include palette(map.get($palettes, $default));
+}
+
+/*
+ * The depth for an element whose palette no rule here names, which is a custom palette.
+ *
+ * `<html>` does not need it, since `:root` above already covers it. The Settings swatch does:
+ * without this, a custom palette's swatch inherits the lightness of whatever palette the app
+ * is wearing, so it previews soft when Paper is on while the palette itself renders deep.
+ * Emitted before the named palettes because it ties with them on specificity.
+ */
+[data-palette] {
+  @include primitives.depth(primitives.$default-depth);
 }
 
 @each $id, $p in $palettes {

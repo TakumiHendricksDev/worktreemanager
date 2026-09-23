@@ -363,7 +363,7 @@ export const commands = {
   // ── preferences ──
   getPref: (key: string) => invoke<string | null>('get_pref', { key }),
   setPref: (key: string, value: string) => invoke<void>('set_pref', { key, value }),
-  /** Palettes the user declared in `[ui.palettes]`. The built-in six are not included. */
+  /** Palettes the user declared in `[ui.palettes]`. The built-in nine are not included. */
   listPalettes: () => invoke<Palette[]>('list_palettes'),
 
   // ── diagnostics ──

@@ -54,8 +54,8 @@ impl Theme {
 
 /// A user-defined colour palette.
 ///
-/// The app ships six of these compiled into the stylesheet. This is the same shape,
-/// declared in TOML, for someone who wants a seventh:
+/// The app ships nine of these compiled into the stylesheet. This is the same shape,
+/// declared in TOML, for someone who wants a tenth:
 ///
 /// ```toml
 /// [ui.palettes.nord]
@@ -66,7 +66,8 @@ impl Theme {
 /// ```
 ///
 /// `hue` and `chroma` drive the neutral ramp, which the stylesheet derives in oklch — so a
-/// custom palette gets the same thirteen greys, at the same lightness, as a built-in one.
+/// custom palette gets the same thirteen greys as a built-in one, at the lightness of the
+/// original six. The three soft built-ins sit on a lifted ramp a custom palette cannot name.
 /// `brand` is the accent ramp at 300/400/500/600; dark mode uses the first two and light
 /// mode the last two, which is the constraint to check when picking them.
 ///
@@ -316,7 +317,7 @@ impl UserConfig {
                 }
             }
             /* Not validated against the known palettes, because this crate does not know
-            them — six live in the stylesheet and the rest in `ui.palettes`. An empty
+            them — nine live in the stylesheet and the rest in `ui.palettes`. An empty
             value clears back to the default, which is how Settings offers "use the
             default" without a sentinel id. */
             "ui.palette" => {
@@ -587,7 +588,7 @@ mod tests {
 
     #[test]
     fn an_unrecognized_palette_is_stored_rather_than_rejected() {
-        // The valid set includes whatever is in `[ui.palettes]` plus six this crate cannot
+        // The valid set includes whatever is in `[ui.palettes]` plus nine this crate cannot
         // see, so refusing an unknown id here would refuse legitimate ones.
         let mut config = UserConfig::default();
         config.set_pref("ui.palette", "something-from-a-newer-build");

@@ -395,7 +395,7 @@ pub async fn doctor(app: AppState<'_>) -> Reply<DoctorView> {
 
 /// The palettes declared in `[ui.palettes]`, for the Settings picker.
 ///
-/// Only the user's own. The six that ship with the app are compiled into the stylesheet and
+/// Only the user's own. The nine that ship with the app are compiled into the stylesheet and
 /// Rust has never heard of them — which is deliberate: a built-in palette is a set of CSS
 /// custom properties, and routing them through IPC so the frontend could list what it
 /// already contains would be a contract to keep in step for no gain.

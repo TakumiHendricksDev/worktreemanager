@@ -234,7 +234,7 @@
   // ── the theme, for the pins and popover the runtime draws inside the page ──
 
   $effect(() => {
-    void theme.resolved;
+    void theme.applied;
     // Re-sent after every load as well: the runtime starts afresh with each page.
     void loading;
     const browser = id;
