@@ -428,10 +428,36 @@ quietly return.
 A worktree's `.env` is the most sensitive thing this app reads — Stripe keys, database
 passwords, SMTP credentials — and the app's job involves displaying that file.
 
-**Nothing leaves the machine without a direct user action.** Dictation sends recorded audio to the
-compiled-in `api.deepgram.com` host. The database viewer connects only after a config's
+**Nothing of yours leaves the machine without a direct user action.** Dictation sends recorded audio
+to the compiled-in `api.deepgram.com` host. The database viewer connects only after a config's
 credential-free target has passed the existing content-hash trust gate and the user clicks Connect.
-There is no telemetry, analytics, crash reporting or update check.
+There is no telemetry, analytics or crash reporting.
+
+**There is one request that is not a user action: the update check.** At launch, and at most daily
+after that, wtm asks `api.github.com` for its own latest release. That is a deliberate exception,
+and the argument for it is the shape of the request rather than its usefulness:
+
+- **It sends nothing.** A GET with no body, and no header about the user, the machine or the
+  installation — not even a `User-Agent` of wtm's own, so the running version stays local. The
+  comparison happens here, after the reply. `crates/wtm-update/tests/github.rs` fails if a
+  `User-Agent` or the version is added to the request.
+- **The destination is a constant**, pinned by `network_boundary.rs` exactly as the transcription
+  host is. For this request that matters more, not less: a configurable host on a request that
+  runs without a click would be every copy of wtm reporting to somewhere on launch.
+- **Noticing is automatic; installing is not.** The check only shows a banner. Nothing is
+  downloaded until the user presses *Update and restart*, and `ui.update_check = "off"` (Settings
+  → General) stops the check too — enforced in `update.rs`, not only in the webview.
+
+On by default, where dictation is opt-in, because the costs point opposite ways. Dictation off by
+default loses a convenience. An update check off by default is one nobody turns on, so nobody hears
+about the release that fixes their bug — and what it costs to have on is that GitHub learns an
+address fetched a public JSON file.
+
+Installing goes through Homebrew rather than an updater of wtm's own. wtm is unsigned, and the cask
+already clears the quarantine attribute on every upgrade, so an app Homebrew upgrades opens like a
+fresh install. A second installer would have to re-implement that Gatekeeper bypass and would leave
+Homebrew believing the old version was still there. `wtm-update`'s module docs have the rest,
+including why the download runs *before* the app quits.
 
 **The egress is in Rust, and that placement is the whole design.** A `fetch` from the webview
 would have been fewer lines and would have widened `connect-src` — after which "the frontend

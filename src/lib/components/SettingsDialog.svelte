@@ -32,6 +32,7 @@
   import { composerPrefs, type SendKey } from '../state/composer.svelte';
   import { DESTINATION, dictation, type DictateMode } from '../state/dictate.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
+  import { updates } from '../state/update.svelte';
   import { browserTools } from '../state/browser-tools.svelte';
   import { sessionAwareness } from '../state/session-awareness.svelte';
   import { workspace } from '../state/workspace.svelte';
@@ -384,6 +385,23 @@
         </Field>
 
         <div class="o-stack">
+          <h3 class="c-section-heading">Updates</h3>
+          <Choice
+            type="checkbox"
+            checked={updates.enabled}
+            onchange={(enabled) => void updates.setEnabled(enabled)}
+          >
+            Check for updates automatically
+          </Choice>
+          <p class="c-field__help">
+            At launch and at most once a day, wtm asks api.github.com for the latest
+            release. The request carries nothing about you, this machine or your projects.
+            Installing always waits for you to click. Check for Updates… in the Worktree
+            Manager menu works either way.
+          </p>
+        </div>
+
+        <div class="o-stack">
           <h3 class="c-section-heading">Agent coordination</h3>
           <Choice
             type="checkbox"
@@ -433,7 +451,7 @@
             Dictate prompts with the microphone
           </Choice>
           <p class="c-field__help">
-            The only feature that sends anything off this machine: audio goes to {DESTINATION}
+            The only feature that sends anything of yours off this machine: audio goes to {DESTINATION}
             to be transcribed. Needs SoX and a key, both set up under Advanced.
           </p>
 
@@ -636,8 +654,8 @@
       <p>
         Dictation records your microphone and sends the audio to
         <code>{DESTINATION}</code> for transcription. This is the only feature in wtm that
-        sends anything off your machine. It needs SoX (<code>brew install sox</code>) and a
-        Deepgram API key.
+        sends anything of yours off your machine. It needs SoX (<code>brew install sox</code
+        >) and a Deepgram API key.
       </p>
     {/snippet}
     {#snippet footer()}

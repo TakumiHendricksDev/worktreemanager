@@ -1,8 +1,9 @@
 //! What network access is allowed to mean.
 //!
 //! The webview has no direct network access. Rust may reach the fixed transcription host when the
-//! user dictates, or a database target that an approved config declared and the user explicitly
-//! connected. The parts of that boundary that can be mechanical belong here rather than in prose.
+//! user dictates, a database target that an approved config declared and the user explicitly
+//! connected, or the fixed GitHub releases endpoint to see whether a newer wtm exists. The parts of
+//! that boundary that can be mechanical belong here rather than in prose.
 //!
 //! Three properties, each with a different way of going wrong:
 //!
@@ -10,7 +11,9 @@
 //!    that "just needed" `connect-src` widened is exactly how it would stop being true.
 //! 2. **The destination is not configurable.** A settable endpoint is an exfiltration primitive,
 //!    and the difference between "sends audio to Deepgram" and "sends audio anywhere a config file
-//!    says" is invisible in a diff that adds one string field.
+//!    says" is invisible in a diff that adds one string field. The update check is held to the same
+//!    rule for a sharper reason: it runs without a click, so a settable host would be every copy of
+//!    wtm reporting to somewhere on launch.
 //! 3. **Nothing gained an HTTP client.** Database protocols may need TLS; that is not permission to
 //!    add a general-purpose HTTP route around the webview's CSP.
 
@@ -70,6 +73,35 @@ fn the_app_webviews_csp_is_untouched_by_the_browser_pane() {
             .get("dangerousRemoteDomainIpcAccess")
             .is_none(),
         "no remote origin may invoke this app's commands, browser pane or not"
+    );
+}
+
+#[test]
+fn the_update_check_host_is_compiled_in_rather_than_configured() {
+    // The same shape as the transcription test above, and read out of the source for the same
+    // reason: the failure being prevented is the constant turning into a field somebody can set.
+    let source = std::fs::read_to_string(repo_root().join("crates/wtm-update/src/lib.rs"))
+        .expect("wtm-update source");
+
+    assert!(
+        source.contains(r#"pub const HOST: &str = "api.github.com";"#),
+        "the destination must stay a constant"
+    );
+    assert!(
+        source.contains(r#"pub const REPO: &str = "TakumiHendricksDev/worktreemanager";"#),
+        "the repository asked about must stay a constant"
+    );
+    assert_eq!(wtm_update::HOST, "api.github.com");
+
+    let argv = wtm_update::check_argv();
+    let url = argv.last().expect("a URL");
+    assert!(
+        url.starts_with("https://api.github.com/"),
+        "the check must be HTTPS to the one host: {url}"
+    );
+    assert!(
+        argv.windows(2).any(|w| w == ["--proto", "=https"]),
+        "{argv:?}"
     );
 }
 

@@ -44,6 +44,8 @@ import type {
   TerminalSession,
   TablePageRequest,
   QueryResult,
+  UpdateOutcome,
+  UpdateStatus,
   Worktree,
 } from './types';
 
@@ -286,6 +288,24 @@ export const commands = {
 
   /** Stop recording and transcribe. Rejects with a human-readable reason. */
   stopDictation: () => invoke<string>('stop_dictation'),
+
+  // ── updates ──
+  /**
+   * Ask GitHub whether a newer release exists. `null` when an automatic check is turned off or
+   * this is a debug build; a `manual` check always runs.
+   */
+  checkForUpdate: (manual: boolean) =>
+    invoke<UpdateStatus | null>('check_for_update', { manual }),
+  /**
+   * `brew update`, confirm Homebrew sees the new version, and download it — while the app is still
+   * open, so a failure is an error here rather than after quitting. Resolves to the version
+   * Homebrew will install.
+   */
+  prepareUpdate: () => invoke<string>('prepare_update'),
+  /** Leave the upgrade helper behind and quit. On success this never resolves: the app is gone. */
+  installUpdate: (version: string) => invoke<void>('install_update', { version }),
+  /** How the previous run's update went. Consumed by the first call; `null` after that. */
+  takeUpdateOutcome: () => invoke<UpdateOutcome | null>('take_update_outcome'),
 
   /**
    * Every file in a worktree worth offering in the composer's `@` list.

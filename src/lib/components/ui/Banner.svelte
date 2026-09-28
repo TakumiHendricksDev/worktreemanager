@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * A strip across the top of a view reporting a problem.
+   * A strip across the top of a view reporting a problem, or — as `info` — offering something.
    *
    * Not used by TrustBanner, which looks banner-shaped but is a security prompt with its own
    * structure — it borrows `c-banner--warn` as a class and adds its own elements. A component
@@ -13,14 +13,16 @@
     action,
     children,
   }: {
-    variant?: 'error' | 'warn';
+    variant?: 'error' | 'warn' | 'info';
     /** Retry, dismiss — rendered at the trailing edge. */
     action?: Snippet;
     children: Snippet;
   } = $props();
 </script>
 
-<div class="c-banner c-banner--{variant}" role="alert">
+<!-- `status` for `info`: `alert` interrupts a screen reader mid-sentence, which a problem earns and
+     an update available does not. -->
+<div class="c-banner c-banner--{variant}" role={variant === 'info' ? 'status' : 'alert'}>
   <span>{@render children()}</span>
   <!-- The wrapper is what carries `margin-left: auto`. `_banner.scss` has styled `.c-banner__action`
        since it was written, but the snippet was rendered bare — so the rule matched nothing and

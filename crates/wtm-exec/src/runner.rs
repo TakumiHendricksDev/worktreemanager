@@ -178,6 +178,15 @@ impl Runner {
     /// its own process group — the last so it is not swept up by a signal aimed at
     /// wtm.
     ///
+    /// # The second caller: something that has to outlive wtm
+    ///
+    /// The update helper (`wtm_update::HELPER_SCRIPT`) waits for wtm to quit, runs
+    /// `brew upgrade`, and opens the new app. It needs exactly the properties above for
+    /// a stronger reason than an editor does: it is *meant* to be running after wtm has
+    /// gone, so a deadline would kill it mid-upgrade and a shared process group would
+    /// let the signal that ends wtm end it too. It bounds itself instead — see the
+    /// script's own docs.
+    ///
     /// # Not a replacement for [`Self::run`] on `open`/`xdg-open`
     ///
     /// [`crate::path`]'s platform opener returns within milliseconds and its exit

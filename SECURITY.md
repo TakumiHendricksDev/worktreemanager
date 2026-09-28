@@ -54,22 +54,28 @@ than a networked service. The things worth reporting:
 
 Worth stating because it narrows the surface considerably:
 
-- **No unsolicited network access.** There are two user-initiated routes: dictation sends a
-  recording to `api.deepgram.com`, and the database viewer connects to a database target disclosed
-  by an approved config after the user clicks Connect. There is no telemetry, analytics, crash
-  reporting or update check.
+- **No unsolicited network access that carries anything of yours.** There are two user-initiated
+  routes: dictation sends a recording to `api.deepgram.com`, and the database viewer connects to a
+  database target disclosed by an approved config after the user clicks Connect. There is no
+  telemetry, analytics or crash reporting.
 
-  What is unchanged, and is the reason the exception is narrow enough to describe in a bullet:
+  The one automatic request is the **update check**: at launch and at most daily, a GET to
+  `api.github.com` for wtm's latest release, with no body and no header naming the user, the
+  machine or the installed version. It only shows a banner — installing waits for a click and goes
+  through Homebrew — and Settings → General turns it off. ARCHITECTURE §6a has the reasoning.
+
+  What is unchanged, and is the reason the exceptions are narrow enough to describe in a bullet:
 
   - **The webview still cannot reach the network.** The CSP permits only `self` and `ipc:`, and
     no HTTP plugin capability is granted. Dictation and database protocols run in Rust behind
     narrow commands; credentials never cross IPC.
-  - **The transcription destination is not configurable.** It is a `const` in `wtm-dictate`.
+  - **The transcription and update-check destinations are not configurable.** Each is a `const`,
+    in `wtm-dictate` and `wtm-update`, and `network_boundary.rs` reads both out of the source.
     Database destinations necessarily are configurable, so repo and git-common config layers show
     their credential-free targets in the content-hash-bound trust prompt before they can be used.
   - **No HTTP client crate is reachable** in the dependency graph of either platform wtm builds
-    for. Dictation uses `curl`; PostgreSQL TLS uses the platform TLS implementation inside the
-    database adapter and is not exposed as a general HTTP facility.
+    for. Dictation and the update check use `curl`; PostgreSQL TLS uses the platform TLS
+    implementation inside the database adapter and is not exposed as a general HTTP facility.
   - **Dictation sends only the audio**, deletes it as soon as it is text, and keeps the key in the
     OS keychain. Database sessions send the SQL the user runs to the selected database and return
     bounded text results; connection credentials stay in Rust.

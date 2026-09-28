@@ -380,6 +380,49 @@ pub async fn stop_dictation(app: AppState<'_>) -> Reply<String> {
     blocking(move || crate::dictate::stop(&app).map_err(|e| ErrorView::new("dictate", e))).await
 }
 
+// ─────────────────────────────── updates ───────────────────────────────
+
+/// Ask GitHub whether a newer release exists. `null` when an automatic check is turned off.
+#[tauri::command]
+pub async fn check_for_update(
+    app: AppState<'_>,
+    manual: bool,
+) -> Reply<Option<crate::update::UpdateStatus>> {
+    let app = Arc::clone(&app);
+    blocking(move || crate::update::check(&app, manual).map_err(|e| ErrorView::new("update", e)))
+        .await
+}
+
+/// `brew update`, confirm, and download — the slow half, while the app is still open.
+///
+/// Returns the version Homebrew will install, which `install_update` is then given.
+#[tauri::command]
+pub async fn prepare_update(app: AppState<'_>) -> Reply<String> {
+    let app = Arc::clone(&app);
+    blocking(move || crate::update::prepare(&app).map_err(|e| ErrorView::new("update", e))).await
+}
+
+/// Leave the upgrade helper running and quit. On success this never answers: the app is gone.
+#[tauri::command]
+pub async fn install_update(
+    app: AppState<'_>,
+    handle: tauri::AppHandle,
+    version: String,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        crate::update::install(&app, &handle, &version).map_err(|e| ErrorView::new("update", e))
+    })
+    .await
+}
+
+/// How the update the previous run started went, reported once.
+#[tauri::command]
+pub async fn take_update_outcome(app: AppState<'_>) -> Reply<Option<crate::update::UpdateOutcome>> {
+    let app = Arc::clone(&app);
+    blocking(move || Ok(crate::update::take_outcome(&app))).await
+}
+
 // ─────────────────────────────── diagnostics ───────────────────────────────
 
 /// The resolved `PATH` and which project tools are reachable.

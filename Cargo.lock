@@ -5844,6 +5844,7 @@ dependencies = [
  "wtm-notify",
  "wtm-render",
  "wtm-testkit",
+ "wtm-update",
  "wtm-webview",
 ]
 
@@ -5976,6 +5977,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "wtm-core",
+]
+
+[[package]]
+name = "wtm-update"
+version = "1.6.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

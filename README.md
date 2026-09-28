@@ -108,8 +108,15 @@ the quarantine bypass, so nothing about Gatekeeper needs doing a second time.
 checking against the [latest release](https://github.com/TakumiHendricksDev/worktreemanager/releases/latest)
 if a feature you expect is missing.
 
-**There is no in-app updater** and no update check — wtm will not tell you a new version
-exists.
+**wtm tells you when there is a new version.** At launch, and at most once a day, it asks
+GitHub for the latest release; the request carries nothing about you or your machine. A
+banner offers the update, and *Update and restart* runs the commands above for you. It
+downloads first, while wtm is still open, then quits, upgrades, and reopens. Running agent
+turns and terminals stop, and your panes come back. **Check for Updates…** in the Worktree
+Manager menu asks on demand, and Settings → General turns the automatic check off.
+
+A copy that did not come from the tap is told about the release but not updated, since
+Homebrew has nothing to upgrade.
 
 To remove it: `brew uninstall --cask wtm`, or `brew uninstall --zap --cask wtm` to take
 `~/.config/wtm` (your preferences, trust decisions and log) with it.

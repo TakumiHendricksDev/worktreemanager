@@ -1,0 +1,33 @@
+/*
+ * The update dialog's two blocks of text that are not prose: Homebrew's log, and a command to
+ * paste into Terminal.
+ *
+ * Its own block rather than borrowing `c-transcript__out`, which looks the same today and belongs
+ * to the transcript's row vocabulary. The day that is retuned for agent output, a dialog about
+ * Homebrew should not move with it.
+ */
+
+.c-update__log {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  background: var(--bg-code);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Bounded and scrollable: the tail is a dozen lines, but one of Homebrew's can be a whole
+     paragraph, and the dialog's buttons must stay on screen. */
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+/* One click selects the whole command, because the only thing anyone does with it is copy it. */
+.c-update__command {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  background: var(--bg-code);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  overflow-wrap: anywhere;
+  user-select: all;
+}

@@ -23,6 +23,7 @@
   import TitleBar from './lib/components/TitleBar.svelte';
   import Toasts from './lib/components/Toasts.svelte';
   import TrustBanner from './lib/components/TrustBanner.svelte';
+  import UpdateDialog from './lib/components/UpdateDialog.svelte';
   import Banner from './lib/components/ui/Banner.svelte';
   import Button from './lib/components/ui/Button.svelte';
   import Icon from './lib/components/ui/Icon.svelte';
@@ -37,6 +38,7 @@
   import { browserTools } from './lib/state/browser-tools.svelte';
   import { browsers } from './lib/state/browsers.svelte';
   import { theme } from './lib/state/theme.svelte';
+  import { updates } from './lib/state/update.svelte';
   import { workspace } from './lib/state/workspace.svelte';
 
   const MIN_SIDEBAR = 200;
@@ -151,6 +153,10 @@
       await workspace.init();
       if (gone) return;
       booted = true;
+
+      // Last, and not awaited: a network round trip must not hold up a window that is otherwise
+      // ready, and nothing above depends on its answer.
+      void updates.init();
     })();
 
     const onFocus = () => {
@@ -164,6 +170,8 @@
        * seen a thing you were looking at.
        */
       sessions.markSeen(workspace.selectedWorktreeId);
+      // At most daily, and only once the launch check has answered. See `update.svelte.ts`.
+      updates.onFocus();
     };
     window.addEventListener('focus', onFocus);
 
@@ -175,6 +183,8 @@
      * listener is unconditional because a platform with no menu simply never fires it.
      */
     const unlistenSettings = listen('wtm:settings', () => (showSettings = true));
+    /* Check for Updates… from the same menu, by the same route. Always runs and always answers. */
+    const unlistenUpdates = listen('wtm:check-updates', () => void updates.check(true));
 
     /*
      * A macOS notification was clicked. The payload is the pane's address, attached by
@@ -254,6 +264,7 @@
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
       void unlistenSettings.then((off) => off());
+      void unlistenUpdates.then((off) => off());
       void unlistenClicks.then((off) => off());
       offSessions?.();
       offAttention?.();
@@ -418,6 +429,61 @@
     {/if}
 
     <main class="c-shell__col c-shell__col--detail">
+      <!--
+        Updates. A banner rather than a dialog, because the check runs by itself: a modal that
+        appeared at launch, or on coming back to the window, would land on top of whatever the
+        user came back to do — the same reasoning as the notification opt-in toast.
+      -->
+      {#if updates.outcome?.kind === 'updated'}
+        <Banner variant="info">
+          Updated to {updates.outcome.version}.
+          {#snippet action()}
+            <Button
+              variant="inline"
+              onclick={() => updates.clearOutcome()}
+              ariaLabel="Dismiss"
+            >
+              <Icon name="close" size={12} />
+            </Button>
+          {/snippet}
+        </Banner>
+      {:else if updates.outcome?.kind === 'failed'}
+        <Banner>
+          The update to {updates.outcome.version} didn’t finish.
+          {#snippet action()}
+            <span class="o-row">
+              <Button variant="inline" onclick={() => updates.showFailure()}>Details</Button
+              >
+              <Button
+                variant="inline"
+                onclick={() => updates.clearOutcome()}
+                ariaLabel="Dismiss"
+              >
+                <Icon name="close" size={12} />
+              </Button>
+            </span>
+          {/snippet}
+        </Banner>
+      {/if}
+
+      {#if updates.offered && updates.status}
+        <Banner variant="info">
+          Worktree Manager {updates.status.latest} is available.
+          {#snippet action()}
+            <span class="o-row">
+              <Button variant="inline" onclick={() => updates.open()}>Update…</Button>
+              <Button
+                variant="inline"
+                onclick={() => updates.dismiss()}
+                ariaLabel="Dismiss"
+              >
+                <Icon name="close" size={12} />
+              </Button>
+            </span>
+          {/snippet}
+        </Banner>
+      {/if}
+
       {#if addError}
         <Banner>
           {addError}
@@ -536,6 +602,8 @@
   {#if showSettings}
     <SettingsDialog onclose={() => (showSettings = false)} />
   {/if}
+
+  <UpdateDialog />
 
   {#if showInspector && workspace.selected && workspace.activeProjectId}
     <Inspector

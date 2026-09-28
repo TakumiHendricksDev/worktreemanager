@@ -1,5 +1,6 @@
 /*
- * A strip across the top of a view saying something went wrong.
+ * A strip across the top of a view saying something went wrong — or, as `--info`, that
+ * something is on offer.
  *
  * The tinted-surface-plus-matching-border idiom, now expressed with the `-soft`/`-line` role
  * tokens rather than a `color-mix()` percentage chosen here. That is the whole point of those
@@ -26,6 +27,14 @@
   background: var(--warn-soft);
   border-bottom-color: var(--warn-line);
   color: var(--warn);
+}
+
+/* An update on offer. Info rather than accent: the accent is the user's chosen palette and
+   means "press this", and a whole strip in it would out-shout every real button on screen. */
+.c-banner--info {
+  background: var(--info-soft);
+  border-bottom-color: var(--info-line);
+  color: var(--info);
 }
 
 /* Retry, dismiss — pushed to the trailing edge, inheriting the banner's colour rather than

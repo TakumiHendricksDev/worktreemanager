@@ -1,10 +1,11 @@
 //! Dictation: recording speech and turning it into text.
 //!
-//! # The only part of this application that speaks HTTP
+//! # The only part of this application that sends anything of yours over HTTP
 //!
-//! The database adapter can speak database protocols to an explicitly selected target. This crate
-//! is the only general request-shaped egress, and its fixed destination is most of the argument for
-//! why that narrower exception is affordable.
+//! The database adapter can speak database protocols to an explicitly selected target, and
+//! `wtm-update` asks a fixed GitHub endpoint for the latest release with a request that carries
+//! nothing. This crate is the only request-shaped egress with a payload, and its fixed destination is
+//! most of the argument for why that narrower exception is affordable.
 //!
 //! What makes dictation usable for writing prompts about software is punctuation inferred from
 //! language rather than from pause length, and getting "SDK" and "`ChatGPT`" right instead of "S D K"

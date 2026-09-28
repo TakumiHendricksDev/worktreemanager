@@ -459,6 +459,26 @@ export interface DictationStatus {
   missing: string[];
 }
 
+/**
+ * What the update check found. `available` is computed in Rust, so the frontend never compares
+ * versions itself.
+ */
+export interface UpdateStatus {
+  current: string;
+  latest: string;
+  available: boolean;
+  /** The release's page, built from the version rather than taken from GitHub's reply. */
+  url: string;
+  /** `homebrew` when Homebrew installed this copy and can upgrade it; `download` otherwise. */
+  via: 'homebrew' | 'download';
+}
+
+/** How the update the previous run started went. Reported once, on the next launch. */
+export type UpdateOutcome =
+  | { kind: 'updated'; version: string }
+  /** `log` is the end of `~/.config/wtm/update.log`, where Homebrew says what went wrong. */
+  | { kind: 'failed'; version: string; log: string };
+
 /** What an agent can do on this machine. */
 export interface Capability {
   models: AgentModel[];

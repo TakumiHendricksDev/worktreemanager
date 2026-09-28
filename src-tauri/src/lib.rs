@@ -19,6 +19,7 @@ pub mod handoff;
 pub mod notifier;
 pub mod openers;
 pub mod pty_bridge;
+pub mod update;
 pub mod view;
 
 use std::sync::Arc;
@@ -67,6 +68,12 @@ fn platform_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// [`pty_bridge`] already uses.
 pub const SETTINGS_EVENT: &str = "wtm:settings";
 
+/// The event the Check for Updates… menu item fires. `App.svelte` listens for it.
+///
+/// A menu item rather than only the automatic check, because the automatic one can be turned off
+/// and stays quiet when it fails. This is the route that always runs and always answers.
+pub const CHECK_UPDATES_EVENT: &str = "wtm:check-updates";
+
 /// The application menu.
 ///
 /// # This exists to add one item, and most of it is not that item
@@ -100,8 +107,14 @@ fn build_menu<R: tauri::Runtime>(
         .accelerator("CmdOrCtrl+,")
         .build(handle)?;
 
+    // Directly under About, which is where every Mac app that has one puts it.
+    let check_updates = MenuItemBuilder::new("Check for Updates…")
+        .id(CHECK_UPDATES_EVENT)
+        .build(handle)?;
+
     let app_menu = SubmenuBuilder::new(handle, "Worktree Manager")
         .about(Some(AboutMetadata::default()))
+        .item(&check_updates)
         .separator()
         .item(&settings)
         .separator()
@@ -194,10 +207,12 @@ pub fn run() {
         .on_menu_event(|handle, event| {
             use tauri::Emitter;
 
+            // A failed emit means the webview is gone, which is not something a menu
+            // handler can do anything about.
             if event.id() == SETTINGS_EVENT {
-                // A failed emit means the webview is gone, which is not something a menu
-                // handler can do anything about.
                 let _ = handle.emit(SETTINGS_EVENT, ());
+            } else if event.id() == CHECK_UPDATES_EVENT {
+                let _ = handle.emit(CHECK_UPDATES_EVENT, ());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -205,6 +220,10 @@ pub fn run() {
             commands::set_dictation_key,
             commands::start_dictation,
             commands::stop_dictation,
+            commands::check_for_update,
+            commands::prepare_update,
+            commands::install_update,
+            commands::take_update_outcome,
             commands::list_projects,
             commands::register_project,
             commands::unregister_project,
