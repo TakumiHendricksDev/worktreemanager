@@ -5804,7 +5804,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-agent"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "parking_lot",
  "pretty_assertions",
@@ -5819,7 +5819,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-app"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "parking_lot",
  "regex",
@@ -5850,7 +5850,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-config"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "etcetera",
  "insta",
@@ -5873,7 +5873,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-core"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "insta",
  "pretty_assertions",
@@ -5888,7 +5888,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-db"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "native-tls",
  "parking_lot",
@@ -5903,7 +5903,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-dictate"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "serde_json",
  "wtm-core",
@@ -5911,7 +5911,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-exec"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "nix 0.31.3",
  "parking_lot",
@@ -5929,7 +5929,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-git"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "insta",
  "pretty_assertions",
@@ -5944,7 +5944,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-notify"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "block2",
  "objc2",
@@ -5957,7 +5957,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-render"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "insta",
  "minijinja",
@@ -5971,7 +5971,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-testkit"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "parking_lot",
  "serde_json",
@@ -5981,7 +5981,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-update"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.19",
@@ -5989,7 +5989,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-webview"
-version = "1.8.0"
+version = "2.0.0"
 dependencies = [
  "block2",
  "objc2",
