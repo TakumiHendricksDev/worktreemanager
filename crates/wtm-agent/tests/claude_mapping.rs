@@ -117,7 +117,7 @@ fn a_fresh_session_id_is_minted_per_session_and_resume_uses_a_different_flag() {
 }
 
 #[test]
-fn a_side_question_forks_without_tools_or_persistence() {
+fn a_side_question_forks_without_tools_servers_or_persistence() {
     let argv = Claude.argv(&SessionRequest {
         fork: Some("11111111-2222-4333-8444-555555555555".to_owned()),
         ephemeral: true,
@@ -137,7 +137,51 @@ fn a_side_question_forks_without_tools_or_persistence() {
     assert!(argv.iter().any(|a| a == "--fork-session"));
     assert!(argv.iter().any(|a| a == "--no-session-persistence"));
     assert_eq!(pair("--tools").as_deref(), Some(""));
+    // `--tools ""` leaves every MCP server loaded, and the side card cannot show the approval one
+    // of their tools can stop for.
+    assert!(argv.iter().any(|a| a == "--strict-mcp-config"));
     assert!(!argv.iter().any(|a| a == "--session-id"));
+
+    // Only the fork: an ordinary resume keeps the user's own servers.
+    let resumed = Claude.argv(&SessionRequest {
+        resume: Some("11111111-2222-4333-8444-555555555555".to_owned()),
+        ..SessionRequest::default()
+    });
+    assert!(!resumed.iter().any(|a| a == "--strict-mcp-config"));
+}
+
+#[test]
+fn a_side_question_goes_out_behind_its_frame_but_is_echoed_as_the_user_typed_it() {
+    // The frame is what stops a side answer ending "want me to fix that?" in a card nobody can
+    // reply in. It has to reach the CLI, and it must not reach the card — the card's question is
+    // read back from the echo.
+    let mut side = Claude.protocol(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        fork: Some("11111111-2222-4333-8444-555555555555".to_owned()),
+        ephemeral: true,
+        ..SessionRequest::default()
+    });
+    let steps = side.send_turn("what did we decide about the cache?", &[]);
+
+    assert_eq!(
+        events(&steps).first(),
+        Some(&&AgentEvent::UserEcho {
+            text: "what did we decide about the cache?".to_owned()
+        })
+    );
+    let frames = writes(&steps);
+    let sent = frames[0]["message"]["content"].as_str().unwrap();
+    assert!(sent.starts_with("<system-reminder>"), "{sent}");
+    assert!(sent.contains("no follow-up turn"), "{sent}");
+    assert!(sent.ends_with("</system-reminder>\n\nwhat did we decide about the cache?"));
+
+    // An ordinary session sends exactly what was typed.
+    let mut plain = driver();
+    let steps = plain.send_turn("what did we decide about the cache?", &[]);
+    assert_eq!(
+        writes(&steps)[0]["message"]["content"],
+        "what did we decide about the cache?"
+    );
 }
 
 #[test]

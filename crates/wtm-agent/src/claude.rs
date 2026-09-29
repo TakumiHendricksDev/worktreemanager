@@ -451,6 +451,10 @@ impl Provider for Claude {
                 argv.push("--no-session-persistence".to_owned());
                 argv.push("--tools".to_owned());
                 argv.push(String::new());
+                // `--tools ""` is the built-in set only. Without this the user's own servers still
+                // load — 53 tools in one captured side session on 2.1.280 — and each is a call that
+                // can stop for an approval the side card has nowhere to show.
+                argv.push("--strict-mcp-config".to_owned());
             }
         } else if let Some(resume) = &req.resume {
             argv.push("--resume".to_owned());
@@ -521,6 +525,7 @@ impl Provider for Claude {
     fn protocol(&self, req: &SessionRequest) -> Box<dyn Protocol> {
         Box::new(ClaudeProtocol {
             history: claude_history(req),
+            side: req.ephemeral,
             fast_wanted: req.fast == Some(true),
             ..ClaudeProtocol::default()
         })
@@ -613,6 +618,8 @@ struct ClaudeProtocol {
     /// several of them — one per tool round trip — and a later message that streamed nothing must
     /// not be silenced by an earlier one that did. See [`Self::on_assistant`].
     streamed: bool,
+    /// A `/btw` fork, whose every turn goes out behind [`SIDE_FRAME`].
+    side: bool,
     turn: u64,
     /// Between the `TurnStarted` this driver announced and the `TurnFinished` that closes it.
     ///
@@ -1382,12 +1389,21 @@ impl Protocol for ClaudeProtocol {
         if self.in_turn() {
             return self.steer(text, attachments);
         }
+        // Echoed as typed, sent framed: the card shows the question the user asked, not ours.
         let mut steps = echo(text, attachments);
         // Claude announces no turn start of its own, so this is where one exists. Emitted rather
         // than inferred from the first delta, so the composer can show "working…" during the
         // seconds before any token arrives.
         steps.push(Step::Emit(self.begin_turn()));
-        steps.push(user_frame(text, attachments, None));
+        if self.side {
+            steps.push(user_frame(
+                &format!("{SIDE_FRAME}{text}"),
+                attachments,
+                None,
+            ));
+        } else {
+            steps.push(user_frame(text, attachments, None));
+        }
         steps
     }
 
@@ -1557,6 +1573,29 @@ fn echo(text: &str, attachments: &[AgentAttachment]) -> Vec<Step> {
     }));
     steps
 }
+
+/// What a side session reads ahead of the question, in the turn itself.
+///
+/// # Why the system prompt was not enough
+///
+/// The side instructions are appended to the system prompt as well, and on their own they lost: a
+/// fork carries the whole parent conversation — often hundreds of thousands of tokens — between
+/// that line and the question, and the model answered as the agent it was forked from. Captured on
+/// 2.1.280, a side answer ended "If you want, I'll fold these into the plan and write it up next",
+/// in a card with no way to say yes. The same question behind this frame answered and stopped.
+///
+/// Said as the CLI says its own injected context, which the model reads as the harness speaking
+/// rather than the user.
+const SIDE_FRAME: &str = "<system-reminder>\n\
+This is a side question, asked with /btw. You are a separate, short-lived copy of the \
+conversation above, answering one question while the main session carries on without you. \
+Nothing you say here is added to the main conversation.\n\n\
+You have no tools in this side session: you cannot read files, run commands, search, or change \
+anything. The user cannot reply to you here, so there is no follow-up turn. Answer the question \
+below in one reply, from what the conversation already contains. Do not offer to fix, check or do \
+anything, do not ask whether they want something done, and do not describe anything you are about \
+to do. If the conversation does not contain the answer, say so plainly.\n\
+</system-reminder>\n\n";
 
 /// A user message frame, carrying a `uuid` when the lifecycle of this one has to be followed.
 ///

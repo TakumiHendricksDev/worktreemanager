@@ -1775,11 +1775,27 @@ fn open_agent_process(
     req.ephemeral = req.fork.is_some();
     if req.ephemeral {
         const SIDE_INSTRUCTIONS: &str = "This is an ephemeral side question. Answer only from the \
-            conversation context already available. Do not call tools or change files.";
-        req.instructions = Some(match req.instructions {
-            Some(existing) => format!("{existing}\n\n{SIDE_INSTRUCTIONS}"),
-            None => SIDE_INSTRUCTIONS.to_owned(),
-        });
+            conversation context already available, in a single reply. You have no tools and \
+            cannot change anything, and the user cannot reply here, so do not offer to do \
+            anything or ask whether they want something done.";
+
+        // No servers at all, the handoff bridge included. `--tools ""` empties Claude's built-in
+        // set and nothing else, so every server here stayed callable in a card that has nowhere to
+        // show an approval: a call that needed one would wait forever under "Thinking…". A side
+        // question has no business opening a pane or driving a browser either.
+        if let Some(token) = req
+            .mcp
+            .get(handoff::SERVER_NAME)
+            .and_then(|server| server.env.get(handoff::TOKEN_ENV))
+        {
+            app.handoff.forget_unbound(token);
+        }
+        req.mcp.clear();
+        // Replaced rather than appended to. Everything `session_instructions` says is about the
+        // bridge's tools or the peer notes, and this session gets neither (`peer_note_for` skips
+        // ephemeral entries) — and a paragraph urging the model to delegate and open panes is the
+        // opposite of what a one-answer card wants to read.
+        req.instructions = Some(SIDE_INSTRUCTIONS.to_owned());
     }
 
     let sink: Arc<dyn wtm_agent::session::AgentSink> =

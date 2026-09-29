@@ -2483,13 +2483,20 @@ class Sessions {
 
     const side = this.blank(parent.kind, parent.projectId, parent.worktreeId);
     side.sideOf = parent.id;
+    // The model is inherited because the fork carries the parent's whole context, and it has to fit
+    // the window it was written in.
     side.model = parent.model;
-    side.effort = parent.effort;
+    // Not inherited. wtm starts sessions at `xhigh`, and a Claude side question at that rung took
+    // 171 seconds, nearly all of it thinking, under a card that said only "Thinking…" — which reads
+    // as a side question that never answers. At `low`, side questions on the same kind of fork took
+    // 12 to 20 seconds, still from the whole conversation: what makes a side answer good is the
+    // context, not the depth. Every ladder wtm knows has `low`; a provider with no effort stays
+    // without one.
+    side.effort = parent.effort === null ? null : 'low';
     side.mode = parent.mode;
     // Inherited, unlike the delegation path in `handoff.rs`, and the difference is fan-out: a `/btw`
     // is one short turn on the conversation the user is already looking at, where one handoff can
-    // open twenty children. Matching the parent is what keeps the side answer comparable to the
-    // ones above it.
+    // open twenty children.
     side.fast = parent.fast;
     this.panes = [...this.panes, side];
 
