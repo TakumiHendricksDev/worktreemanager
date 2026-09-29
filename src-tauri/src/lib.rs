@@ -18,6 +18,7 @@ pub mod display;
 pub mod handoff;
 pub mod notifier;
 pub mod openers;
+pub mod pane_windows;
 pub mod pty_bridge;
 pub mod update;
 pub mod view;
@@ -207,14 +208,19 @@ pub fn run() {
         .on_menu_event(|handle, event| {
             use tauri::Emitter;
 
+            // To the main window, and the main window brought forward: Settings and the update
+            // prompt live there, and a pane window in front has neither. Without the focus a ⌘,
+            // pressed in a pane window would open Settings behind it.
+            //
             // A failed emit means the webview is gone, which is not something a menu
             // handler can do anything about.
-            if event.id() == SETTINGS_EVENT {
-                let _ = handle.emit(SETTINGS_EVENT, ());
-            } else if event.id() == CHECK_UPDATES_EVENT {
-                let _ = handle.emit(CHECK_UPDATES_EVENT, ());
+            let id = event.id().as_ref();
+            if id == SETTINGS_EVENT || id == CHECK_UPDATES_EVENT {
+                let _ = pane_windows::focus(handle, None);
+                let _ = handle.emit_to(pane_windows::MAIN_WINDOW, id, ());
             }
         })
+        .on_window_event(pane_windows::on_window_event)
         .invoke_handler(tauri::generate_handler![
             commands::dictation_status,
             commands::set_dictation_key,
@@ -258,6 +264,7 @@ pub fn run() {
             commands::pty_kill,
             commands::open_terminal,
             commands::list_terminals,
+            commands::terminal_replay,
             commands::close_terminal,
             commands::list_agents,
             commands::agent_capability,
@@ -299,6 +306,12 @@ pub fn run() {
             commands::browser_snapshot_png,
             commands::browser_set_theme,
             commands::browser_open_devtools,
+            commands::pop_out_pane,
+            commands::pane_window_state,
+            commands::sync_pane_window,
+            commands::close_pane_window,
+            commands::focus_pane_window,
+            commands::list_pane_windows,
             commands::list_openers,
             commands::open_in,
             commands::post_notification,

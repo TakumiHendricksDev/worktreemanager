@@ -69,9 +69,12 @@
   const worktree = $derived(
     workspace.worktrees.find((candidate) => candidate.id === pane.worktreeId) ?? null,
   );
-  /** The agent pane Send drafts into. Derived from focus and layout, so it follows the user. */
-  const target = $derived(sessions.draftTargetIn(pane.worktreeId));
-  const targetLabel = $derived(target ? sessions.labelOf(target) : null);
+  /**
+   * The agent pane Send drafts into. Derived from focus and layout, so it follows the user — the
+   * main window's focus and layout, when this pane is in a window of its own.
+   */
+  const target = $derived(sessions.draftDestination(pane.worktreeId));
+  const targetLabel = $derived(target?.label ?? null);
 
   let address = $state<HTMLInputElement | null>(null);
   let typed = $state('');

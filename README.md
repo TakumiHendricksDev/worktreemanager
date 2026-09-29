@@ -42,6 +42,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | ✅ | Cross-model delegation from one chat: one visible child or a customizable run of up to 20 child agents, with per-child model/effort/mode and navigable session status |
 | ✅ | **Open in …** — a split button that hands the worktree to your editor, a terminal, the file manager, or a fresh Claude Code session; see [below](#open-in-) |
 | ✅ | **Browser panes** — a real web page tiled beside your sessions, driveable by the agents in that worktree, with element-anchored comments you can hand to an agent; see [below](#browser-panes) |
+| ✅ | **Pop a pane out** — any shell, agent chat or browser pane moves into a window of its own, and closing that window puts it back where it was; see [below](#panes-in-their-own-windows) |
 | 🚧 | `[remove] strategy = "command"` — the native path is the default and the one that turns the branch prompt into a checkbox |
 | 🚧 | A command palette, and `notify`-based auto-refresh |
 
@@ -63,7 +64,8 @@ project's convention. With the variable unset the tests skip.
 [Install](#install) · [Updating](#updating-an-install-you-already-have) ·
 [Prerequisites](#prerequisites) · [Setup](#setup) ·
 [First run](#first-run) · [Registering a project](#registering-a-project) ·
-[Writing wtm.toml](#writing-wtmtoml) · [Browser panes](#browser-panes) · [Open in …](#open-in-) · [Settings](#settings) ·
+[Writing wtm.toml](#writing-wtmtoml) · [Browser panes](#browser-panes) ·
+[Panes in their own windows](#panes-in-their-own-windows) · [Open in …](#open-in-) · [Settings](#settings) ·
 [Dev workflow](#dev-workflow) ·
 [Build & install](#build--install) · [Troubleshooting](#troubleshooting) ·
 [Logs](#logs) · [Dependencies](#dependencies) · [Architecture](#architecture)
@@ -394,6 +396,39 @@ links, buttons, checkboxes, and framework handlers all work, but a native `<sele
 chooser, or a `window.open` that needs a real user gesture will not (use `browser_select_option`
 for selects). Downloads and popups are handed to your default browser and the same pane
 respectively. Four browser panes per worktree, eight in all — each is a WebContent process.
+
+## Panes in their own windows
+
+Every pane you can drag around the tiling — a shell, an agent chat, a browser — can also leave it.
+Press the **Pop out** button in the pane's header (the two overlapping windows, beside Split) and
+the pane moves into a window of its own, opened over the tile it came from, which you can put on
+another display. The session does not restart: a shell keeps its scrollback and whatever it is
+running, an agent keeps its transcript, its queue and the draft in its composer, and a browser keeps
+the very page it had — history, scroll position, a half-filled form — because it is the same web
+view, moved.
+
+To put it back, press **Put back** in the window's title bar, or just close the window — the traffic
+light and ⌘W do the same. It returns to exactly where it was if nothing else in the tiling moved
+while it was away, and beside the pane it was next to if something did. Closing the window never
+ends the session; the pane's own **Close** does that, from either window.
+
+While a pane is out, the main window lists it in a strip above the worktree's panes: press its name
+to bring its window forward, or the arrow to put it back. Its status dot, the sidebar and the dock
+badge keep counting it, and a notification about it is held back while its window is the one in
+front. A browser in its own window can still send its comments to an agent in the main window.
+
+**What has been verified, and how.** `just check`: the Rust registry, the browser placement rule
+(a hide from a window that no longer holds a browser is ignored; a closing window can never take one
+back), the terminal replay ring and its lifecycle, and a capability test proving the pane-window
+glob can never match a browser's webview. The new controls were rendered against the real
+stylesheet in headless Chrome. Not yet clicked through in the running app.
+
+**Limits worth knowing.** Pane windows do not survive a relaunch — the panes come back tiled where
+they were. A shell's replay is its last mebibyte of output, so a very long history comes back
+trimmed, and a full-screen program redraws only once the new window's size reaches it. Closing the
+window from its traffic light carries the draft as it was a quarter of a second earlier; **Put back**
+carries it exactly. While a pane is out the main window holds a second copy of an agent's
+transcript.
 
 ## Open in …
 

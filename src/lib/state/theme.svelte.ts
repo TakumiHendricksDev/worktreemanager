@@ -139,6 +139,23 @@ class ThemeStore {
 
   /** Reconcile with the persisted preferences and start following the OS. */
   async init(): Promise<void> {
+    await this.reload();
+
+    // Only meaningful while the choice is `system`, but the listener is cheap and
+    // unconditional is one less state transition to get wrong.
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (this.choice === 'system') this.apply();
+    });
+  }
+
+  /**
+   * Read the persisted choice and palettes again, and paint them.
+   *
+   * Apart from `init` for a pane window, which paints with the preferences the main window's
+   * Settings writes and has to follow them when they change there — without adding a second
+   * `matchMedia` listener every time.
+   */
+  async reload(): Promise<void> {
     try {
       const [storedTheme, storedPalette] = await Promise.all([
         commands.getPref(THEME_PREF),
@@ -163,12 +180,6 @@ class ThemeStore {
     }
 
     this.apply();
-
-    // Only meaningful while the choice is `system`, but the listener is cheap and
-    // unconditional is one less state transition to get wrong.
-    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-      if (this.choice === 'system') this.apply();
-    });
   }
 
   async set(choice: ThemeChoice): Promise<void> {

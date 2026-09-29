@@ -334,6 +334,25 @@ export interface TerminalSession {
 export interface PtyOutput {
   session: string;
   chunkBase64: string;
+  /** The chunk's number in a dock shell's replay; `null` for every other session. */
+  seq: number | null;
+}
+
+/** What `terminal_replay` returns: everything kept, and the number of its last chunk. */
+export interface TerminalReplay {
+  through: number;
+  chunkBase64: string;
+}
+
+/**
+ * A pane in a window of its own, and the frontend's last record of it.
+ *
+ * `state` is opaque to Rust by design — it is `sessions.svelte.ts`'s own snapshot of the pane,
+ * which only that file reads. See `pane_windows.rs`.
+ */
+export interface PaneWindow {
+  paneId: string;
+  state: unknown;
 }
 
 /** Emitted as `pty:exit`. */

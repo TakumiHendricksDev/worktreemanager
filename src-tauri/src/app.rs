@@ -65,7 +65,7 @@ fn database_target(connection: &DatabaseConnection) -> String {
 /// How many finished sessions the pty registry keeps.
 ///
 /// Not about transcripts, despite what `reap_finished`'s own doc suggests — a `Session`
-/// holds no output buffer at all; the transcript lives in the pane's xterm instance. What a
+/// holds no output buffer at all; a dock shell's is [`App::terminal_replay`]'s. What a
 /// finished entry actually holds is a `Box<dyn MasterPty>` and its writer, which measures as
 /// two file descriptors apiece, forever. Nothing in the app called `reap_finished` before the
 /// terminal dock existed, and a dock that opens and closes shells all day is what turns that
@@ -384,6 +384,95 @@ fn trim_global_replay(
     }
 }
 
+/// How much of one dock shell's output is kept for a window that attaches late.
+///
+/// xterm keeps 5000 lines of scrollback, and a line of real terminal output — colour escapes
+/// included — rarely passes 200 bytes, so a mebibyte covers what the pane itself would have held.
+/// Forty panes is the frontend's hard cap, so the whole map stays under 40 MiB.
+pub const MAX_TERMINAL_REPLAY_BYTES: usize = 1024 * 1024;
+
+/// One dock shell's recent output, numbered by chunk.
+///
+/// # Why a shell now has a transcript in Rust
+///
+/// It did not use to, and `SessionTree` was built around that: a shell's scrollback lived only in
+/// its xterm, so anything that unmounted the pane destroyed it. A pane in its own window is exactly
+/// that unmount — the xterm in the main window goes away and a new one starts in another webview —
+/// and so, less deliberately, is a webview reload. Both now attach by asking for this.
+///
+/// # Same invariant as [`ReplayBuffer`]
+///
+/// The number never goes backwards, including across a trim that discards the chunks it counted.
+/// The window subscribes to `pty:output` before it asks for the snapshot, so a chunk can arrive
+/// twice, and the number is the only thing both paths can compare.
+///
+/// Whole chunks are dropped from the front, because a chunk is the unit the number names; cutting
+/// one in half would leave a snapshot claiming a sequence it only half contains. The first chunk
+/// kept may start mid-escape-sequence all the same — the one it continued is gone — which xterm
+/// renders as a stray glyph or two at the very top of history, not as a broken terminal.
+#[derive(Debug)]
+pub struct TerminalRing {
+    chunks: VecDeque<(u64, Vec<u8>)>,
+    bytes: usize,
+    next: u64,
+    cap: usize,
+}
+
+impl TerminalRing {
+    #[must_use]
+    pub fn new(cap: usize) -> Self {
+        Self {
+            chunks: VecDeque::new(),
+            bytes: 0,
+            next: 0,
+            cap,
+        }
+    }
+
+    /// Keep a chunk and give it its number.
+    pub fn push(&mut self, chunk: &[u8]) -> u64 {
+        let seq = self.next;
+        self.next += 1;
+        // A single chunk larger than the whole budget keeps its tail: the end of a burst is what
+        // is on screen, and the start is what would have scrolled away first anyway.
+        let kept = &chunk[chunk.len().saturating_sub(self.cap)..];
+        self.bytes += kept.len();
+        self.chunks.push_back((seq, kept.to_vec()));
+        while self.bytes > self.cap {
+            let Some((_, dropped)) = self.chunks.pop_front() else {
+                break;
+            };
+            self.bytes -= dropped.len();
+        }
+        seq
+    }
+
+    /// Everything kept, as one run of bytes, and the number of the last chunk in it.
+    ///
+    /// `None` when nothing has been kept yet, so the caller can tell "no output so far" from "the
+    /// output so far is empty" — only the first leaves nothing to deduplicate against.
+    #[must_use]
+    pub fn snapshot(&self) -> Option<(u64, Vec<u8>)> {
+        let (through, _) = self.chunks.back()?;
+        let mut out = Vec::with_capacity(self.bytes);
+        for (_, chunk) in &self.chunks {
+            out.extend_from_slice(chunk);
+        }
+        Some((*through, out))
+    }
+
+    /// Bytes currently kept.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.bytes
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes == 0
+    }
+}
+
 /// What the frontend needs to know about a live agent session.
 ///
 /// Kept out of `view.rs` because it is not itself an IPC type — [`crate::view::AgentSessionView`]
@@ -491,6 +580,15 @@ pub struct App {
     /// which reports running sessions only, so an entry for a shell the user exited answers
     /// "not running" without anybody having to remember to clean up.
     shells: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, ShellEntry>>,
+    /// What each dock shell has printed, for a window that attaches after it was printed.
+    ///
+    /// Apart from [`Self::shells`] rather than a field on [`ShellEntry`] because output can arrive
+    /// before `open_shell` has inserted the entry: the reader thread starts inside `spawn`, and a
+    /// prompt is usually on its way before `spawn` returns. A ring created on the first chunk has
+    /// no such window. Forgotten wherever the shell's entry is — see [`Self::forget_shell_output`].
+    terminal_replay: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, TerminalRing>>,
+    /// Panes the user has moved into windows of their own. See `pane_windows.rs`.
+    pub pane_windows: crate::pane_windows::Registry,
     /// Live agent sessions, keyed by **session id**, exactly as the shells map above is.
     ///
     /// Here rather than on the port for the same reason `shells` is: "which sessions does this
@@ -602,6 +700,8 @@ impl App {
             resolved_path,
             os_tokens: wtm_exec::os_tokens(),
             shells: parking_lot::Mutex::new(BTreeMap::new()),
+            terminal_replay: parking_lot::Mutex::new(BTreeMap::new()),
+            pane_windows: crate::pane_windows::Registry::default(),
             handoff: crate::handoff::Hub::default(),
             browsers: crate::browser::Host::default(),
             dictation: crate::dictate::Dictation::default(),
@@ -1148,6 +1248,11 @@ impl App {
         // the only moment the map grows, so it stays the size of what is actually running.
         let running = self.running_sessions();
         shells.retain(|session, _| running.contains(session.as_str()));
+        // The same prune for the output, and by the same test — which keeps the new shell's ring,
+        // since it is running, even though its entry is only inserted below.
+        self.terminal_replay
+            .lock()
+            .retain(|session, _| running.contains(session.as_str()));
 
         shells.insert(
             spawned.session.clone(),
@@ -1205,6 +1310,7 @@ impl App {
         if self.shells.lock().remove(&session).is_none() {
             return false;
         }
+        self.forget_shell_output(&session);
         let closed = match self.pty.kill(&session) {
             Ok(()) => true,
             Err(error) => {
@@ -1215,6 +1321,31 @@ impl App {
         };
         self.pty.reap_finished(KEEP_FINISHED_SESSIONS);
         closed
+    }
+
+    /// Keep a chunk a dock shell printed, and give it its number.
+    ///
+    /// Called on the reader thread for every chunk, before it is emitted, so the number the window
+    /// receives is the number the ring holds — the order `record_agent_event` keeps, for the same
+    /// reason. Creates the ring on first use; see [`Self::terminal_replay`] for why.
+    pub fn record_shell_output(&self, session: &wtm_core::model::SessionId, chunk: &[u8]) -> u64 {
+        self.terminal_replay
+            .lock()
+            .entry(session.clone())
+            .or_insert_with(|| TerminalRing::new(MAX_TERMINAL_REPLAY_BYTES))
+            .push(chunk)
+    }
+
+    /// What a dock shell has printed that is still kept, and the number of its last chunk.
+    #[must_use]
+    pub fn shell_replay(&self, session_id: &str) -> Option<(u64, Vec<u8>)> {
+        let session = wtm_core::model::SessionId::new(session_id);
+        self.terminal_replay.lock().get(&session)?.snapshot()
+    }
+
+    /// Drop a shell's kept output. Every path that forgets its [`ShellEntry`] calls this too.
+    fn forget_shell_output(&self, session: &wtm_core::model::SessionId) {
+        self.terminal_replay.lock().remove(session);
     }
 
     pub(crate) fn reap_hosts(&self) {
@@ -1587,6 +1718,7 @@ impl App {
             let mut map = self.shells.lock();
             for session in &shells {
                 map.remove(session);
+                self.forget_shell_output(session);
             }
         }
         {
@@ -2329,6 +2461,78 @@ mod tests {
         let listed = app.live_shells();
         assert_eq!(listed.len(), 1, "got {listed:?}");
         assert_eq!(listed[0].session, survivor.as_str());
+        app.pty.kill_all();
+    }
+
+    #[test]
+    fn terminal_scrollback_is_bounded_by_bytes_and_trimmed_at_chunk_boundaries() {
+        let mut ring = TerminalRing::new(10);
+        ring.push(b"aaaa");
+        ring.push(b"bbbb");
+        // Twelve bytes now: the oldest whole chunk goes, never half of one.
+        ring.push(b"cccc");
+        let (through, bytes) = ring.snapshot().expect("something is kept");
+        assert_eq!(through, 2);
+        assert_eq!(bytes, b"bbbbcccc");
+        assert_eq!(ring.len(), 8);
+
+        // One burst larger than the whole budget keeps its tail, which is what was on screen.
+        ring.push(b"0123456789ABCDEF");
+        let (through, bytes) = ring.snapshot().expect("something is kept");
+        assert_eq!(through, 3);
+        assert_eq!(bytes, b"6789ABCDEF");
+    }
+
+    #[test]
+    fn a_chunk_number_never_goes_backwards_across_a_trim() {
+        // The dedupe on attach compares these numbers, so one reused after a trim would make a
+        // window drop live output it had never seen.
+        let mut ring = TerminalRing::new(4);
+        let numbers: Vec<u64> = (0..6).map(|_| ring.push(b"xyz")).collect();
+        assert_eq!(numbers, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(ring.snapshot().map(|(through, _)| through), Some(5));
+    }
+
+    #[test]
+    fn a_ring_that_has_kept_nothing_says_so_rather_than_reporting_an_empty_run() {
+        assert!(TerminalRing::new(8).snapshot().is_none());
+    }
+
+    #[test]
+    fn a_shells_output_can_be_read_back_after_the_window_that_saw_it_is_gone() {
+        // What a pane moved into its own window attaches with. Before this there was no second
+        // copy anywhere, and the new window's xterm started blank.
+        let (_fixture, _dir, app, project) = app_with_worktree();
+        let worktree = worktree_named(&app, &project, "shell-a");
+        let project_id = project.root.to_string_lossy().into_owned();
+        let shell = app
+            .open_shell(&worktree, &project_id, sleeper(), 24, 80, sink())
+            .expect("shell");
+
+        assert_eq!(app.record_shell_output(&shell, b"$ npm run dev\r\n"), 0);
+        assert_eq!(app.record_shell_output(&shell, b"ready on :5173\r\n"), 1);
+
+        let (through, bytes) = app.shell_replay(shell.as_str()).expect("kept");
+        assert_eq!(through, 1);
+        assert_eq!(bytes, b"$ npm run dev\r\nready on :5173\r\n");
+        app.pty.kill_all();
+    }
+
+    #[test]
+    fn closing_a_shell_forgets_its_scrollback() {
+        let (_fixture, _dir, app, project) = app_with_worktree();
+        let worktree = worktree_named(&app, &project, "shell-a");
+        let project_id = project.root.to_string_lossy().into_owned();
+        let shell = app
+            .open_shell(&worktree, &project_id, sleeper(), 24, 80, sink())
+            .expect("shell");
+        app.record_shell_output(&shell, b"secret=hunter2\r\n");
+
+        assert!(app.close_shell(shell.as_str()));
+        assert!(
+            app.shell_replay(shell.as_str()).is_none(),
+            "a closed shell's output must not outlive it in memory"
+        );
         app.pty.kill_all();
     }
 

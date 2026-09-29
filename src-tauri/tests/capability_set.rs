@@ -127,14 +127,37 @@ fn the_capability_file_grants_nothing_to_a_browser_webview() {
     }
     assert_eq!(
         config["windows"],
-        serde_json::json!(["main"]),
-        "the capability must stay scoped to the one window this app has"
+        serde_json::json!([
+            "main",
+            format!("{}*", wtm_app_lib::pane_windows::LABEL_PREFIX)
+        ]),
+        "the capability must stay scoped to the main window and the windows panes are moved into"
     );
     for permission in permissions() {
         assert!(
             !permission.starts_with("core:webview:"),
             "`{permission}` would let the frontend create or steer webviews; browser panes are \
              made by Rust alone"
+        );
+    }
+}
+
+#[test]
+fn no_window_glob_in_the_capability_can_match_a_browser_webview_label() {
+    // Tauri resolves a capability by window label as well as webview label, and a pane window is
+    // named by a glob. Were that glob ever to match `browser-…`, every browser pane's webview would
+    // be granted this app's frontend permissions by name — with no local origin needed at all.
+    let browser = wtm_app_lib::browser::LABEL_PREFIX;
+    for window in capability()["windows"].as_array().unwrap() {
+        let window = window.as_str().unwrap();
+        let fixed = window.trim_end_matches('*');
+        assert!(
+            !fixed.is_empty() && !browser.starts_with(fixed) && !fixed.starts_with(browser),
+            "the window pattern `{window}` could match a browser label starting `{browser}`"
+        );
+        assert!(
+            !fixed.contains(['*', '?', '[']),
+            "`{window}` has a wildcard before its end, which this test cannot reason about"
         );
     }
 }

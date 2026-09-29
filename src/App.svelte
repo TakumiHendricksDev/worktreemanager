@@ -33,6 +33,7 @@
   import { attention } from './lib/state/attention.svelte';
   import { composerPrefs } from './lib/state/composer.svelte';
   import { dictation } from './lib/state/dictate.svelte';
+  import { initMainWindow } from './lib/state/pane-windows.svelte';
   import { sessions } from './lib/state/sessions.svelte';
   import { sessionAwareness } from './lib/state/session-awareness.svelte';
   import { browserTools } from './lib/state/browser-tools.svelte';
@@ -73,6 +74,8 @@
   let offSessions: (() => void) | null = null;
   /** The focus/blur listeners behind the notification gate. Same contract as `offSessions`. */
   let offAttention: (() => void) | null = null;
+  /** Hearing the windows panes are popped out into. See `pane-windows.svelte.ts`. */
+  let offWindows: (() => void) | null = null;
 
   /**
    * The one navigation recipe. Notification clicks and toast clicks both land here, because
@@ -145,6 +148,14 @@
       // from, so paying for this first costs nothing visible.
       offSessions = await sessions.init();
       if (gone) {
+        offSessions?.();
+        offAttention?.();
+        return;
+      }
+      // After the panes exist, because every one of these events names one.
+      offWindows = await initMainWindow();
+      if (gone) {
+        offWindows?.();
         offSessions?.();
         offAttention?.();
         return;
@@ -266,6 +277,7 @@
       void unlistenSettings.then((off) => off());
       void unlistenUpdates.then((off) => off());
       void unlistenClicks.then((off) => off());
+      offWindows?.();
       offSessions?.();
       offAttention?.();
     };

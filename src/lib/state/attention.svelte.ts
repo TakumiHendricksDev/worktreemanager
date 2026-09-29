@@ -29,6 +29,7 @@
  */
 
 import { commands } from '../ipc/commands';
+import { inPaneWindow } from '../window-role';
 import { workspace } from './workspace.svelte';
 
 /**
@@ -59,6 +60,14 @@ export interface Announceable {
   worktreeId: string;
   /** The provider id, or null for a shell. */
   provider: string | null;
+  /**
+   * Whether the pane is in a window of its own.
+   *
+   * Such a pane is on screen whatever this window has selected, so it is never "hidden" — no toast
+   * here and no unseen dot for it. Whether the user is *looking* is the notification gate's
+   * question, which `windowFront` answers.
+   */
+  ownWindow: boolean;
 }
 
 /**
@@ -108,6 +117,14 @@ class Attention {
    * notification arriving before the first focus event is not misjudged.
    */
   private inFront = document.hasFocus();
+  /**
+   * The pane whose window is in front, when one of this app's pane windows is.
+   *
+   * The DOM cannot see another window, so `inFront` goes false the moment the user clicks into a
+   * pane window — and without this every turn finishing in the window they are watching would post
+   * a notification about it. Reported by Rust (`pane-window:focus`). Not `$state`, as above.
+   */
+  private windowFront: string | null = null;
   /**
    * True once a notification was withheld only because the preference was still unset.
    *
@@ -168,6 +185,12 @@ class Attention {
     };
   }
 
+  /** A pane window gained or lost focus. */
+  noteWindowFocus(paneId: string, focused: boolean): void {
+    if (focused) this.windowFront = paneId;
+    else if (this.windowFront === paneId) this.windowFront = null;
+  }
+
   /** Whether this worktree's panes are not the ones on screen. */
   offScreen(worktreeId: string): boolean {
     return workspace.selectedWorktreeId !== worktreeId;
@@ -179,10 +202,11 @@ class Attention {
    *
    * # Three gates, and each is separate on purpose
    *
-   * 1. **The notification gate is window focus alone**, deliberately *not* `offScreen`. An approval
-   *    in the currently selected worktree while the user is in another application still has to reach
-   *    them — they cannot see the selected worktree either, and that is the case this feature exists
-   *    for. Making it conditional on the selection would silence the most common way of being away.
+   * 1. **The notification gate is window focus alone** — this window's or a pane window's — and
+   *    deliberately *not* `offScreen`. An approval in the currently selected worktree while the user
+   *    is in another application still has to reach them — they cannot see the selected worktree
+   *    either, and that is the case this feature exists for. Making it conditional on the selection
+   *    would silence the most common way of being away.
    *
    * 2. **The toast gate is `inFront && offScreen`**, so it is the strict complement of the first via
    *    `else if`, and the two can never both fire. A toast raised while the window is in the
@@ -194,9 +218,12 @@ class Attention {
    *    handler would clear it a frame later — a dot that blinks on every ⌘-Tab back.
    */
   announce(what: Announcement, pane: Announceable): boolean {
-    const hidden = this.offScreen(pane.worktreeId);
+    // A pane window hears every session's events and records its own pane's, and telling the user
+    // is the main window's job alone: two windows judging the same event would post it twice.
+    if (inPaneWindow) return false;
+    const hidden = !pane.ownWindow && this.offScreen(pane.worktreeId);
 
-    if (!this.inFront) {
+    if (!this.inFront && this.windowFront === null) {
       if (this.pref === 'on') this.notify(what, pane);
       // Withheld rather than lost: `askIfEarned` turns this into one question on the next focus.
       else if (this.pref === 'ask') this.earned = true;

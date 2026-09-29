@@ -44,6 +44,7 @@ import {
   type Brief,
   type Resumable,
   type SpawnedSession,
+  type Worktree,
 } from '../ipc/types';
 import { statusOf, worse, type PaneStatus } from '../status';
 import { transferPrompt } from '../transfer';
@@ -51,12 +52,23 @@ import { attention, type Announceable, type Announcement } from './attention.sve
 import { asShortcut, browsers } from './browsers.svelte';
 import { workspace } from './workspace.svelte';
 import {
+  inPaneWindow,
+  ownPaneId,
+  toMain,
+  toPaneWindow,
+  type DraftDestination,
+  type PaneCommand,
+} from '../window-role';
+import {
   insert,
   move,
   panesOf,
+  putBack,
   replacePane,
   remove,
   resize,
+  takeOut,
+  type Home,
   type Layout,
   type Placement,
   type Target,
@@ -140,6 +152,15 @@ const SESSION_WAIT_STEP_MS = 50;
  * dressed up as robustness.
  */
 const MAX_EARLY_EVENTS = 64;
+
+/**
+ * How many sessions may have early events held at once.
+ *
+ * The per-session bound above was enough while every event had a pane coming for it. A pane window
+ * hears every session in the app and owns one, so without this it would hold 64 events for each of
+ * the others for as long as it stayed open.
+ */
+const MAX_EARLY_SESSIONS = 64;
 
 export type SessionKind =
   | { kind: 'shell' }
@@ -387,8 +408,118 @@ export type AgentRun = {
   children: Pane[];
 };
 
+/** A composer's unsent words, carried with a pane when it changes window. */
+export interface Draft {
+  text: string;
+  attachments: AgentAttachment[];
+}
+
+/**
+ * The fields of a pane that cross between windows.
+ *
+ * Everything a pane holds *except* what its session's events rebuild — the transcript, the
+ * approvals, usage, skills, whether a turn is running. Those come from `agent_replay` in the window
+ * that receives the pane, numbered, which is exact where a copy would be a second transcript
+ * competing with the first. What is left is what only a frontend knows: the model picked, the queue,
+ * a dismissed limit, and which session the pane is holding now.
+ */
+const CARRIED = [
+  'id',
+  'projectId',
+  'worktreeId',
+  'kind',
+  'session',
+  'url',
+  'ready',
+  'ended',
+  'error',
+  'generation',
+  'model',
+  'effort',
+  'mode',
+  'fast',
+  'effortPending',
+  'pendingProvider',
+  'queue',
+  'queueHeld',
+  'sideOf',
+  'parentSession',
+  'run',
+  'agentTitle',
+  'limit',
+  'providerSession',
+] as const satisfies readonly (keyof Pane)[];
+
+type CarriedPane = Pick<Pane, (typeof CARRIED)[number]>;
+
+/**
+ * What the main window takes from a pane window's sync while the pane is out.
+ *
+ * Not `ready` or `ended`, which the main window hears from the session itself, and not the pane's
+ * identity. `session` is handled apart, because a new one means repainting rather than assigning.
+ */
+const SYNCED = [
+  'kind',
+  'url',
+  'error',
+  'generation',
+  'model',
+  'effort',
+  'mode',
+  'fast',
+  'effortPending',
+  'pendingProvider',
+  'queue',
+  'queueHeld',
+  'agentTitle',
+  'limit',
+  'providerSession',
+] as const satisfies readonly (keyof CarriedPane)[];
+
+function carry(pane: Pane): CarriedPane {
+  // Field by field rather than `$state.snapshot(pane)`, which would copy the whole transcript on
+  // every sync to throw it away again.
+  return Object.fromEntries(
+    CARRIED.map((key) => [key, $state.snapshot(pane[key])]),
+  ) as CarriedPane;
+}
+
+/**
+ * A pane as it crosses between windows. See `pane_windows.rs` for why Rust keeps this opaque.
+ *
+ * `side` is the pane's `/btw` question, which goes with it: it is drawn over the pane, so it is
+ * owned by whichever window owns the pane. Its events travel because a side session closes when
+ * its one answer finishes, which empties its replay — the transcript would otherwise be gone.
+ *
+ * `context` is what the main window knows that a pane window has no way to ask for without
+ * repeating work the main window already did: the agent catalogue, a capability probe that for
+ * Codex costs a process, the worktree's links. Only sent outward.
+ */
+export interface PaneSnapshot {
+  pane: CarriedPane;
+  draft: Draft;
+  side: { pane: CarriedPane; events: AgentEvent[] } | null;
+  context: {
+    options: AgentOption[];
+    capabilities: Record<string, Capability>;
+    worktree: Worktree | null;
+    destination: DraftDestination | null;
+  } | null;
+}
+
+/** Shape-checked, because it has been through Rust as untyped JSON. */
+function asSnapshot(state: unknown): PaneSnapshot | null {
+  if (typeof state !== 'object' || state === null) return null;
+  const snapshot = state as PaneSnapshot;
+  if (typeof snapshot.pane !== 'object' || snapshot.pane === null) return null;
+  if (typeof snapshot.pane.id !== 'string') return null;
+  return snapshot;
+}
+
+/** Where a popped-out pane goes back to, and which worktree it belongs to. */
+type OutPane = Home & { worktreeId: string };
+
 let nextPaneId = 0;
-let nextQueuedId = 0;
 
 /** How many of these panes have a process behind them, or are on their way to one. */
 function running(panes: readonly Pane[]): number {
@@ -548,6 +679,37 @@ class Sessions {
   error = $state<string | null>(null);
   /** True when a pane was asked for and a cap said no. Cleared by the next successful open. */
   atCapacity = $state(false);
+
+  /**
+   * Panes in windows of their own, by pane id, with where each goes back to.
+   *
+   * Main window only. The pane record stays in `panes` — this window keeps recording its events,
+   * which is what keeps the sidebar, the dock badge and notifications right — but its leaf leaves
+   * the tree, so no tile shows it here. Insertion order is pop-out order, which `remember` relies on.
+   */
+  out = $state<Record<string, OutPane>>({});
+
+  /**
+   * The composer's draft, in a pane window, as its pane reports it. What syncs send back.
+   *
+   * State, unlike almost everything else a component keeps to itself, because the sync effect has
+   * to hear it change.
+   */
+  windowDraft = $state<Draft>({ text: '', attachments: [] });
+
+  /**
+   * Where a browser in a pane window sends its comments, as the main window last said.
+   *
+   * A pane window holds one pane, so it cannot work this out: the agent panes it would choose
+   * between are all somewhere else.
+   */
+  remoteDestination = $state<DraftDestination | null>(null);
+
+  /** Drafts waiting for their pane to mount, keyed by pane id. See `takeDraft`. */
+  private readonly stashedDrafts = new Map<string, Draft>();
+
+  /** One chain per pane, so two syncs never repaint the same pane at once. */
+  private readonly syncing = new Map<string, Promise<void>>();
 
   /**
    * What to call each delegated run, by run id.
@@ -825,6 +987,24 @@ class Sessions {
       },
     );
 
+    const off = () => {
+      offAgent();
+      offAgentExit();
+      offReady();
+      offPtyExit();
+      offSpawned();
+      offReleased();
+      offBrowserState();
+      offBrowserOpened();
+      offBrowserClosed();
+      offBrowserComments();
+      offBrowserPick();
+      offBrowserShortcut();
+    };
+    // A pane window holds one pane, handed to it by `adoptSnapshot`. Restoring the saved layout or
+    // adopting every live session here would give it all of them.
+    if (inPaneWindow) return off;
+
     await this.refreshOptions();
 
     const [shells, agents, liveBrowsers] = await Promise.all([
@@ -839,9 +1019,17 @@ class Sessions {
       void this.loadCapability(option.id);
     }
 
+    // Asked for before the restore rather than after it, so the two can run with no await between
+    // them: a restored tree that rendered for even a frame would mount a terminal for a shell a pane
+    // window is showing, and its first fit would resize that shell to a tile it is not in.
+    const windows = await commands.listPaneWindows().catch(() => []);
+
     // Before adopting, so a live session can land in the pane it was in rather than being appended
     // beside an empty copy of itself.
     this.restore();
+    // Straight after, so a pane that is in a window of its own is taken back out of the tree the
+    // restore just put it in — and the adopt below then attaches it there rather than tiling it.
+    this.reclaimWindows(windows);
 
     for (const shell of shells) {
       await this.adopt({ kind: 'shell' }, shell.project, shell.worktree, shell.session);
@@ -864,20 +1052,7 @@ class Sessions {
       await this.adopt({ kind: 'browser' }, view.project, view.worktree, view.id);
     }
 
-    return () => {
-      offAgent();
-      offAgentExit();
-      offReady();
-      offPtyExit();
-      offSpawned();
-      offReleased();
-      offBrowserState();
-      offBrowserOpened();
-      offBrowserClosed();
-      offBrowserComments();
-      offBrowserPick();
-      offBrowserShortcut();
-    };
+    return off;
   }
 
   /**
@@ -888,6 +1063,8 @@ class Sessions {
    * teardown for a session id the app has already forgotten and put its error in the banner.
    */
   private dropReleased(released: string[]): void {
+    // The main window drops the pane and closes this window; nothing here outlives that.
+    if (inPaneWindow) return;
     // Descendants too. Rust's `close_agents` now closes the whole settled subtree, but a
     // grandchild the announcement missed would otherwise stay as a pane pointing at a parent
     // that is gone — the orphan `close()` exists to prevent. Extra ids get an IPC close in
@@ -920,6 +1097,7 @@ class Sessions {
     if (gone.length === 0) return;
 
     const ids = new Set(gone.map((pane) => pane.id));
+    for (const id of ids) this.forgetOut(id);
     this.panes = this.panes.filter((pane) => !ids.has(pane.id));
 
     // A released child usually holds no tile, but one that was shown or split does — and leaving a
@@ -957,6 +1135,8 @@ class Sessions {
    * hunting for it.
    */
   private adoptSpawned(spawned: SpawnedSession): void {
+    // Delegated children and handoffs belong to the main window's surface.
+    if (inPaneWindow) return;
     // A second announcement for a session already on screen would open a duplicate pane pointed at
     // one CLI. Cheap to guard and impossible to notice if it ever happened.
     if (this.paneBySession(spawned.session)) return;
@@ -1387,6 +1567,12 @@ class Sessions {
    * `../transfer` for what goes into it and what is deliberately left out.
    */
   async continueOn(paneId: string, provider: string): Promise<void> {
+    // The continuation opens as a pane in the main window, which also holds this conversation's
+    // transcript — so it builds the transfer from its own copy.
+    if (inPaneWindow) {
+      toMain({ kind: 'continueOn', paneId, provider });
+      return;
+    }
     const source = this.paneById(paneId);
     if (!source) return;
 
@@ -1413,6 +1599,7 @@ class Sessions {
     if (sent) {
       const live = this.paneById(paneId);
       if (live) live.limit = null;
+      if (this.isOut(paneId)) toPaneWindow(paneId, { kind: 'dismissLimit' });
     }
   }
 
@@ -1547,6 +1734,9 @@ class Sessions {
     const waiting = this.panesIn(worktreeId).filter(
       (pane) =>
         pane.detached &&
+        // Its window is showing it, whatever this copy of it says. Filling it here would give the
+        // pane a second session that its window knows nothing about.
+        !this.isOut(pane.id) &&
         (pane.kind.kind === 'shell' || (pane.kind.kind === 'browser' && pane.url !== null)),
     );
     for (const pane of waiting) {
@@ -1646,29 +1836,40 @@ class Sessions {
       // than the raw object, which is why every other caller here does the same.
       this.panes = [...this.panes, pane];
     }
-    const live = this.paneById(pane.id);
-    if (live) {
-      // A shell's scrollback lives in its xterm instance and is replayed by the pty bridge, so only
-      // an agent has anything to fetch here.
-      const buffered =
-        kind.kind === 'agent' ? await commands.agentReplay(session).catch(() => []) : [];
-
-      // Assigned directly rather than through `claimSession`, which would drain the events that
-      // arrived while the fetch was in flight — and those must land *after* the snapshot, not
-      // before it. `claimSession` runs below, once `replayedThrough` can tell the two apart.
-      live.session = session;
-      for (const { seq, event } of buffered) this.record(session, event, seq);
-      live.replayedThrough = buffered.at(-1)?.seq ?? null;
-
-      this.claimSession(live, session);
-      // Adopted, so it is running by definition — readiness was announced before this window
-      // existed and there is no second announcement coming.
-      live.ready = true;
-    }
+    await this.attach(pane.id, session);
     // A restored pane is already in the tree, in the place the user put it. Placing it again would
     // move it, which is the behaviour this whole path exists to stop.
     if (!restored) this.place(worktreeId, pane.id, 'right');
     else this.remember(worktreeId);
+  }
+
+  /**
+   * Give a pane a session that is already running, with everything it has already said.
+   *
+   * The half of `adopt` that a pane changing window needs too: the window receiving it has never
+   * heard this session, and neither has the main window when a pane window restarted it.
+   */
+  private async attach(paneId: string, session: string): Promise<void> {
+    const pane = this.paneById(paneId);
+    if (!pane) return;
+    // A shell's scrollback is replayed by `Terminal` itself when it attaches (`terminal_replay`),
+    // and a browser's page is the webview, so only an agent has anything to fetch here.
+    const buffered =
+      pane.kind.kind === 'agent' ? await commands.agentReplay(session).catch(() => []) : [];
+    const live = this.paneById(paneId);
+    if (!live) return;
+
+    // Assigned directly rather than through `claimSession`, which would drain the events that
+    // arrived while the fetch was in flight — and those must land *after* the snapshot, not
+    // before it. `claimSession` runs below, once `replayedThrough` can tell the two apart.
+    live.session = session;
+    for (const { seq, event } of buffered) this.record(session, event, seq);
+    live.replayedThrough = buffered.at(-1)?.seq ?? null;
+
+    this.claimSession(live, session);
+    // Adopted, so it is running by definition — readiness was announced before this window
+    // existed and there is no second announcement coming.
+    live.ready = true;
   }
 
   private blank(kind: SessionKind, projectId: string, worktreeId: string): Pane {
@@ -1747,6 +1948,14 @@ class Sessions {
 
   /** Show an already-running delegated session in the current tile or in an explicit split. */
   showRelated(paneId: string, split = false): void {
+    if (inPaneWindow) {
+      toMain({ kind: 'showRelated', paneId });
+      return;
+    }
+    if (this.isOut(paneId)) {
+      void commands.focusPaneWindow(paneId).catch(() => {});
+      return;
+    }
     const pane = this.paneById(paneId);
     if (!pane) return;
     const layout = this.layoutFor(pane.worktreeId);
@@ -1807,7 +2016,7 @@ class Sessions {
    */
   private hasRoom(worktreeId: string): boolean {
     const room =
-      panesOf(this.layoutFor(worktreeId)).length < MAX_PANES_PER_WORKTREE &&
+      this.tileCount(worktreeId) < MAX_PANES_PER_WORKTREE &&
       running(this.ownPanes()) < MAX_PANES;
     this.noteCapacity(room);
     return room;
@@ -1820,7 +2029,7 @@ class Sessions {
    * already has the maximum number of user-opened CLIs even though this call adds none.
    */
   private hasTileRoom(worktreeId: string): boolean {
-    const room = panesOf(this.layoutFor(worktreeId)).length < MAX_PANES_PER_WORKTREE;
+    const room = this.tileCount(worktreeId) < MAX_PANES_PER_WORKTREE;
     this.noteCapacity(room, AT_TILE_CAP);
     return room;
   }
@@ -1839,12 +2048,26 @@ class Sessions {
    * how many tiles already have a process behind them.
    */
   private canFill(worktreeId: string): boolean {
-    const tiles = new Set(panesOf(this.layoutFor(worktreeId)));
+    const tiles = new Set([
+      ...panesOf(this.layoutFor(worktreeId)),
+      ...this.outIn(worktreeId).map((pane) => pane.id),
+    ]);
     const filled = this.panes.filter((pane) => tiles.has(pane.id));
     const room =
       running(filled) < MAX_PANES_PER_WORKTREE && running(this.ownPanes()) < MAX_PANES;
     this.noteCapacity(room);
     return room;
+  }
+
+  /**
+   * The tiles a worktree holds, counting the panes that are in windows of their own.
+   *
+   * Counted because each of those has a tile waiting for it: putting a pane back must never be
+   * refused, since a window closing has nowhere else to send it — and a cap that could be exceeded
+   * by a pane coming home would be a cap in name only.
+   */
+  private tileCount(worktreeId: string): number {
+    return panesOf(this.layoutFor(worktreeId)).length + this.outIn(worktreeId).length;
   }
 
   /** Panes the user opened. Delegated children are budgeted in `handoff.rs`; see `hasRoom`. */
@@ -1942,6 +2165,10 @@ class Sessions {
    * looking at tiles, not at a list. `panesOf` walks the tree left-to-right, top-to-bottom.
    */
   async focusOrOpenShell(projectId: string, worktreeId: string): Promise<void> {
+    if (inPaneWindow) {
+      toMain({ kind: 'focusOrOpenShell', projectId, worktreeId });
+      return;
+    }
     const shells = this.shellsIn(worktreeId);
     if (shells.length === 0) {
       await this.openShell(projectId, worktreeId);
@@ -2125,7 +2352,7 @@ class Sessions {
    */
   private adoptBrowser(view: BrowserView): void {
     browsers.apply(view);
-    if (this.paneBySession(view.id)) return;
+    if (inPaneWindow || this.paneBySession(view.id)) return;
 
     const pane = this.blank({ kind: 'browser' }, view.project, view.worktree);
     pane.url = view.url;
@@ -2151,6 +2378,9 @@ class Sessions {
       pane.working = false;
       return;
     }
+    // Closed by an agent. The main window removes the pane and closes this window.
+    if (inPaneWindow) return;
+    this.forgetOut(pane.id);
     this.panes = this.panes.filter((p) => p.id !== pane.id);
     this.layouts = {
       ...this.layouts,
@@ -2176,6 +2406,16 @@ class Sessions {
 
   /** Put text into an agent pane's composer without sending it, and bring the pane forward. */
   insertDraft(paneId: string, text: string): void {
+    // A pane window's only agent is its own; any other is somewhere the main window knows about.
+    if (inPaneWindow && paneId !== ownPaneId) {
+      toMain({ kind: 'insertDraft', paneId, text });
+      return;
+    }
+    if (!inPaneWindow && this.isOut(paneId)) {
+      toPaneWindow(paneId, { kind: 'draft', text });
+      void commands.focusPaneWindow(paneId).catch(() => {});
+      return;
+    }
     const pane = this.paneById(paneId);
     if (!pane || pane.kind.kind !== 'agent') return;
     this.draftTarget = { paneId, text };
@@ -2204,7 +2444,26 @@ class Sessions {
     return agents[0] ?? null;
   }
 
+  /**
+   * Where a browser pane's comments would go, and what to call it.
+   *
+   * `draftTargetIn` answers the question in the main window; a pane window cannot, because the
+   * agents are not in it, so it shows what the main window last told it. See `remoteDestination`.
+   */
+  draftDestination(worktreeId: string): DraftDestination | null {
+    if (inPaneWindow) return this.remoteDestination;
+    const target = this.draftTargetIn(worktreeId);
+    return target ? { id: target.id, label: this.labelOf(target) } : null;
+  }
+
   focus(worktreeId: string, paneId: string): void {
+    // A pane in a window of its own is focused by bringing that window forward. It has no tile
+    // here to put the caret in, and it must not become the target the next split lands beside.
+    if (!inPaneWindow && this.isOut(paneId)) {
+      this.seen(paneId);
+      void commands.focusPaneWindow(paneId).catch(() => {});
+      return;
+    }
     this.focused = { ...this.focused, [worktreeId]: paneId };
     this.focusTarget = paneId;
     this.focusEpoch += 1;
@@ -2239,6 +2498,11 @@ class Sessions {
   }
 
   /** Clear one pane's unread mark. Guarded, so an ordinary click writes nothing. */
+  /** A pane was looked at somewhere this window cannot see — in its own window. */
+  markPaneSeen(paneId: string): void {
+    this.seen(paneId);
+  }
+
   private seen(paneId: string): void {
     const pane = this.paneById(paneId);
     if (pane?.unseen) pane.unseen = false;
@@ -2346,8 +2610,9 @@ class Sessions {
   enqueue(paneId: string, text: string, attachments: AgentAttachment[]): string | null {
     const pane = this.paneById(paneId);
     if (!pane) return null;
-    nextQueuedId += 1;
-    const id = `queued-${nextQueuedId}`;
+    // Random rather than counted: a pane changing window takes its queue with it, and a counter
+    // per window would mint an id the other window's queue already holds.
+    const id = crypto.randomUUID();
     pane.queue = [...pane.queue, { id, text, attachments, steered: false, editing: false }];
     pane.queueHeld = false;
     void this.drain(paneId);
@@ -2423,6 +2688,393 @@ class Sessions {
   }
 
   /** Panes with a queued send in flight. Not `$state`: only `drain` reads it, to refuse a second. */
+  // ── panes in windows of their own ──
+  //
+  // See `pane_windows.rs` for the model: the pane window owns a popped-out pane and every change
+  // to it; this window keeps the record and records its session, and gets the frontend-only half
+  // back through syncs. Everything below is main-window-only unless it says otherwise.
+
+  /** Whether a pane is in a window of its own. Always false in a pane window, which *is* one. */
+  isOut(paneId: string): boolean {
+    return paneId in this.out;
+  }
+
+  /** A worktree's popped-out panes, in the order they left. */
+  outIn(worktreeId: string | null): Pane[] {
+    if (worktreeId === null) return [];
+    return Object.entries(this.out)
+      .filter(([, home]) => home.worktreeId === worktreeId)
+      .map(([paneId]) => this.paneById(paneId))
+      .filter((pane): pane is Pane => pane !== null);
+  }
+
+  /** What a pane window's title bar and the OS's window list call it. */
+  windowTitle(pane: Pane): string {
+    const worktree = workspace.worktrees.find((w) => w.id === pane.worktreeId);
+    const where = worktree?.title ?? pane.worktreeId.split('/').at(-1) ?? '';
+    return where ? `${this.labelOf(pane)} — ${where}` : this.labelOf(pane);
+  }
+
+  /**
+   * Move a pane into a window of its own, opening over the tile it leaves.
+   *
+   * The leaf comes out of the tree *first*, and that order matters for a browser: it unmounts this
+   * window's `BrowserPane`, whose teardown hides the page, before the new window exists to ask for
+   * it. `browser::set_bounds` would cope with the other order too, but only by ignoring a stale hide,
+   * and not issuing one is better than relying on it being ignored.
+   *
+   * A pane with nothing behind it — restored and not yet resumed, or a side question — has nothing
+   * to move, so it is refused rather than given a window that could only show an offer.
+   */
+  async popOut(
+    paneId: string,
+    draft: Draft,
+    rect: { x: number; y: number; w: number; h: number },
+  ): Promise<void> {
+    if (inPaneWindow || this.isOut(paneId)) return;
+    const pane = this.paneById(paneId);
+    if (!pane || pane.detached || pane.sideOf !== null) return;
+    const worktreeId = pane.worktreeId;
+    const taken = takeOut(this.layoutFor(worktreeId), paneId);
+    if (!taken) return;
+
+    const side = this.sideFor(paneId);
+    // Taken before anything moves, so the window starts from what was on screen.
+    const snapshot = this.snapshotOf(pane, draft, side, true);
+
+    this.layouts = { ...this.layouts, [worktreeId]: taken.after };
+    this.out = { ...this.out, [paneId]: { ...taken.home, worktreeId } };
+    // The side question goes with the pane, so this window stops holding one it cannot show.
+    if (side) this.panes = this.panes.filter((p) => p.id !== side.id);
+    if (this.focused[worktreeId] === paneId) {
+      this.focused = {
+        ...this.focused,
+        [worktreeId]: taken.home.neighbour ?? panesOf(taken.after).at(-1) ?? null,
+      };
+    }
+    this.remember(worktreeId);
+
+    try {
+      await commands.popOutPane({
+        paneId,
+        title: this.windowTitle(pane),
+        state: snapshot,
+        rect,
+      });
+    } catch (e) {
+      this.error = errorMessage(e);
+      // As if its window had opened and closed at once: back where it was, with its side question.
+      await this.returnPane(paneId, snapshot);
+    }
+  }
+
+  /** Put a pane back, by closing its window. The window's own close route does the rest. */
+  putPaneBack(paneId: string): void {
+    void commands.closePaneWindow(paneId).catch((e: unknown) => {
+      this.error = errorMessage(e);
+    });
+  }
+
+  /**
+   * A pane's window has closed: put the pane back where it came from, with its latest state.
+   *
+   * Applied *before* the pane leaves `out`, so replaying a restarted session's history cannot drain
+   * a queue the pane window has already sent — see the guard in `record`.
+   */
+  async returnPane(paneId: string, state: unknown): Promise<void> {
+    const home = this.out[paneId];
+    if (!home) return;
+    const pane = this.paneById(paneId);
+    const snapshot = asSnapshot(state);
+    if (pane && snapshot) {
+      await this.syncChain(paneId, () => this.applySync(pane, snapshot.pane));
+      const draft = snapshot.draft;
+      if (draft.text !== '' || draft.attachments.length > 0) {
+        this.stashedDrafts.set(paneId, draft);
+      }
+      if (snapshot.side && !this.sideFor(paneId))
+        await this.restoreSide(pane, snapshot.side);
+    }
+
+    const next = { ...this.out };
+    delete next[paneId];
+    this.out = next;
+    // Closed while it was out: the record is gone, and so is anything to put back.
+    const live = this.paneById(paneId);
+    if (!live) return;
+
+    this.layouts = {
+      ...this.layouts,
+      [home.worktreeId]: putBack(this.layoutFor(home.worktreeId), paneId, home),
+    };
+    this.focus(home.worktreeId, paneId);
+    this.remember(home.worktreeId);
+  }
+
+  /** A pane window reported a change to its pane. */
+  applyWindowSync(paneId: string, state: unknown): void {
+    const pane = this.paneById(paneId);
+    const snapshot = asSnapshot(state);
+    if (!pane || !snapshot || !this.isOut(paneId)) return;
+    void this.syncChain(paneId, () => this.applySync(pane, snapshot.pane));
+  }
+
+  private syncChain(paneId: string, work: () => Promise<void>): Promise<void> {
+    const next = (this.syncing.get(paneId) ?? Promise.resolve()).then(work, work);
+    this.syncing.set(paneId, next);
+    return next;
+  }
+
+  /**
+   * Take the frontend-only half of a pane from its window.
+   *
+   * # A new session is repainted, not assigned
+   *
+   * A pane window that restarted its pane, or swapped its provider, holds a session this window
+   * has never attached — its events went to `holdEvent` and its transcript is empty here. Assigning
+   * the id would leave a pane that reads correctly and has none of its history, so the old
+   * session's state is cleared and the new one is attached the way `adopt` attaches one: replayed,
+   * then claimed.
+   */
+  private async applySync(pane: Pane, carried: CarriedPane): Promise<void> {
+    const live = this.paneById(pane.id);
+    if (!live) return;
+    const moved = carried.session !== live.session;
+    if (moved) {
+      live.session = null;
+      live.events = [];
+      live.eventBytes = 0;
+      live.approvals = [];
+      live.usage = null;
+      live.working = false;
+      live.lastTurnFinished = false;
+      live.ready = false;
+      live.ended = null;
+      live.skills = [];
+      live.replayedThrough = null;
+    }
+    for (const key of SYNCED) {
+      (live as Record<(typeof SYNCED)[number], unknown>)[key] = carried[key];
+    }
+    if (moved && carried.session !== null) await this.attach(live.id, carried.session);
+    if (moved && live.kind.kind === 'agent') void this.refreshResumable(live.worktreeId);
+  }
+
+  /**
+   * After this window reloads, take back out of the tree every pane that is in a window of its own.
+   *
+   * `restore` has just put them in, because `remember` saves out panes at home — which is right for
+   * a relaunch, where the windows are gone, and wrong for a reload, where they are not. A window
+   * whose pane this window has no record of is closed, and its session is adopted here instead:
+   * better one tile than a window nothing can put back.
+   */
+  private reclaimWindows(windows: { paneId: string; state: unknown }[]): void {
+    for (const { paneId, state } of windows) {
+      const pane = this.paneById(paneId);
+      const taken = pane ? takeOut(this.layoutFor(pane.worktreeId), paneId) : null;
+      if (!pane || !taken) {
+        void commands.closePaneWindow(paneId).catch(() => {});
+        continue;
+      }
+      this.layouts = { ...this.layouts, [pane.worktreeId]: taken.after };
+      this.out = { ...this.out, [paneId]: { ...taken.home, worktreeId: pane.worktreeId } };
+      const snapshot = asSnapshot(state);
+      if (snapshot) {
+        for (const key of SYNCED) {
+          (pane as Record<(typeof SYNCED)[number], unknown>)[key] = snapshot.pane[key];
+        }
+        // What `adopt` matches the live session against, so it lands in this pane.
+        pane.session = snapshot.pane.session;
+      }
+    }
+  }
+
+  /** Stop treating a pane as out, and close its window. For a pane being closed or dropped. */
+  private forgetOut(paneId: string): void {
+    if (inPaneWindow || !this.isOut(paneId)) return;
+    const next = { ...this.out };
+    delete next[paneId];
+    this.out = next;
+    void commands.closePaneWindow(paneId).catch(() => {});
+  }
+
+  private snapshotOf(
+    pane: Pane,
+    draft: Draft,
+    side: Pane | null,
+    withContext: boolean,
+  ): PaneSnapshot {
+    const provider = pane.kind.kind === 'agent' ? pane.kind.provider : null;
+    const capability = provider !== null ? this.capabilities[provider] : null;
+    return {
+      pane: carry(pane),
+      draft: $state.snapshot(draft),
+      side: side ? { pane: carry(side), events: $state.snapshot(side.events) } : null,
+      context: withContext
+        ? {
+            options: $state.snapshot(this.options),
+            capabilities:
+              provider !== null && capability
+                ? { [provider]: $state.snapshot(capability) }
+                : {},
+            worktree: $state.snapshot(
+              workspace.worktrees.find((w) => w.id === pane.worktreeId) ?? null,
+            ),
+            destination:
+              pane.kind.kind === 'browser' ? this.draftDestination(pane.worktreeId) : null,
+          }
+        : null,
+    };
+  }
+
+  /**
+   * A pane window's own record of its pane, for syncing back. Null once the pane is gone.
+   *
+   * Reads only what it carries — never the transcript — so the effect that calls it re-runs when
+   * the pane's settings change and not once per streamed token.
+   */
+  snapshotFor(paneId: string): PaneSnapshot | null {
+    const pane = this.paneById(paneId);
+    if (!pane) return null;
+    return this.snapshotOf(pane, this.windowDraft, this.sideFor(paneId), false);
+  }
+
+  /**
+   * Take the pane a pane window was handed, from the state Rust kept for it. Pane window only.
+   *
+   * False when there is nothing usable — a window that outlived its main window's record, which
+   * `pane_windows.rs` makes unlikely but a hand-edited build could still produce.
+   */
+  async adoptWindowState(state: unknown): Promise<boolean> {
+    const snapshot = asSnapshot(state);
+    if (!snapshot) return false;
+    workspace.seed(snapshot.pane.projectId, snapshot.context?.worktree ?? null);
+    await this.adoptSnapshot(snapshot);
+    return true;
+  }
+
+  /**
+   * Take the one pane a pane window holds. Pane window only.
+   *
+   * The pane keeps the main window's id, which is what every message between the two names it by.
+   * Its queue is set only *after* the replay: a replayed `turn_finished` drains whatever queue the
+   * pane holds at that moment, and replaying history must not send the user's queued words into
+   * the middle of a turn that is still running.
+   */
+  private async adoptSnapshot(snapshot: PaneSnapshot): Promise<void> {
+    const carried = snapshot.pane;
+    const context = snapshot.context;
+    if (context) {
+      this.options = context.options;
+      this.capabilities = { ...context.capabilities };
+      this.remoteDestination = context.destination;
+    }
+
+    const pane = this.blank(carried.kind, carried.projectId, carried.worktreeId);
+    this.windPast(carried.id);
+    for (const key of CARRIED) {
+      if (key === 'session' || key === 'queue' || key === 'queueHeld') continue;
+      (pane as Record<(typeof CARRIED)[number], unknown>)[key] = carried[key];
+    }
+    pane.session = null;
+    this.panes = [pane];
+    this.layouts = { [pane.worktreeId]: { node: 'pane', paneId: pane.id } };
+    this.focused = { [pane.worktreeId]: pane.id };
+    this.windowDraft = snapshot.draft;
+    this.stashedDrafts.set(pane.id, snapshot.draft);
+
+    if (carried.session !== null) {
+      if (carried.kind.kind === 'browser') {
+        const views = await commands.listBrowsers(carried.worktreeId).catch(() => []);
+        const view = views.find((candidate) => candidate.id === carried.session);
+        if (view) browsers.apply(view);
+        const comments = await commands
+          .browserListComments(carried.session)
+          .catch(() => null);
+        if (comments) browsers.setComments(carried.session, comments);
+      }
+      await this.attach(pane.id, carried.session);
+    }
+    const live = this.paneById(pane.id);
+    if (!live) return;
+    live.ended = carried.ended;
+    if (carried.ended !== null) live.ready = false;
+    live.queue = carried.queue;
+    live.queueHeld = carried.queueHeld;
+    if (snapshot.side) await this.restoreSide(live, snapshot.side);
+  }
+
+  /** Mint ids past one this window was handed, so the next `blank` cannot collide with it. */
+  private windPast(id: string): void {
+    const n = Number.parseInt(id.replace('pane-', ''), 10);
+    if (Number.isFinite(n)) nextPaneId = Math.max(nextPaneId, n);
+  }
+
+  /**
+   * Put back a `/btw` question that travelled with its pane.
+   *
+   * Under a fresh id: the window that asked it minted its id from its own counter, which knows
+   * nothing of this window's panes. Repainted from the side session's replay while it is still
+   * streaming, and from the carried events once it has finished and closed.
+   */
+  private async restoreSide(
+    parent: Pane,
+    carried: { pane: CarriedPane; events: AgentEvent[] },
+  ): Promise<void> {
+    const side = this.blank(parent.kind, parent.projectId, parent.worktreeId);
+    side.sideOf = parent.id;
+    side.model = carried.pane.model;
+    side.effort = carried.pane.effort;
+    side.mode = carried.pane.mode;
+    side.fast = carried.pane.fast;
+    side.error = carried.pane.error;
+    this.panes = [...this.panes, side];
+
+    const session = carried.pane.session;
+    const replay =
+      session !== null ? await commands.agentReplay(session).catch(() => []) : [];
+    if (session !== null && replay.length > 0) {
+      await this.attach(side.id, session);
+      return;
+    }
+    const live = this.paneById(side.id);
+    if (!live) return;
+    live.session = session;
+    live.events = carried.events;
+    live.eventBytes = carried.events.reduce((total, event) => total + eventBytes(event), 0);
+    live.lastTurnFinished = carried.events.some((event) => event.kind === 'turn_finished');
+    live.ended = carried.pane.ended;
+    live.ready = carried.pane.ready;
+  }
+
+  /**
+   * A draft handed over with a pane, for its composer to start from. Taken once.
+   *
+   * Read by `SessionPane` as it mounts, rather than pushed through `draftEpoch`: the pane mounts
+   * *after* it is handed over, and an epoch bumped before a component exists is one it never sees.
+   */
+  takeDraft(paneId: string): Draft | null {
+    const draft = this.stashedDrafts.get(paneId) ?? null;
+    this.stashedDrafts.delete(paneId);
+    return draft;
+  }
+
+  /** A pane window's composer reporting its draft, so the next sync carries it. */
+  noteWindowDraft(draft: Draft): void {
+    this.windowDraft = draft;
+  }
+
+  /** Do what the main window asked. Pane window only. */
+  obey(paneId: string, command: PaneCommand): void {
+    if (command.kind === 'draft') {
+      this.insertDraft(paneId, command.text);
+    } else if (command.kind === 'dismissLimit') {
+      this.dismissLimit(paneId);
+    } else {
+      this.remoteDestination = command.destination;
+    }
+  }
+
   private readonly draining = new Set<string>();
 
   /**
@@ -2589,6 +3241,12 @@ class Sessions {
     const closing = this.paneById(paneId);
     const side = this.sideFor(paneId);
     if (side) await this.close(side.id);
+    // A pane window closes its own side question, which only it holds, and asks the main window for
+    // the rest: the record, the delegated children, and this window, are all the main window's.
+    if (inPaneWindow && closing?.sideOf === null) {
+      toMain({ kind: 'close', paneId });
+      return;
+    }
     for (const child of this.childrenOf(closing?.session ?? null)) {
       await this.close(child.id);
     }
@@ -2598,6 +3256,7 @@ class Sessions {
   private async closeOne(paneId: string): Promise<void> {
     const pane = this.paneById(paneId);
     if (!pane) return;
+    this.forgetOut(paneId);
 
     if (pane.session) {
       try {
@@ -2763,6 +3422,7 @@ class Sessions {
       }
     }
     const gone = new Set(doomed.map((p) => p.id));
+    for (const id of gone) this.forgetOut(id);
     this.panes = this.panes.filter((p) => !gone.has(p.id));
 
     const layouts = { ...this.layouts };
@@ -2788,9 +3448,19 @@ class Sessions {
    * restoring one would offer to continue a conversation the provider was told not to keep.
    */
   private remember(worktreeId: string): void {
+    // localStorage is shared by every window on this origin, and a pane window's one-pane surface
+    // written here would replace the main window's whole arrangement for the worktree.
+    if (inPaneWindow) return;
     const panes = this.panesIn(worktreeId).filter((pane) => pane.sideOf === null);
+    // Saved with every popped-out pane back where it came from, because pane windows do not survive
+    // a relaunch and a pane with no leaf would come back unreachable. Newest first, so each one is
+    // put back into the tree it left — which keeps the exact answer exact.
+    let layout = this.layouts[worktreeId] ?? null;
+    for (const [paneId, home] of Object.entries(this.out).reverse()) {
+      if (home.worktreeId === worktreeId) layout = putBack(layout, paneId, home);
+    }
     writeSurface(worktreeId, {
-      layout: this.layouts[worktreeId] ?? null,
+      layout,
       focused: this.focused[worktreeId] ?? null,
       panes: panes.map((pane) => ({
         id: pane.id,
@@ -2856,6 +3526,10 @@ class Sessions {
 
   /** Hold an event for a session no pane owns yet. Oldest dropped first, as the transcript does. */
   private holdEvent(session: string, event: AgentEvent, seq: number | null): void {
+    if (!this.eventsAhead.has(session) && this.eventsAhead.size >= MAX_EARLY_SESSIONS) {
+      const oldest = this.eventsAhead.keys().next().value;
+      if (oldest !== undefined) this.eventsAhead.delete(oldest);
+    }
     const waiting = this.eventsAhead.get(session) ?? [];
     waiting.push({ event, seq });
     if (waiting.length > MAX_EARLY_EVENTS)
@@ -2902,7 +3576,10 @@ class Sessions {
     } else if (event.kind === 'turn_finished') {
       pane.working = false;
       pane.lastTurnFinished = true;
-      if (pane.sideOf === null && attention.announce('finished', announceable(pane))) {
+      if (
+        pane.sideOf === null &&
+        attention.announce('finished', announceable(pane, this.isOut(pane.id)))
+      ) {
         pane.unseen = true;
       }
       // A side question is single-turn. Keep its answer in the overlay, not a spare CLI process.
@@ -2911,14 +3588,20 @@ class Sessions {
       }
       // Every steer into this turn has been taken by now or never will be — each driver holds the
       // finish back until it is (`Protocol::steer`) — so what is left of them is only clutter.
-      if (pane.queue.length > 0) {
+      //
+      // Not for a pane in a window of its own, whose queue that window drains. This window hears
+      // the same `turn_finished`, and draining here too would send the next message twice.
+      if (pane.queue.length > 0 && !this.isOut(pane.id)) {
         pane.queue = pane.queue.filter((entry) => !entry.steered);
         void this.drain(pane.id);
       }
     } else if (event.kind === 'failed') {
       pane.working = false;
       this.holdQueue(pane);
-      if (pane.sideOf === null && attention.announce('failed', announceable(pane))) {
+      if (
+        pane.sideOf === null &&
+        attention.announce('failed', announceable(pane, this.isOut(pane.id)))
+      ) {
         pane.unseen = true;
       }
     } else if (event.kind === 'limit_reached') {
@@ -2927,7 +3610,10 @@ class Sessions {
       // throw away everything in it for a single refusal.
       this.holdQueue(pane);
       pane.limit = { message: event.message, resetsAt: event.resetsAt };
-      if (pane.sideOf === null && attention.announce('limit', announceable(pane))) {
+      if (
+        pane.sideOf === null &&
+        attention.announce('limit', announceable(pane, this.isOut(pane.id)))
+      ) {
         pane.unseen = true;
       }
     }
@@ -2936,7 +3622,10 @@ class Sessions {
       pane.approvals = [...pane.approvals, { id: event.id, request: event.request }];
       if (
         pane.sideOf === null &&
-        attention.announce(announcementFor(event.request), announceable(pane))
+        attention.announce(
+          announcementFor(event.request),
+          announceable(pane, this.isOut(pane.id)),
+        )
       ) {
         pane.unseen = true;
       }
@@ -3034,7 +3723,13 @@ class Sessions {
      * the user restarted a moment ago would be a lie about a thing they did on purpose. The dot is
      * cheap enough to be wrong; an alert is not.
      */
-    if (pane.sideOf === null && attention.offScreen(pane.worktreeId)) pane.unseen = true;
+    if (
+      pane.sideOf === null &&
+      !inPaneWindow &&
+      !this.isOut(pane.id) &&
+      attention.offScreen(pane.worktreeId)
+    )
+      pane.unseen = true;
     // An approval nobody can answer any more would sit on screen forever.
     pane.approvals = [];
     // A steer the process never took is unsent again, for a Restart to deliver. See `restart`.
@@ -3064,12 +3759,13 @@ function facts(pane: Pane): Parameters<typeof statusOf>[0] {
   };
 }
 
-function announceable(pane: Pane): Announceable {
+function announceable(pane: Pane, ownWindow: boolean): Announceable {
   return {
     id: pane.id,
     projectId: pane.projectId,
     worktreeId: pane.worktreeId,
     provider: pane.kind.kind === 'agent' ? pane.kind.provider : null,
+    ownWindow,
   };
 }
 

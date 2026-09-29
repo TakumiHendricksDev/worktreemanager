@@ -32,8 +32,8 @@ use crate::openers;
 use crate::view::{
     ActionView, AgentOptionView, AgentSessionView, BackgroundTaskView, BriefView, BrowserView,
     CapabilityView, DatabaseConnectionView, DoctorView, ErrorView, FieldView, FormView,
-    OpenersView, PaletteView, ProjectView, RegisteredView, ResumableView, TerminalSessionView,
-    WorktreeView,
+    OpenersView, PaletteView, ProjectView, RegisteredView, ResumableView, TerminalReplayView,
+    TerminalSessionView, WorktreeView,
 };
 
 /// Shared application state.
@@ -338,10 +338,36 @@ pub async fn get_pref(app: AppState<'_>, key: String) -> Reply<Option<String>> {
     blocking(move || app.config.user_pref(&key).map_err(Into::into)).await
 }
 
+/// Emitted after a preference is written, with its key and value.
+///
+/// For a pane window: it reads its preferences once, at start, like the main window does, and
+/// without this a theme picked in the main window's Settings would leave the pane window painted
+/// in the old one until it was closed.
+pub const PREF_CHANGED_EVENT: &str = "wtm:pref-changed";
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct PrefChanged {
+    key: String,
+    value: String,
+}
+
 #[tauri::command]
-pub async fn set_pref(app: AppState<'_>, key: String, value: String) -> Reply<()> {
+pub async fn set_pref(
+    app: AppState<'_>,
+    handle: tauri::AppHandle,
+    key: String,
+    value: String,
+) -> Reply<()> {
+    use tauri::Emitter;
+
     let app = Arc::clone(&app);
-    blocking(move || app.config.set_user_pref(&key, &value).map_err(Into::into)).await
+    blocking(move || {
+        app.config.set_user_pref(&key, &value)?;
+        // A failed emit means no window is listening, which is not a failure to save.
+        let _ = handle.emit(PREF_CHANGED_EVENT, PrefChanged { key, value });
+        Ok(())
+    })
+    .await
 }
 
 // ─────────────────────────────── dictation ───────────────────────────────
@@ -1503,7 +1529,7 @@ pub async fn open_terminal(
         });
 
         let (rows, cols) = usable_geometry(rows, cols);
-        let sink = crate::pty_bridge::EventSink::new(handle);
+        let sink = crate::pty_bridge::EventSink::recording(handle, Arc::clone(&app));
         let session = app
             .open_shell(&worktree, &project_id, argv, rows, cols, sink)
             .map_err(|e| ErrorView::new("exec", e.to_string()))?;
@@ -1520,8 +1546,8 @@ pub async fn open_terminal(
 ///
 /// The re-attach path, and the reason it has to exist in Rust: a webview reload throws away
 /// the frontend's pane-to-session map while the shells keep running in process sessions of
-/// their own, so without this they are unreachable until the app quits. It does **not**
-/// restore a transcript — no output is buffered anywhere but in the pane that received it.
+/// their own, so without this they are unreachable until the app quits. It does not carry a
+/// transcript; a pane that attaches asks [`terminal_replay`] for that.
 ///
 /// Deliberately *not* derived from `PtyHost::sessions` directly. That also reports the sessions
 /// of running actions and of setup, which carry the same worktree id and must never be adopted
@@ -1542,6 +1568,28 @@ pub async fn list_terminals(app: AppState<'_>) -> Reply<Vec<TerminalSessionView>
                 project: shell.project,
             })
             .collect())
+    })
+    .await
+}
+
+/// What one dock shell has printed that is still kept.
+///
+/// How a pane attaches to a shell it did not start: one in a window of its own, one being put
+/// back, one repainting after a reload. `None` for a session that is not a dock shell or has
+/// printed nothing yet; the caller then writes live output only, which is all there is.
+#[tauri::command]
+pub async fn terminal_replay(
+    app: AppState<'_>,
+    session: String,
+) -> Reply<Option<TerminalReplayView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(app
+            .shell_replay(&session)
+            .map(|(through, bytes)| TerminalReplayView {
+                through,
+                chunk_base64: crate::pty_bridge::base64_encode(&bytes),
+            }))
     })
     .await
 }
@@ -2963,11 +3011,13 @@ pub async fn browser_history(
 pub async fn browser_set_bounds(
     app: AppState<'_>,
     handle: tauri::AppHandle,
+    window: tauri::Window,
     id: String,
     bounds: Option<crate::browser::Bounds>,
 ) -> Reply<()> {
     let app = Arc::clone(&app);
-    blocking(move || crate::browser::set_bounds(&handle, &app, &id, bounds)).await
+    let caller = window.label().to_owned();
+    blocking(move || crate::browser::set_bounds(&handle, &app, &id, bounds, &caller)).await
 }
 
 #[tauri::command]
@@ -3098,6 +3148,89 @@ pub async fn browser_set_theme(
 #[tauri::command]
 pub async fn browser_open_devtools(handle: tauri::AppHandle, id: String) -> Reply<()> {
     blocking(move || crate::browser::open_devtools(&handle, &id)).await
+}
+
+// ═══════════════════════════ panes in windows of their own ═══════════════════════════
+
+/// Move a pane into a window of its own. See `pane_windows.rs`.
+///
+/// `rect` is where the pane sat, in the main window's CSS pixels, so the window opens over it.
+/// `state` is the frontend's record of the pane, handed to the new window as it starts.
+#[tauri::command]
+pub async fn pop_out_pane(
+    app: AppState<'_>,
+    handle: tauri::AppHandle,
+    window: tauri::Window,
+    pane_id: String,
+    title: String,
+    state: serde_json::Value,
+    rect: crate::browser::Bounds,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        crate::pane_windows::pop_out(&handle, &app, &window, &pane_id, &title, state, rect)
+    })
+    .await
+}
+
+/// The pane this window holds, for a pane window's frontend as it starts. `None` anywhere else.
+#[tauri::command]
+pub async fn pane_window_state(
+    app: AppState<'_>,
+    window: tauri::Window,
+) -> Reply<Option<crate::pane_windows::PaneWindowView>> {
+    let app = Arc::clone(&app);
+    blocking(move || Ok(crate::pane_windows::state_for(&app, &window))).await
+}
+
+/// A pane window's latest record of its pane, passed on to the main window.
+#[tauri::command]
+pub async fn sync_pane_window(
+    app: AppState<'_>,
+    handle: tauri::AppHandle,
+    window: tauri::Window,
+    state: serde_json::Value,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        crate::pane_windows::sync(&handle, &app, &window, state);
+        Ok(())
+    })
+    .await
+}
+
+/// Put a pane back, by closing its window.
+#[tauri::command]
+pub async fn close_pane_window(
+    app: AppState<'_>,
+    handle: tauri::AppHandle,
+    pane_id: String,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || crate::pane_windows::close(&handle, &app, &pane_id)).await
+}
+
+/// Bring a pane's window forward, or the main window when no pane is named.
+#[tauri::command]
+pub async fn focus_pane_window(handle: tauri::AppHandle, pane_id: Option<String>) -> Reply<()> {
+    blocking(move || crate::pane_windows::focus(&handle, pane_id.as_deref())).await
+}
+
+/// Every pane window, for a main window that has reloaded and no longer knows which panes are out.
+#[tauri::command]
+pub async fn list_pane_windows(
+    app: AppState<'_>,
+) -> Reply<Vec<crate::pane_windows::PaneWindowView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(app
+            .pane_windows
+            .list()
+            .into_iter()
+            .map(|(pane_id, state)| crate::pane_windows::PaneWindowView { pane_id, state })
+            .collect())
+    })
+    .await
 }
 
 // ═══════════════════════════ plans and background work ═══════════════════════════

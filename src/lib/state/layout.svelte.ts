@@ -10,6 +10,10 @@
  * never overlap, so their paint order never has to be decided. And side-by-side is what the feature
  * is for in the first place: watching a reviewer beside the thing it reviews.
  *
+ * A pane *can* now leave for an OS window of its own (`pane_windows.rs`), and that is not the
+ * floating window this rules out: the OS orders real windows, so nothing here has to. What this
+ * module contributes is the way back — `takeOut` and `putBack`.
+ *
  * (This once said "nested flex boxes cannot overlap by construction", which was the mechanism rather
  * than the reason — and the mechanism has since changed. See below.)
  *
@@ -24,8 +28,9 @@
  * `tilesOf` and `handlesOf` turn it into rectangles, and `SessionTree` positions panes absolutely
  * from those rather than nesting them to match. That is not an optimisation — nesting means a reshape
  * *destroys* the panes it moves, because a leaf becoming a split reparents an element and Svelte has
- * no DOM-preserving reparent. For a shell that is scrollback Rust does not buffer and cannot resend.
- * See `tilesOf`.
+ * no DOM-preserving reparent. For a shell that is its scrollback: Rust now keeps the last mebibyte of
+ * it for a terminal that attaches later, but a teardown still loses anything older and repaints the
+ * rest. See `tilesOf`.
  *
  * # A move does survive a restart, and what that needed
  *
@@ -115,8 +120,8 @@ const WHOLE: Frame = { x: 0, y: 0, w: 1, h: 1 };
  * Because nesting the panes in the DOM to match the tree means a reshape *destroys* them. A leaf
  * becoming a split moves a pane's element from child to grandchild, Svelte has no DOM-preserving
  * reparent, and the `<SessionPane>` subtree is torn down and rebuilt — which for a shell throws away
- * scrollback that Rust does not buffer and cannot resend. Positioning them instead means a reshape
- * only rewrites four numbers per pane.
+ * whatever scrollback is older than the mebibyte Rust keeps, and repaints the rest. Positioning them
+ * instead means a reshape only rewrites four numbers per pane.
  *
  * The order is `panesOf`'s: visual order, so DOM order and tab order still match the screen.
  */
@@ -340,4 +345,78 @@ export function resize(layout: Layout, path: string, ratio: number): Layout {
     return { ...node, a: walk(node.a, `${at}a`), b: walk(node.b, `${at}b`) };
   };
   return walk(layout, '');
+}
+
+/**
+ * Where a pane that has left the tree came from, so it can go back.
+ *
+ * Two answers, because there are two cases. If nothing else about the tree changed while the pane
+ * was away, `before` *is* the answer — every ratio the user dragged, exactly. If something did, an
+ * exact tree is meaningless, so the pane goes back beside the leaf that touched it, on the same
+ * side. That is the move an editor makes when a pane comes back from its own window, and it is what
+ * `insert` already knows how to do.
+ */
+export interface Home {
+  /** The tree with the pane in it, as it was when the pane left. */
+  before: Layout;
+  /** The tree without it, as it was straight afterwards. */
+  after: Layout | null;
+  /** The leaf the pane was beside. Null when it was the only one. */
+  neighbour: string | null;
+  /** Which side of `neighbour` it was on. */
+  side: Placement;
+}
+
+/** Take a pane out of its tree, and remember where it was. Null if it is not in this tree. */
+export function takeOut(
+  layout: Layout | null,
+  paneId: string,
+): { after: Layout | null; home: Home } | null {
+  if (!layout || !panesOf(layout).includes(paneId)) return null;
+  const after = remove(layout, paneId);
+  const beside = besideOf(layout, paneId);
+  return {
+    after,
+    home: { before: layout, after, neighbour: beside.neighbour, side: beside.side },
+  };
+}
+
+/** The leaf a pane touches, and which side of it the pane is on. */
+function besideOf(
+  layout: Layout,
+  paneId: string,
+): { neighbour: string | null; side: Placement } {
+  const walk = (node: Layout): { neighbour: string | null; side: Placement } | null => {
+    if (node.node === 'pane') return null;
+    for (const [child, sibling, first] of [
+      [node.a, node.b, true],
+      [node.b, node.a, false],
+    ] as const) {
+      if (child.node !== 'pane' || child.paneId !== paneId) continue;
+      const side: Placement =
+        node.dir === 'row' ? (first ? 'left' : 'right') : first ? 'above' : 'below';
+      // The sibling's leaf on the edge the pane shared with it: its first when the pane came
+      // before it, its last when the pane came after.
+      const leaves = panesOf(sibling);
+      return { neighbour: (first ? leaves[0] : leaves.at(-1)) ?? null, side };
+    }
+    return walk(node.a) ?? walk(node.b);
+  };
+  return walk(layout) ?? { neighbour: null, side: 'right' };
+}
+
+/**
+ * Put a pane back into a tree, as close to where it was as the tree still allows.
+ *
+ * Compared as JSON rather than by identity, because the tree a reloaded window restored is equal to
+ * the one it saved without being the same object — and a boundary dragged while the pane was away
+ * is a change, which is what makes the exact answer wrong.
+ */
+export function putBack(layout: Layout | null, paneId: string, home: Home): Layout {
+  if (panesOf(layout).includes(paneId)) return layout as Layout;
+  if (JSON.stringify(layout) === JSON.stringify(home.after)) return home.before;
+  if (home.neighbour !== null && panesOf(layout).includes(home.neighbour)) {
+    return insert(layout, paneId, home.neighbour, home.side);
+  }
+  return insert(layout, paneId, null, 'right');
 }

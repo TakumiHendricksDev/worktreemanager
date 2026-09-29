@@ -8,9 +8,10 @@
    * A leaf becoming a split — every split, every move — flips an `{#if}` branch, so the pane's element
    * has to move from child to grandchild; Svelte 5 has no DOM-preserving reparent and `{#key}` only
    * forces more teardown. The `<SessionPane>` subtree was torn down and rebuilt. For an agent that
-   * costs scroll position; **for a shell it costs the scrollback permanently**, because `Terminal`
-   * disposes its xterm on teardown and Rust buffers nothing to resend. That was reachable before any
-   * of this: focus the shell, split an agent pane, and the shell's history was gone.
+   * costs scroll position; **for a shell it cost the scrollback permanently**, because `Terminal`
+   * disposes its xterm on teardown and Rust buffered nothing to resend. That was reachable before any
+   * of this: focus the shell, split an agent pane, and the shell's history was gone. Rust keeps the
+   * last mebibyte now, for panes that move between windows, but a reshape must still cost nothing.
    *
    * There was a second, quieter version of the same bug. A reshape that happened to keep the tree's
    * *shape* reused a `SessionPane` instance with a different `pane` prop — and `Terminal`'s creation
@@ -299,8 +300,11 @@
           <SessionPane
             {pane}
             {visible}
-            onmovestart={(event) => startMove(event, tile.paneId)}
-            onmovekey={(event) => onMoveKey(event, tile.paneId)}
+            host={{
+              kind: 'tile',
+              onmovestart: (event) => startMove(event, tile.paneId),
+              onmovekey: (event) => onMoveKey(event, tile.paneId),
+            }}
           />
         </div>
       {/key}

@@ -83,7 +83,9 @@
 @use 'components/new-worktree';
 @use 'components/note';
 @use 'components/pane';
+@use 'components/pane-window';
 @use 'components/planview';
+@use 'components/popped';
 @use 'components/preflight';
 @use 'components/progress';
 @use 'components/queue';

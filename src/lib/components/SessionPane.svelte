@@ -42,27 +42,44 @@
   const {
     pane,
     visible,
-    onmovestart,
-    onmovekey,
+    host,
   }: {
     pane: Pane;
     visible: boolean;
     /**
-     * The grip was pressed. Raw event, so the tree can decide what it means.
+     * Where the pane is shown: a tile in the main window's tiling, or a window of its own.
      *
-     * Required rather than optional, deliberately: `svelte-check` is the only guard this codebase has
-     * on a component's call sites, so a required prop is what turns "someone rendered a pane without
-     * wiring the grip" into a build error instead of a handle that silently does nothing.
+     * A union rather than two optional handlers, because the handlers are what a tile *requires*.
+     * `svelte-check` is the only guard this codebase has on a component's call sites, so a tile
+     * without `onmovestart` has to be a build error instead of a grip that silently does nothing —
+     * and a pane in its own window has no tiling to move within, so it has no grip at all.
      *
      * The geometry stays out of this file. `SessionTree` owns the pane rectangles, so it is the only
      * thing that can say what a drag or an arrow key resolves to.
      */
-    onmovestart: (event: PointerEvent) => void;
-    onmovekey: (event: KeyboardEvent) => void;
+    host:
+      | {
+          kind: 'tile';
+          /** The grip was pressed. Raw event, so the tree can decide what it means. */
+          onmovestart: (event: PointerEvent) => void;
+          onmovekey: (event: KeyboardEvent) => void;
+        }
+      | { kind: 'window' };
   } = $props();
 
-  let draft = $state('');
-  let attachments = $state<AgentAttachment[]>([]);
+  /**
+   * Whether this pane is in a window of its own.
+   *
+   * Read once: a pane never changes host without being unmounted — it leaves one window's tree and
+   * mounts in another's — so a reactive read would only ever see one value.
+   */
+  const inWindow = untrack(() => host.kind === 'window');
+
+  // Seeded from a draft that came with the pane from another window, so words typed there are here.
+  const carried = untrack(() => sessions.takeDraft(pane.id));
+  let draft = $state(carried?.text ?? '');
+  let attachments = $state<AgentAttachment[]>(carried?.attachments ?? []);
+  let section = $state<HTMLElement | null>(null);
   let contextOpen = $state(false);
   let skillsOpen = $state(false);
   let confirmRestart = $state(false);
@@ -359,6 +376,33 @@
     confirmRestart = false;
     await sessions.restart(pane.id);
   }
+
+  /**
+   * Lift this pane out into a window of its own, over the tile it leaves.
+   *
+   * The draft goes with it, because a composer is component state and this component is about to
+   * unmount; see `sessions.takeDraft` for how it arrives.
+   */
+  function popOut() {
+    const rect = section?.getBoundingClientRect();
+    if (!rect) return;
+    void sessions.popOut(
+      pane.id,
+      { text: draft, attachments: $state.snapshot(attachments) },
+      { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+    );
+  }
+
+  /*
+   * In a pane window, keep the store told what the draft is, so the next sync carries it back.
+   *
+   * Only there: in the main window the draft is read once, by `popOut`, and reporting every
+   * keystroke to a store nobody reads would be a write per character for nothing.
+   */
+  $effect(() => {
+    if (!inWindow) return;
+    sessions.noteWindowDraft({ text: draft, attachments: $state.snapshot(attachments) });
+  });
 
   async function closeConfirmed() {
     if (closingSession) return;
@@ -1099,6 +1143,7 @@
 <section
   class="c-pane"
   class:is-focused={isFocused}
+  bind:this={section}
   aria-label="{label} session"
   onfocusin={() => sessions.noteFocus(pane.worktreeId, pane.id)}
   onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
@@ -1114,17 +1159,19 @@
       across the whole webview, in exchange for Finder drops carrying real paths. See the drag-drop
       effect above.
     -->
-      <button
-        class="c-pane__grip"
-        type="button"
-        aria-label="Move this session"
-        aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
-        title="Drag to move this pane, or use the arrow keys"
-        onpointerdown={onmovestart}
-        onkeydown={onmovekey}
-      >
-        <Icon name="grip" size={12} />
-      </button>
+      {#if host.kind === 'tile'}
+        <button
+          class="c-pane__grip"
+          type="button"
+          aria-label="Move this session"
+          aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
+          title="Drag to move this pane, or use the arrow keys"
+          onpointerdown={host.onmovestart}
+          onkeydown={host.onmovekey}
+        >
+          <Icon name="grip" size={12} />
+        </button>
+      {/if}
 
       <h2 class="c-pane__title">{label}</h2>
 
@@ -1148,7 +1195,8 @@
       {/if}
 
       <!--
-      Restart · Split · Close, in that order, and the order does not change with the pane's state.
+      Restart · Split · Pop out · Close, in that order, and the order does not change with the pane's
+      state.
 
       Restart used to appear *only* on a pane that had ended or failed, which left both "on restart"
       markers — effort, and now the provider — pointing at a control that did not exist. It also meant
@@ -1215,7 +1263,7 @@
            allowed several. Both arms pass `pane.id` as the neighbour: the pane whose button was
            pressed, not whichever one the focus map thinks. See `Sessions.place` for why those
            differ on macOS. -->
-        {#if !pane.ended && !pane.error}
+        {#if !pane.ended && !pane.error && !inWindow}
           <Button
             variant="quiet"
             size="sm"
@@ -1250,6 +1298,25 @@
                     ))}
           >
             <Icon name="split-right" size={13} />
+          </Button>
+        {/if}
+
+        <!--
+          Beside Split, because both answer "where is this pane". Not offered for a restored pane with
+          nothing behind it yet, which a window of its own could only show the same offer in; and not
+          in a pane window, whose title bar carries Put back as a labelled button — a window holding
+          one pane has room to say it in words.
+        -->
+        {#if !inWindow && !pane.detached}
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title="Move this pane into a window of its own"
+            ariaLabel="Pop out into its own window"
+            onclick={popOut}
+          >
+            <Icon name="pop-out" size={13} />
           </Button>
         {/if}
 

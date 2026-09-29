@@ -22,6 +22,16 @@
    * component attaches first and learns its session second: while `session` is null it buffers
    * output for **every** session, and flushes the matching one the moment it is told which is
    * its own. That makes the attach race unlosable rather than merely unlikely.
+   *
+   * # Why it asks Rust for a replay when it attaches
+   *
+   * Because a dock shell is not always attached to by the pane that started it. A pane moved to a
+   * window of its own gets a new terminal in another webview; one being put back gets a new one
+   * here; a reload gets a new one for every shell. Rust keeps what each dock shell printed
+   * (`App::record_shell_output`), numbered, so attaching writes that first and then drops any
+   * live chunk whose number it already contained — live output kept flowing into `pending`
+   * while the replay was on its way, so the same chunk can arrive by both routes. A session
+   * Rust keeps nothing for (setup, an action) answers `null` and attaches exactly as before.
    */
   import { FitAddon } from '@xterm/addon-fit';
   import { Terminal } from '@xterm/xterm';
@@ -41,9 +51,10 @@
     /**
      * False while the pane is mounted but hidden.
      *
-     * That is how the terminal dock keeps a shell's scrollback across a worktree switch: the
-     * transcript lives in this component, so unmounting throws it away, and every pane but the
-     * active one is `display: none` instead. Defaults to true — a terminal that is on screen
+     * That is how the terminal dock keeps a shell's scrollback across a worktree switch without
+     * a round trip: every pane but the active one is `display: none` rather than unmounted. An
+     * unmount no longer loses a dock shell's history — Rust replays it on the next attach — but
+     * it does cost a repaint of up to a mebibyte, which a worktree switch should not. Defaults to true — a terminal that is on screen
      * for its whole life, like the create pane's or the remove dialog's, has nothing to
      * declare.
      */
@@ -61,12 +72,16 @@
    * session that may not even be ours would be a leak. Overflow drops the oldest chunks, which
    * degrades to "the transcript starts a little late" rather than to unbounded memory.
    */
-  const pending = new Map<string, Uint8Array[]>();
+  const pending = new Map<string, { seq: number | null; bytes: Uint8Array }[]>();
   const MAX_PENDING_CHUNKS = 2048;
   const MAX_PENDING_SESSIONS = 40;
 
   /** Deliberately not `$state`: the flush effect writes it, and reading it must not re-trigger. */
   let attachedTo: string | null = null;
+  /** The session a replay has been asked for, so a re-run of the effect does not ask twice. */
+  let attaching: string | null = null;
+  /** The last chunk number the replay contained. A live chunk at or below it is a duplicate. */
+  let replayedThrough: number | null = null;
   let term: Terminal | null = null;
   /** Hoisted out of the creation effect so `refit` can reach it. Nothing renders it. */
   let fit: FitAddon | null = null;
@@ -194,11 +209,12 @@
       // expensive half of the hottest path in the app.
       if (session !== null && attachedTo === session) {
         if (incoming !== session) return;
+        if (duplicate(event.payload.seq)) return;
         created.write(base64ToBytes(event.payload.chunkBase64));
         return;
       }
       if (session !== null && incoming !== session) return;
-      buffer(incoming, base64ToBytes(event.payload.chunkBase64));
+      buffer(incoming, event.payload.seq, base64ToBytes(event.payload.chunkBase64));
     });
 
     const unlistenExit = listen<PtyExit>('pty:exit', (event) => {
@@ -218,37 +234,59 @@
       sent = { rows: 0, cols: 0 };
       ready = false;
       attachedTo = null;
+      attaching = null;
+      replayedThrough = null;
       pending.clear();
     };
   });
 
-  function buffer(id: string, bytes: Uint8Array) {
+  function duplicate(seq: number | null): boolean {
+    return seq !== null && replayedThrough !== null && seq <= replayedThrough;
+  }
+
+  function buffer(id: string, seq: number | null, bytes: Uint8Array) {
     if (!pending.has(id) && pending.size >= MAX_PENDING_SESSIONS) {
       const first = pending.keys().next().value;
       if (first !== undefined) pending.delete(first);
     }
     const chunks = pending.get(id) ?? [];
-    chunks.push(bytes);
+    chunks.push({ seq, bytes });
     if (chunks.length > MAX_PENDING_CHUNKS)
       chunks.splice(0, chunks.length - MAX_PENDING_CHUNKS);
     pending.set(id, chunks);
   }
 
-  /** Once the session is known, drain its backlog and drop everyone else's. */
+  /** Once the session is known, replay what Rust kept, drain the backlog, drop everyone else's. */
   $effect(() => {
     const id = session;
-    if (!ready || !term || id === null || attachedTo === id) return;
+    const created = term;
+    if (!ready || !created || id === null || attachedTo === id || attaching === id) return;
+    attaching = id;
 
-    for (const chunk of pending.get(id) ?? []) term.write(chunk);
-    pending.clear();
-    attachedTo = id;
-    // Now that there is somewhere to send it, tell the child how big the pane really is.
-    //
-    // Every caller spawns with a guessed 24×100, and the observer's first fire happened before
-    // there was an id to send it to — so without this the child kept the guess for its whole
-    // life and wrapped its output at the wrong column. That was true of the create pane and the
-    // remove dialog too, long before the dock existed.
-    refit();
+    void commands
+      .terminalReplay(id)
+      .catch(() => null)
+      .then((replay) => {
+        // Superseded while the reply was on its way: torn down, or told a different session.
+        if (term !== created || session !== id || attaching !== id) return;
+        replayedThrough = replay?.through ?? null;
+        if (replay) created.write(base64ToBytes(replay.chunkBase64));
+        for (const chunk of pending.get(id) ?? []) {
+          if (!duplicate(chunk.seq)) created.write(chunk.bytes);
+        }
+        pending.clear();
+        attachedTo = id;
+        // Now that there is somewhere to send it, tell the child how big the pane really is.
+        //
+        // Every caller spawns with a guessed 24×100, and the observer's first fire happened
+        // before there was an id to send it to — so without this the child kept the guess for its
+        // whole life and wrapped its output at the wrong column. That was true of the create pane
+        // and the remove dialog too, long before the dock existed. For a pane attaching to a
+        // shell that is already running it matters twice over: the new window is a new size, and
+        // the SIGWINCH is what makes a full-screen program redraw a screen the replay only half
+        // described.
+        refit();
+      });
   });
 
   function bytesToBase64(bytes: Uint8Array): string {

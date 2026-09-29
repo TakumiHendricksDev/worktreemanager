@@ -349,10 +349,12 @@ WebKit paints nothing, which is also why `browser_screenshot` refuses a hidden p
 returning a black image.
 
 **Three fences keep a page out of the app.** Tauri refuses IPC from a remote origin unless a
-capability grants `remote`, and none does. The capability lists `windows: ["main"]`, and the child
-*lives in* the main window — so a child that ever loaded a **local** origin would inherit
-`core:default`, which is why `navigation_allowed` is an allowlist of `http`, `https` and `about:`
-and not a denylist of `tauri:`. And no capability names a `browser-*` label. `capability_set.rs`
+capability grants `remote`, and none does. The capability lists `windows: ["main", "popout-*"]` —
+the main window and the windows panes are popped out into, §6d — and the child *lives in* one of
+them, so a child that ever loaded a **local** origin would inherit `core:default`, which is why
+`navigation_allowed` is an allowlist of `http`, `https` and `about:` and not a denylist of `tauri:`.
+Moving a child between those windows changes nothing here: both are named by the same capability,
+so they grant exactly the same thing. And no capability names a `browser-*` label. `capability_set.rs`
 pins the first and third; the second is a unit test, and the spike that preceded the feature
 confirmed both by trying: a page's `invoke` was refused, and `location.href = 'tauri://localhost'`
 went nowhere.
@@ -399,6 +401,58 @@ than deleted because it is what lets both halves of the facade keep compiling an
 uninhabited-`Handle` proof in §6c honest; the alternative is a `#[cfg]` around every call site.
 
 ---
+
+## 6d. Panes in windows of their own
+
+A shell, an agent chat or a browser pane can leave the main window's tiling for an OS window of its
+own, and go back. The browser was the reason — a dev app on a second display, beside the agent
+driving it — but every kind of pane the tiling can move can move here too.
+
+**The window runs the same frontend, holding one pane.** `main.ts` mounts `PaneWindow` instead of
+`App` when the window's label says it is one (`window-role.ts`), and every store is built again
+there. So the stores that are about the whole app have to know they are not in charge:
+`sessions` restores no layout and adopts no sessions, `remember` writes nothing — `localStorage` is
+shared by every window on the origin, and a one-pane surface would overwrite the main window's —
+and `attention` never announces anything. The alternative, a thin window mirroring state the main
+window pushed at it, would have meant a second implementation of every control on a pane.
+
+**While a pane is out, its window owns it and the main window keeps a shadow.** Every change to the
+pane is made in its window, by the same store code that makes it in a tile. The main window keeps
+the record and goes on recording its session's events, which is what keeps the sidebar dots, the
+dock badge and notifications right for a pane it is not showing — and what means a pane coming back
+already has its whole transcript. What the events do not carry (the model picked, the queue, a
+dismissed limit, the draft) the pane window syncs back through Rust, debounced, as an opaque blob
+`pane_windows.rs` stores and relays. Anything an event would make *both* windows do — draining the
+queue when a turn finishes — is done only by the owner, or it would happen twice. Anything that
+creates or affects another pane (Close, a continuation, a browser's comments into an agent's
+composer) is asked of the main window, which holds the other panes.
+
+**The window opens where the tile was, and closing it puts the pane back.** Opening over the tile
+makes the gesture read as lifting the pane out. Closing — the traffic light, ⌘W, Put back in either
+window — returns it to its old place in the tree: exactly, if nothing else moved while it was away,
+or beside the leaf it touched. A session is expensive to lose and cheap to end deliberately, since
+the pane keeps its own Close. So every route goes through `Window::close`, which fires
+`CloseRequested`, and never `destroy`, which does not. Pop-outs do not survive a relaunch: the
+arrangement is saved with every popped-out pane back home, and a window on a display that is no
+longer attached is a worse morning than a pane in its old tile.
+
+**A browser moves by reparenting.** The same WKWebView is moved into the new window
+(`Webview::reparent`, behind the `unstable` feature §6c already accepted), so the page, its history
+and a half-filled form survive where reopening would keep only the URL. Which window holds it is
+decided by who last asked to show it, and only the window holding a browser may hide it — the window
+a pane left always sends a stale hide as it unmounts, and nothing orders it against the new window's
+show. `CloseRequested` moves every browser a closing window holds back to the main window first,
+because Tauri destroys every webview a closed window holds.
+
+**A shell repaints from Rust.** It used to have no transcript anywhere but its xterm, which is why
+§8 keeps panes mounted. A dock shell now keeps its last mebibyte of output in `App`, numbered by
+chunk exactly as an agent's events are, and a terminal attaching asks for it before it writes
+anything live. That is what a pane window's terminal attaches with, and a reloaded main window's
+too.
+
+**Closing the main window still quits.** It used to because it was the last window; a pane window
+would otherwise keep a process alive with no way back to the main window, so the main window's
+`Destroyed` now exits explicitly.
 
 ## 5a. Two things the real repository taught us
 
@@ -690,7 +744,9 @@ a fan. v1 refreshes on demand and on window focus. A narrow `notify` watcher on 
 option; a naive watcher over a Docker-backed worktree tree would generate thousands of events.
 
 **The terminal dock is mounted by the shell, not by the detail pane, and every pane stays mounted.** A
-terminal's transcript lives in its xterm instance, so unmounting one throws it away — and `Detail` is
+terminal's transcript lives in its xterm instance, so unmounting one throws it away — Rust now keeps a
+dock shell's last mebibyte for panes that change window (§6d), but that is a repaint and a bounded one,
+not a reason to unmount — and `Detail` is
 destroyed whenever the main pane switches views, or momentarily when a project switch lands on an empty
 cached list. So `TerminalDock` is an unconditional sibling of that `{#if}` chain, holds one pane per
 worktree you have opened a shell in, and hides all but the active one.
@@ -757,6 +813,9 @@ the no-transcript rule in `wtm-config::sessions` is untouched. The number is wha
 race-free: the window subscribes before it asks for the buffer, so an event can arrive twice, and a
 counter the emitter owns is the one thing both sides can compare. The bound is bytes as well as event
 count, and cumulative snapshots — patches, agendas, skills and usage — replace their predecessor.
+Dock shells have the same since panes could leave for windows of their own: `terminal_replay` hands
+back the last mebibyte of output, numbered by chunk, and `Terminal` drops a live chunk the replay
+already held.
 The frontend applies the same byte bound, retains up to 100,000 events, folds only an 800-event
 tail until asked, lazily mounts disclosure bodies and paginates diff lines. Display copies of
 prompts stop at 64 KiB and diffs/tool output at 2 MiB; the complete prompt still goes to the
@@ -774,7 +833,8 @@ An explicit delegated run is the one exception: it may own up to twenty child pr
 count is the requested feature, but those children live behind the agent rail and consume a tile only
 when selected or explicitly split.
 
-**The per-worktree cap counts leaves of the layout, and it did not always.** It counted pane
+**The per-worktree cap counts leaves of the layout — and the panes in windows of their own, each of
+which has a tile waiting for it — and it did not always.** It counted pane
 _records_, which were the same thing until delegation shipped — after which one `spawn_agents` run of
 three children in a worktree showing one session read as four panes, and every subsequent Shell,
 agent and resume there was refused. Silently: a refusal returns rather than raising, and the only

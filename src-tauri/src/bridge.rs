@@ -98,7 +98,7 @@ pub fn listen(handle: tauri::AppHandle, app: Arc<App>) {
     // process that made it — a crash, or a `kill -9`, leaves one behind. Last writer wins, which is
     // also what happens with two app instances: the second takes the socket and the first's sessions
     // lose their bridge. Documented rather than solved, because a second instance of a
-    // single-window desktop app is already a confusing state and a lock file would not make it less
+    // desktop app meant to run once is already a confusing state and a lock file would not make it less
     // so.
     let _ = std::fs::remove_file(&path);
     if let Some(parent) = path.parent() {

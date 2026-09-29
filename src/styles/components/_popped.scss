@@ -1,0 +1,64 @@
+/*
+ * The strip above a worktree's tiles naming its panes that are in windows of their own.
+ *
+ * Components layer, and drawn as the agent rail's sibling on purpose: both are one line above the
+ * tiles saying "these sessions are here but not in a tile", so they share its band, type size and
+ * border, and differ only in what a click does.
+ */
+.c-popped {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: var(--step--2);
+}
+
+.c-popped__heading {
+  flex: 0 0 auto;
+  color: var(--fg-subtle);
+  font-weight: 600;
+}
+
+.c-popped__pane {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+
+/* The pane's name and state, as one control: pressing it brings the pane's window forward. */
+.c-popped__show {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--fg);
+  }
+}
+
+.c-popped__label {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-popped__status {
+  color: var(--fg-subtle);
+}

@@ -1,6 +1,8 @@
 import { mount } from 'svelte';
 
 import App from './App.svelte';
+import PaneWindow from './PaneWindow.svelte';
+import { inPaneWindow } from './lib/window-role';
 
 // xterm's own stylesheet, loaded before ours.
 //
@@ -19,4 +21,7 @@ import './styles/main.scss';
 const target = document.getElementById('app');
 if (!target) throw new Error('#app is missing from index.html');
 
-export default mount(App, { target });
+// One bundle, two roots. A pane popped out of the tiling gets a window of its own running this same
+// frontend, and which root to mount is the one thing it has to know before anything else runs —
+// see `window-role.ts`.
+export default mount(inPaneWindow ? PaneWindow : App, { target });

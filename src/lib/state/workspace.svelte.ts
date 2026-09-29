@@ -202,6 +202,19 @@ class Workspace {
   openers = $state<Opener[]>([]);
   preferredOpener = $state<string | null>(null);
 
+  /**
+   * Know one worktree, without listing or selecting anything. For a pane window.
+   *
+   * `init` reads the project list, lands on the last project and writes it back as the last one —
+   * all of which is the main window's to do, and the last of which a pane window would get wrong.
+   * What a popped-out pane needs is only the worktree it is in, for a browser's links and home page,
+   * and the main window hands that over.
+   */
+  seed(projectId: string, worktree: Worktree | null): void {
+    this.activeProjectId = projectId;
+    this.worktrees = worktree ? [worktree] : [];
+  }
+
   async init(): Promise<void> {
     // Not awaited: the picker is the last thing anyone reaches for, and a slow PATH probe
     // must not hold up the worktree list. Failure is silent by design — see below.

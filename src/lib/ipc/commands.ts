@@ -41,8 +41,10 @@ import type {
   RemoveOutcome,
   SeqEvent,
   SetupResult,
+  TerminalReplay,
   TerminalSession,
   TablePageRequest,
+  PaneWindow,
   QueryResult,
   UpdateOutcome,
   UpdateStatus,
@@ -139,10 +141,19 @@ export const commands = {
    * Every live shell, one row each. Every project's, not just the active one.
    *
    * Call on start: a reload loses this side's pane-to-session map while the shells keep
-   * running, and without this they are unreachable until the app quits. It does not restore a
-   * transcript — nothing is buffered outside the pane that received it.
+   * running, and without this they are unreachable until the app quits. It carries no
+   * transcript; a terminal attaching asks `terminalReplay` for that.
    */
   listTerminals: () => invoke<TerminalSession[]>('list_terminals'),
+
+  /**
+   * What a dock shell has printed that Rust still keeps, or `null` for none.
+   *
+   * How a terminal attaches to a shell it did not see start — in a pane window, on the way back
+   * from one, after a reload. Live chunks numbered at or below `through` are already in it.
+   */
+  terminalReplay: (session: string) =>
+    invoke<TerminalReplay | null>('terminal_replay', { session }),
 
   /**
    * Kills one shell and forgets it. Restart is this, then `openTerminal`.
@@ -468,6 +479,28 @@ export const commands = {
   browserSetTheme: (id: string, tokens: Record<string, string>) =>
     invoke<void>('browser_set_theme', { id, tokens }),
   browserOpenDevtools: (id: string) => invoke<void>('browser_open_devtools', { id }),
+
+  // ── pane windows ──
+  /**
+   * Move a pane into a window of its own, opening over `rect` — where its tile was, in this
+   * window's CSS pixels. `state` is handed to the new window as it starts. Main window only.
+   */
+  popOutPane: (args: {
+    paneId: string;
+    title: string;
+    state: unknown;
+    rect: BrowserBounds;
+  }) => invoke<void>('pop_out_pane', args),
+  /** The pane this window holds, for a pane window starting up. `null` in the main window. */
+  paneWindowState: () => invoke<PaneWindow | null>('pane_window_state'),
+  /** A pane window's latest record of its pane, passed on to the main window. */
+  syncPaneWindow: (state: unknown) => invoke<void>('sync_pane_window', { state }),
+  /** Put a pane back, by closing its window — which is also what the traffic light does. */
+  closePaneWindow: (paneId: string) => invoke<void>('close_pane_window', { paneId }),
+  /** Bring a pane's window forward, or the main window when no pane is named. */
+  focusPaneWindow: (paneId: string | null) => invoke<void>('focus_pane_window', { paneId }),
+  /** Every pane window, for a main window that has reloaded. */
+  listPaneWindows: () => invoke<PaneWindow[]>('list_pane_windows'),
 
   // ── notifications ──
   /**

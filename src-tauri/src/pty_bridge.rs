@@ -7,6 +7,11 @@
 //! corrupt both. So chunks are forwarded as bytes (base64 for JSON transport) and reassembled
 //! by the terminal emulator, which is the component that actually knows how.
 //!
+//! # Why a dock shell's output is also kept
+//!
+//! So a pane can move to another window, or survive a reload, with its history. The xterm that
+//! received a chunk used to be the only place it existed. See `App::record_shell_output`.
+//!
 //! # Why events and not a channel per call
 //!
 //! A session outlives the command that started it: `create_worktree` returns once setup
@@ -18,6 +23,8 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+
+use crate::app::App;
 use wtm_core::model::{ExitOutcome, SessionId};
 use wtm_core::ports::pty::PtySink;
 
@@ -36,6 +43,11 @@ struct OutputEvent {
     session: String,
     /// Base64, because JSON cannot carry arbitrary bytes and terminal output is arbitrary.
     chunk_base64: String,
+    /// The chunk's number in a dock shell's replay ring; `None` for every other session.
+    ///
+    /// What lets a window that attaches late drop the chunks its snapshot already contained. See
+    /// `App::record_shell_output`.
+    seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +63,11 @@ struct ExitEvent {
 /// Forwards session output to the window as Tauri events.
 pub struct EventSink {
     app: AppHandle,
+    /// Set for a dock shell only, whose output is kept for a window that attaches later.
+    ///
+    /// Not for a pipeline's sessions — setup, an action, a worktree removal. Their panes never
+    /// leave the view that started them, and keeping their output would hold it for nobody.
+    recorder: Option<Arc<App>>,
 }
 
 impl std::fmt::Debug for EventSink {
@@ -62,15 +79,34 @@ impl std::fmt::Debug for EventSink {
 impl EventSink {
     #[must_use]
     pub fn new(app: AppHandle) -> Arc<Self> {
-        Arc::new(Self { app })
+        Arc::new(Self {
+            app,
+            recorder: None,
+        })
+    }
+
+    /// A sink that also keeps what it forwards, for a dock shell.
+    #[must_use]
+    pub fn recording(app: AppHandle, recorder: Arc<App>) -> Arc<Self> {
+        Arc::new(Self {
+            app,
+            recorder: Some(recorder),
+        })
     }
 }
 
 impl PtySink for EventSink {
     fn on_output(&self, session: &SessionId, chunk: &[u8]) {
+        // Kept before it is emitted, and numbered by the same call, so a window can never be sent
+        // a chunk the ring does not have — the order `agent_bridge` keeps for the same reason.
+        let seq = self
+            .recorder
+            .as_ref()
+            .map(|app| app.record_shell_output(session, chunk));
         let event = OutputEvent {
             session: session.as_str().to_owned(),
             chunk_base64: base64_encode(chunk),
+            seq,
         };
         // A failed emit means the window is gone. Nothing useful to do, and it must not
         // interrupt the reader thread.

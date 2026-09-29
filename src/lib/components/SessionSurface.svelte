@@ -25,11 +25,14 @@
   import { browsers } from '../state/browsers.svelte';
   import { AT_CAPACITY, sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import { STATUS_WORD } from '../status';
   import AgentsDialog from './AgentsDialog.svelte';
   import AgentTree from './AgentTree.svelte';
   import PlanViewer from './PlanViewer.svelte';
   import SessionTree from './SessionTree.svelte';
   import Button from './ui/Button.svelte';
+  import Icon from './ui/Icon.svelte';
+  import SessionDot from './ui/SessionDot.svelte';
 
   const {
     visible,
@@ -44,6 +47,8 @@
   /** Worktrees that have any pane at all, so nothing renders an empty tree. */
   const occupied = $derived([...new Set(sessions.panes.map((p) => p.worktreeId))]);
   const activeLayout = $derived(sessions.layoutFor(activeId));
+  /** This worktree's panes that are in windows of their own. */
+  const poppedOut = $derived(sessions.outIn(activeId));
   const resumable = $derived(activeId ? (sessions.resumable[activeId] ?? []) : []);
   const briefs = $derived(activeId ? (sessions.briefs[activeId] ?? []) : []);
   const background = $derived(activeId ? (sessions.background[activeId] ?? []) : []);
@@ -226,6 +231,49 @@
   {#if activeId}
     <AgentTree worktreeId={activeId} onbrowse={() => (browsingAgents = true)} />
   {/if}
+  {#if poppedOut.length > 0}
+    <!--
+      Where a popped-out pane is reachable from here. A window of its own can end up behind this
+      one, on another display, or minimised, and the tiling it left has no tile to click — so
+      without this strip the pane would be findable only through the OS's window list. One line,
+      for the reason the agent rail gives.
+
+      The name brings the window forward; the icon puts the pane back. Its status rides along, as
+      it does in the rail, because a pane waiting on an approval in a window nobody is looking at is
+      the case this exists for.
+    -->
+    <nav class="c-popped" aria-label="Panes in their own windows">
+      <span class="c-popped__heading">In their own windows</span>
+      {#each poppedOut as pane (pane.id)}
+        {@const status = sessions.statusOfPane(pane)}
+        {@const label = sessions.labelOf(pane)}
+        <span class="c-popped__pane">
+          <button
+            class="c-popped__show"
+            type="button"
+            title="Bring {label}'s window forward"
+            onclick={() => sessions.focus(pane.worktreeId, pane.id)}
+          >
+            <SessionDot {status} />
+            <span class="c-popped__label">{label}</span>
+            {#if status !== 'idle'}
+              <span class="c-popped__status">{STATUS_WORD[status]}</span>
+            {/if}
+          </button>
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title="Put {label} back in this window"
+            ariaLabel="Put {label} back"
+            onclick={() => sessions.putPaneBack(pane.id)}
+          >
+            <Icon name="pop-in" size={12} />
+          </Button>
+        </span>
+      {/each}
+    </nav>
+  {/if}
   {#each occupied as worktreeId (worktreeId)}
     {@const layout = sessions.layoutFor(worktreeId)}
     {#if layout}
@@ -247,6 +295,12 @@
              covers the far commoner case of being refused while looking at a full surface. -->
         <p>{AT_CAPACITY}</p>
       {:else if workspace.selected && workspace.activeProjectId}
+        {#if poppedOut.length > 0}
+          <p>
+            Every pane in this worktree is in a window of its own. Put one back from the
+            strip above, or start another here.
+          </p>
+        {/if}
         <p>
           Start a session in <code>{workspace.selected.dirname}</code>. It runs in that
           directory and can read and change the files there.

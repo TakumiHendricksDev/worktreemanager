@@ -56,6 +56,8 @@ export type IconName =
   | 'star'
   | 'star-outline'
   | 'plus'
+  | 'pop-in'
+  | 'pop-out'
   | 'restart'
   | 'search'
   | 'settings'
@@ -142,6 +144,22 @@ export const icons: Record<IconName, IconSpec> = {
   star: { fill: STAR, stroke: STAR },
   'star-outline': { stroke: STAR },
   plus: { stroke: 'M8 3.5 L8 12.5 M3.5 8 L12.5 8' },
+  /**
+   * A box with an arrow arriving at it from the upper left: put the pane back in the main window.
+   *
+   * The mirror of `external`, deliberately — that one leaves through the upper-right corner, and
+   * the two appear on the same kind of pane. An arrow going *in* is the one reading neither of the
+   * others has.
+   */
+  'pop-in': { stroke: 'M9 3.5 H12.5 V12.5 H3.5 V9 M2.5 2.5 L8 8 M8 4.75 V8 H4.75' },
+  /**
+   * Two windows, the second lifted over the first's corner: move the pane into its own window.
+   *
+   * Not `external`'s arrow, which already means "open this in another app" on a browser pane's
+   * toolbar — two controls a few pixels apart must not look alike. The back window is drawn only
+   * where it shows, so the front one reads as on top without a fill.
+   */
+  'pop-out': { stroke: 'M6.5 6.5 H2.5 V13.5 H9.5 V9.5 M6.5 2.5 H13.5 V9.5 H6.5 Z' },
   /*
    * An arc with one arrowhead, not a closed loop with two.
    *

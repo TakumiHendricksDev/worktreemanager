@@ -727,6 +727,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_terminal_replay_contract_is_a_sequence_number_and_base64_bytes() {
+        let view = TerminalReplayView {
+            through: 7,
+            chunk_base64: "Zm9v".to_owned(),
+        };
+        let json = serde_json::to_value(&view).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["chunkBase64", "through"],
+            "the TypeScript mirror in `src/lib/ipc/types.ts` must be updated to match"
+        );
+    }
+
     /// The exact key sets for the two agent views, for the same reason as the one above.
     ///
     /// Both are hand-mirrored in `src/lib/ipc/types.ts`, and both have a field the other does
@@ -919,6 +940,18 @@ pub struct TerminalSessionView {
     pub session: String,
     pub worktree: String,
     pub project: String,
+}
+
+/// What a dock shell has printed that is still kept, for a pane attaching after it was printed.
+///
+/// One run of bytes rather than the chunks, because the only thing a reader does with them is
+/// write them to an emulator in order. `through` is the number of the last chunk inside it: a live
+/// `pty:output` numbered at or below it is already in `chunk_base64` and must be dropped.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalReplayView {
+    pub through: u64,
+    pub chunk_base64: String,
 }
 
 /// One agent wtm can start, and whether this machine can.

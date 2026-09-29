@@ -15,10 +15,12 @@
 //!
 //! 1. Tauri's IPC refuses a remote origin unless a capability names it with `remote`, and
 //!    `capabilities/default.json` has no such key.
-//! 2. The capability lists `windows: ["main"]`, and the child *lives in* the main window — so a
-//!    child that ever loaded a **local** origin would inherit `core:default`. That is why
-//!    [`navigation_allowed`] is an allowlist of `http`, `https` and `about:` and not a denylist
-//!    of `tauri:`; it is the fence that matters, and `tests/capability_set.rs` pins the other two.
+//! 2. The capability lists the main window and pane windows (`popout-*`), and the child *lives in*
+//!    one of them — so a child that ever loaded a **local** origin would inherit `core:default`.
+//!    That is why [`navigation_allowed`] is an allowlist of `http`, `https` and `about:` and not a
+//!    denylist of `tauri:`; it is the fence that matters, and `tests/capability_set.rs` pins the
+//!    other two. Moving a child into a pane window changes nothing here, because both windows are
+//!    named by the same capability and so grant exactly the same thing.
 //! 3. The webview label carries [`LABEL_PREFIX`] and no capability names it.
 //!
 //! # The runtime, and why it lives in an isolated world
@@ -68,6 +70,7 @@ use wtm_webview::{Handle, Message, World};
 
 use crate::app::App;
 use crate::browser_bridge;
+use crate::pane_windows::{self, Placement};
 use crate::view::{BrowserView, ErrorView};
 
 /// Every browser webview's label starts with this, so a test can prove no capability matches one.
@@ -79,8 +82,8 @@ pub const MAX_PER_WORKTREE: usize = 4;
 /// Browsers the app may hold in total.
 pub const MAX_TOTAL: usize = 8;
 
-/// The window every child is added to. The only window this app has.
-const MAIN_WINDOW: &str = "main";
+/// The window every child is born in. It may move to a pane window later; see [`set_bounds`].
+const MAIN_WINDOW: &str = pane_windows::MAIN_WINDOW;
 
 /// What an empty pane shows. Kept as a constant because the frontend compares against it.
 pub const BLANK: &str = "about:blank";
@@ -1138,13 +1141,45 @@ pub fn history(handle: &AppHandle, id: &str, action: HistoryAction) -> Result<()
 ///
 /// `None` hides rather than moving the view off-screen, because a hidden WKWebView stops painting
 /// and an off-screen one does not — and because "hidden" is a fact the snapshot path needs.
+///
+/// # Which window it is in
+///
+/// Whichever last asked to show it. A pane moved to a window of its own is the same WKWebView
+/// **reparented**, not a new one loaded at the same address: the page, its history, its scroll
+/// position and a half-filled form all survive, where reopening would keep only the URL. `caller`
+/// is the window that sent the update, and [`pane_windows::placement`] decides what it may do — in
+/// short, any window may take a browser by showing it, and only the window holding one may hide it.
 pub fn set_bounds(
     handle: &AppHandle,
     app: &Arc<App>,
     id: &str,
     bounds: Option<Bounds>,
+    caller: &str,
 ) -> Result<(), ErrorView> {
     let webview = webview_of(handle, id)?;
+    let host = webview.window().label().to_owned();
+    let closing = caller != pane_windows::MAIN_WINDOW && app.pane_windows.is_closing(caller);
+    match pane_windows::placement(&host, caller, closing, bounds.is_some()) {
+        Placement::Ignore => {
+            tracing::debug!(%id, %host, %caller, "stale browser placement ignored");
+            return Ok(());
+        }
+        Placement::Adopt => {
+            let window = handle
+                .get_window(caller)
+                .ok_or_else(|| ErrorView::new("webview", "that window is gone"))?;
+            // Hidden first, so the view never paints for a frame at its old coordinates in the new
+            // window before the placement below lands.
+            webview
+                .hide()
+                .map_err(|e| webview_error("hide the browser", &e))?;
+            webview
+                .reparent(&window)
+                .map_err(|e| webview_error("move the browser", &e))?;
+            tracing::debug!(%id, from = %host, to = %caller, "browser moved between windows");
+        }
+        Placement::Place | Placement::Hide => {}
+    }
     if let Some(rect) = bounds {
         webview
             .set_bounds(Rect {
@@ -1165,6 +1200,31 @@ pub fn set_bounds(
         tracing::debug!(%id, "browser hidden");
     }
     Ok(())
+}
+
+/// Move every browser a closing window holds back to the main window, hidden.
+///
+/// Called from the window's `CloseRequested`, while its webviews still exist: Tauri destroys every
+/// webview a closed window holds, and a browser destroyed with its pane window would lose the page
+/// the user moved it there to look at. Hidden, because nothing in the main window has asked to
+/// show it yet — the pane going back will, once it is tiled.
+pub fn rehome(handle: &AppHandle, app: &Arc<App>, from: &str) {
+    let Some(main) = handle.get_window(MAIN_WINDOW) else {
+        return;
+    };
+    for view in app.browsers.list(None) {
+        let Some(webview) = handle.get_webview(&view.id) else {
+            continue;
+        };
+        if webview.window().label() != from {
+            continue;
+        }
+        let _ = webview.hide();
+        if let Err(error) = webview.reparent(&main) {
+            tracing::warn!(id = %view.id, %error, "a browser could not be moved back to the main window");
+        }
+        app.browsers.update(&view.id, |entry| entry.shown = false);
+    }
 }
 
 pub fn focus(handle: &AppHandle, id: &str) -> Result<(), ErrorView> {
