@@ -1,5 +1,6 @@
 /**
- * The sidebar's right-click menus, as native macOS menus.
+ * The app's pop-up menus, as native macOS menus: the sidebar's right-click menus, the worktree bar's
+ * New and ⋯ menus, and a narrow pane's ⋯ menu.
  *
  * # Why native, and not a popover
  *
@@ -77,6 +78,17 @@ function tidy(entries: MenuEntry[]): MenuEntry[] {
 }
 
 let open: Menu | null = null;
+
+/**
+ * Where a menu opened by a button goes: under its left edge, the way a macOS pull-down opens.
+ *
+ * Measured from the button rather than taken from the click, so a menu opened from the keyboard —
+ * where the click's coordinates are all zero — lands in the same place as one opened by pointer.
+ */
+export function under(button: Element): { x: number; y: number } {
+  const box = button.getBoundingClientRect();
+  return { x: box.left, y: box.bottom + 4 };
+}
 
 /**
  * Show a menu at a point in the window's client coordinates, or at the pointer when `at` is omitted

@@ -61,6 +61,7 @@ export type IconName =
   | 'restart'
   | 'search'
   | 'settings'
+  | 'sidebar'
   | 'split-right'
   | 'terminal'
   | 'theme-system'
@@ -68,6 +69,7 @@ export type IconName =
   | 'theme-dark'
   | 'bolt'
   | 'mic'
+  | 'more'
   | 'warn';
 
 export interface IconSpec {
@@ -113,6 +115,19 @@ export const icons: Record<IconName, IconSpec> = {
     stroke:
       'M8 2.25 A1.75 1.75 0 0 1 9.75 4 V7.5 A1.75 1.75 0 0 1 6.25 7.5 V4 ' +
       'A1.75 1.75 0 0 1 8 2.25 Z M3.75 7.25 A4.25 4.25 0 0 0 12.25 7.25 M8 11.5 V14',
+  },
+  /*
+   * Three dots in a row: more actions than there is room for.
+   *
+   * Filled discs, not stroked dots. A dot drawn as a zero-length stroke is the failure `grip`
+   * records — at 1.5 it relies on the round cap to render at all and blurs into its neighbour. Discs
+   * of radius 1.25 on a 4.5 pitch leave a clear gap between each at 13px.
+   */
+  more: {
+    fill:
+      'M2.25 8 A1.25 1.25 0 1 0 4.75 8 A1.25 1.25 0 1 0 2.25 8 Z ' +
+      'M6.75 8 A1.25 1.25 0 1 0 9.25 8 A1.25 1.25 0 1 0 6.75 8 Z ' +
+      'M11.25 8 A1.25 1.25 0 1 0 13.75 8 A1.25 1.25 0 1 0 11.25 8 Z',
   },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
   /** A speech bubble with its tail at the lower left: a comment left *on* something. */
@@ -175,6 +190,15 @@ export const icons: Record<IconName, IconSpec> = {
     stroke:
       'M7.25 2.5 A4.75 4.75 0 1 0 7.25 12 A4.75 4.75 0 1 0 7.25 2.5 M10.9 10.9 L13.5 13.5',
   },
+  /*
+   * A window with a narrow column ruled off its left edge: the sidebar.
+   *
+   * The same glyph whether the sidebar is showing or not, which is how the macOS toolbar button
+   * behaves. A chevron that flipped with the state was what it replaced, and a control whose icon
+   * changes when you press it reads as two controls. Unfilled, unlike `split-right`: that one's fill
+   * says where a new pane lands, and there is no direction to say here.
+   */
+  sidebar: { stroke: 'M2.5 3 H13.5 V13 H2.5 Z M6.25 3 V13' },
   /*
    * Two panes side by side, the right one filled.
    *

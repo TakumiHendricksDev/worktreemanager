@@ -56,6 +56,13 @@
   place-items: center;
   width: 28px;
   height: 28px;
+  /*
+   * Pulls the ink out to the bar's padding edge, where the traffic lights above it start. The glyph
+   * sat 7px inside that edge — 5px of hit box around the 18px icon, and 2.4px of the star's own side
+   * bearing at that size — which read as a stray indent. The hit box keeps its size and reaches
+   * into the padding instead, as the name's switcher label does beside it.
+   */
+  margin-left: -7px;
   /* Pulls the star in from the row's gap so it reads as attached to the title. */
   margin-right: calc(var(--sp-2) - var(--sp-3));
   border-radius: var(--r-sm);
@@ -84,15 +91,6 @@
   /* Optically centres the button against the h1's cap-height rather than its line box, which
      top-alignment alone leaves sitting a couple of pixels high. */
   margin-top: 2px;
-}
-
-/* Separates the neutral action from the destructive one. A hairline rather than more
-   whitespace, because whitespace alone at this size reads as an accident. */
-.c-detail__divider {
-  width: 1px;
-  height: 18px;
-  margin: 3px calc(var(--sp-1) * -1) 0;
-  background: var(--border);
 }
 
 .c-detail__badges {

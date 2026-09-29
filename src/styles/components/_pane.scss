@@ -12,6 +12,8 @@
  * container and pushes the composer off the bottom.
  */
 
+@use '../settings/config' as *;
+
 /*
  * A row, not a column, because the plan panel is a sibling of the whole session rather than
  * something inside its body. `c-pane__main` is the column the pane always was.
@@ -94,15 +96,28 @@
   gap: var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
+  /* A container, so its actions can fold on the pane's own width. See the fold below. */
+  container: pane-head / inline-size;
+}
+
+/* A second name rather than a second number on the first: a container query cannot read state,
+   so a header with the wider back button is a differently named container with its own threshold. */
+.c-pane__head.has-origin {
+  container-name: pane-head-origin;
 }
 
 /* Weighted like the dock's title, not like a heading: this names a region, and heading weight would
    compete with the worktree's name in the bar above. */
 .c-pane__title {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: var(--step--1);
   font-weight: 500;
   color: var(--fg-muted);
+  /* Below even the folded header's width the title gives way, so Close is never pushed out. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Takes the slack so the actions stay pinned right however long a status is. Monospace because it
@@ -122,6 +137,45 @@
   align-items: center;
   gap: var(--sp-1);
   margin-left: auto;
+}
+
+/*
+ * The fold.
+ *
+ * Every quiet header button sits in a `c-pane__foldable` wrapper, and the ⋯ button that stands in for
+ * them in `c-pane__more`. Both wrappers are `display: contents` when shown, so the buttons inside are
+ * the flex items and the row's gap applies to them exactly as it did before there were wrappers.
+ *
+ * CSS decides what is folded and `SessionPane` decides what the menu holds, and they agree because
+ * the menu is built from the same conditions as the buttons, not from what is visible. That is why
+ * this needs no measuring: nothing in script ever has to know how wide the pane is.
+ */
+.c-pane__foldable {
+  display: contents;
+}
+
+.c-pane__more {
+  display: none;
+}
+
+@container pane-head (max-width: #{$pane-fold}) {
+  .c-pane__foldable {
+    display: none;
+  }
+
+  .c-pane__more {
+    display: contents;
+  }
+}
+
+@container pane-head-origin (max-width: #{$pane-fold-origin}) {
+  .c-pane__foldable {
+    display: none;
+  }
+
+  .c-pane__more {
+    display: contents;
+  }
 }
 
 /*

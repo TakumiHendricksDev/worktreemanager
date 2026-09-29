@@ -40,7 +40,7 @@
     type Section,
     type Slot,
   } from '../sidebar';
-  import { item, popUp, separator, type MenuEntry } from '../sidebar-menu';
+  import { item, popUp, separator, type MenuEntry } from '../native-menu';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { inRail, worse, type PaneStatus } from '../status';
@@ -51,13 +51,10 @@
 
   const {
     onnew,
-    oncollapse,
     onselectworktree,
     detailId = 'worktree-detail',
   }: {
     onnew: () => void;
-    /** Hides this rail; the shell owns the matching edge control that restores it. */
-    oncollapse: () => void;
     /** Picking a worktree means "show me that one", so the pane leaves the create view. */
     onselectworktree?: () => void;
     /** The panel this tree controls, or empty while the create pane owns the screen. */
@@ -678,18 +675,6 @@
         </button>
       {/if}
     </div>
-
-    <Button
-      variant="quiet"
-      icon="md"
-      onclick={oncollapse}
-      title="Hide worktree sidebar"
-      ariaLabel="Hide worktree sidebar"
-      ariaExpanded={true}
-      ariaControls="worktree-sidebar"
-    >
-      <Icon name="chevron-left" size={14} />
-    </Button>
   </div>
 
   <div class="c-sidebar__list-wrap" bind:this={wrapEl}>

@@ -2,26 +2,46 @@
   /**
    * One row above the sessions: what this worktree is, and what you can do to it.
    *
-   * Everything the user asked to keep accessible is here, and the placements are deliberate:
+   * # Five controls, grouped by what they do
    *
-   *   * **Links** is a native `<select>` in the existing `o-overlay-select` idiom — the same pattern
-   *     `OpenInButton` uses. A native popup renders outside the stacking context, so a links menu
-   *     costs **no `z-index`**, which is what keeps `settings/_config.scss`'s rule intact.
-   *   * **Details** is a text button rather than an icon. An "info" glyph is a circle, a bar and a
-   *     dot, and at 1.5 stroke on a 16 grid the dot is a smudge — the judgement `icons.ts` already
-   *     records for the cog and the terminal box.
-   *   * **Open in** and **Remove** keep their position, order and variants, with Remove alone past
-   *     the hairline. The gap is not cosmetic: a destructive control flush against a neutral one is
-   *     how it gets clicked by accident.
+   * It had grown to ten, one per action, and they no longer fitted: at the smallest window the bar
+   * gets about 580 pixels with the sidebar open, and the row needed about 900, so the last buttons
+   * slid off the edge of the window. Most of them were one of three kinds of thing, so they are
+   * grouped by kind now rather than squeezed:
    *
-   * Dirty state stays inline because it is the fact you glance at; the rest moved into the Details
-   * dialog. The branch went too, because the selected tab beside it already says it.
+   *   * **New** is everything that opens a pane here — the agents, a shell, a browser. They used to
+   *     be a New agent menu and two buttons beside it.
+   *   * **Open in** keeps its split button. It is the one action here most people use every time.
+   *   * **⋯** is what you reach for occasionally: Details, the configured links, and Remove.
+   *
+   * Both menus are native — see `native-menu.ts` — so they cost no `z-index`, which is what keeps
+   * `settings/_config.scss`'s rule intact, and Links becomes a submenu rather than a third menu.
+   *
+   * Remove used to sit alone past a hairline, because a destructive control flush against a neutral
+   * one is how it gets clicked by accident. Inside a menu, at the bottom, behind a separator and still
+   * followed by its confirmation dialog, it is further from an accident than the hairline made it.
+   *
+   * The facts moved into the Details dialog. The branch and the dirty state went too, because the
+   * selected tab beside it already says both.
+   *
+   * # The name is a switcher while the sidebar is hidden
+   *
+   * With the rail gone this bar is the only place that names a worktree, so the name becomes the
+   * list: a native `<select>` over it, the idiom the project picker in the title bar uses. It
+   * follows the sidebar's arrangement — a labelled `<optgroup>` per group, in the order the user
+   * dragged them into — so the two never disagree about where a worktree is.
+   *
+   * What it deliberately does not follow is the sidebar's folds and filter. Those decide what a
+   * list leaves out to save room, and a menu is the thing you open to see everything; a worktree
+   * missing from it because a group was folded in a rail nobody can see would just be missing.
    */
   import { browsers } from '../state/browsers.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { commands } from '../ipc/commands';
   import { INSPECTOR_SHORTCUT, SHELL_SHORTCUT } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import { item, popUp, separator, under, type MenuEntry } from '../native-menu';
+  import { arrange } from '../sidebar';
   import type { Worktree } from '../ipc/types';
   import OpenInButton from './OpenInButton.svelte';
   import Button from './ui/Button.svelte';
@@ -31,33 +51,33 @@
     worktree,
     projectId,
     databaseActive,
+    sidebarCollapsed,
     onsessions,
     ondatabase,
     onremove,
     onfavorite,
     oninspect,
+    onselect,
+    onnew,
   }: {
     worktree: Worktree;
     projectId: string;
     databaseActive: boolean;
+    /** Whether the name is a switcher. See the header. */
+    sidebarCollapsed: boolean;
     onsessions: () => void;
     ondatabase: () => void;
     onremove: () => void;
     onfavorite: () => void;
     oninspect: () => void;
+    onselect: (worktreeId: string) => void;
+    /** The sidebar's New worktree button, which is out of reach while it is hidden. */
+    onnew: () => void;
   } = $props();
 
-  /**
-   * The empty-string sentinel, the same trick `OpenInButton` uses.
-   *
-   * A `<select>` fires no `change` when you re-pick the option that is already selected, so the value
-   * is reset to `''` after every pick and the placeholder is what is always "chosen".
-   */
   /** In the Favorites group. A lookup, since a star is where a worktree sits, not a field on it. */
   const favorite = $derived(workspace.isFavorite(worktree.id));
 
-  let linkChoice = $state('');
-  let agentChoice = $state('');
   const startable = $derived(
     sessions.options.filter((option) => option.available && option.offered),
   );
@@ -69,12 +89,44 @@
     worktree.badges.filter((badge) => badge.label.trim().toLowerCase() !== 'compose'),
   );
 
-  async function pickLink(event: Event) {
+  /**
+   * The switcher's options: every group that has anyone in it, each listing all its members.
+   *
+   * `members` rather than `rows`, and no filter and no `urgent`, for the reason in the header. An
+   * empty group is dropped here although the sidebar keeps it, because an `<optgroup>` with nothing
+   * under it is a heading you can neither pick nor drop onto.
+   */
+  const switcher = $derived.by(() => {
+    if (!sidebarCollapsed) return null;
+    const { sections, headers } = arrange(workspace.worktrees, workspace.layout, {
+      matching: null,
+      selectedId: worktree.id,
+      urgent: () => false,
+      dragging: false,
+    });
+    return { headers, sections: sections.filter((section) => section.members.length > 0) };
+  });
+
+  /**
+   * The same `●` the project picker appends, for the same reason: the row dots are gone with the
+   * rail, and without it a blocked session in another worktree would be invisible again.
+   */
+  function optionLabel(candidate: Worktree): string {
+    const status = sessions.statuses[candidate.id];
+    return candidate.title + (status === 'attention' || status === 'failed' ? '  ●' : '');
+  }
+
+  function pickWorktree(event: Event) {
     const select = event.currentTarget as HTMLSelectElement;
-    const url = select.value;
-    select.value = '';
-    linkChoice = '';
-    if (!url) return;
+    const choice = select.value;
+    // Back onto the current worktree, so the sentinel never shows as chosen — the project picker's
+    // trick for its own Add a repository… row.
+    select.value = worktree.id;
+    if (choice === '__new__') onnew();
+    else if (choice !== worktree.id) onselect(choice);
+  }
+
+  async function openLink(url: string) {
     try {
       await commands.openUrl(url);
     } catch {
@@ -82,19 +134,57 @@
     }
   }
 
-  function pickAgent(event: Event) {
-    const select = event.currentTarget as HTMLSelectElement;
-    const provider = select.value;
-    select.value = '';
-    agentChoice = '';
-    if (provider) void sessions.openAgent(projectId, worktree.id, provider);
+  function newMenu(event: MouseEvent) {
+    const entries: MenuEntry[] = [
+      // Available even when the only pane is a shell; starting an agent never has to replace it.
+      ...startable.map((option) =>
+        item(
+          option.label,
+          () => void sessions.openAgent(projectId, worktree.id, option.id),
+        ),
+      ),
+      separator,
+      // The call ⌘J makes, as the Shell button this replaced did, so the two never disagree: a
+      // shortcut that focused the open shell beside a menu row that spawned another login shell per
+      // click would leak one for every habituated pick.
+      item('Shell', () => void sessions.focusOrOpenShell(projectId, worktree.id)),
+      item(
+        'Browser',
+        () => void sessions.openBrowser(projectId, worktree.id),
+        browsers.unavailable === null,
+      ),
+    ];
+    void popUp(entries, under(event.currentTarget as Element));
+  }
+
+  function moreMenu(event: MouseEvent) {
+    const entries: MenuEntry[] = [
+      item('Details…', oninspect),
+      ...(worktree.links.length > 0
+        ? [
+            {
+              kind: 'submenu' as const,
+              text: 'Links',
+              items: worktree.links.map((link) =>
+                item(`${link.label} — ${link.url}`, () => void openLink(link.url)),
+              ),
+            },
+          ]
+        : []),
+      separator,
+      // Disabled rather than left out on the main worktree: git refuses to remove it, and so does the
+      // pipeline, and a menu that sometimes has no Remove teaches nobody where Remove lives.
+      item('Remove Worktree…', onremove, !worktree.isMain),
+    ];
+    void popUp(entries, under(event.currentTarget as Element));
   }
 </script>
 
 <header class="c-worktree-bar">
   <!--
     Duplicated from the sidebar on purpose: the one there only appears on hover, which is not
-    somewhere a control can be *found*. This is where you learn it exists.
+    somewhere a control can be *found*. This is where you learn it exists, and while the sidebar
+    is hidden it is the only star there is.
   -->
   <button
     class="c-detail__star"
@@ -107,16 +197,47 @@
     <span class="u-visually-hidden">Favorite</span>
   </button>
 
-  <h1 class="c-worktree-bar__title">{worktree.title}</h1>
+  {#if switcher}
+    <!--
+      The label is drawn beside an invisible select, as in the title bar, so the control is as wide
+      as the name and not as wide as the longest worktree in the project.
+    -->
+    <h1 class="c-worktree-bar__picker o-overlay-select">
+      <span class="c-worktree-bar__switch" aria-hidden="true">
+        <span class="c-worktree-bar__name">{worktree.title}</span>
+        <Icon name="chevron-down" size={12} />
+      </span>
+      <select
+        class="o-overlay-select__native"
+        aria-label="Switch worktree"
+        value={worktree.id}
+        onchange={pickWorktree}
+      >
+        {#snippet options(members: Worktree[])}
+          {#each members as candidate (candidate.id)}
+            <option value={candidate.id}>{optionLabel(candidate)}</option>
+          {/each}
+        {/snippet}
+        {#if switcher.headers}
+          {#each switcher.sections as section (section.id)}
+            <optgroup label={section.label}>{@render options(section.members)}</optgroup>
+          {/each}
+        {:else}
+          {@render options(switcher.sections.flatMap((section) => section.members))}
+        {/if}
+        <option value="__new__">New worktree…</option>
+      </select>
+    </h1>
+  {:else}
+    <h1 class="c-worktree-bar__title">{worktree.title}</h1>
+  {/if}
 
   <div class="c-worktree-bar__facts">
-    <!-- No branch and no "main worktree" badge. The selected tab directly to the left already
-         shows both — its second line is the branch unless `display.subtitle` says otherwise, its
-         tooltip is the branch either way, and it has a `main` pill — so here they repeated the one
-         thing on screen the user had just clicked. Details has the branch in full. -->
-    {#if worktree.dirty || worktree.untracked > 0 || worktree.staged > 0}
-      <span class="c-status--warn">modified</span>
-    {/if}
+    <!-- No branch, no "main worktree" badge and no "modified". The selected tab directly to the
+         left already shows all three — its second line is the branch unless `display.subtitle`
+         says otherwise, its tooltip is the branch either way, it has a `main` pill, and it carries
+         the dirty state — so here they repeated the one thing on screen the user had just clicked.
+         Details has the branch in full. -->
     <!-- The `↑N↓N` divergence counter was here and is gone for the same reason it left
          `WorktreeTab`: it is a measurement presented as a status, and this header is the one place
          where the Inspector — which reports ahead, behind, staged and unstaged properly — is a
@@ -143,92 +264,28 @@
       >
     </div>
 
-    {#if startable.length > 0}
-      <!-- Available even when the only pane is a shell; starting an agent never has to replace it. -->
-      <span class="o-overlay-select">
-        <span class="c-button c-button--quiet c-button--sm" aria-hidden="true">
-          New agent <Icon name="chevron-down" size={11} />
-        </span>
-        <select
-          class="o-overlay-select__native"
-          aria-label="Open an agent in this worktree"
-          bind:value={agentChoice}
-          onchange={pickAgent}
-        >
-          <option value="">New agent</option>
-          {#each startable as option (option.id)}
-            <option value={option.id}>{option.label}</option>
-          {/each}
-        </select>
-      </span>
-    {/if}
-
-    {#if worktree.links.length > 0}
-      <!-- A native select, so the menu needs no stacking level of its own. -->
-      <span class="o-overlay-select">
-        <span class="c-button c-button--quiet c-button--sm" aria-hidden="true">
-          Links <Icon name="chevron-down" size={11} />
-        </span>
-        <select
-          class="o-overlay-select__native"
-          aria-label="Open a link for this worktree"
-          bind:value={linkChoice}
-          onchange={pickLink}
-        >
-          <option value="">Links</option>
-          {#each worktree.links as link, i (`${link.label}:${i}`)}
-            <option value={link.url}>{link.label} — {link.url}</option>
-          {/each}
-        </select>
-      </span>
-    {/if}
-
     <Button
       variant="quiet"
       size="sm"
-      title="Path, ports and environment ({INSPECTOR_SHORTCUT})"
-      onclick={oninspect}
+      title="Open an agent, a shell ({SHELL_SHORTCUT}) or a browser in this worktree"
+      ariaHaspopup="menu"
+      onclick={newMenu}
     >
-      Details
-    </Button>
-
-    <!-- Goes through the same call ⌘J does, because the tooltip names that shortcut. A button that
-         spawned a fresh login shell per click while the shortcut beside it focused an existing one
-         would leak a shell for every ⌘J-habituated click. -->
-    <Button
-      variant="quiet"
-      size="sm"
-      title="Open a shell in this worktree ({SHELL_SHORTCUT})"
-      onclick={() => void sessions.focusOrOpenShell(projectId, worktree.id)}
-    >
-      <Icon name="terminal" size={13} /> Shell
-    </Button>
-
-    <Button
-      variant="quiet"
-      size="sm"
-      title={browsers.unavailable ?? 'Open a browser pane in this worktree'}
-      disabled={browsers.unavailable !== null}
-      onclick={() => void sessions.openBrowser(projectId, worktree.id)}
-    >
-      <Icon name="globe" size={13} /> Browser
+      New <Icon name="chevron-down" size={11} />
     </Button>
 
     <OpenInButton {projectId} worktreeId={worktree.id} />
 
-    <span class="c-detail__divider" aria-hidden="true"></span>
-
-    <!-- The main worktree cannot be removed; git refuses, and so does the pipeline. -->
     <Button
-      variant="danger-outline"
+      variant="quiet"
       size="sm"
-      onclick={onremove}
-      disabled={worktree.isMain}
-      title={worktree.isMain
-        ? "git will not remove a repository's main worktree"
-        : 'Remove this worktree'}
+      icon="sm"
+      title="Details ({INSPECTOR_SHORTCUT}), links and Remove"
+      ariaLabel="More actions for this worktree"
+      ariaHaspopup="menu"
+      onclick={moreMenu}
     >
-      Remove
+      <Icon name="more" size={13} />
     </Button>
   </div>
 </header>

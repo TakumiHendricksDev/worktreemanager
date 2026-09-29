@@ -24,6 +24,7 @@
     ariaExpanded,
     ariaPressed,
     ariaControls,
+    ariaHaspopup,
     onclick,
     children,
   }: {
@@ -63,6 +64,8 @@
     ariaPressed?: boolean;
     /** The id of the region a disclosure toggles. */
     ariaControls?: string;
+    /** For a button that opens a native menu. See `native-menu.ts`. */
+    ariaHaspopup?: 'menu';
     onclick?: (event: MouseEvent) => void;
     children: Snippet;
   } = $props();
@@ -77,6 +80,7 @@
   aria-expanded={ariaExpanded}
   aria-pressed={ariaPressed}
   aria-controls={ariaControls}
+  aria-haspopup={ariaHaspopup}
   class="c-button c-button--{variant} c-button--{size}"
   class:c-button--full={full}
   class:c-button--icon={icon === 'md'}

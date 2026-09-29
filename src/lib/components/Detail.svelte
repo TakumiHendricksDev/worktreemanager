@@ -26,20 +26,26 @@
     worktree,
     projectId,
     databaseActive,
+    sidebarCollapsed,
     onsessions,
     ondatabase,
     onremove,
     onfavorite,
     oninspect,
+    onselect,
+    onnew,
   }: {
     worktree: Worktree;
     projectId: string;
     databaseActive: boolean;
+    sidebarCollapsed: boolean;
     onsessions: () => void;
     ondatabase: () => void;
     onremove: () => void;
     onfavorite: () => void;
     oninspect: () => void;
+    onselect: (worktreeId: string) => void;
+    onnew: () => void;
   } = $props();
 </script>
 
@@ -59,10 +65,13 @@
     {worktree}
     {projectId}
     {databaseActive}
+    {sidebarCollapsed}
     {onsessions}
     {ondatabase}
     {onremove}
     {onfavorite}
     {oninspect}
+    {onselect}
+    {onnew}
   />
 </div>

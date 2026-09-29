@@ -18,6 +18,15 @@
    * A native `<select>` rather than a hand-rolled popover: keyboard navigation, type-ahead,
    * click-outside and Escape all come free and behave the way macOS menus are expected to.
    * It is styled to read as a title-bar button, not a form control.
+   *
+   * # Why the sidebar toggle lives here too
+   *
+   * It used to be two controls: a hide chevron in the sidebar's own header, and, once it was
+   * hidden, a tab pinned over the top-left corner of the detail pane to bring it back. That tab
+   * sat on top of whatever the pane put in its corner — the favourite star, in the worktree bar —
+   * and every view the pane can show would have had to leave room for it. Beside the traffic
+   * lights is where Finder, Mail and Xcode put this button, it is in the same place in both
+   * states, and nothing is underneath it.
    */
   import { sessions } from '../state/sessions.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
@@ -27,12 +36,29 @@
   import type { IconName } from './ui/icons';
 
   const {
+    sidebarCollapsed,
+    ontogglesidebar,
     onaddproject,
     onsettings,
   }: {
+    sidebarCollapsed: boolean;
+    ontogglesidebar: () => void;
     onaddproject: () => void;
     onsettings: () => void;
   } = $props();
+
+  /**
+   * macOS's own chord for View › Show Sidebar. `App.svelte`'s keydown handler is what binds it.
+   *
+   * None on Linux. There is no convention there to follow, and the free chords all belong to a
+   * shell: Ctrl-B, the one VS Code uses, is readline's backward-char.
+   */
+  const SIDEBAR_SHORTCUT =
+    document.documentElement.dataset.platform === 'linux' ? null : '⌃⌘S';
+
+  const sidebarLabel = $derived(
+    `${sidebarCollapsed ? 'Show' : 'Hide'} worktree sidebar${SIDEBAR_SHORTCUT ? ` (${SIDEBAR_SHORTCUT})` : ''}`,
+  );
 
   const themeIcons: Record<ThemeChoice, IconName> = {
     system: 'theme-system',
@@ -62,6 +88,18 @@
   <!-- Reserves space for the macOS traffic lights; a plain inset on Linux, where the
        window manager draws the controls outside the webview. -->
   <div class="c-titlebar__gutter" data-tauri-drag-region></div>
+
+  <Button
+    variant="quiet"
+    icon="md"
+    onclick={ontogglesidebar}
+    title={sidebarLabel}
+    ariaLabel={sidebarLabel}
+    ariaExpanded={!sidebarCollapsed}
+    ariaControls="worktree-sidebar"
+  >
+    <Icon name="sidebar" />
+  </Button>
 
   <!--
     Drag region on the container, not just the text: the path may be short, and the empty

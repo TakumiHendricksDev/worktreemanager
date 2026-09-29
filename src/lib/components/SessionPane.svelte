@@ -21,6 +21,7 @@
   import { commandsFor } from '../agent-commands';
   import { composerPrefs } from '../state/composer.svelte';
   import { DESTINATION, dictation } from '../state/dictate.svelte';
+  import { item, popUp, under, type MenuEntry } from '../native-menu';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
@@ -392,6 +393,59 @@
       { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
     );
   }
+
+  /** Another pane of the same kind, to the right of this one. The header's Split, and its ⋯ row. */
+  function splitRight() {
+    if (kind === 'shell') {
+      void sessions.openShell(pane.projectId, pane.worktreeId, 'right', pane.id);
+    } else if (kind === 'browser') {
+      void sessions.openBrowser(pane.projectId, pane.worktreeId, null, 'right', pane.id);
+    } else {
+      void sessions.openAgent(
+        pane.projectId,
+        pane.worktreeId,
+        provider ?? '',
+        'right',
+        pane.id,
+      );
+    }
+  }
+
+  /** Whether Split and Pop out are offered at all. See their buttons for why each is withheld. */
+  const canSplit = $derived(!pane.ended && !pane.error && !inWindow);
+  const canPopOut = $derived(!inWindow && !pane.detached);
+  /** Restart as a labelled button, because something is waiting on it. Never folded away. */
+  const restartCalls = $derived(Boolean(pane.ended || pane.error) || pending !== null);
+
+  /**
+   * What a narrow pane's ⋯ menu holds: exactly the header buttons the container query hides.
+   *
+   * Built from the same conditions as those buttons, in the same order, so the menu and the row can
+   * never offer different things. Empty means there is nothing to fold, and no ⋯ is drawn.
+   */
+  const folded = $derived.by((): MenuEntry[] => {
+    const entries: MenuEntry[] = [];
+    if (origin) {
+      const back = origin.id;
+      entries.push(item(`Back to ${origin.label}`, () => sessions.showRelated(back)));
+    }
+    if (!restartCalls)
+      entries.push(item('Restart Session…', () => (confirmRestart = true)));
+    if (canSplit) {
+      entries.push(
+        item(
+          kind === 'shell'
+            ? 'New Shell to the Right'
+            : kind === 'browser'
+              ? 'New Browser to the Right'
+              : 'Split Right',
+          splitRight,
+        ),
+      );
+    }
+    if (canPopOut) entries.push(item('Pop Out into Its Own Window', popOut));
+    return entries;
+  });
 
   /*
    * In a pane window, keep the store told what the draft is, so the next sync carries it back.
@@ -1149,7 +1203,7 @@
   onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
 >
   <div class="c-pane__main">
-    <header class="c-pane__head">
+    <header class="c-pane__head" class:has-origin={origin !== null}>
       <!--
       First, before the title, because it is what the pane is held by — and because a handle after the
       name reads as an action on the name rather than on the pane.
@@ -1206,6 +1260,10 @@
       Prominence tracks whether anything is waiting on it: a quiet icon while it is merely available,
       a labelled button when it is the thing to press. Same register the row already used for Split
       against Restart-on-ended.
+
+      On a narrow pane the quiet ones fold into ⋯, which takes their place just before Close, and a
+      labelled Restart stays out: it only appears when it is the thing to press, and a button that
+      is waiting on you is the last thing to hide behind a menu.
     -->
       <div class="c-pane__actions">
         <!--
@@ -1220,85 +1278,74 @@
 
         First in the row, ahead of Restart, because it is the only one of these verbs that is
         navigation rather than an action on the session in front of you.
+
+        Each `c-pane__foldable` wraps a button the ⋯ menu stands in for once the pane is narrow; see
+        `_pane.scss`. The wrapper is `display: contents` until then, so the row lays out as if it
+        were not there.
       -->
         {#if origin}
-          <Button
-            variant="quiet"
-            size="sm"
-            title="Back to {origin.label}, the session that started this one"
-            onclick={() => sessions.showRelated(origin.id)}
-          >
-            ← {origin.label}
-          </Button>
+          <span class="c-pane__foldable">
+            <Button
+              variant="quiet"
+              size="sm"
+              title="Back to {origin.label}, the session that started this one"
+              onclick={() => sessions.showRelated(origin.id)}
+            >
+              ← {origin.label}
+            </Button>
+          </span>
         {/if}
 
-        {#if pane.ended || pane.error}
-          <Button variant="neutral" size="sm" onclick={() => (confirmRestart = true)}>
-            Restart
-          </Button>
-        {:else if pending !== null}
+        {#if restartCalls}
           <Button
             variant="neutral"
             size="sm"
-            title={pending}
+            title={pending ?? undefined}
             onclick={() => (confirmRestart = true)}
           >
             Restart
           </Button>
         {:else}
-          <Button
-            variant="quiet"
-            size="sm"
-            icon="sm"
-            title="Restart this session — the transcript is cleared and the conversation stays resumable"
-            ariaLabel="Restart session"
-            onclick={() => (confirmRestart = true)}
-          >
-            <Icon name="restart" size={12} />
-          </Button>
+          <span class="c-pane__foldable">
+            <Button
+              variant="quiet"
+              size="sm"
+              icon="sm"
+              title="Restart this session — the transcript is cleared and the conversation stays resumable"
+              ariaLabel="Restart session"
+              onclick={() => (confirmRestart = true)}
+            >
+              <Icon name="restart" size={12} />
+            </Button>
+          </span>
         {/if}
 
         <!-- Shells get this too, and it is how a second terminal is opened. The guard used to require
            a provider, which was the last thing keeping a worktree to one shell once the backend
-           allowed several. Both arms pass `pane.id` as the neighbour: the pane whose button was
+           allowed several. Every kind passes `pane.id` as the neighbour: the pane whose button was
            pressed, not whichever one the focus map thinks. See `Sessions.place` for why those
            differ on macOS. -->
-        {#if !pane.ended && !pane.error && !inWindow}
-          <Button
-            variant="quiet"
-            size="sm"
-            icon="sm"
-            title={kind === 'shell'
-              ? 'Open another shell to the right'
-              : kind === 'browser'
-                ? 'Open another browser to the right'
-                : 'Split this session to the right'}
-            ariaLabel={kind === 'shell'
-              ? 'New shell to the right'
-              : kind === 'browser'
-                ? 'New browser to the right'
-                : 'Split right'}
-            onclick={() =>
-              void (kind === 'shell'
-                ? sessions.openShell(pane.projectId, pane.worktreeId, 'right', pane.id)
+        {#if canSplit}
+          <span class="c-pane__foldable">
+            <Button
+              variant="quiet"
+              size="sm"
+              icon="sm"
+              title={kind === 'shell'
+                ? 'Open another shell to the right'
                 : kind === 'browser'
-                  ? sessions.openBrowser(
-                      pane.projectId,
-                      pane.worktreeId,
-                      null,
-                      'right',
-                      pane.id,
-                    )
-                  : sessions.openAgent(
-                      pane.projectId,
-                      pane.worktreeId,
-                      provider ?? '',
-                      'right',
-                      pane.id,
-                    ))}
-          >
-            <Icon name="split-right" size={13} />
-          </Button>
+                  ? 'Open another browser to the right'
+                  : 'Split this session to the right'}
+              ariaLabel={kind === 'shell'
+                ? 'New shell to the right'
+                : kind === 'browser'
+                  ? 'New browser to the right'
+                  : 'Split right'}
+              onclick={splitRight}
+            >
+              <Icon name="split-right" size={13} />
+            </Button>
+          </span>
         {/if}
 
         <!--
@@ -1307,19 +1354,38 @@
           in a pane window, whose title bar carries Put back as a labelled button — a window holding
           one pane has room to say it in words.
         -->
-        {#if !inWindow && !pane.detached}
-          <Button
-            variant="quiet"
-            size="sm"
-            icon="sm"
-            title="Move this pane into a window of its own"
-            ariaLabel="Pop out into its own window"
-            onclick={popOut}
-          >
-            <Icon name="pop-out" size={13} />
-          </Button>
+        {#if canPopOut}
+          <span class="c-pane__foldable">
+            <Button
+              variant="quiet"
+              size="sm"
+              icon="sm"
+              title="Move this pane into a window of its own"
+              ariaLabel="Pop out into its own window"
+              onclick={popOut}
+            >
+              <Icon name="pop-out" size={13} />
+            </Button>
+          </span>
         {/if}
 
+        {#if folded.length > 0}
+          <span class="c-pane__more">
+            <Button
+              variant="quiet"
+              size="sm"
+              icon="sm"
+              title="More actions for this pane"
+              ariaLabel="More actions for this pane"
+              ariaHaspopup="menu"
+              onclick={(event) => void popUp(folded, under(event.currentTarget as Element))}
+            >
+              <Icon name="more" size={13} />
+            </Button>
+          </span>
+        {/if}
+
+        <!-- Never folded: closing is the one thing every pane, however narrow, has to offer. -->
         <Button
           variant="quiet"
           size="sm"

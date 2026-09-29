@@ -257,6 +257,18 @@
       }
 
       /*
+       * ⌃⌘S to show or hide the sidebar, on macOS only — see `SIDEBAR_SHORTCUT` in `TitleBar`.
+       *
+       * No terminal guard, unlike ⌘R and ⌘I. A shell sees nothing of a chord that holds ⌘, so
+       * there is no binding to steal, and the terminal is the one place a keyboard user is most
+       * likely to be when they want the room.
+       */
+      if (!isLinux && event.metaKey && event.ctrlKey && event.key === 's') {
+        event.preventDefault();
+        toggleSidebar();
+      }
+
+      /*
        * Ctrl-, on Linux only.
        *
        * Gated on the platform rather than accepting either modifier the way ⌘R above does,
@@ -382,7 +394,12 @@
 </script>
 
 <div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
-  <TitleBar onaddproject={addProject} onsettings={() => (showSettings = true)} />
+  <TitleBar
+    {sidebarCollapsed}
+    ontogglesidebar={toggleSidebar}
+    onaddproject={addProject}
+    onsettings={() => (showSettings = true)}
+  />
 
   <div
     class="c-shell__columns"
@@ -392,7 +409,6 @@
     <aside class="c-shell__col" id="worktree-sidebar" hidden={sidebarCollapsed}>
       <Sidebar
         onnew={() => (mainView = 'new')}
-        oncollapse={toggleSidebar}
         onselectworktree={() => (mainView = 'worktree')}
         detailId={mainView === 'worktree' || mainView === 'database'
           ? 'worktree-detail'
@@ -421,24 +437,6 @@
       onpointerdown={startDrag}
       onkeydown={onSplitterKey}
     ></div>
-
-    {#if sidebarCollapsed}
-      <!-- The restore action belongs to the edge the rail disappeared through. Keeping it
-           out of the title bar prevents it from reading as a window-level command. -->
-      <div class="c-shell__sidebar-handle">
-        <Button
-          variant="quiet"
-          icon="md"
-          onclick={toggleSidebar}
-          title="Show worktree sidebar"
-          ariaLabel="Show worktree sidebar"
-          ariaExpanded={false}
-          ariaControls="worktree-sidebar"
-        >
-          <Icon name="chevron-right" size={14} />
-        </Button>
-      </div>
-    {/if}
 
     <main class="c-shell__col c-shell__col--detail">
       <!--
@@ -572,6 +570,7 @@
           worktree={workspace.selected}
           projectId={workspace.activeProjectId ?? ''}
           databaseActive={mainView === 'database'}
+          {sidebarCollapsed}
           onsessions={() => (mainView = 'worktree')}
           ondatabase={() => (mainView = 'database')}
           onremove={() => (showRemove = true)}
@@ -580,6 +579,12 @@
             const id = workspace.selected?.id;
             if (id) workspace.toggleFavorite(id);
           }}
+          onselect={(worktreeId) => {
+            // What picking a row in the sidebar does, since this is that list with the rail away.
+            workspace.select(worktreeId);
+            mainView = 'worktree';
+          }}
+          onnew={() => (mainView = 'new')}
         />
       {:else if !workspace.loadingWorktrees}
         <div class="c-placeholder">

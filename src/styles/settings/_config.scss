@@ -14,6 +14,18 @@
 /// variable and the colours are not.
 $bp-narrow: 900px;
 
+/// The pane width below which a pane header folds its quiet buttons into a ⋯ menu.
+///
+/// Not a breakpoint on the window. Panes split, so three side by side in a wide window are each
+/// narrower than one in a small window, and only a container query on the pane can tell. The number
+/// is what the full header needs: its padding and gaps, the grip, a title the length of
+/// "Cursor Agent", four icon buttons, and enough of the status for "● working…" to stay readable.
+$pane-fold: 320px;
+
+/// The same, for a delegated child whose header also carries a "← Claude Code" button back to the
+/// session that started it. That label is wider than the other four buttons together.
+$pane-fold-origin: 420px;
+
 /// The modal's two levels: the scrim covers the app, the dialog sits on the scrim.
 ///
 /// These were for a long time *the* two levels, and the rule they came with still holds: nothing in

@@ -1,10 +1,18 @@
 /*
  * One row: what the worktree is, and what you can do to it.
  *
- * Components layer. Replaces `.c-detail__head` and its two-tab strip, and keeps that block's two
- * deliberate decisions: the actions are pinned right so the left edge — where every scan starts — is
- * the worktree's name rather than the button that destroys it, and Remove sits alone past a hairline
- * because a destructive control flush against a neutral one is how it gets clicked by accident.
+ * Components layer. Replaces `.c-detail__head` and its two-tab strip, and keeps that block's
+ * deliberate decision: the actions are pinned right so the left edge — where every scan starts — is
+ * the worktree's name rather than the button that destroys it. Remove is in the ⋯ menu now; see
+ * `WorktreeBar.svelte` for why that is safer than the hairline it used to sit behind.
+ *
+ * # What gives way when the window is narrow
+ *
+ * The badges first, then the name, and the buttons never. The badges take only space nobody else
+ * wants (a zero flex basis), the name shrinks and ellipsizes, and the actions do not shrink at all.
+ * The row used to be the other way round — a name that refused to shrink beside a fixed row of
+ * buttons — so a narrow window pushed the last buttons off its edge, where they could not be
+ * reached at all. A truncated name is still the name; the full one is in Details and the sidebar.
  *
  * # Why one row and not two
  *
@@ -23,7 +31,8 @@
 }
 
 .c-worktree-bar__title {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: var(--step-0);
   font-weight: 600;
   color: var(--fg);
@@ -34,14 +43,71 @@
 }
 
 /*
- * The dirty state you glance at, plus the badges.
+ * While the sidebar is hidden the name is a switcher, dressed as the title bar's project picker is:
+ * no field chrome until you reach for it. The invisible `<select>` over it is `o-overlay-select`.
+ *
+ * The negative inline margin cancels the label's padding, so the name does not step sideways from
+ * where the plain title sat when the sidebar goes away.
+ *
+ * The font is set here, on the `<h1>`, and not only on the label, because the select inherits it —
+ * `elements/_forms.scss` gives every select `font: inherit` — and macOS sizes the native menu from
+ * the select's font. Left to the heading's user-agent 2em bold, the menu opened at double size.
+ * Regular weight, so the menu matches the project picker's, whose select inherits plain body text.
+ */
+.c-worktree-bar__picker {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  margin-inline: -7px;
+  font-size: var(--step-0);
+  font-weight: 400;
+
+  &:hover .c-worktree-bar__switch {
+    background: var(--bg-hover);
+    border-color: var(--border);
+  }
+
+  /* The select carries focus but cannot show a ring while it is invisible, so the label wears it. */
+  &:focus-within .c-worktree-bar__switch {
+    border-color: var(--border-focus);
+  }
+}
+
+.c-worktree-bar__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  font-size: var(--step-0);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--fg-subtle);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+/* The name takes the colour; the chevron keeps the label's subtler one, as in the title bar. */
+.c-worktree-bar__name {
+  max-width: 32ch;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * The badges.
  *
  * Takes the slack so the actions stay pinned right however many badges there are, and hides the
  * overflow rather than wrapping: a bar that becomes two rows on a narrow window would move every
  * control below it, and this is a strip whose height other things measure against.
  */
 .c-worktree-bar__facts {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   display: flex;
   align-items: baseline;
