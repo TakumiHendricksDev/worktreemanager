@@ -34,7 +34,7 @@
 }
 
 /*
- * The two facts you glance at, plus the badges.
+ * The dirty state you glance at, plus the badges.
  *
  * Takes the slack so the actions stay pinned right however many badges there are, and hides the
  * overflow rather than wrapping: a bar that becomes two rows on a narrow window would move every
@@ -48,13 +48,6 @@
   gap: var(--sp-2);
   overflow: hidden;
   font-size: var(--step--1);
-}
-
-.c-worktree-bar__branch {
-  color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .c-worktree-bar__actions {

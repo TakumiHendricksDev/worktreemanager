@@ -14,8 +14,8 @@
    *     the hairline. The gap is not cosmetic: a destructive control flush against a neutral one is
    *     how it gets clicked by accident.
    *
-   * Branch and dirty state stay inline because they are the two facts you glance at; the rest moved
-   * into the Details dialog.
+   * Dirty state stays inline because it is the fact you glance at; the rest moved into the Details
+   * dialog. The branch went too, because the selected tab beside it already says it.
    */
   import { browsers } from '../state/browsers.svelte';
   import { sessions } from '../state/sessions.svelte';
@@ -106,11 +106,10 @@
   <h1 class="c-worktree-bar__title">{worktree.title}</h1>
 
   <div class="c-worktree-bar__facts">
-    {#if worktree.branch}
-      <code class="c-worktree-bar__branch" title={worktree.branch}>{worktree.branch}</code>
-    {:else}
-      <span class="c-status--muted">detached</span>
-    {/if}
+    <!-- No branch and no "main worktree" badge. The selected tab directly to the left already
+         shows both — its second line is the branch unless `display.subtitle` says otherwise, its
+         tooltip is the branch either way, and it has a `main` pill — so here they repeated the one
+         thing on screen the user had just clicked. Details has the branch in full. -->
     {#if worktree.dirty || worktree.untracked > 0 || worktree.staged > 0}
       <span class="c-status--warn">modified</span>
     {/if}
@@ -119,7 +118,6 @@
          where the Inspector — which reports ahead, behind, staged and unstaged properly — is a
          single click away. -->
 
-    {#if worktree.isMain}<span class="c-badge c-badge--accent">main worktree</span>{/if}
     {#each visibleBadges as badge, i (`${badge.label}:${i}`)}
       <span class="c-badge" title={badge.label}>{badge.label}: {badge.value}</span>
     {/each}
