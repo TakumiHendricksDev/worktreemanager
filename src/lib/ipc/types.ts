@@ -92,8 +92,6 @@ export interface Worktree {
   behind: number;
 
   issueKey: string | null;
-  /** Starred by the user. Sorts to the top of the sidebar; see `workspace.ordered`. */
-  favorite: boolean;
 
   badges: Badge[];
   links: Link[];
@@ -105,6 +103,32 @@ export interface Worktree {
   env: string[];
   /** The rendered `[browser] home`, or the first visible, openable HTTP(S) display link. */
   browserHome: string | null;
+}
+
+/**
+ * One group in the sidebar. Mirrors `SidebarGroupView` in `view.rs`.
+ *
+ * `favorites` and `ungrouped` are the two built-in ids; see `sidebar.ts`.
+ */
+export interface SidebarGroup {
+  id: string;
+  /** Empty for the built-ins, whose labels are the frontend's copy. */
+  name: string;
+  collapsed: boolean;
+  /** Worktree ids, in display order. May name worktrees git no longer lists. */
+  worktrees: string[];
+}
+
+/**
+ * How the sidebar arranges a project's worktrees. Mirrors `SidebarView` in `view.rs`.
+ *
+ * The one type that also travels back: the frontend edits it locally and sends the whole thing
+ * to `set_sidebar_layout`, which answers with it normalized.
+ */
+export interface SidebarLayout {
+  groups: SidebarGroup[];
+  /** Starred worktree id → the custom group it was starred from, so unstarring can go back. */
+  origins: Record<string, string>;
 }
 
 export type DatabaseEngine = 'postgres' | 'mysql' | 'sqlite';

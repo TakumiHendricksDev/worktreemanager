@@ -158,13 +158,6 @@ pub struct WorktreeView {
     /// An issue key extracted from the branch, then the directory, if either has one.
     pub issue_key: Option<String>,
 
-    /// Starred by the user, which floats it to the top of the sidebar.
-    ///
-    /// The only field here that comes from the *app* config rather than from git or the
-    /// project config. It rides along on this view so the sidebar's ordering survives a
-    /// cold start from the frontend's cache, with no second round-trip.
-    pub favorite: bool,
-
     pub badges: Vec<BadgeView>,
     pub links: Vec<LinkView>,
     pub table: Vec<TableRowView>,
@@ -607,7 +600,6 @@ mod tests {
             ahead: 0,
             behind: 0,
             issue_key: None,
-            favorite: false,
             badges: vec![],
             links: vec![],
             table: vec![],
@@ -618,15 +610,45 @@ mod tests {
         let object = json.as_object().unwrap();
 
         // Snake_case leaking through would silently break every binding in the UI.
-        for expected in [
-            "isMain", "isBare", "issueKey", "dirname", "subtitle", "favorite",
-        ] {
+        for expected in ["isMain", "isBare", "issueKey", "dirname", "subtitle"] {
             assert!(
                 object.contains_key(expected),
                 "missing `{expected}` in {object:?}"
             );
         }
         assert!(!object.contains_key("is_main"), "must not emit snake_case");
+    }
+
+    #[test]
+    fn a_sidebar_layout_crosses_the_boundary_in_both_directions_unchanged() {
+        // The one view the frontend also sends back. What it reads must be what it can write,
+        // key for key, or a drag would silently drop whatever the rename lost.
+        let json = serde_json::json!({
+            "groups": [
+                { "id": "favorites", "name": "", "collapsed": false, "worktrees": ["/x/a"] },
+                { "id": "g1", "name": "Reviews", "collapsed": true, "worktrees": ["/x/b"] },
+            ],
+            "origins": { "/x/a": "g1" },
+        });
+        let view: SidebarView = serde_json::from_value(json.clone()).unwrap();
+        let layout = wtm_config::SidebarLayout::from(view);
+        assert_eq!(layout.groups[1].name, "Reviews");
+        assert!(layout.groups[1].collapsed);
+        assert_eq!(
+            serde_json::to_value(SidebarView::from(layout)).unwrap(),
+            json
+        );
+    }
+
+    #[test]
+    fn a_sidebar_layout_with_missing_keys_still_deserializes() {
+        // A group the frontend has just made may not carry every field yet; a missing key is
+        // its default rather than a rejected command.
+        let view: SidebarView =
+            serde_json::from_value(serde_json::json!({ "groups": [{ "id": "g1" }] })).unwrap();
+        assert_eq!(view.groups[0].id, "g1");
+        assert!(view.groups[0].worktrees.is_empty());
+        assert!(view.origins.is_empty());
     }
 
     #[test]
@@ -1045,6 +1067,66 @@ pub struct BackgroundTaskView {
     /// this is another program's vocabulary and it may add to it.
     pub state: String,
     pub session: Option<String>,
+}
+
+/// How the sidebar arranges a project's worktrees. See `wtm_config::sidebar`.
+///
+/// The one view that also travels the other way: the frontend applies every drag, fold and
+/// rename locally and sends the whole layout back, so this derives `Deserialize` as well.
+/// It mirrors the config type field for field — every name is one word, which is why that
+/// type's TOML keys and this type's camel case agree — but is kept separate so the boundary,
+/// not the config crate, owns the contract `src/lib/ipc/types.ts` mirrors.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SidebarView {
+    pub groups: Vec<SidebarGroupView>,
+    /// Starred worktree → the custom group it was starred from.
+    pub origins: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SidebarGroupView {
+    pub id: String,
+    pub name: String,
+    pub collapsed: bool,
+    pub worktrees: Vec<String>,
+}
+
+impl From<wtm_config::SidebarLayout> for SidebarView {
+    fn from(layout: wtm_config::SidebarLayout) -> Self {
+        Self {
+            groups: layout
+                .groups
+                .into_iter()
+                .map(|group| SidebarGroupView {
+                    id: group.id,
+                    name: group.name,
+                    collapsed: group.collapsed,
+                    worktrees: group.worktrees,
+                })
+                .collect(),
+            origins: layout.origins,
+        }
+    }
+}
+
+impl From<SidebarView> for wtm_config::SidebarLayout {
+    fn from(view: SidebarView) -> Self {
+        Self {
+            groups: view
+                .groups
+                .into_iter()
+                .map(|group| wtm_config::SidebarGroup {
+                    id: group.id,
+                    name: group.name,
+                    collapsed: group.collapsed,
+                    worktrees: group.worktrees,
+                })
+                .collect(),
+            origins: view.origins,
+        }
+    }
 }
 
 /// A conversation that can be picked up again.

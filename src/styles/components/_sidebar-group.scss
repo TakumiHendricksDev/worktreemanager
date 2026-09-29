@@ -1,0 +1,115 @@
+/*
+ * One foldable group in the sidebar tree: a header, then its rows.
+ *
+ * The header keeps the look the old "Favorites" / "All worktrees" headings had — small caps in
+ * the subtle foreground — because it is the same thing grown a chevron, not a new kind of row.
+ * It must never compete with the worktrees under it for attention.
+ *
+ * # Why the focus ring is redrawn on the header
+ *
+ * The tree item that takes focus is the whole group, rows included (see `SidebarSection.svelte`
+ * for why it has to be). The global ring would therefore circle the entire section. It is
+ * removed from the wrapper and drawn on the header instead, which is the part that reads as
+ * "this group" — the same move `--focus-ring` exists to make possible for the overlay selects.
+ */
+
+.c-sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: var(--r-md);
+
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+.c-sidebar-group:focus-visible > .c-sidebar-group__head {
+  outline: var(--focus-ring);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+
+.c-sidebar-group__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  /* The gap above is a margin, not padding, so the focus ring and the drop highlight hug the
+     label rather than drawing a tall box with the words at its foot. */
+  margin-top: var(--sp-3);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: var(--step--2);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+
+  &:hover {
+    color: var(--fg-muted);
+  }
+}
+
+/* A smaller gap above the first heading; it sits directly under the filter. */
+.c-sidebar-group:first-child > .c-sidebar-group__head {
+  margin-top: var(--sp-1);
+}
+
+.c-sidebar-group__chevron {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.c-sidebar-group__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shown only while folded: an open group's rows already say how many there are. */
+.c-sidebar-group__count {
+  flex: 0 0 auto;
+  font-weight: 500;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The name, being edited in place. Its own control rather than `c-input`, for the reason the
+ * filter field is: it has to sit in a 16px-high heading without moving the rows below it, so it
+ * takes the heading's type and adds only a hairline and a tint.
+ */
+.c-sidebar-group__rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: -2px 0;
+  padding: 1px var(--sp-1);
+  border: 1px solid var(--border-focus);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.c-sidebar-group__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A dragged row would land in this group: its header lights up in the drop colours `c-drop` uses. */
+.c-sidebar-group.is-drop-target > .c-sidebar-group__head {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.c-sidebar-group.is-dragging {
+  opacity: 0.5;
+}

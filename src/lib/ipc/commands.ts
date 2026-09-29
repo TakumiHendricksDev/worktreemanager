@@ -41,6 +41,7 @@ import type {
   RemoveOutcome,
   SeqEvent,
   SetupResult,
+  SidebarLayout,
   TerminalReplay,
   TerminalSession,
   TablePageRequest,
@@ -61,9 +62,12 @@ export const commands = {
 
   // ── worktrees ──
   listWorktrees: (projectId: string) => invoke<Worktree[]>('list_worktrees', { projectId }),
-  /** Persists to `~/.config/wtm/config.toml`. Returns nothing — see the Rust doc comment. */
-  setWorktreeFavorite: (projectId: string, worktreeId: string, favorite: boolean) =>
-    invoke<void>('set_worktree_favorite', { projectId, worktreeId, favorite }),
+  /** Order, groups, folds and stars. Read when a project opens — see the Rust doc comment. */
+  sidebarLayout: (projectId: string) =>
+    invoke<SidebarLayout>('sidebar_layout', { projectId }),
+  /** Persists to `~/.config/wtm/config.toml` and answers with the layout as normalized. */
+  setSidebarLayout: (projectId: string, layout: SidebarLayout) =>
+    invoke<SidebarLayout>('set_sidebar_layout', { projectId, layout }),
 
   // ── the form ──
   worktreeForm: (projectId: string) => invoke<Form>('worktree_form', { projectId }),

@@ -107,24 +107,37 @@
   padding: 0 var(--sp-2) var(--sp-2);
 }
 
+/* `relative` so the drop line can be placed in the list's own content box — the space a drag
+   measures its slots in, which keeps it right while the list scrolls. */
 .c-sidebar__list {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.c-sidebar__group {
-  padding: var(--sp-3) var(--sp-3) 2px;
-  font-size: var(--step--2);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-subtle);
+/* While dragging, a pass over row text must not start a selection, and the pointer says what
+   is happening even over the gaps between rows. */
+.c-sidebar__list.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+}
 
-  /* No leading gap above the first heading; it sits directly under the project picker. */
-  &:first-child {
-    padding-top: var(--sp-1);
-  }
+/*
+ * Where a dragged row or group would land: a line in the accent, the drop colour `c-drop` uses
+ * for a pane. A line rather than a gap opening up, because opening a gap would move every row
+ * below it — and those rows are the slots the drag measured when it started.
+ */
+.c-sidebar__drop {
+  position: absolute;
+  left: var(--sp-1);
+  right: var(--sp-1);
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
 }
 
 .c-sidebar__empty {

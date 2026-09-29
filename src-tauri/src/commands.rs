@@ -32,8 +32,8 @@ use crate::openers;
 use crate::view::{
     ActionView, AgentOptionView, AgentSessionView, BackgroundTaskView, BriefView, BrowserView,
     CapabilityView, DatabaseConnectionView, DoctorView, ErrorView, FieldView, FormView,
-    OpenersView, PaletteView, ProjectView, RegisteredView, ResumableView, TerminalReplayView,
-    TerminalSessionView, WorktreeView,
+    OpenersView, PaletteView, ProjectView, RegisteredView, ResumableView, SidebarView,
+    TerminalReplayView, TerminalSessionView, WorktreeView,
 };
 
 /// Shared application state.
@@ -126,24 +126,37 @@ pub async fn list_worktrees(app: AppState<'_>, project_id: String) -> Reply<Vec<
     .await
 }
 
-/// Star or unstar a worktree, persisting to the app config.
+/// How the sidebar arranges a project's worktrees: order, groups, folds and stars.
 ///
-/// Returns nothing on purpose. Unlike a create or a remove, this changes no git state and
-/// nothing else can contradict it, so the frontend flips its own star and calls this
-/// behind the click — the same shape as a theme change. Re-listing every worktree to
-/// confirm one boolean would cost several `git` invocations per click.
+/// Read once when a project opens rather than with every listing. The frontend is the only
+/// thing that changes it, so re-reading it on each window focus would only ever return what the
+/// frontend already has — and would open a window for a read to race a drag in flight.
 #[tauri::command]
-pub async fn set_worktree_favorite(
-    app: AppState<'_>,
-    project_id: String,
-    worktree_id: String,
-    favorite: bool,
-) -> Reply<()> {
+pub async fn sidebar_layout(app: AppState<'_>, project_id: String) -> Reply<SidebarView> {
     let app = Arc::clone(&app);
     blocking(move || {
         let project = app.project(&project_id)?;
-        app.set_favorite(&project, &worktree_id, favorite)
-            .map_err(Into::into)
+        Ok(app.sidebar_layout(&project)?.into())
+    })
+    .await
+}
+
+/// Replace the sidebar layout, returning it as stored.
+///
+/// The frontend applies the edit first and calls this behind it — the same shape as a theme
+/// change, because nothing but the user has an opinion on where a row goes. What comes back is
+/// the layout after `normalized`, which the frontend adopts: that is how an edit the invariants
+/// reject (a second copy of a row, say) is corrected rather than kept on screen only.
+#[tauri::command]
+pub async fn set_sidebar_layout(
+    app: AppState<'_>,
+    project_id: String,
+    layout: SidebarView,
+) -> Reply<SidebarView> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let project = app.project(&project_id)?;
+        Ok(app.set_sidebar_layout(&project, &layout.into())?.into())
     })
     .await
 }
@@ -1223,14 +1236,14 @@ pub async fn remove_worktree(
             &wtm_core::ports::exec::CancelToken::new(),
         )?;
 
-        // Drop the star along with the worktree. Without this the app config accumulates
-        // paths that no longer exist, and a later worktree created at the same path would
-        // come back mysteriously starred.
+        // Drop its place in the sidebar along with the worktree. Without this the app config
+        // accumulates paths that no longer exist, and a later worktree created at the same path
+        // would come back mysteriously starred, or filed in a group it was never put in.
         if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. })
-            && let Err(err) = app.set_favorite(&req.project, &worktree_id, false)
+            && let Err(err) = app.forget_in_sidebar(&req.project, &worktree_id)
         {
             // The worktree is already gone; a leftover entry is untidy, not broken.
-            tracing::warn!(error = %err, "could not clear the favorite for a removed worktree");
+            tracing::warn!(error = %err, "could not clear a removed worktree from the sidebar");
         }
 
         // And the resume entries, for a sharper reason than tidiness: every one names this

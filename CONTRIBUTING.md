@@ -125,7 +125,7 @@ and resolves `PATH`, `wtm-config` reads the layered TOML and the trust store, `w
 is the template engine. `src-tauri` is the composition root: the only place a concrete
 adapter is chosen, and the only place allowed to hold an opinion about the UI. If you find
 yourself wanting to put a UI concern on a port, that is the signal to put it in `src-tauri`
-instead — see the comment on `FileConfigStore::favorites` for the canonical example.
+instead — see the comment on `FileConfigStore::sidebar_layout` for the canonical example.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) has the long version.
 

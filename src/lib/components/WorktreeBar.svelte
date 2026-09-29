@@ -21,6 +21,7 @@
   import { sessions } from '../state/sessions.svelte';
   import { commands } from '../ipc/commands';
   import { INSPECTOR_SHORTCUT, SHELL_SHORTCUT } from '../state/sessions.svelte';
+  import { workspace } from '../state/workspace.svelte';
   import type { Worktree } from '../ipc/types';
   import OpenInButton from './OpenInButton.svelte';
   import Button from './ui/Button.svelte';
@@ -52,6 +53,9 @@
    * A `<select>` fires no `change` when you re-pick the option that is already selected, so the value
    * is reset to `''` after every pick and the placeholder is what is always "chosen".
    */
+  /** In the Favorites group. A lookup, since a star is where a worktree sits, not a field on it. */
+  const favorite = $derived(workspace.isFavorite(worktree.id));
+
   let linkChoice = $state('');
   let agentChoice = $state('');
   const startable = $derived(
@@ -94,12 +98,12 @@
   -->
   <button
     class="c-detail__star"
-    class:is-on={worktree.favorite}
-    aria-pressed={worktree.favorite}
-    title={worktree.favorite ? 'Remove from favorites' : 'Add to favorites'}
+    class:is-on={favorite}
+    aria-pressed={favorite}
+    title={favorite ? 'Remove from favorites' : 'Add to favorites'}
     onclick={onfavorite}
   >
-    <Icon name={worktree.favorite ? 'star' : 'star-outline'} size={18} />
+    <Icon name={favorite ? 'star' : 'star-outline'} size={18} />
     <span class="u-visually-hidden">Favorite</span>
   </button>
 

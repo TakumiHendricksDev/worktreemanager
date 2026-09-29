@@ -36,6 +36,7 @@ use wtm_core::ports::template::TemplateEngine;
 
 use crate::layers::{self, LayerPaths, LoadedLayer};
 use crate::paths::AppPaths;
+use crate::sidebar::SidebarLayout;
 use crate::trust::{self, TrustStore};
 use crate::user::UserConfig;
 use crate::validate::{self, Origin};
@@ -55,7 +56,7 @@ pub struct FileConfigStore {
     engine: Arc<dyn TemplateEngine>,
     clock: Arc<dyn Clock>,
     cache: Mutex<BTreeMap<PathBuf, CacheEntry>>,
-    /// Serializes read-modify-write of `config.toml`. Two overlapping `set_favorite`
+    /// Serializes read-modify-write of `config.toml`. Two overlapping `set_sidebar_layout`
     /// or `register_project` calls would otherwise each load, mutate, and save, and
     /// the second write would drop the first.
     user_write: Mutex<()>,
@@ -102,41 +103,63 @@ impl FileConfigStore {
         config.save(&self.paths.config_file)
     }
 
-    /// Starred worktree paths for `repo_root`.
+    /// How the sidebar arranges `repo_root`'s worktrees.
     ///
     /// Deliberately an inherent method rather than part of the [`ConfigStore`] port. A
-    /// favorite is a sidebar-ordering preference: no use-case reads it, no plan depends on
-    /// it, and putting it on the port would hand the domain an opinion about the UI. The
+    /// sidebar layout is a UI preference: no use-case reads it, no plan depends on it, and
+    /// putting it on the port would hand the domain an opinion about the UI. The
     /// composition root reaches for the concrete store, which is the one place allowed to.
-    pub fn favorites(&self, repo_root: &Path) -> Result<Vec<String>, ConfigError> {
-        Ok(self.user_config()?.favorites(repo_root).to_vec())
+    pub fn sidebar_layout(&self, repo_root: &Path) -> Result<SidebarLayout, ConfigError> {
+        Ok(self.user_config()?.sidebar(repo_root))
     }
 
-    /// Star or unstar one worktree, by its absolute path.
+    /// Replace the sidebar layout for `repo_root`, returning it normalized.
     ///
-    /// Writing the whole config back for one boolean is fine here: the file is small, the
-    /// write is atomic, and a star is a deliberate click rather than something that
-    /// happens in a loop.
-    pub fn set_favorite(
+    /// The whole layout rather than one edit at a time: every edit the sidebar makes — a drag,
+    /// a rename, a fold — is applied optimistically in the frontend, so what arrives here is
+    /// already the state the user is looking at, and [`SidebarLayout::normalized`] is what
+    /// makes it safe to take verbatim. Writing the whole config back for it is fine: the file
+    /// is small, the write is atomic, and these are deliberate clicks rather than a loop.
+    pub fn set_sidebar_layout(
+        &self,
+        repo_root: &Path,
+        layout: &SidebarLayout,
+    ) -> Result<SidebarLayout, ConfigError> {
+        let _write = self.user_write.lock();
+        let mut config = self.user_config()?;
+        let key = repo_root.to_string_lossy();
+        let stored_form = |config: &UserConfig| {
+            config
+                .projects
+                .get(key.as_ref())
+                .map(|entry| (entry.sidebar.clone(), entry.favorites.clone()))
+        };
+        let before = stored_form(&config);
+        let Some(stored) = config.set_sidebar(repo_root, layout) else {
+            tracing::warn!(
+                repo = %repo_root.display(),
+                "ignoring a sidebar layout for an unregistered project"
+            );
+            return Ok(layout.normalized());
+        };
+        // What would be written is what is already there — a fold of an already-folded group,
+        // say — so no write.
+        if stored_form(&config) == before {
+            return Ok(stored);
+        }
+        self.save_user_config(&config)?;
+        Ok(stored)
+    }
+
+    /// Take one worktree out of `repo_root`'s layout, for when the worktree itself is removed.
+    pub fn forget_worktree_in_sidebar(
         &self,
         repo_root: &Path,
         worktree: &str,
-        favorite: bool,
     ) -> Result<(), ConfigError> {
         let _write = self.user_write.lock();
         let mut config = self.user_config()?;
-        if !config
-            .projects
-            .contains_key(repo_root.to_string_lossy().as_ref())
-        {
-            tracing::warn!(
-                repo = %repo_root.display(),
-                "ignoring a favorite for an unregistered project"
-            );
-            return Ok(());
-        }
-        // Already in the requested state: no change, so no write.
-        if !config.set_favorite(repo_root, worktree, favorite) {
+        if !config.forget_in_sidebar(repo_root, worktree) {
             return Ok(());
         }
         self.save_user_config(&config)
@@ -843,53 +866,121 @@ mod tests {
         assert!(!format!("{found:?}").contains("secret"));
     }
 
+    fn starring(worktree: &str) -> SidebarLayout {
+        SidebarLayout {
+            groups: vec![crate::sidebar::SidebarGroup {
+                id: crate::sidebar::FAVORITES.to_owned(),
+                worktrees: vec![worktree.to_owned()],
+                ..crate::sidebar::SidebarGroup::default()
+            }],
+            ..SidebarLayout::default()
+        }
+    }
+
+    fn starred(layout: &SidebarLayout) -> Vec<String> {
+        layout.groups[0].worktrees.clone()
+    }
+
     #[test]
-    fn favorites_persist_to_disk_and_can_be_removed() {
+    fn a_sidebar_layout_persists_to_disk_and_can_be_cleared() {
         let h = Harness::new();
         h.store.register_project(&h.repo).unwrap();
 
         let a = h.repo.join("../wt-a").to_string_lossy().into_owned();
-        h.store.set_favorite(&h.repo, &a, true).unwrap();
-        assert_eq!(h.store.favorites(&h.repo).unwrap(), vec![a.clone()]);
+        h.store.set_sidebar_layout(&h.repo, &starring(&a)).unwrap();
+        assert_eq!(starred(&h.store.sidebar_layout(&h.repo).unwrap()), [a]);
 
-        h.store.set_favorite(&h.repo, &a, false).unwrap();
-        assert!(h.store.favorites(&h.repo).unwrap().is_empty());
+        h.store
+            .set_sidebar_layout(&h.repo, &SidebarLayout::default())
+            .unwrap();
+        assert!(starred(&h.store.sidebar_layout(&h.repo).unwrap()).is_empty());
     }
 
     #[test]
-    fn favoriting_does_not_disturb_the_rest_of_the_app_config() {
-        // The whole file is rewritten for one boolean, so the round-trip has to be safe.
+    fn writing_a_layout_does_not_disturb_the_rest_of_the_app_config() {
+        // The whole file is rewritten for one drag, so the round-trip has to be safe.
         let h = Harness::new();
         h.store.register_project(&h.repo).unwrap();
         h.store.set_user_pref("ui.theme", "dark").unwrap();
 
-        h.store.set_favorite(&h.repo, "/wt-a", true).unwrap();
+        h.store
+            .set_sidebar_layout(&h.repo, &starring("/wt-a"))
+            .unwrap();
 
         assert_eq!(
             h.store.user_pref("ui.theme").unwrap().as_deref(),
             Some("dark"),
-            "an unrelated preference must survive a favorite"
+            "an unrelated preference must survive a layout write"
         );
         assert_eq!(
             h.store.projects().unwrap(),
             vec![h.repo.clone()],
-            "registration must survive a favorite"
+            "registration must survive a layout write"
         );
     }
 
     #[test]
-    fn favoriting_an_unregistered_project_is_ignored_rather_than_an_error() {
+    fn a_layout_for_an_unregistered_project_is_ignored_rather_than_an_error() {
         // Reachable only if the UI got ahead of the config; it must not create a phantom
-        // project, and it must not fail the click either.
+        // project, and it must not fail the drag either.
         let h = Harness::new();
-        h.store.set_favorite(&h.repo, "/wt-a", true).unwrap();
+        let answer = h
+            .store
+            .set_sidebar_layout(&h.repo, &starring("/wt-a"))
+            .unwrap();
+        assert_eq!(
+            starred(&answer),
+            ["/wt-a"],
+            "the caller still gets its layout back"
+        );
         assert!(h.store.projects().unwrap().is_empty());
-        assert!(h.store.favorites(&h.repo).unwrap().is_empty());
+        assert!(starred(&h.store.sidebar_layout(&h.repo).unwrap()).is_empty());
     }
 
     #[test]
-    fn a_project_with_no_config_file_reports_no_favorites() {
+    fn a_layout_write_that_changes_nothing_does_not_touch_the_file() {
         let h = Harness::new();
-        assert!(h.store.favorites(&h.repo).unwrap().is_empty());
+        h.store.register_project(&h.repo).unwrap();
+        h.store
+            .set_sidebar_layout(&h.repo, &starring("/wt-a"))
+            .unwrap();
+        // A comment is the marker because a rewrite cannot keep one: serde drops comments, so
+        // this detects a write where a timestamp might be too coarse to.
+        let file = &h.store.paths().config_file;
+        std::fs::write(
+            file,
+            std::fs::read_to_string(file).unwrap() + "\n# marker\n",
+        )
+        .unwrap();
+
+        h.store
+            .set_sidebar_layout(&h.repo, &starring("/wt-a"))
+            .unwrap();
+
+        let text = std::fs::read_to_string(file).unwrap();
+        assert!(
+            text.contains("# marker"),
+            "an unchanged layout must not rewrite the file"
+        );
+    }
+
+    #[test]
+    fn forgetting_a_worktree_removes_it_from_the_stored_layout() {
+        let h = Harness::new();
+        h.store.register_project(&h.repo).unwrap();
+        h.store
+            .set_sidebar_layout(&h.repo, &starring("/wt-a"))
+            .unwrap();
+
+        h.store
+            .forget_worktree_in_sidebar(&h.repo, "/wt-a")
+            .unwrap();
+        assert!(starred(&h.store.sidebar_layout(&h.repo).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn a_project_with_no_config_file_reads_as_an_empty_layout() {
+        let h = Harness::new();
+        assert!(h.store.sidebar_layout(&h.repo).unwrap().is_empty());
     }
 }

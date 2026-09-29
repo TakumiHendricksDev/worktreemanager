@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use wtm_core::error::ConfigError;
 
+use crate::sidebar::SidebarLayout;
+
 /// Which theme the window uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -93,9 +95,9 @@ pub struct PaletteDef {
 
 /// UI preferences.
 ///
-/// Field order matters, for the same reason it does in `ProjectEntry`: TOML emits every
-/// plain value before any table, so `palettes` must stay below `theme`, `palette` and
-/// `sidebar_width`. Moving it up makes `save` fail at runtime rather than at compile time.
+/// `palettes`, a table, is declared below the plain values for the reason given on
+/// `ProjectEntry`: it is the order TOML writes them in, though `toml` 1.x no longer fails
+/// `save` when it is not.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UiPrefs {
     #[serde(default)]
@@ -135,9 +137,11 @@ pub struct ExecPrefs {
 
 /// One registered repository.
 ///
-/// Field order matters: TOML requires every plain value to be emitted before any table,
-/// so `favorites` (an array of strings) must stay above `config` (a table). Moving it
-/// below would make `save` fail at runtime, not at compile time.
+/// Plain values are declared above tables (`sidebar`, `config`) because that is the order
+/// TOML writes them in. It used to be load-bearing — the old serializer failed `save` on a
+/// value after a table — and no longer is: `toml` 1.x reorders them itself. Checked by
+/// swapping `favorites` below `sidebar` and watching `a_layout_saves_beside_a_project_config_table`
+/// still pass; that test is what would catch a serializer that stopped doing this.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectEntry {
     /// Display name override.
@@ -146,14 +150,23 @@ pub struct ProjectEntry {
     /// ISO date it was added, for ordering and for display.
     #[serde(default)]
     pub added: Option<String>,
-    /// Absolute paths of worktrees the user has starred, sorted.
+    /// Starred worktrees, as written before favorites became a sidebar group.
     ///
-    /// Stored per project rather than globally because a worktree path is only meaningful
-    /// relative to its repository, and unregistering a project should take its stars with
-    /// it. Kept out of the file entirely when empty, so a config nobody has starred in
-    /// looks exactly as it did before this existed.
+    /// Read, never written: [`UserConfig::sidebar`] folds these into the Favorites group, and
+    /// the first layout saved for the project clears them. Kept as a field rather than
+    /// migrated on load because loading must not rewrite a hand-edited file — and an older
+    /// build reading the file after a downgrade still finds the stars it knows about until
+    /// then.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub favorites: Vec<String>,
+    /// How the sidebar arranges this project's worktrees.
+    ///
+    /// Stored per project for the reason favorites were: a worktree path is only meaningful
+    /// relative to its repository, and unregistering a project should take its layout with
+    /// it. Kept out of the file entirely when it says nothing, so a project nobody has
+    /// arranged looks exactly as it did before this existed.
+    #[serde(default, skip_serializing_if = "SidebarLayout::is_empty")]
+    pub sidebar: SidebarLayout,
     /// Project-config overrides for this repository, merged as the user layer.
     #[serde(default)]
     pub config: Option<toml::Value>,
@@ -249,41 +262,49 @@ impl UserConfig {
         self.projects.remove(&root.to_string_lossy().into_owned());
     }
 
-    /// Starred worktree paths for `root`, or empty if it has none.
+    /// The sidebar layout for `root`, normalized, with any legacy favorites folded in.
+    ///
+    /// An unregistered root reads as the empty layout rather than an error: the sidebar only
+    /// ever asks about a project it is showing, so absent means the answer is "nothing".
     #[must_use]
-    pub fn favorites(&self, root: &Path) -> &[String] {
+    pub fn sidebar(&self, root: &Path) -> SidebarLayout {
         self.projects
             .get(root.to_string_lossy().as_ref())
-            .map_or(&[], |entry| entry.favorites.as_slice())
+            .map_or_else(SidebarLayout::default, |entry| {
+                entry.sidebar.with_legacy_favorites(&entry.favorites)
+            })
+            .normalized()
     }
 
-    /// Star or unstar one worktree. Returns whether anything changed.
+    /// Replace the sidebar layout for `root`. Returns the normalized layout as stored, or
+    /// `None` when `root` is not registered.
     ///
     /// A missing project entry is a no-op rather than an insertion: `projects` is also the
-    /// registration list, so creating an entry here would make a stray star register a
-    /// phantom repository in the sidebar. Only a registered project's worktrees are
-    /// reachable in the UI, so absent means something is already wrong upstream.
-    pub fn set_favorite(&mut self, root: &Path, worktree: &str, favorite: bool) -> bool {
+    /// registration list, so creating an entry here would make a stray write register a
+    /// phantom repository. Only a registered project's worktrees are reachable in the UI, so
+    /// absent means something is already wrong upstream.
+    ///
+    /// Clears the legacy `favorites` list. The frontend only writes a layout it read through
+    /// [`sidebar`](Self::sidebar), which had those stars folded in, so they are part of what
+    /// is being written — keeping the old list as well would resurrect a star the user has
+    /// since removed.
+    pub fn set_sidebar(&mut self, root: &Path, layout: &SidebarLayout) -> Option<SidebarLayout> {
+        let entry = self.projects.get_mut(root.to_string_lossy().as_ref())?;
+        entry.sidebar = layout.compacted();
+        entry.favorites.clear();
+        Some(entry.sidebar.normalized())
+    }
+
+    /// Take `worktree` out of the layout for `root`. Returns whether anything changed.
+    pub fn forget_in_sidebar(&mut self, root: &Path, worktree: &str) -> bool {
         let Some(entry) = self.projects.get_mut(root.to_string_lossy().as_ref()) else {
             return false;
         };
-
-        // A linear scan rather than a binary search: this file is hand-editable, so the
-        // list cannot be assumed sorted on the way in. Sorting on insert keeps the diff
-        // stable going forward, and these lists are a handful of entries long.
-        let at = entry.favorites.iter().position(|f| f == worktree);
-        match (at, favorite) {
-            (None, true) => {
-                entry.favorites.push(worktree.to_owned());
-                entry.favorites.sort();
-                true
-            }
-            (Some(at), false) => {
-                entry.favorites.remove(at);
-                true
-            }
-            _ => false,
-        }
+        let before = entry.favorites.len();
+        entry.favorites.retain(|f| f != worktree);
+        let changed = entry.sidebar.forget(worktree) || entry.favorites.len() != before;
+        entry.sidebar = entry.sidebar.compacted();
+        changed
     }
 
     /// Read a dotted preference key.
@@ -340,6 +361,7 @@ impl UserConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sidebar::FAVORITES;
 
     #[test]
     fn a_missing_file_loads_as_defaults() {
@@ -436,86 +458,181 @@ mod tests {
         );
     }
 
+    fn layout(groups: &[(&str, &[&str])]) -> SidebarLayout {
+        SidebarLayout {
+            groups: groups
+                .iter()
+                .map(|(id, worktrees)| crate::sidebar::SidebarGroup {
+                    id: (*id).to_owned(),
+                    name: format!("{id} name"),
+                    collapsed: false,
+                    worktrees: worktrees.iter().map(|&w| w.to_owned()).collect(),
+                })
+                .collect(),
+            ..SidebarLayout::default()
+        }
+    }
+
+    fn members(layout: &SidebarLayout, id: &str) -> Vec<String> {
+        layout
+            .groups
+            .iter()
+            .find(|g| g.id == id)
+            .map(|g| g.worktrees.clone())
+            .unwrap_or_default()
+    }
+
     #[test]
-    fn favorites_round_trip_and_stay_sorted() {
+    fn a_sidebar_layout_round_trips_through_disk() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
         let mut config = UserConfig::default();
         config.register(Path::new("/r"), "2026-07-28".to_owned());
-        assert!(config.set_favorite(Path::new("/r"), "/r-b", true));
-        assert!(config.set_favorite(Path::new("/r"), "/r-a", true));
+        let mut written = layout(&[(FAVORITES, &["/r-f"]), ("reviews", &["/r-b", "/r-a"])]);
+        written.groups[1].collapsed = true;
+        written
+            .origins
+            .insert("/r-f".to_owned(), "reviews".to_owned());
+        config.set_sidebar(Path::new("/r"), &written).unwrap();
         config.save(&path).unwrap();
 
-        let reloaded = UserConfig::load(&path).unwrap();
-        assert_eq!(reloaded.favorites(Path::new("/r")), ["/r-a", "/r-b"]);
-    }
-
-    #[test]
-    fn favoriting_is_idempotent_in_both_directions() {
-        let mut config = UserConfig::default();
-        config.register(Path::new("/r"), "2026-07-28".to_owned());
-
-        assert!(config.set_favorite(Path::new("/r"), "/r-a", true));
-        assert!(
-            !config.set_favorite(Path::new("/r"), "/r-a", true),
-            "starring twice must not duplicate the entry"
+        let reloaded = UserConfig::load(&path).unwrap().sidebar(Path::new("/r"));
+        assert_eq!(reloaded, written.normalized());
+        assert_eq!(
+            members(&reloaded, "reviews"),
+            ["/r-b", "/r-a"],
+            "a hand-set order must not be re-sorted"
         );
-        assert_eq!(config.favorites(Path::new("/r")).len(), 1);
-
-        assert!(config.set_favorite(Path::new("/r"), "/r-a", false));
-        assert!(
-            !config.set_favorite(Path::new("/r"), "/r-a", false),
-            "unstarring what is not starred is not a change"
-        );
-        assert!(config.favorites(Path::new("/r")).is_empty());
     }
 
     #[test]
-    fn favoriting_an_unregistered_project_does_not_register_it() {
-        // `projects` doubles as the registration list, so an insert here would put a
-        // phantom repository in the sidebar.
-        let mut config = UserConfig::default();
-        assert!(!config.set_favorite(Path::new("/never-added"), "/x", true));
-        assert!(config.projects.is_empty());
-    }
+    fn a_layout_saves_beside_a_project_config_table() {
+        // `sidebar` and `config` are both tables under the project, beside a plain array. The
+        // serializer that used to fail `save` on a value after a table would fail here, and
+        // nowhere at compile time.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
 
-    #[test]
-    fn unstarring_survives_a_hand_sorted_list() {
-        // The list is assumed unsorted on the way in, because a human may have typed it.
         let mut config = UserConfig::default();
         config.projects.insert(
             "/r".to_owned(),
             ProjectEntry {
-                favorites: vec!["/r-z".to_owned(), "/r-a".to_owned()],
+                favorites: vec!["/r-legacy".to_owned()],
+                config: Some(
+                    toml::from_str::<toml::Table>("[naming]\nbranch = 'x'\n")
+                        .map(toml::Value::Table)
+                        .unwrap(),
+                ),
                 ..ProjectEntry::default()
             },
         );
-        assert!(config.set_favorite(Path::new("/r"), "/r-z", false));
-        assert_eq!(config.favorites(Path::new("/r")), ["/r-a"]);
+        config.projects.get_mut("/r").unwrap().sidebar = layout(&[("g", &["/r-a"])]);
+        config
+            .save(&path)
+            .expect("a layout beside a config table must serialize");
+
+        let reloaded = UserConfig::load(&path).unwrap();
+        assert!(reloaded.projects["/r"].config.is_some());
+        assert_eq!(members(&reloaded.sidebar(Path::new("/r")), "g"), ["/r-a"]);
     }
 
     #[test]
-    fn a_project_with_no_favorites_writes_no_favorites_key() {
-        // The setting should be invisible until it is used.
+    fn legacy_favorites_read_as_the_favorites_group() {
+        // A config written before favorites were a group must come up with the same stars.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[projects.\"/r\"]\nfavorites = [\"/r-a\", \"/r-b\"]\n",
+        )
+        .unwrap();
+
+        let sidebar = UserConfig::load(&path).unwrap().sidebar(Path::new("/r"));
+        assert_eq!(members(&sidebar, FAVORITES), ["/r-a", "/r-b"]);
+    }
+
+    #[test]
+    fn saving_a_layout_retires_the_legacy_favorites_list() {
+        // Otherwise unstarring a migrated favorite would not stick: the old list would put it
+        // back on the next read.
+        let mut config = UserConfig::default();
+        config.projects.insert(
+            "/r".to_owned(),
+            ProjectEntry {
+                favorites: vec!["/r-a".to_owned(), "/r-b".to_owned()],
+                ..ProjectEntry::default()
+            },
+        );
+
+        let mut read = config.sidebar(Path::new("/r"));
+        read.groups[0].worktrees.retain(|w| w != "/r-a");
+        config.set_sidebar(Path::new("/r"), &read).unwrap();
+
+        assert!(config.projects["/r"].favorites.is_empty());
+        assert_eq!(
+            members(&config.sidebar(Path::new("/r")), FAVORITES),
+            ["/r-b"]
+        );
+    }
+
+    #[test]
+    fn a_project_nobody_has_arranged_writes_no_sidebar_or_favorites_key() {
+        // The setting should be invisible until it is used — including after a write of the
+        // layout a fresh project reads as, which is the two empty built-ins.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
         let mut config = UserConfig::default();
         config.register(Path::new("/r"), "2026-07-28".to_owned());
+        let untouched = config.sidebar(Path::new("/r"));
+        config.set_sidebar(Path::new("/r"), &untouched).unwrap();
         config.save(&path).unwrap();
 
         let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sidebar"), "unexpected table in:\n{text}");
         assert!(!text.contains("favorites"), "unexpected key in:\n{text}");
     }
 
     #[test]
-    fn unregistering_takes_the_favorites_with_it() {
+    fn arranging_an_unregistered_project_does_not_register_it() {
+        // `projects` doubles as the registration list, so an insert here would put a
+        // phantom repository in the sidebar.
+        let mut config = UserConfig::default();
+        assert!(
+            config
+                .set_sidebar(Path::new("/never-added"), &layout(&[("g", &["/x"])]))
+                .is_none()
+        );
+        assert!(config.projects.is_empty());
+    }
+
+    #[test]
+    fn forgetting_a_worktree_clears_it_from_the_layout_and_the_legacy_list() {
+        let mut config = UserConfig::default();
+        config.projects.insert(
+            "/r".to_owned(),
+            ProjectEntry {
+                favorites: vec!["/r-a".to_owned()],
+                sidebar: layout(&[("g", &["/r-a", "/r-b"])]),
+                ..ProjectEntry::default()
+            },
+        );
+
+        assert!(config.forget_in_sidebar(Path::new("/r"), "/r-a"));
+        let sidebar = config.sidebar(Path::new("/r"));
+        assert!(members(&sidebar, FAVORITES).is_empty());
+        assert_eq!(members(&sidebar, "g"), ["/r-b"]);
+        assert!(!config.forget_in_sidebar(Path::new("/r"), "/r-a"));
+    }
+
+    #[test]
+    fn unregistering_takes_the_layout_with_it() {
         let mut config = UserConfig::default();
         config.register(Path::new("/r"), "2026-07-28".to_owned());
-        config.set_favorite(Path::new("/r"), "/r-a", true);
+        config.set_sidebar(Path::new("/r"), &layout(&[(FAVORITES, &["/r-a"])]));
         config.unregister(Path::new("/r"));
-        assert!(config.favorites(Path::new("/r")).is_empty());
+        assert!(members(&config.sidebar(Path::new("/r")), FAVORITES).is_empty());
     }
 
     #[test]
@@ -663,7 +780,7 @@ mod tests {
 
     #[test]
     fn a_config_with_no_palettes_writes_no_palettes_table() {
-        // Same argument as `favorites`: a file nobody has customized must look exactly as it
+        // Same argument as `sidebar`: a file nobody has customized must look exactly as it
         // did before this feature existed.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");

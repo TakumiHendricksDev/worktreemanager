@@ -1,10 +1,10 @@
 /*
  * One worktree row in the sidebar list.
  *
- * The star is a *sibling* of the tab, overlaid on its right edge, not a child — a button
- * inside a button is invalid HTML, and nesting one inside `role="tab"` would break both the
- * tab's click target and its accessible name. Hence the wrapper, and hence `position:
- * relative` here rather than on the tab itself.
+ * The star is a *sibling* of the row, overlaid on its right edge, not a child — a button
+ * inside a button is invalid HTML, and nesting one inside `role="treeitem"` would break both the
+ * row's click target and its accessible name. Hence the wrapper, and hence `position:
+ * relative` here rather than on the row itself.
  *
  * This block previously owned nine of the app's most collision-prone class names — `.row`,
  * `.name`, `.meta`, `.branch`, `.pill`, `.flag`, `.star`, `.selected`, `.on` — each of which
@@ -15,6 +15,11 @@
 .c-worktree-tab {
   position: relative;
   min-width: 0;
+}
+
+/* The row being dragged stays in place, dimmed, until it is dropped: the line shows where it goes. */
+.c-worktree-tab.is-dragging {
+  opacity: 0.5;
 }
 
 .c-worktree-tab__button {
@@ -53,7 +58,7 @@
   border-radius: var(--r-sm);
   color: var(--fg-subtle);
   /* Hidden until it is relevant: a column of empty outlines down the sidebar is clutter, and
-     the group heading already says which rows are starred. */
+     the Favorites heading already says which rows are starred. */
   opacity: 0;
   transition:
     opacity var(--dur-fast) var(--ease),

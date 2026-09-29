@@ -2,9 +2,10 @@
   /**
    * One worktree in the sidebar list.
    *
-   * A `role="tab"` rather than a button, because the list is a tablist: that is what
-   * makes arrow-key navigation and the selected state legible to a screen reader, and it
-   * is how the "tabs down the left" interaction is supposed to be described.
+   * A `role="treeitem"` rather than a button, because the list is a tree: that is what makes
+   * arrow-key navigation, the selected state and the group it sits in legible to a screen reader.
+   * It was a `tab` while the list was flat; a tablist can only contain tabs, which left nowhere to
+   * put a heading you can fold.
    */
   import type { Worktree } from '../ipc/types';
   import { STATUS_WORD, type PaneStatus } from '../status';
@@ -15,9 +16,16 @@
     worktree,
     status,
     selected,
+    favorite,
+    level,
+    group,
+    next,
+    dragging = false,
     controls = 'worktree-detail',
     onselect,
     onfavorite,
+    onpress,
+    onmenu,
   }: {
     worktree: Worktree;
     /**
@@ -29,10 +37,22 @@
      */
     status: PaneStatus | null;
     selected: boolean;
-    /** The panel this tab controls. Null while the create pane is on screen. */
+    /** In the Favorites group. A prop for the same reason `status` is. */
+    favorite: boolean;
+    /** 1 when the list has no headings, 2 under one. */
+    level: 1 | 2;
+    /** The group this row is in, and the member after it — what a drag measures. */
+    group: string;
+    next: string | null;
+    /** This row is the one being dragged. */
+    dragging?: boolean;
+    /** The panel this row controls. Null while the create pane is on screen. */
     controls?: string | null;
     onselect: () => void;
     onfavorite: () => void;
+    /** A press that may become a drag. The sidebar decides; see `startRowDrag`. */
+    onpress: (event: PointerEvent) => void;
+    onmenu: (event: MouseEvent) => void;
   } = $props();
 
   /**
@@ -60,21 +80,37 @@
 </script>
 
 <!--
-  The star is a *sibling* of the tab, overlaid on its right edge, not a child. A button
-  inside a button is invalid HTML, and nesting one inside `role="tab"` would break both the
-  tab's click target and its accessible name. The wrapper is `presentation` so it stays
-  transparent to the tablist above it, which must see tabs as its children.
+  The star is a *sibling* of the row, overlaid on its right edge, not a child. A button
+  inside a button is invalid HTML, and nesting one inside `role="treeitem"` would break both the
+  row's click target and its accessible name. The wrapper is `presentation` so it stays
+  transparent to the tree above it, which must see tree items as its children.
+
+  The `data-*` attributes are what the sidebar reads: `data-nav` marks what arrow keys stop on,
+  `data-slot` what a drag can land on. Attributes rather than a class, because the rule here is
+  to select behaviour on ARIA or `data-*` and leave classes to the stylesheet.
 -->
-<div class="c-worktree-tab" role="presentation">
+<div
+  class="c-worktree-tab"
+  class:is-dragging={dragging}
+  role="presentation"
+  data-row={worktree.id}
+  data-slot="row"
+  data-group={group}
+  data-next={next ?? ''}
+>
   <button
-    role="tab"
+    role="treeitem"
     id={`tab-${worktree.id}`}
     aria-selected={selected}
+    aria-level={level}
     aria-controls={controls ?? undefined}
     tabindex={selected ? 0 : -1}
     class="c-worktree-tab__button"
     class:is-selected={selected}
+    data-nav={`row:${worktree.id}`}
     onclick={onselect}
+    onpointerdown={onpress}
+    oncontextmenu={onmenu}
   >
     <span class="c-worktree-tab__line">
       <span class="c-worktree-tab__name" title={worktree.title}>{worktree.title}</span>
@@ -135,13 +171,13 @@
   -->
   <button
     class="c-worktree-tab__star"
-    class:is-on={worktree.favorite}
+    class:is-on={favorite}
     tabindex={selected ? 0 : -1}
-    aria-pressed={worktree.favorite}
-    title={worktree.favorite ? 'Remove from favorites' : 'Add to favorites'}
+    aria-pressed={favorite}
+    title={favorite ? 'Remove from favorites' : 'Add to favorites'}
     onclick={onfavorite}
   >
-    <Icon name={worktree.favorite ? 'star' : 'star-outline'} size={14} />
+    <Icon name={favorite ? 'star' : 'star-outline'} size={14} />
     <span class="u-visually-hidden">Favorite</span>
   </button>
 </div>

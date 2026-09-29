@@ -43,10 +43,15 @@
   } = $props();
 </script>
 
+<!--
+  A region named by its row in the sidebar tree. It was a `tabpanel` while the sidebar was a
+  tablist; a tree has no panel role, and `region` is what a landmark labelled by the item that
+  controls it is.
+-->
 <div
   class="c-detail"
   id="worktree-detail"
-  role="tabpanel"
+  role="region"
   aria-labelledby={`tab-${worktree.id}`}
   tabindex="-1"
 >

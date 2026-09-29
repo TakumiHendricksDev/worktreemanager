@@ -14,7 +14,7 @@
 //! the suite — the failure mode `the_resolved_path_is_used_not_the_inherited_one` was
 //! rewritten to avoid.
 //!
-//! As in `favorites.rs`, everything is addressed by the ids the API hands back and never by
+//! As in `sidebar_layout.rs`, everything is addressed by the ids the API hands back and never by
 //! an id built from a path: on macOS a temp directory is reached through a symlink
 //! (`/var` → `/private/var`), so a hand-built id tests a spelling the app never uses.
 

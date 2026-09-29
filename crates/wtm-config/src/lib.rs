@@ -3,6 +3,7 @@
 //! - [`paths`] — where wtm keeps its own files (`~/.config/wtm`, deliberately not
 //!   `~/Library/Application Support`).
 //! - [`user`] — the app config: registered repositories, UI preferences, exec settings.
+//! - [`sidebar`] — how a project's worktrees are ordered and grouped in the sidebar.
 //! - [`layers`] — the four-layer precedence chain and the per-key TOML merge.
 //! - [`trust`] — approval bound to a **content hash**, so editing a config re-arms the
 //!   prompt. A `wtm.toml` declares shell commands and lives inside a repository, which
@@ -25,6 +26,7 @@ pub mod fs;
 pub mod layers;
 pub mod paths;
 pub mod sessions;
+pub mod sidebar;
 pub mod store;
 pub mod trust;
 pub mod user;
@@ -35,6 +37,7 @@ pub use fs::{RealFileStore, absolutize, parse_dotenv, unique_temp_path};
 pub use layers::{BUILT_IN_DEFAULTS, LOCAL_FILENAME, LayerPaths, REPO_FILENAME};
 pub use paths::AppPaths;
 pub use sessions::{SessionRecord, SessionStore};
+pub use sidebar::{SidebarGroup, SidebarLayout};
 pub use store::FileConfigStore;
 pub use trust::{TrustStore, content_hash};
 pub use user::{PaletteDef, Theme, UserConfig};

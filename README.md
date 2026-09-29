@@ -23,7 +23,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | | |
 |---|---|
 | ✅ | Register any git repository; worktrees appear as tabs down the left |
-| ✅ | Favorite a worktree to pin it to the top of the sidebar, under its own heading; persisted per project in `~/.config/wtm/config.toml` |
+| ✅ | Arrange the sidebar: drag worktrees into any order, file them into named groups that fold away, and star one to move it into Favorites — right-click a row or a heading for the rest. A folded group still shows a worktree whose session needs you. Persisted per project in `~/.config/wtm/config.toml` |
 | ✅ | Detail pane: branch, directory, HEAD, dirty/staged/untracked, ahead/behind, Jira key, copyable path |
 | ✅ | Config-driven display — badges, links, and prefix-grouped tables (e.g. a port table) from `wtm.toml` |
 | ✅ | The **New Worktree** form, generated from the project's config, with dropdowns populated by running the project's own commands |

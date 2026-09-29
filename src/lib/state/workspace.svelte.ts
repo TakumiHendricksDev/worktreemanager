@@ -5,13 +5,16 @@
  *
  * 1. **Rust owns the truth.** This is a cache. Nothing backed by *git* is mutated
  *    optimistically — a create or remove awaits the command and then refreshes, so the UI
- *    can never show a worktree that git does not agree exists. The one exception is
- *    `favorite`, which is a preference in the app's own config: git has no opinion on it,
- *    so there is nothing for the flip to be wrong about. See `toggleFavorite`.
+ *    can never show a worktree that git does not agree exists. The one exception is the
+ *    sidebar `layout` — order, groups, folds and stars — which is a preference in the app's
+ *    own config: git has no opinion on it, so there is nothing for an edit to be wrong
+ *    about. See `editLayout`.
  * 2. **No polling.** There is no `setInterval` anywhere; polling a git repo is how these
  *    tools end up spinning a fan. Refresh happens on demand and on window focus.
  * 3. **Client-owned state is only selection.** Which project and worktree are selected,
- *    and nothing else.
+ *    and nothing else. The layout is edited here but *owned* by the config file, where it
+ *    can be hand-edited and where clearing the webview's storage cannot lose it; the copy in
+ *    `localStorage` is a cache of it, like the worktree list's.
  *
  * # Why the list is cached, and why it is patched rather than replaced
  *
@@ -33,10 +36,23 @@
  */
 
 import { commands } from '../ipc/commands';
-import { errorMessage, type Opener, type Project, type Worktree } from '../ipc/types';
+import {
+  errorMessage,
+  type Opener,
+  type Project,
+  type SidebarLayout,
+  type Worktree,
+} from '../ipc/types';
+import { emptyLayout, FAVORITES, toggleStar } from '../sidebar';
 
 const LAST_PROJECT_KEY = 'wtm.lastProject';
 const WORKTREE_CACHE_PREFIX = 'wtm.worktrees.';
+/**
+ * The last known sidebar layout per project, so a cold start draws the grouped list at once rather
+ * than a flat one that rearranges itself a moment later. The job the per-row `favorite` flag used
+ * to do by riding on the cached listing.
+ */
+const LAYOUT_CACHE_PREFIX = 'wtm.sidebar.';
 
 /**
  * Where the chosen "Open in …" tool is remembered.
@@ -69,12 +85,35 @@ function writeCache(projectId: string, worktrees: Worktree[]): void {
   }
 }
 
-/** Drop cached lists for projects that are no longer registered. */
+/** The cached layout for a project, or null. Shape-checked only as far as rendering needs. */
+function readLayoutCache(projectId: string): SidebarLayout | null {
+  try {
+    const raw = localStorage.getItem(LAYOUT_CACHE_PREFIX + projectId);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SidebarLayout> | null;
+    return parsed && Array.isArray(parsed.groups)
+      ? { groups: parsed.groups, origins: parsed.origins ?? {} }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLayoutCache(projectId: string, layout: SidebarLayout): void {
+  try {
+    localStorage.setItem(LAYOUT_CACHE_PREFIX + projectId, JSON.stringify(layout));
+  } catch {
+    /* See writeCache. */
+  }
+}
+
+/** Drop cached lists and layouts for projects that are no longer registered. */
 function pruneCache(keep: string[]): void {
   try {
-    const live = new Set(keep.map((id) => WORKTREE_CACHE_PREFIX + id));
+    const prefixes = [WORKTREE_CACHE_PREFIX, LAYOUT_CACHE_PREFIX];
+    const live = new Set(keep.flatMap((id) => prefixes.map((prefix) => prefix + id)));
     const doomed = Object.keys(localStorage).filter(
-      (key) => key.startsWith(WORKTREE_CACHE_PREFIX) && !live.has(key),
+      (key) => prefixes.some((prefix) => key.startsWith(prefix)) && !live.has(key),
     );
     for (const key of doomed) localStorage.removeItem(key);
   } catch {
@@ -115,13 +154,35 @@ class Workspace {
   selectedWorktreeId = $state<string | null>(null);
 
   /**
-   * Bumped by every star toggle, to detect one that raced an in-flight refresh.
+   * How the sidebar arranges this project's worktrees. Edited only through `editLayout`.
    *
-   * A refresh reads favorites from the config as it starts, so a star clicked while it is
-   * still running produces a response that says "not starred" — and applying it would make
-   * the star the user just clicked flick back off. Not `$state`: nothing renders it.
+   * Loaded separately from the listing and only when a project opens: the frontend is the only
+   * thing that changes it, so there is nothing a refresh on window focus could learn — and keeping
+   * it off the listing is what stops a slow refresh from undoing a drag.
    */
-  private favoriteEpoch = 0;
+  layout = $state<SidebarLayout>(emptyLayout());
+
+  /** The starred ids, as a set for a per-row lookup. */
+  starred = $derived(
+    new Set(this.layout.groups.find((g) => g.id === FAVORITES)?.worktrees ?? []),
+  );
+
+  /**
+   * Bumped by every layout edit, to detect one that raced a read or an earlier write.
+   *
+   * A read that started before a drag answers with the layout from before it, and applying that
+   * would put the row back where it came from. Not `$state`: nothing renders it.
+   */
+  private layoutEpoch = 0;
+
+  /**
+   * The tail of the queue of layout writes.
+   *
+   * Writes are sent one at a time, in order. Each carries the whole layout, and `blocking` in Rust
+   * runs commands on a thread pool — so two in flight at once could land in either order, and the
+   * older one landing last would leave the file a click behind the screen.
+   */
+  private layoutWrites: Promise<void> = Promise.resolve();
   /** Bumped at the start of every list fetch so a stale `finally` cannot clear a newer spinner. */
   private listEpoch = 0;
 
@@ -166,25 +227,6 @@ class Workspace {
       return terms.every((term) => haystack.includes(term));
     });
   });
-
-  /**
-   * The visible list split by star, each half keeping git's own order.
-   *
-   * Sorting within a group is deliberately left alone: git lists the main worktree first
-   * and the rest in a stable order, and imposing an alphabetical sort on top would move
-   * rows the user has learned the position of.
-   */
-  favorites = $derived(this.matching.filter((w) => w.favorite));
-  others = $derived(this.matching.filter((w) => !w.favorite));
-
-  /**
-   * Display order: starred first.
-   *
-   * The sidebar renders from `favorites` and `others`, but keyboard navigation has to walk
-   * *this* — arrow keys that step through `worktrees` while the eye sees a grouped list
-   * would jump around the screen.
-   */
-  ordered = $derived([...this.favorites, ...this.others]);
 
   /** True when a filter is hiding something, so the sidebar can say so. */
   filtering = $derived(this.query.trim().length > 0);
@@ -256,8 +298,8 @@ class Workspace {
    * Remember a tool as the default, optimistically.
    *
    * Applied locally first so the button relabels on click rather than after a round trip —
-   * the same reasoning as `toggleFavorite`, and safe for the same reason: nothing else in
-   * the system has an opinion about this value, so there is nothing to be contradicted by.
+   * the same reasoning as `editLayout`, and safe for the same reason: nothing else in the
+   * system has an opinion about this value, so there is nothing to be contradicted by.
    */
   async setPreferredOpener(openerId: string): Promise<void> {
     const previous = this.preferredOpener;
@@ -292,6 +334,8 @@ class Workspace {
     // pane for as long as the git calls took, which is the whole reason this hurt.
     const cached = readCache(projectId);
     this.worktrees = cached ?? [];
+    this.layout = readLayoutCache(projectId) ?? emptyLayout();
+    void this.loadLayout(projectId);
     this.stale = cached !== null;
     this.selectedWorktreeId = cached
       ? ((cached.find((w) => w.isMain) ?? cached[0])?.id ?? null)
@@ -327,7 +371,6 @@ class Workspace {
     if (cold) this.loadingWorktrees = true;
     else this.revalidating = true;
 
-    const favoriteAt = this.favoriteEpoch;
     const epoch = ++this.listEpoch;
 
     try {
@@ -336,16 +379,6 @@ class Workspace {
       // Guard against a slow response for a project the user has since navigated away from.
       if (this.activeProjectId !== projectId) return;
       if (epoch !== this.listEpoch) return;
-
-      // A star clicked while this was in flight is newer than what came back, and has
-      // already been written to disk. Keep it rather than letting the stale answer win.
-      if (this.favoriteEpoch !== favoriteAt) {
-        const local = new Map(this.worktrees.map((w) => [w.id, w.favorite]));
-        for (const fresh of list) {
-          const known = local.get(fresh.id);
-          if (known !== undefined) fresh.favorite = known;
-        }
-      }
 
       const merged = merge(this.worktrees, list);
       if (merged !== null) this.worktrees = merged;
@@ -377,46 +410,86 @@ class Workspace {
     this.selectedWorktreeId = worktreeId;
   }
 
-  /** Move the selection by `delta`, for keyboard navigation. */
-  selectRelative(delta: number): void {
-    // `ordered`, not `worktrees`: this has to follow what is on screen.
-    const list = this.ordered;
-    if (list.length === 0) return;
-    const current = list.findIndex((w) => w.id === this.selectedWorktreeId);
-    // Nothing selected: ArrowDown starts *on* the first row, ArrowUp on the last. Starting
-    // from 0 then adding delta used to skip the first row on the way down.
-    const from = current === -1 ? (delta > 0 ? -1 : list.length) : current;
-    const next = Math.min(Math.max(from + delta, 0), list.length - 1);
-    this.selectedWorktreeId = list[next]?.id ?? this.selectedWorktreeId;
+  /**
+   * Read the stored layout for a project, unless an edit has overtaken the read.
+   *
+   * Failure keeps whatever is on screen — the cached layout, or the empty one — and says nothing:
+   * the listing's own refresh reports a broken config, and a second banner for the same cause
+   * would only be noise.
+   */
+  private async loadLayout(projectId: string): Promise<void> {
+    const epoch = this.layoutEpoch;
+    try {
+      const stored = await commands.sidebarLayout(projectId);
+      if (this.activeProjectId !== projectId || this.layoutEpoch !== epoch) return;
+      this.adoptLayout(projectId, stored);
+    } catch {
+      /* See above. */
+    }
+  }
+
+  /** Take `layout` as the current one, skipping the assignment when nothing changed. */
+  private adoptLayout(projectId: string, layout: SidebarLayout): void {
+    // The same reason `merge` exists: a fresh object for an identical layout would re-derive every
+    // section and re-render every row, which mid-drag moves the rows the drag measured.
+    if (JSON.stringify($state.snapshot(this.layout)) !== JSON.stringify(layout)) {
+      this.layout = layout;
+    }
+    writeLayoutCache(projectId, layout);
   }
 
   /**
-   * Star or unstar a worktree.
+   * Apply an edit to the sidebar layout now, then write it behind the click.
    *
-   * Flipped locally before the call, unlike a create or a remove. Those await git because
-   * git could disagree; a star is a preference in the app's own config, so there is nothing
-   * to be wrong about and no reason to make a click wait on a disk write. Same shape as a
-   * theme change. On failure the flag goes back and the error is surfaced.
+   * Optimistic for the reason `setPreferredOpener` is: nothing but the user has an opinion on where
+   * a row goes, so there is nothing for the write to be contradicted by. What comes back is the
+   * layout as Rust normalized it, and that is adopted — it is how an edit the invariants reject is
+   * corrected on screen rather than only on disk. A failed write puts back the layout from before
+   * this edit, unless a newer edit has already replaced it; that one's write carries this edit too,
+   * since every write is the whole layout.
+   *
+   * `edit` gets a plain snapshot and every listed id in git's order, and must return a new layout;
+   * every edit in `sidebar.ts` has that shape.
    */
-  async toggleFavorite(worktreeId: string): Promise<void> {
+  editLayout(edit: (layout: SidebarLayout, all: readonly string[]) => SidebarLayout): void {
     const projectId = this.activeProjectId;
-    const worktree = this.worktrees.find((w) => w.id === worktreeId);
-    if (!projectId || !worktree) return;
+    if (!projectId) return;
+    const before = $state.snapshot(this.layout);
+    const next = edit(
+      before,
+      this.worktrees.map((w) => w.id),
+    );
+    const epoch = ++this.layoutEpoch;
+    this.layout = next;
+    writeLayoutCache(projectId, next);
 
-    const next = !worktree.favorite;
-    worktree.favorite = next;
-    this.favoriteEpoch += 1;
+    const current = () => this.activeProjectId === projectId && this.layoutEpoch === epoch;
+    this.layoutWrites = this.layoutWrites.then(async () => {
+      try {
+        const stored = await commands.setSidebarLayout(projectId, next);
+        if (current()) this.adoptLayout(projectId, stored);
+      } catch (e) {
+        if (current()) {
+          this.layout = before;
+          writeLayoutCache(projectId, before);
+        }
+        this.error = errorMessage(e);
+      }
+    });
+  }
 
-    try {
-      await commands.setWorktreeFavorite(projectId, worktreeId, next);
-      // Keep the cache in step, or a restart would show the pre-click stars until the
-      // first refresh lands.
-      writeCache(projectId, this.worktrees);
-      this.error = null;
-    } catch (e) {
-      worktree.favorite = !next;
-      this.error = errorMessage(e);
-    }
+  isFavorite(worktreeId: string): boolean {
+    return this.starred.has(worktreeId);
+  }
+
+  /**
+   * Star or unstar a worktree: into Favorites, or back to the group it was starred from.
+   *
+   * Starring is a move rather than a flag, so the row changes place — see `sidebar.ts`.
+   */
+  toggleFavorite(worktreeId: string): void {
+    if (!this.worktrees.some((w) => w.id === worktreeId)) return;
+    this.editLayout((layout, all) => toggleStar(layout, all, worktreeId));
   }
 
   /**
@@ -443,6 +516,7 @@ class Workspace {
     if (this.activeProject === null || this.activeProjectId === path) {
       this.activeProjectId = null;
       this.worktrees = [];
+      this.layout = emptyLayout();
       this.stale = false;
       const next = this.projects.find((p) => p.usable) ?? this.projects[0];
       if (next) await this.selectProject(next.id);

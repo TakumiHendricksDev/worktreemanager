@@ -578,7 +578,7 @@
           oninspect={() => (showInspector = true)}
           onfavorite={() => {
             const id = workspace.selected?.id;
-            if (id) void workspace.toggleFavorite(id);
+            if (id) workspace.toggleFavorite(id);
           }}
         />
       {:else if !workspace.loadingWorktrees}

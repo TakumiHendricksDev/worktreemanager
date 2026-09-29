@@ -734,6 +734,26 @@ function per command, with the compiler catching drift because the types come fr
 **No virtualized list.** A developer with 500 worktrees does not exist. If it ever crosses ~200 rows,
 `content-visibility: auto` is one CSS line.
 
+**The sidebar is a tree of groups, and Favorites is one of them.** Rows can be dragged into any order,
+filed into named groups, and groups folded away; the arrangement is one `SidebarLayout` per project in
+`config.toml` (`wtm_config::sidebar`). Starring used to be a flag that floated a row to the top, and
+once rows can be placed by hand a flag has nothing left to do — a star that re-sorts fights the order
+the user just set, and one that does not changes nothing on screen. So a star is membership of a
+built-in group that is always first, and every worktree is in exactly one group; showing a starred row
+under Favorites *and* its own group was rejected because it puts two rows in the list for one
+worktree. Unstarring returns a row to the group it was starred from. The list became `role="tree"`
+because a tablist can only contain tabs, which leaves nowhere to put a heading you can fold.
+
+Three rules keep it honest. *A fold may not hide a session that needs you:* the status dot exists
+because a blocked session elsewhere was invisible, so a folded group still shows its `attention` and
+`failed` rows and the selected one. *The layout is not on the listing:* it is read once when a project
+opens and written whole behind every edit, one write at a time, so a refresh on window focus cannot
+race a drag and two writes cannot land out of order. *Rust normalizes, the frontend places:* Rust
+repairs anything it is sent (one place per worktree, built-ins first and last) but never sees the
+listing, so `sidebar.ts` writes a group's displayed order into it before inserting relative to what is
+on screen. A project nobody has arranged renders exactly as before — one list in git's order, no
+headings.
+
 **Config lives in `~/.config/wtm/`, via `etcetera`'s XDG strategy** — a deliberate deviation from
 Apple's `~/Library/Application Support`. This is a developer tool whose config is hand-edited and
 version-controlled alongside dotfiles; burying it in `Application Support` would be hostile. `dirs`
@@ -789,7 +809,7 @@ and hidden — which is a new `Layout` node kind and a third arm in every operat
 tab semantics a stacked pane would need (`tablist`/`tab`/`tabpanel`, `aria-selected`, arrow-key
 roving). `_tabs.scss` styles a lighter in-panel strip (Settings, formerly the detail pane). Settings
 now implements `tablist`/`tab`/`aria-selected` on that strip, and the sidebar worktree list is a
-separate vertical tablist — neither is the stacked pane node that would need a new `Layout` kind.
+separate vertical tree — neither is the stacked pane node that would need a new `Layout` kind.
 That module is pure tree algebra with no
 test runner behind it (see the counterweight in §8a), so the change is all risk and no new
 capability: several shells side by side already tile, drag, resize and keep their scrollback. The

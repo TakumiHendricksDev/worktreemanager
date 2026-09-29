@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use wtm_config::{AppPaths, FileConfigStore, RealFileStore};
+use wtm_config::{AppPaths, FileConfigStore, RealFileStore, SidebarLayout};
 use wtm_core::error::{ConfigError, WtmError};
 use wtm_core::model::{
     AgentEvent, DatabaseEngine, DatabaseScope, Project, WorkingTreeStatus, Worktree,
@@ -827,18 +827,6 @@ impl App {
         let worktrees = self.git.list_worktrees(&project.root)?;
         let base = self.base_branch(project, &worktrees);
 
-        // Read once for the whole list, not once per row. A missing or unreadable app
-        // config means nothing is starred, which is the right answer anyway.
-        let favorites: BTreeSet<String> = self
-            .config
-            .favorites(&project.root)
-            .unwrap_or_else(|err| {
-                tracing::warn!(error = %err, "cannot read favorites; treating none as starred");
-                Vec::new()
-            })
-            .into_iter()
-            .collect();
-
         Ok(worktrees
             .iter()
             .map(|worktree| {
@@ -847,7 +835,6 @@ impl App {
                     project,
                     worktree,
                     status,
-                    favorites.contains(worktree.id.as_str()),
                     self.files.as_ref(),
                     self.engine.as_ref(),
                     &self.os_tokens,
@@ -1008,21 +995,36 @@ impl App {
         })
     }
 
-    /// Star or unstar a worktree.
+    /// How the sidebar arranges this project's worktrees, stars included.
     ///
-    /// Takes the id verbatim: [`WorktreeId`](wtm_core::model::WorktreeId) *is* the absolute
-    /// path, so what gets stored is exactly the string the next `worktrees` call will
-    /// compare against. Resolving it through git first would cost a process spawn to
-    /// re-derive a value we already hold.
-    pub fn set_favorite(
+    /// Separate from [`worktrees`](Self::worktrees) rather than riding on each row as the star
+    /// used to: the listing costs several `git` processes and is re-run on every window focus,
+    /// while the layout changes only when the user drags or renames something — and the
+    /// frontend is the one that did it. Keeping them apart is what lets a refresh never race a
+    /// drag.
+    pub fn sidebar_layout(&self, project: &Project) -> Result<SidebarLayout, WtmError> {
+        Ok(self.config.sidebar_layout(&project.root)?)
+    }
+
+    /// Replace the sidebar layout, returning it as stored.
+    ///
+    /// Ids are taken verbatim: [`WorktreeId`](wtm_core::model::WorktreeId) *is* the absolute
+    /// path, so what gets stored is exactly the string the next `worktrees` call reports.
+    /// Resolving each through git first would cost a process spawn per row to re-derive values
+    /// we already hold.
+    pub fn set_sidebar_layout(
         &self,
         project: &Project,
-        worktree_id: &str,
-        favorite: bool,
-    ) -> Result<(), WtmError> {
+        layout: &SidebarLayout,
+    ) -> Result<SidebarLayout, WtmError> {
+        Ok(self.config.set_sidebar_layout(&project.root, layout)?)
+    }
+
+    /// Drop a worktree from the sidebar layout, once the worktree itself is gone.
+    pub fn forget_in_sidebar(&self, project: &Project, worktree_id: &str) -> Result<(), WtmError> {
         Ok(self
             .config
-            .set_favorite(&project.root, worktree_id, favorite)?)
+            .forget_worktree_in_sidebar(&project.root, worktree_id)?)
     }
 
     /// Status plus divergence for one worktree.
