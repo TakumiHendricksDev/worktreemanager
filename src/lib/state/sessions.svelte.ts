@@ -377,10 +377,14 @@ export interface Pane {
    * The last event sequence this pane drew from the backend's replay buffer, or `null` when it
    * never repainted from one.
    *
-   * Only `adopt` sets it. It exists because the frontend subscribes to `agent:event` *before* it
-   * asks for the buffer, so an event emitted in between arrives twice — once live, once in the
-   * snapshot — and comparing the emitter's own counter is the only way to tell that apart from a
-   * session legitimately repeating a delta.
+   * `attach` sets it, for every session a pane takes. It exists because the frontend subscribes to
+   * `agent:event` *before* it asks for the buffer, so an event emitted in between arrives twice —
+   * once live, once in the snapshot — and comparing the emitter's own counter is the only way to
+   * tell that apart from a session legitimately repeating a delta.
+   *
+   * It describes one session: the counter is per session and starts at 0. So anything that gives a
+   * pane a different session has to clear it first — `restart` does, and so does a pane window
+   * handing back a pane whose session moved.
    */
   replayedThrough: number | null;
   /**
@@ -3316,6 +3320,11 @@ class Sessions {
     pane.session = null;
     pane.events = [];
     pane.eventBytes = 0;
+    // The old session's high-water mark, and every session numbers its events from 0 — so left in
+    // place it tells `record` that the new session's first events were already drawn, and they are
+    // dropped. The first is the composer's `/` list seeded from disk, which is how a restarted pane
+    // came back with no project skills; the process itself had them all along.
+    pane.replayedThrough = null;
     pane.approvals = [];
     pane.usage = null;
     // A fresh session has no turn in flight and nothing you have not seen. Both would otherwise
