@@ -1844,20 +1844,29 @@ class Sessions {
   }
 
   /**
-   * Give a pane a session that is already running, with everything it has already said.
+   * Give a pane a session, with everything it has already said.
    *
    * The half of `adopt` that a pane changing window needs too: the window receiving it has never
-   * heard this session, and neither has the main window when a pane window restarted it.
+   * heard this session, and neither has the main window when a pane window restarted it. And the
+   * half every open needs: a session emits before its id has crossed IPC — for a resumed Claude
+   * conversation, its whole history — and `holdEvent` keeps only the last few dozen of those, so a
+   * resume that relied on it came back with the tail of its history and nothing above.
+   *
+   * `adopted` is for a session that was already running before this window heard of it, whose
+   * readiness was announced to nobody. A session this window just opened says so itself.
    */
-  private async attach(paneId: string, session: string): Promise<void> {
+  private async attach(paneId: string, session: string, adopted = true): Promise<void> {
     const pane = this.paneById(paneId);
     if (!pane) return;
+    // Captured so a Restart pressed while the replay is on its way wins: the pane has moved on to
+    // another session by the time this one would be claimed.
+    const generation = pane.generation;
     // A shell's scrollback is replayed by `Terminal` itself when it attaches (`terminal_replay`),
     // and a browser's page is the webview, so only an agent has anything to fetch here.
     const buffered =
       pane.kind.kind === 'agent' ? await commands.agentReplay(session).catch(() => []) : [];
     const live = this.paneById(paneId);
-    if (!live) return;
+    if (!live || live.generation !== generation) return;
 
     // Assigned directly rather than through `claimSession`, which would drain the events that
     // arrived while the fetch was in flight — and those must land *after* the snapshot, not
@@ -1869,7 +1878,7 @@ class Sessions {
     this.claimSession(live, session);
     // Adopted, so it is running by definition — readiness was announced before this window
     // existed and there is no second announcement coming.
-    live.ready = true;
+    if (adopted) live.ready = true;
   }
 
   private blank(kind: SessionKind, projectId: string, worktreeId: string): Pane {
@@ -3490,9 +3499,16 @@ class Sessions {
     kind: SessionKind['kind'],
   ): Promise<void> {
     const live = this.paneById(paneId);
-    if (live) {
+    if (live && kind !== 'agent') {
       this.claimSession(live, session);
       return;
+    }
+    if (live) {
+      // Through the replay, so a resumed conversation arrives with all of its history. Checked
+      // afterwards, because the pane can be closed or restarted while the replay is on its way —
+      // and then this session belongs to nobody and is closed below like any other orphan.
+      await this.attach(paneId, session, false);
+      if (this.paneById(paneId)?.session === session) return;
     }
     try {
       if (kind === 'shell') await commands.closeTerminal(session);

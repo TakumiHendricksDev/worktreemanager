@@ -811,7 +811,13 @@ the events had been emitted to a window that no longer existed. `App` now keeps 
 ring of what it emitted, numbered, and `agent_replay` hands it back — in memory only, which is why
 the no-transcript rule in `wtm-config::sessions` is untouched. The number is what makes re-attaching
 race-free: the window subscribes before it asks for the buffer, so an event can arrive twice, and a
-counter the emitter owns is the one thing both sides can compare. The bound is bytes as well as event
+counter the emitter owns is the one thing both sides can compare. That includes what a session says
+while it is still opening: a resumed Claude conversation emits its whole history from inside
+`AgentSession::open`, before `open_agent` has an id to file it under, so `App` keeps those events
+aside and hands them to the entry when it is inserted. Dropping them made a pane that attached later —
+a reload, a pane moved into its own window — come back without the history it had been showing, and
+the pane that opened the session kept only the few dozen `holdEvent` holds, so a freshly opened agent
+now repaints from the replay too. The bound is bytes as well as event
 count, and cumulative snapshots — patches, agendas, skills and usage — replace their predecessor.
 Dock shells have the same since panes could leave for windows of their own: `terminal_replay` hands
 back the last mebibyte of output, numbered by chunk, and `Terminal` drops a live chunk the replay

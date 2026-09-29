@@ -246,7 +246,7 @@ impl AgentSink for AgentEventSink {
         let seq = self
             .app
             .as_ref()
-            .and_then(|app| app.record_agent_event(session.as_str(), event));
+            .map(|app| app.record_agent_event(session.as_str(), event));
 
         let payload = AgentEventPayload {
             session: session.as_str().to_owned(),

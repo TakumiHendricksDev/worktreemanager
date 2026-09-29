@@ -261,6 +261,33 @@ const MAX_REPLAY_BYTES: usize = 32 * 1024 * 1024;
 /// retaining 32 MiB each indefinitely.
 const MAX_REPLAY_BYTES_GLOBAL: usize = 128 * 1024 * 1024;
 
+/// How many sessions may have events buffered before they are in the agents map.
+///
+/// A session is normally there for the few milliseconds between its spawn and `open_agent`'s
+/// insert, so this is the number that can be *opening* at once — a delegated run opens up to twenty
+/// children together, hence the margin. Past it the oldest is dropped rather than growing without
+/// bound for sessions that will never be inserted.
+const MAX_EARLY_REPLAY_SESSIONS: usize = 32;
+
+/// Keep an agent entry's own view of the session — ready, working, what it is waiting on — in step
+/// with an event. What session awareness and `live_agents` report is read from these.
+fn note_activity(entry: &mut AgentEntry, event: &AgentEvent) {
+    match event {
+        AgentEvent::SessionReady { .. } => entry.ready = true,
+        AgentEvent::TurnStarted { .. } => entry.working = true,
+        AgentEvent::TurnFinished { .. }
+        | AgentEvent::Failed { .. }
+        | AgentEvent::LimitReached { .. } => entry.working = false,
+        AgentEvent::ApprovalRequested { id, .. } => {
+            entry.pending_approvals.insert(id.clone());
+        }
+        AgentEvent::ApprovalResolved { id } => {
+            entry.pending_approvals.remove(id);
+        }
+        _ => {}
+    }
+}
+
 #[derive(Debug, Clone)]
 struct BufferedEvent {
     seq_event: SeqEvent,
@@ -339,6 +366,11 @@ impl ReplayBuffer {
             .iter()
             .map(|entry| entry.seq_event.clone())
             .collect()
+    }
+
+    /// The buffered events, oldest first, without their numbers.
+    fn iter(&self) -> impl Iterator<Item = &AgentEvent> {
+        self.events.iter().map(|entry| &entry.seq_event.event)
     }
 }
 
@@ -605,6 +637,11 @@ pub struct App {
     /// page-load callbacks as well as from commands — see `browser.rs` for the lock discipline.
     pub browsers: crate::browser::Host,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
+    /// Events from agent sessions that are not in [`Self::agents`] yet. See
+    /// [`Self::record_agent_event`].
+    ///
+    /// Only ever locked while `agents` is held, so the two cannot be taken in opposite orders.
+    early_replay: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, ReplayBuffer>>,
     /// Where the resume list lives, and the lock that serializes writes to it.
     ///
     /// Held rather than re-derived because it is written on every turn's first event, and a
@@ -706,6 +743,7 @@ impl App {
             browsers: crate::browser::Host::default(),
             dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
+            early_replay: parking_lot::Mutex::new(BTreeMap::new()),
             sessions_file: sessions_file.clone(),
             resume: parking_lot::Mutex::new(()),
         })
@@ -1428,24 +1466,38 @@ impl App {
         let running = self.running_agents();
         agents.retain(|session, _| running.contains(session.as_str()));
 
-        agents.insert(
-            id.clone(),
-            AgentEntry {
-                project: project_id.to_owned(),
-                worktree: worktree.id.as_str().to_owned(),
-                provider: entry.id.to_owned(),
-                provider_session: String::new(),
-                title: None,
-                ephemeral: req.ephemeral,
-                ready: false,
-                working: false,
-                pending_approvals: BTreeSet::new(),
-                peer_snapshot: String::new(),
-                session: Arc::new(session),
-                staged_attachments: BTreeSet::new(),
-                replay: ReplayBuffer::default(),
-            },
-        );
+        // What the session said while it was opening — for a resumed conversation, its history —
+        // becomes the start of its replay, numbered as it was emitted. Anything else early belongs
+        // to a session that has since gone, and is dropped with the same test as above.
+        let early = {
+            let mut early = self.early_replay.lock();
+            let mine = early.remove(&id).unwrap_or_default();
+            early.retain(|session, _| running.contains(session.as_str()));
+            mine
+        };
+
+        let mut agent = AgentEntry {
+            project: project_id.to_owned(),
+            worktree: worktree.id.as_str().to_owned(),
+            provider: entry.id.to_owned(),
+            provider_session: String::new(),
+            title: None,
+            ephemeral: req.ephemeral,
+            ready: false,
+            working: false,
+            pending_approvals: BTreeSet::new(),
+            peer_snapshot: String::new(),
+            session: Arc::new(session),
+            staged_attachments: BTreeSet::new(),
+            replay: ReplayBuffer::default(),
+        };
+        // The flags `record_agent_event` would have set, had the entry existed.
+        for event in early.iter() {
+            note_activity(&mut agent, event);
+        }
+        agent.replay = early;
+        agents.insert(id.clone(), agent);
+        trim_global_replay(&mut agents, &id);
         if let Some(token) = req
             .mcp
             .get(crate::handoff::SERVER_NAME)
@@ -1922,29 +1974,33 @@ impl App {
     /// Buffer an event for a session and give it its sequence number.
     ///
     /// Called on the reader thread for every event, before it is emitted, so the number the window
-    /// receives is the number the buffer holds. A session that is no longer in the map — one being
-    /// closed while its last events drain — gets `None` and is simply not buffered.
-    pub fn record_agent_event(&self, session: &str, event: &AgentEvent) -> Option<u64> {
+    /// receives is the number the buffer holds.
+    ///
+    /// A session not in the map yet is buffered in [`Self::early_replay`], and that is not a corner
+    /// case: a resumed Claude conversation emits its whole history from inside `AgentSession::open`,
+    /// before `open_agent` has an id to insert. Dropping those left the replay without the history,
+    /// so a pane that attached later — a reload, a pane moved into its own window — came back
+    /// blank. A session that has *left* the map, draining its last events as it closes, lands
+    /// there too, and is pruned by the next open; see [`Self::open_agent`].
+    pub fn record_agent_event(&self, session: &str, event: &AgentEvent) -> u64 {
         let id = wtm_core::model::SessionId::new(session);
         let mut agents = self.agents.lock();
-        let entry = agents.get_mut(&id)?;
-        match event {
-            AgentEvent::SessionReady { .. } => entry.ready = true,
-            AgentEvent::TurnStarted { .. } => entry.working = true,
-            AgentEvent::TurnFinished { .. }
-            | AgentEvent::Failed { .. }
-            | AgentEvent::LimitReached { .. } => entry.working = false,
-            AgentEvent::ApprovalRequested { id, .. } => {
-                entry.pending_approvals.insert(id.clone());
+        let Some(entry) = agents.get_mut(&id) else {
+            // Under the agents lock, which `open_agent` also holds while it moves this buffer into
+            // the entry — so an event can never fall between the two.
+            let mut early = self.early_replay.lock();
+            if !early.contains_key(&id)
+                && early.len() >= MAX_EARLY_REPLAY_SESSIONS
+                && let Some(oldest) = early.keys().next().cloned()
+            {
+                early.remove(&oldest);
             }
-            AgentEvent::ApprovalResolved { id } => {
-                entry.pending_approvals.remove(id);
-            }
-            _ => {}
-        }
+            return early.entry(id).or_default().push(event);
+        };
+        note_activity(entry, event);
         let seq = entry.replay.push(event);
         trim_global_replay(&mut agents, &id);
-        Some(seq)
+        seq
     }
 
     /// Everything a session has emitted that is still buffered, oldest first.
@@ -2135,6 +2191,38 @@ mod tests {
 
         let snapshot = buffer.snapshot();
         assert_eq!(snapshot.iter().map(|e| e.seq).collect::<Vec<_>>(), [0, 1]);
+    }
+
+    #[test]
+    fn events_a_session_emits_before_it_is_registered_are_kept_and_numbered() {
+        // A resumed Claude conversation emits its whole history from inside `AgentSession::open`,
+        // before `open_agent` can insert the entry. Those used to be dropped, so a window that
+        // attached to the session later — a reload, a pane moved into its own window — repainted
+        // with none of the history the pane had been showing.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let app = App::with_paths(AppPaths::rooted(dir.path())).expect("app should build");
+
+        assert_eq!(app.record_agent_event("opening", &notice("first")), 0);
+        assert_eq!(app.record_agent_event("opening", &notice("second")), 1);
+
+        let early = app
+            .early_replay
+            .lock()
+            .remove(&wtm_core::model::SessionId::new("opening"))
+            .expect("kept for the entry to take over");
+        let kept: Vec<u64> = early.snapshot().iter().map(|event| event.seq).collect();
+        assert_eq!(kept, vec![0, 1]);
+        assert_eq!(early.iter().count(), 2);
+    }
+
+    #[test]
+    fn early_events_are_bounded_by_session_count() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let app = App::with_paths(AppPaths::rooted(dir.path())).expect("app should build");
+        for index in 0..MAX_EARLY_REPLAY_SESSIONS + 5 {
+            app.record_agent_event(&format!("never-registered-{index:02}"), &notice("x"));
+        }
+        assert_eq!(app.early_replay.lock().len(), MAX_EARLY_REPLAY_SESSIONS);
     }
 
     #[test]

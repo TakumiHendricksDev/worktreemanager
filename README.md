@@ -421,7 +421,10 @@ front. A browser in its own window can still send its comments to an agent in th
 (a hide from a window that no longer holds a browser is ignored; a closing window can never take one
 back), the terminal replay ring and its lifecycle, and a capability test proving the pane-window
 glob can never match a browser's webview. The new controls were rendered against the real
-stylesheet in headless Chrome. Not yet clicked through in the running app.
+stylesheet in headless Chrome. In the running app, an agent pane has been popped out and put back
+— which is how a resumed conversation's pop-out was found to be blank: its history had never
+reached the replay the new window paints from, now fixed. Shell and browser pop-outs, and closing
+the window from its traffic light, have not been clicked through yet.
 
 **Limits worth knowing.** Pane windows do not survive a relaunch — the panes come back tiled where
 they were. A shell's replay is its last mebibyte of output, so a very long history comes back
