@@ -43,6 +43,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | ✅ | **Open in …** — a split button that hands the worktree to your editor, a terminal, the file manager, or a fresh Claude Code session; see [below](#open-in-) |
 | ✅ | **Browser panes** — a real web page tiled beside your sessions, driveable by the agents in that worktree, with element-anchored comments you can hand to an agent; see [below](#browser-panes) |
 | ✅ | **Pop a pane out** — any shell, agent chat or browser pane moves into a window of its own, and closing that window puts it back where it was; see [below](#panes-in-their-own-windows) |
+| ✅ | **Code tab** — read a worktree's files with real syntax highlighting, ⇧⌘F Find in Files, ⇧⌘O / ⌘O / ⌥⌘O Go to File, Class or Symbol, a Changes view with a diff gutter, and comments on lines that you draft to an agent or that it reads itself; see [below](#code-tab) |
 | 🚧 | `[remove] strategy = "command"` — the native path is the default and the one that turns the branch prompt into a checkbox |
 | 🚧 | A command palette, and `notify`-based auto-refresh |
 
@@ -64,7 +65,7 @@ project's convention. With the variable unset the tests skip.
 [Install](#install) · [Updating](#updating-an-install-you-already-have) ·
 [Prerequisites](#prerequisites) · [Setup](#setup) ·
 [First run](#first-run) · [Registering a project](#registering-a-project) ·
-[Writing wtm.toml](#writing-wtmtoml) · [Browser panes](#browser-panes) ·
+[Writing wtm.toml](#writing-wtmtoml) · [Code tab](#code-tab) · [Browser panes](#browser-panes) ·
 [Panes in their own windows](#panes-in-their-own-windows) · [Open in …](#open-in-) · [Settings](#settings) ·
 [Dev workflow](#dev-workflow) ·
 [Build & install](#build--install) · [Troubleshooting](#troubleshooting) ·
@@ -317,6 +318,31 @@ tls = "require"
 Credentials are rendered and retained in Rust, never listed over IPC or logged. Read-only profiles
 are also enforced by the driver. A read/write production console has an additional per-session UI
 lock; table browsing remains available while it is locked.
+
+## Code tab
+
+**Code**, beside Sessions and Database in the worktree bar, is a read-only view of the selected
+worktree for reviewing what an agent did — without leaving wtm to find the lines and paste them back.
+
+- **Project tree.** What git lists, with ignored folders like `node_modules` shown dimmed and
+  loaded only when opened. **Changes** switches to just the files this branch changed since its
+  base (or only what is uncommitted), each marked A, M, D, R or U. The tree re-reads when the tab is
+  shown, on window focus, and when an agent in the worktree finishes a turn.
+- **Viewer.** Syntax highlighting for Python, JavaScript/TypeScript, Vue, Svelte, HTML, CSS/SCSS,
+  JSON, Markdown, Rust, Go, YAML, SQL, XML, TOML, shell and more; ⌘F finds in the file. A changed
+  file has a gutter of change markers — click one to see what the lines were.
+- **⇧⌘F Find in Files** — match case, words and regex (⌥C, ⌥W, ⌥X), a file mask such as
+  `*.py, !*.min.js`, and a preview of each hit. Ignored files are left out unless you ask.
+- **⇧⌘O / ⌘O / ⌥⌘O** — go to a file, a class, or any symbol; Tab switches between them. ⌘-click or
+  ⌘B on a name goes to its definition. Definitions come from the code's shape, not a language
+  server, so there is nothing to install and two things with one name are both offered.
+- **Comments.** Select lines and choose **Comment** (or ⌥⌘C) to leave a note on them, or **Ask
+  ‹agent›** to put them straight into that agent's message box. The Review drawer's **Send** drafts
+  every new comment, quoted, into the agent you last used here — the chevron picks another — and
+  never sends anything until you press Enter there. An agent can also read the comments itself with
+  `code_read_comments` and resolve them with a note you see on the comment.
+- **From an agent's reply**, a file path in inline code — `src/app.py:42` — opens in the Code tab at
+  that line, when the file exists in the worktree.
 
 ## Environment values
 
