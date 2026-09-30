@@ -48,33 +48,16 @@
 
 /*
  * While the sidebar is hidden the name is a switcher, dressed as the title bar's project picker is:
- * no field chrome until you reach for it. The invisible `<select>` over it is `o-overlay-select`.
+ * no field chrome until you reach for it.
  *
- * The negative inline margin cancels the label's padding, so the name does not step sideways from
+ * The negative inline margin cancels the button's padding, so the name does not step sideways from
  * where the plain title sat when the sidebar goes away.
- *
- * The font is set here, on the `<h1>`, and not only on the label, because the select inherits it —
- * `elements/_forms.scss` gives every select `font: inherit` — and macOS sizes the native menu from
- * the select's font. Left to the heading's user-agent 2em bold, the menu opened at double size.
- * Regular weight, so the menu matches the project picker's, whose select inherits plain body text.
  */
 .c-worktree-bar__picker {
   flex: 0 1 auto;
   min-width: 0;
   display: inline-flex;
   margin-inline: -7px;
-  font-size: var(--step-0);
-  font-weight: 400;
-
-  &:hover .c-worktree-bar__switch {
-    background: var(--bg-hover);
-    border-color: var(--border);
-  }
-
-  /* The select carries focus but cannot show a ring while it is invisible, so the label wears it. */
-  &:focus-within .c-worktree-bar__switch {
-    border-color: var(--border-focus);
-  }
 }
 
 .c-worktree-bar__switch {
@@ -93,6 +76,11 @@
   transition:
     background var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
+
+  &:hover {
+    background: var(--bg-hover);
+    border-color: var(--border);
+  }
 }
 
 /* The name takes the colour; the chevron keeps the label's subtler one, as in the title bar. */

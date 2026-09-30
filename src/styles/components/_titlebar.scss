@@ -1,11 +1,6 @@
 /*
  * The window's own title bar: traffic-light gutter, project switcher, repository path, theme
  * toggle.
- *
- * `select {}` used to be a bare element selector in this component, which Svelte scoping made
- * safe and a global stylesheet would not have: it sets `opacity: 0`, so going global without
- * renaming it would have made **every dropdown in the app invisible**. It is
- * `o-overlay-select__native` now — the object shared with the split button's menu half.
  */
 
 .c-titlebar {
@@ -41,39 +36,14 @@
   flex: 1 1 auto;
 }
 
-.c-titlebar__picker {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-
-  &:hover .c-titlebar__project {
-    background: var(--bg-hover);
-    border-color: var(--border);
-  }
-
-  /* The select carries focus but cannot show a ring while it is invisible, so the label
-     wears it instead. */
-  &:focus-within .c-titlebar__project {
-    border-color: var(--border-focus);
-  }
-
-  &:has(select:disabled) .c-titlebar__project {
-    color: var(--fg-muted);
-  }
-
-  &:has(select:disabled):hover .c-titlebar__project {
-    background: transparent;
-    border-color: transparent;
-  }
-}
-
 /* Reads as a title-bar button: no field chrome until you interact with it. */
 .c-titlebar__project {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 24px;
+  min-width: 0;
   max-width: 220px;
   padding: 0 7px;
   border: 1px solid transparent;
@@ -85,6 +55,16 @@
   transition:
     background var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
+
+  &:hover:enabled {
+    background: var(--bg-hover);
+    border-color: var(--border);
+  }
+
+  &:disabled {
+    cursor: default;
+    color: var(--fg-muted);
+  }
 }
 
 /* The name takes the colour; the chevron beside it keeps the container's subtler one. */

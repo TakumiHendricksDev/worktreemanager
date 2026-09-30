@@ -45,7 +45,7 @@
 }
 
 /* The native select is transparent and on top, so the ring has to be drawn by the wrapper — the
-   same division `_titlebar.scss` and `_split-button.scss` make, and the reason the object itself
+   same division `_split-button.scss` makes, and the reason the object itself
    deliberately ships no focus treatment. */
 .c-model-picker__trigger:focus-within {
   background: var(--bg-hover);

@@ -1,16 +1,23 @@
 /*
  * A native `<select>` stretched invisibly over a label you drew yourself.
  *
- * Two components do this — the project switcher in the title bar and the menu half of the
- * Open-in split button — and both had these six declarations written out with their own
- * comment explaining the same trick.
+ * The menu half of the Open-in split button, the composer's Add button and the model picker's
+ * pills do this. It began as two components each writing these six declarations out with their
+ * own comment explaining the same trick.
  *
  * # Why not just style the select
  *
- * A `<select>` sizes itself to its **widest option**. The project switcher's widest option is
- * "Add a repository…", the split button's is a "— not found" row; either strands the control's
- * visible edge a couple of hundred pixels from the thing it belongs to. Rendering the label
- * separately sizes the control to what is actually *selected*.
+ * A `<select>` sizes itself to its **widest option**. The split button's widest option is a
+ * "— not found" row, which strands the control's visible edge a couple of hundred pixels from
+ * the thing it belongs to. Rendering the label separately sizes the control to what is actually
+ * *selected*.
+ *
+ * # What it cannot fix
+ *
+ * macOS opens a `<select>` with the selected row laid over the control, so a long list whose
+ * current value is near the bottom opens mostly off the top of the screen. The switchers that
+ * had that problem — projects, and worktrees while the sidebar is hidden — became native menus;
+ * see `native-menu.ts`.
  *
  * # Why `opacity: 0` and not `visibility: hidden`
  *
@@ -20,7 +27,7 @@
  *
  * # What is deliberately not here
  *
- * The focus treatment. The title bar moves a border onto its label; the split button draws an
+ * The focus treatment. The model picker rings its whole label; the split button draws an
  * inset outline. Those are different designs, correctly, and each lives with its own component.
  * This object is only the mechanism.
  */

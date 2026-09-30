@@ -1,6 +1,7 @@
 /**
  * The app's pop-up menus, as native macOS menus: the sidebar's right-click menus, the worktree bar's
- * New and ⋯ menus, and a narrow pane's ⋯ menu.
+ * New and ⋯ menus, a narrow pane's ⋯ menu, and the two switchers — the title bar's project picker
+ * and the worktree name while the sidebar is hidden.
  *
  * # Why native, and not a popover
  *
@@ -13,6 +14,14 @@
  * It needed no new capability: `core:default` includes `core:menu:default`, which is what grants
  * `menu|new` and `menu|popup`.
  *
+ * # Why the switchers are menus and not `<select>`s
+ *
+ * They were `<select>`s, and macOS opens a pop-up button's list with the *selected* row laid over
+ * the control. With the current project or worktree far down the list, everything above it opened
+ * off the top of the screen and had to be scrolled back into view. A menu popped up at `under` opens
+ * below its button with the whole list in view, and `choice` puts the platform's checkmark on the
+ * current row, which is all the selected row was for.
+ *
  * # Why the previous menu is closed late
  *
  * A menu is a resource held on the Rust side, so each one has to be closed or it lives as long as
@@ -24,23 +33,39 @@
 import { LogicalPosition } from '@tauri-apps/api/dpi';
 import {
   Menu,
+  type CheckMenuItemOptions,
   type MenuItemOptions,
   type PredefinedMenuItemOptions,
   type SubmenuOptions,
 } from '@tauri-apps/api/menu';
 
 export type MenuEntry =
-  | { kind: 'item'; text: string; enabled?: boolean; action: () => void }
+  | { kind: 'item'; text: string; enabled?: boolean; checked?: boolean; action: () => void }
   | { kind: 'submenu'; text: string; enabled?: boolean; items: MenuEntry[] }
+  | { kind: 'heading'; text: string }
   | { kind: 'separator' };
 
 export function item(text: string, action: () => void, enabled = true): MenuEntry {
   return { kind: 'item', text, action, enabled };
 }
 
+/** One of a list of alternatives, with a checkmark when it is the one in effect. */
+export function choice(text: string, current: boolean, action: () => void): MenuEntry {
+  return { kind: 'item', text, action, checked: current };
+}
+
+/**
+ * A label over the rows that follow. Muda has no section headers, so it is a disabled row, which
+ * AppKit draws greyed out — the way menus labelled their sections before macOS 14 gave them one.
+ */
+export function heading(text: string): MenuEntry {
+  return { kind: 'heading', text };
+}
+
 export const separator: MenuEntry = { kind: 'separator' };
 
-type Native = MenuItemOptions | SubmenuOptions | PredefinedMenuItemOptions;
+type Native =
+  MenuItemOptions | CheckMenuItemOptions | SubmenuOptions | PredefinedMenuItemOptions;
 
 function native(entry: MenuEntry): Native {
   switch (entry.kind) {
@@ -52,10 +77,14 @@ function native(entry: MenuEntry): Native {
         enabled: entry.enabled ?? true,
         items: entry.items.map(native),
       };
+    case 'heading':
+      return { text: entry.text, enabled: false };
     case 'item':
       return {
         text: entry.text,
         enabled: entry.enabled ?? true,
+        // Only when asked for: Rust takes any item that has a `checked` field for a check item.
+        ...(entry.checked === undefined ? {} : { checked: entry.checked }),
         action: () => entry.action(),
       };
   }

@@ -31,9 +31,10 @@
    * # The name is a switcher while the sidebar is hidden
    *
    * With the rail gone this bar is the only place that names a worktree, so the name becomes the
-   * list: a native `<select>` over it, the idiom the project picker in the title bar uses. It
-   * follows the sidebar's arrangement — a labelled `<optgroup>` per group, in the order the user
-   * dragged them into — so the two never disagree about where a worktree is.
+   * list: a native menu under it, as the project picker in the title bar has, and for the same
+   * reason it is not a `<select>` — see `native-menu.ts`. It follows the sidebar's arrangement — a
+   * heading per group, in the order the user dragged them into — so the two never disagree about
+   * where a worktree is.
    *
    * What it deliberately does not follow is the sidebar's folds and filter. Those decide what a
    * list leaves out to save room, and a menu is the thing you open to see everything; a worktree
@@ -43,7 +44,15 @@
   import { sessions } from '../state/sessions.svelte';
   import { INSPECTOR_SHORTCUT, SHELL_SHORTCUT } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
-  import { item, popUp, separator, under, type MenuEntry } from '../native-menu';
+  import {
+    choice,
+    heading,
+    item,
+    popUp,
+    separator,
+    under,
+    type MenuEntry,
+  } from '../native-menu';
   import { arrange } from '../sidebar';
   import type { Worktree } from '../ipc/types';
   import LinksButton from './LinksButton.svelte';
@@ -94,40 +103,40 @@
   );
 
   /**
-   * The switcher's options: every group that has anyone in it, each listing all its members.
+   * The same `●` the project picker appends, for the same reason: the row dots are gone with the
+   * rail, and without it a blocked session in another worktree would be invisible again.
+   */
+  function rowLabel(candidate: Worktree): string {
+    const status = sessions.statuses[candidate.id];
+    return candidate.title + (status === 'attention' || status === 'failed' ? '  ●' : '');
+  }
+
+  /**
+   * Every group that has anyone in it, each listing all its members.
    *
    * `members` rather than `rows`, and no filter and no `urgent`, for the reason in the header. An
-   * empty group is dropped here although the sidebar keeps it, because an `<optgroup>` with nothing
-   * under it is a heading you can neither pick nor drop onto.
+   * empty group is dropped here although the sidebar keeps it, because a heading with nothing under
+   * it is one you can neither pick nor drop onto.
    */
-  const switcher = $derived.by(() => {
-    if (!sidebarCollapsed) return null;
+  function switchMenu(event: MouseEvent) {
     const { sections, headers } = arrange(workspace.worktrees, workspace.layout, {
       matching: null,
       selectedId: worktree.id,
       urgent: () => false,
       dragging: false,
     });
-    return { headers, sections: sections.filter((section) => section.members.length > 0) };
-  });
-
-  /**
-   * The same `●` the project picker appends, for the same reason: the row dots are gone with the
-   * rail, and without it a blocked session in another worktree would be invisible again.
-   */
-  function optionLabel(candidate: Worktree): string {
-    const status = sessions.statuses[candidate.id];
-    return candidate.title + (status === 'attention' || status === 'failed' ? '  ●' : '');
-  }
-
-  function pickWorktree(event: Event) {
-    const select = event.currentTarget as HTMLSelectElement;
-    const choice = select.value;
-    // Back onto the current worktree, so the sentinel never shows as chosen — the project picker's
-    // trick for its own Add a repository… row.
-    select.value = worktree.id;
-    if (choice === '__new__') onnew();
-    else if (choice !== worktree.id) onselect(choice);
+    const row = (candidate: Worktree) =>
+      choice(rowLabel(candidate), candidate.id === worktree.id, () => {
+        if (candidate.id !== worktree.id) onselect(candidate.id);
+      });
+    const entries: MenuEntry[] = sections
+      .filter((section) => section.members.length > 0)
+      .flatMap((section) => [
+        ...(headers ? [separator, heading(section.label)] : []),
+        ...section.members.map(row),
+      ]);
+    entries.push(separator, item('New worktree…', onnew));
+    void popUp(entries, under(event.currentTarget as Element));
   }
 
   function newMenu(event: MouseEvent) {
@@ -182,36 +191,17 @@
     <span class="u-visually-hidden">Favorite</span>
   </button>
 
-  {#if switcher}
-    <!--
-      The label is drawn beside an invisible select, as in the title bar, so the control is as wide
-      as the name and not as wide as the longest worktree in the project.
-    -->
-    <h1 class="c-worktree-bar__picker o-overlay-select">
-      <span class="c-worktree-bar__switch" aria-hidden="true">
+  {#if sidebarCollapsed}
+    <h1 class="c-worktree-bar__picker">
+      <button
+        class="c-worktree-bar__switch"
+        aria-label="Switch worktree: {worktree.title}"
+        aria-haspopup="menu"
+        onclick={switchMenu}
+      >
         <span class="c-worktree-bar__name">{worktree.title}</span>
         <Icon name="chevron-down" size={12} />
-      </span>
-      <select
-        class="o-overlay-select__native"
-        aria-label="Switch worktree"
-        value={worktree.id}
-        onchange={pickWorktree}
-      >
-        {#snippet options(members: Worktree[])}
-          {#each members as candidate (candidate.id)}
-            <option value={candidate.id}>{optionLabel(candidate)}</option>
-          {/each}
-        {/snippet}
-        {#if switcher.headers}
-          {#each switcher.sections as section (section.id)}
-            <optgroup label={section.label}>{@render options(section.members)}</optgroup>
-          {/each}
-        {:else}
-          {@render options(switcher.sections.flatMap((section) => section.members))}
-        {/if}
-        <option value="__new__">New worktree…</option>
-      </select>
+      </button>
     </h1>
   {:else}
     <h1 class="c-worktree-bar__title">{worktree.title}</h1>

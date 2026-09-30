@@ -7,8 +7,7 @@
    *
    * # Why the menu is a native `<select>`
    *
-   * The same reasoning as the project switcher in `TitleBar.svelte`, which this deliberately
-   * mirrors: a real `<select>` gets keyboard navigation, type-ahead, click-outside and
+   * A real `<select>` gets keyboard navigation, type-ahead, click-outside and
    * Escape for free, and renders the way the platform's menus are expected to. A hand-rolled
    * popover would mean re-implementing all four, plus a focus trap, plus `role="menu"` and
    * `aria-expanded` — with `svelte-check` as the only gate, since this repository has no JS

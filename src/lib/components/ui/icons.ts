@@ -28,8 +28,8 @@
  *
  * Six do, and the reasons are worth stating so nobody "finishes the job":
  *
- *   - `⚠` inside an `<option>` in the project picker. An `<option>` may contain text and
- *     nothing else — an SVG cannot go there at all.
+ *   - `⚠` in a row of the project picker, a native menu. A menu row is text and nothing
+ *     else — an SVG cannot go there at all.
  *   - `⚠` appended to a button label by a ternary, where it flows inline with the text.
  *   - `↑n↓n` and `● modified` in the sidebar's flag row, which sets `--font-mono`. Arrows and
  *     bullets in a monospace face are metrically correct by construction, which is the one

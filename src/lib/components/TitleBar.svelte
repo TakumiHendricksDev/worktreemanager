@@ -15,9 +15,11 @@
    * that is what it filters. Moving the switcher up here removes the duplication and leaves
    * the sidebar to do one thing.
    *
-   * A native `<select>` rather than a hand-rolled popover: keyboard navigation, type-ahead,
-   * click-outside and Escape all come free and behave the way macOS menus are expected to.
-   * It is styled to read as a title-bar button, not a form control.
+   * A native menu rather than a hand-rolled popover: keyboard navigation, type-ahead,
+   * click-outside and Escape all come free and behave the way macOS menus are expected to. It was
+   * a `<select>` until it was clear that macOS opens one on the selected row, which pushed every
+   * project above the active one off the top of the screen — see `native-menu.ts`. It is styled to
+   * read as a title-bar button, not a form control.
    *
    * # Why the sidebar toggle lives here too
    *
@@ -31,6 +33,7 @@
   import { sessions } from '../state/sessions.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import { choice, item, popUp, separator, under, type MenuEntry } from '../native-menu';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
   import type { IconName } from './ui/icons';
@@ -74,17 +77,41 @@
     dark: 'Theme: dark',
   };
 
-  async function onProjectChange(event: Event) {
-    const select = event.currentTarget as HTMLSelectElement;
-    const chosen = select.value;
-    if (chosen === '__add__' || chosen === '__remove__') {
-      // Re-select the current project so the picker does not stay on the sentinel.
-      select.value = workspace.activeProjectId ?? '';
-      if (chosen === '__add__') onaddproject();
-      else onremoveproject();
-      return;
-    }
-    await workspace.selectProject(select.value);
+  function projectMenu(event: MouseEvent) {
+    const active = workspace.activeProject;
+    const entries: MenuEntry[] = [
+      /*
+        Glyphs rather than a dot component, because a menu row is text and nothing else.
+
+        The `●` matters more than it looks. Panes carry a `projectId`, but the sidebar lists only
+        the *active* project's worktrees — so the row dots alone still leave a session blocked in
+        another project completely invisible. This and the dock badge are what close that.
+      */
+      ...workspace.projects.map((project) =>
+        choice(
+          project.name +
+            (project.usable ? '' : '  ⚠') +
+            (sessions.wantsAttentionIn(project.id) ? '  ●' : ''),
+          project.id === active?.id,
+          () => {
+            if (project.id !== active?.id) void workspace.selectProject(project.id);
+          },
+        ),
+      ),
+      /*
+        The actions past a separator, so they do not read as two more repositories.
+
+        Remove sits beside Add because this is where a person looks for it: the list of
+        repositories is the thing being edited. It used to exist only on the error card of a project
+        that failed to load, so a working repository could not be removed at all. It names the active
+        project rather than offering a submenu of all of them, because removing the one on screen is
+        a choice made while looking at it.
+      */
+      separator,
+      item('Add a repository…', onaddproject),
+      ...(active ? [item(`Remove “${active.name}” from wtm…`, onremoveproject)] : []),
+    ];
+    void popUp(entries, under(event.currentTarget as Element));
   }
 </script>
 
@@ -108,79 +135,21 @@
   <!--
     Drag region on the container, not just the text: the path may be short, and the empty
     space beside it still has to move the window. Tauri only starts a drag when the event's
-    own target carries the attribute, so the select and its caret are unaffected.
+    own target carries the attribute, so the picker and its caret are unaffected.
   -->
   <div class="c-titlebar__identity" data-tauri-drag-region>
-    <div class="c-titlebar__picker o-overlay-select">
-      <label class="u-visually-hidden" for="project-picker">Project</label>
-      <!--
-        The visible label is a span, and the real `<select>` is stretched invisibly over it.
-        A bare select sizes itself to its *widest option* — here `Add a repository…` — which
-        strands the caret a couple of hundred pixels from a short project name. Rendering the
-        label separately sizes the control to what is actually selected.
-
-        The span is `aria-hidden` because the select underneath is the real control and
-        already carries this text; without it a screen reader reads the name twice.
-      -->
-      <span class="c-titlebar__project" aria-hidden="true">
-        <span class="c-titlebar__name">
-          {workspace.activeProject?.name ?? 'No projects yet'}
-        </span>
-        <Icon name="chevron-down" size={12} />
+    <button
+      class="c-titlebar__project"
+      aria-label="Project: {workspace.activeProject?.name ?? 'none'}"
+      aria-haspopup="menu"
+      onclick={projectMenu}
+      disabled={workspace.projects.length === 0}
+    >
+      <span class="c-titlebar__name">
+        {workspace.activeProject?.name ?? 'No projects yet'}
       </span>
-      <select
-        id="project-picker"
-        class="o-overlay-select__native"
-        value={workspace.activeProjectId ?? ''}
-        onchange={onProjectChange}
-        disabled={workspace.projects.length === 0}
-      >
-        {#if workspace.projects.length === 0}
-          <option value="">No projects yet</option>
-        {/if}
-        <!--
-          A text glyph rather than a dot component, and `icons.ts` states the rule: an `<option>` may
-          contain text and nothing else, so an SVG cannot go here at all. The `⚠` beside it is the
-          same exemption, already taken for the same reason.
-
-          This one glyph matters more than it looks. Panes carry a `projectId`, but the sidebar lists
-          only the *active* project's worktrees — so the row dots alone still leave a session blocked
-          in another project completely invisible. This and the dock badge are what close that.
-        -->
-        {#if workspace.projects.length > 0}
-          <optgroup label="Repositories">
-            {#each workspace.projects as project (project.id)}
-              <option value={project.id}>
-                {project.name}{project.usable ? '' : '  ⚠'}{sessions.wantsAttentionIn(
-                  project.id,
-                )
-                  ? '  ●'
-                  : ''}
-              </option>
-            {/each}
-          </optgroup>
-        {/if}
-        <!--
-          The two actions under a heading of their own, because as bare rows at the foot of the list
-          they read as two more repositories. A labelled `<optgroup>` rather than an `<hr>`: a
-          separator inside a `<select>` is recent HTML that not every WebKit this app runs on draws,
-          while every engine draws a group heading — and the worktree switcher already uses them.
-
-          Remove sits beside Add because this is where a person looks for it: the list of
-          repositories is the thing being edited. It used to exist only on the error card of a
-          project that failed to load, so a working repository could not be removed at all. It names
-          the active project rather than offering a submenu of all of them, because a `<select>` has
-          no submenus — and removing the one on screen is a choice made while looking at it.
-        -->
-        <optgroup label="Manage">
-          <option value="__add__">Add a repository…</option>
-          {#if workspace.activeProject}
-            {@const name = workspace.activeProject.name}
-            <option value="__remove__">Remove “{name}” from wtm…</option>
-          {/if}
-        </optgroup>
-      </select>
-    </div>
+      <Icon name="chevron-down" size={12} />
+    </button>
 
     {#if workspace.activeProject}
       <!--
