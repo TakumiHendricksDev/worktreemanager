@@ -17,6 +17,7 @@ mod mask;
 mod path;
 mod read;
 mod search;
+mod symbols;
 
 pub use dir::{Entry, EntryKind, Kinds, MAX_IGNORED_FILES, classify, list_dir, walk_ignored};
 pub use mask::Mask;
@@ -25,6 +26,7 @@ pub use read::{Content, FileText, MAX_READ_BYTES, read_file, stat};
 pub use search::{
     Hit, MAX_LINES_PER_FILE, MAX_MATCHES, MAX_SEARCH_BYTES, SearchOptions, SearchResults, search,
 };
+pub use symbols::{Symbol, SymbolIndex, SymbolKind, symbols_in};
 
 /// Why a file or directory could not be shown.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

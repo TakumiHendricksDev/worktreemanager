@@ -6,7 +6,7 @@
  * ⇧⌘F Find in Files.
  */
 
-export type CodeChord = 'file' | 'find';
+export type CodeChord = 'file' | 'class' | 'symbol' | 'find';
 
 export const GO_TO_FILE_SHORTCUT = '⇧⌘O';
 export const FIND_IN_FILES_SHORTCUT = '⇧⌘F';
@@ -21,6 +21,8 @@ export const FIND_IN_FILES_SHORTCUT = '⇧⌘F';
 export function chordOf(event: KeyboardEvent): CodeChord | null {
   if (!event.metaKey || event.ctrlKey) return null;
   if (event.code === 'KeyO' && event.shiftKey && !event.altKey) return 'file';
+  if (event.code === 'KeyO' && event.altKey && !event.shiftKey) return 'symbol';
+  if (event.code === 'KeyO' && !event.altKey && !event.shiftKey) return 'class';
   if (event.code === 'KeyF' && event.shiftKey && !event.altKey) return 'find';
   return null;
 }

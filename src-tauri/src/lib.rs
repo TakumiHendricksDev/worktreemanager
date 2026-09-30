@@ -288,6 +288,8 @@ pub fn run() {
             code::code_changes,
             code::code_file_diff,
             code::code_base_version,
+            code::code_symbols,
+            code::code_definitions,
             code_comments::code_list_comments,
             code_comments::code_add_comment,
             code_comments::code_update_comment,

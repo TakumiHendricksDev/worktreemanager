@@ -58,6 +58,7 @@
     composing,
     askLabel,
     actions,
+    ondefinition,
   }: {
     worktreeId: string;
     /** The file on screen, or null when no tab is open. */
@@ -72,7 +73,40 @@
     /** The agent Ask would draft into, or null when the worktree has none. */
     askLabel: string | null;
     actions: CommentActions;
+    /** ⌘-click or ⌘B on a name: go to where it is defined. */
+    ondefinition: (name: string) => void;
   } = $props();
+
+  /** The identifier at a position, or null over whitespace and punctuation. */
+  function nameAt(state: EditorState, pos: number): string | null {
+    const word = state.wordAt(pos);
+    const text = word ? state.sliceDoc(word.from, word.to) : '';
+    return /^[A-Za-z_$][\w$]*$/.test(text) ? text : null;
+  }
+
+  const definitions: Extension = [
+    EditorView.domEventHandlers({
+      mousedown(event, editor) {
+        if (!event.metaKey || event.button !== 0) return false;
+        const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY });
+        const name = pos === null ? null : nameAt(editor.state, pos);
+        if (!name) return false;
+        event.preventDefault();
+        ondefinition(name);
+        return true;
+      },
+    }),
+    keymap.of([
+      {
+        key: 'Mod-b',
+        run: (editor) => {
+          const name = nameAt(editor.state, editor.state.selection.main.head);
+          if (name) ondefinition(name);
+          return name !== null;
+        },
+      },
+    ]),
+  ];
 
   interface Kept {
     state: EditorState;
@@ -126,6 +160,7 @@
     search({ top: true }),
     keymap.of([...searchKeymap, ...foldKeymap, ...defaultKeymap]),
     changeGutter(),
+    definitions,
     flashField,
     commentExtension(
       () => actions,

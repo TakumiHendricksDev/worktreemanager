@@ -343,6 +343,27 @@ export interface NewCodeComment {
   text: string;
 }
 
+export type CodeSymbolKind =
+  | 'class'
+  | 'function'
+  | 'method'
+  | 'interface'
+  | 'type'
+  | 'enum'
+  | 'struct'
+  | 'trait'
+  | 'module'
+  | 'constant';
+
+/** One definition. Mirrors `CodeSymbolView`. */
+export interface CodeSymbol {
+  name: string;
+  kind: CodeSymbolKind;
+  container: string | null;
+  path: string;
+  line: number;
+}
+
 export interface Field {
   key: string;
   label: string;

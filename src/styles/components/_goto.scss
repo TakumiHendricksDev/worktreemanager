@@ -12,6 +12,13 @@
   min-height: 0;
 }
 
+.c-goto__modes {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3) 0;
+}
+
 .c-goto__field {
   display: flex;
   flex: 0 0 auto;
@@ -78,4 +85,19 @@
   padding: var(--sp-3);
   font-size: var(--step--1);
   color: var(--fg-muted);
+}
+
+/* A symbol's kind as one letter, where a file has its icon. */
+.c-goto__badge {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  font-weight: 600;
+  color: var(--syntax-definition);
+  background: var(--bg-hover);
 }

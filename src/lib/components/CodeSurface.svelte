@@ -12,6 +12,7 @@
   import type { CommentActions } from '../code-comment-marks';
   import { askMessage, isOutdated, reviewMessage } from '../code-review';
   import type { CodeComment } from '../ipc/types';
+  import { commands } from '../ipc/commands';
   import { code, type Popup } from '../state/code.svelte';
   import { codeRequests } from '../state/code-request.svelte';
   import { sessions } from '../state/sessions.svelte';
@@ -117,6 +118,27 @@
       if (askTarget && active) draft(askTarget.id, askMessage(active, start, end, excerpt));
     },
   };
+
+  /**
+   * ⌘-click or ⌘B on a name: to where it is defined. One definition opens; several open Go to
+   * Symbol with the name, so the user picks; none leaves the caret where it is and says so.
+   */
+  let notice = $state<string | null>(null);
+  async function goToDefinition(name: string): Promise<void> {
+    if (!projectId || !worktreeId) return;
+    const found = await commands
+      .codeDefinitions(projectId, worktreeId, name)
+      .catch(() => []);
+    const only = found.length === 1 ? found[0] : null;
+    if (only) {
+      code.open(projectId, worktreeId, only.path, { line: only.line });
+    } else if (found.length > 1) {
+      code.ask('symbol', name);
+    } else {
+      notice = `Nothing in this worktree defines \`${name}\`.`;
+      setTimeout(() => (notice = null), 3000);
+    }
+  }
 
   function sendComments(paneId: string, label: string, list: readonly CodeComment[]): void {
     if (!worktreeId || list.length === 0) return;
@@ -497,7 +519,9 @@
           {composing}
           {askLabel}
           {actions}
+          ondefinition={goToDefinition}
         />
+        {#if notice}<p class="c-code-view__notice" role="status">{notice}</p>{/if}
 
         {#if !active}
           <div class="c-code-view__placeholder"><p>Choose a file on the left.</p></div>
@@ -549,11 +573,18 @@
     }}
     onclose={() => (popup = null)}
   />
-{:else if popup?.kind === 'file' && worktreeId}
+{:else if popup && popup.kind !== 'find' && projectId && worktreeId}
   <GoTo
+    {projectId}
+    {worktreeId}
     paths={tree?.paths ?? []}
     initial={popup.query}
-    onpick={open}
+    mode={popup.kind}
+    onpick={(path, line) => {
+      if (projectId && worktreeId) {
+        code.open(projectId, worktreeId, path, line ? { line } : undefined);
+      }
+    }}
     onclose={() => (popup = null)}
   />
 {/if}

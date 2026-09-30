@@ -54,7 +54,7 @@ interface Loaded {
  */
 export interface Popup {
   id: number;
-  kind: 'file' | 'find';
+  kind: 'file' | 'class' | 'symbol' | 'find';
   /** What to start the query with — the text selected when the shortcut was pressed. */
   query: string;
 }

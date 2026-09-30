@@ -36,6 +36,7 @@ import type {
   CodeSearch,
   CodeSearchOptions,
   CodeStat,
+  CodeSymbol,
   CodeTree,
   NewCodeComment,
   CreateOutcome,
@@ -491,6 +492,27 @@ export const commands = {
     invoke<CodeComment[]>('code_clear_comments', { worktreeId, resolvedOnly }),
   codeMarkCommentsSent: (worktreeId: string, ids: number[], to: string) =>
     invoke<CodeComment[]>('code_mark_comments_sent', { worktreeId, ids, to }),
+  /**
+   * Go to Class (`typesOnly`) or Go to Symbol. `refresh` re-reads what changed since the index was
+   * built, which the palette asks for once, when it opens.
+   */
+  codeSymbols: (
+    projectId: string,
+    worktreeId: string,
+    query: string,
+    typesOnly: boolean,
+    refresh: boolean,
+  ) =>
+    invoke<CodeSymbol[]>('code_symbols', {
+      projectId,
+      worktreeId,
+      query,
+      typesOnly,
+      refresh,
+    }),
+  /** Every definition named exactly this — what ⌘-click on a name goes to. */
+  codeDefinitions: (projectId: string, worktreeId: string, name: string) =>
+    invoke<CodeSymbol[]>('code_definitions', { projectId, worktreeId, name }),
   /** When each open file last changed, so a refresh re-reads only what did. */
   codeStat: (projectId: string, worktreeId: string, paths: string[]) =>
     invoke<CodeStat[]>('code_stat', { projectId, worktreeId, paths }),

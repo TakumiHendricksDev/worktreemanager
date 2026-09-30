@@ -146,6 +146,31 @@ pub struct CodeHunkView {
     pub removed: Vec<String>,
 }
 
+/// One definition, for Go to Class, Go to Symbol and ⌘-click.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeSymbolView {
+    pub name: String,
+    /// `class`, `function`, `method`, `interface`, `type`, `enum`, `struct`, `trait`, `module` or
+    /// `constant`.
+    pub kind: &'static str,
+    pub container: Option<String>,
+    pub path: String,
+    pub line: u32,
+}
+
+impl From<wtm_code::Symbol> for CodeSymbolView {
+    fn from(symbol: wtm_code::Symbol) -> Self {
+        Self {
+            kind: symbol.kind.as_str(),
+            name: symbol.name,
+            container: symbol.container,
+            path: symbol.path,
+            line: symbol.line,
+        }
+    }
+}
+
 impl From<wtm_code::CodeError> for ErrorView {
     fn from(err: wtm_code::CodeError) -> Self {
         let kind = match &err {
@@ -363,6 +388,88 @@ pub async fn code_base_version(
         let root = root_of(&app, &project_id, &worktree_id)?;
         wtm_code::resolve(&root, &path)?;
         Ok(app.git.show_file(&root, checked_rev(&rev)?, &path)?)
+    })
+    .await
+}
+
+/// The symbol indexes of the worktrees looked at most recently, newest last.
+///
+/// Two, because an index holds every definition in a worktree and a person reads one worktree at a
+/// time — the second is the one they were in a moment ago. Older ones are rebuilt when they are
+/// asked for again, which costs a read of their source files.
+static SYMBOLS: parking_lot::Mutex<Vec<(String, wtm_code::SymbolIndex)>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Run `with` on a worktree's symbol index, refreshed against git's file list when `refresh`.
+///
+/// Refreshing is a `stat` per file and a read of only the ones that changed, so it is asked for when
+/// a palette opens rather than on every keystroke in it.
+fn with_symbols<T>(
+    app: &App,
+    root: &std::path::Path,
+    worktree_id: &str,
+    refresh: bool,
+    with: impl FnOnce(&wtm_code::SymbolIndex) -> T,
+) -> Result<T, ErrorView> {
+    let mut cache = SYMBOLS.lock();
+    let known = cache.iter().position(|(id, _)| id == worktree_id);
+    let (id, mut index) = match known {
+        Some(at) => cache.remove(at),
+        None => (worktree_id.to_owned(), wtm_code::SymbolIndex::default()),
+    };
+    if refresh || known.is_none() {
+        index.update(root, &app.git.files(root)?.paths);
+    }
+    let answer = with(&index);
+    cache.push((id, index));
+    if cache.len() > 2 {
+        cache.remove(0);
+    }
+    Ok(answer)
+}
+
+/// Go to Class (`types_only`) and Go to Symbol: the best definitions for a query.
+#[tauri::command]
+pub async fn code_symbols(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    query: String,
+    types_only: bool,
+    refresh: bool,
+) -> Reply<Vec<CodeSymbolView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let root = root_of(&app, &project_id, &worktree_id)?;
+        with_symbols(&app, &root, &worktree_id, refresh, |index| {
+            index
+                .query(&query, types_only, 60)
+                .into_iter()
+                .map(CodeSymbolView::from)
+                .collect()
+        })
+    })
+    .await
+}
+
+/// Every definition with exactly this name: what ⌘-click on a name goes to.
+#[tauri::command]
+pub async fn code_definitions(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    name: String,
+) -> Reply<Vec<CodeSymbolView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let root = root_of(&app, &project_id, &worktree_id)?;
+        with_symbols(&app, &root, &worktree_id, true, |index| {
+            index
+                .definitions(&name)
+                .into_iter()
+                .map(CodeSymbolView::from)
+                .collect()
+        })
     })
     .await
 }
