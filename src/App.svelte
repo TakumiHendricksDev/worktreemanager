@@ -659,7 +659,10 @@
         visible={booted && mainView === 'database'}
         onsessions={() => (mainView = 'worktree')}
       />
-      <CodeSurface visible={booted && mainView === 'code'} />
+      <CodeSurface
+        visible={booted && mainView === 'code'}
+        onsessions={() => (mainView = 'worktree')}
+      />
     </main>
   </div>
 

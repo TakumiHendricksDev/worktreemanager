@@ -317,6 +317,32 @@ export interface CodeHunk {
   removed: string[];
 }
 
+/** A comment on lines in the Code tab. Mirrors `CodeComment` in `code_comments.rs`. */
+export interface CodeComment {
+  id: number;
+  path: string;
+  /** 1-based and inclusive. */
+  start: number;
+  end: number;
+  /** The lines as they were when the comment was written. */
+  excerpt: string;
+  text: string;
+  status: 'open' | 'resolved';
+  /** The agent it was last drafted to, by the label the user saw. */
+  sentTo: string | null;
+  /** What an agent said when it resolved it. */
+  note: string | null;
+}
+
+/** Mirrors `NewComment`. */
+export interface NewCodeComment {
+  path: string;
+  start: number;
+  end: number;
+  excerpt: string;
+  text: string;
+}
+
 export interface Field {
   key: string;
   label: string;

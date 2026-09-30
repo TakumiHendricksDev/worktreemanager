@@ -17,6 +17,8 @@
  * moved is read again; the rest cost one `stat`.
  */
 
+import { listen } from '@tauri-apps/api/event';
+
 import {
   ancestorsOf,
   buildTree,
@@ -29,6 +31,7 @@ import {
   errorMessage,
   type CodeChange,
   type CodeChanges,
+  type CodeComment,
   type CodeFile,
   type CodeHunk,
   type CodeSearchOptions,
@@ -115,6 +118,17 @@ class CodeState {
   >({});
   /** Each changed file's hunks, keyed by worktree, path and revision. */
   hunks = $state.raw<Record<string, CodeHunk[]>>({});
+  /** Comments on lines, by worktree — Rust's list, mirrored from `code:comments`. */
+  comments = $state.raw<Record<string, CodeComment[]>>({});
+  /** The lines a new comment is being written on, while its box is open. */
+  composing = $state<{
+    worktreeId: string;
+    path: string;
+    start: number;
+    end: number;
+  } | null>(null);
+  private listening = false;
+  private commentsLoaded = new Set<string>();
   reveal = $state<Reveal | null>(null);
   popup = $state<Popup | null>(null);
   /**
@@ -318,6 +332,90 @@ class CodeState {
         against: entry.answer.against,
       });
     }
+  }
+
+  /**
+   * Hear every change to the comments, whoever made it — this window, or an agent resolving one
+   * over MCP. Once per window; the Code tab calls it when it mounts.
+   */
+  listenForComments(): void {
+    if (this.listening) return;
+    this.listening = true;
+    void listen<{ worktreeId: string; comments: CodeComment[] }>(
+      'code:comments',
+      (event) => {
+        this.comments = {
+          ...this.comments,
+          [event.payload.worktreeId]: event.payload.comments,
+        };
+      },
+    );
+  }
+
+  /** Ask for a worktree's comments the first time it is shown, in case they predate this window. */
+  async loadComments(worktreeId: string): Promise<void> {
+    if (this.commentsLoaded.has(worktreeId)) return;
+    this.commentsLoaded.add(worktreeId);
+    try {
+      this.setComments(worktreeId, await commands.codeListComments(worktreeId));
+    } catch {
+      this.commentsLoaded.delete(worktreeId);
+    }
+  }
+
+  commentsIn(worktreeId: string): CodeComment[] {
+    return this.comments[worktreeId] ?? [];
+  }
+
+  /** Open the new-comment box on some lines. */
+  compose(worktreeId: string, path: string, start: number, end: number): void {
+    this.composing = { worktreeId, path, start, end };
+  }
+
+  async addComment(worktreeId: string, text: string, excerpt: string): Promise<void> {
+    const at = this.composing;
+    if (!at || at.worktreeId !== worktreeId) return;
+    this.setComments(
+      worktreeId,
+      await commands.codeAddComment(worktreeId, {
+        path: at.path,
+        start: at.start,
+        end: at.end,
+        excerpt,
+        text,
+      }),
+    );
+    this.composing = null;
+  }
+
+  async updateComment(worktreeId: string, id: number, text: string): Promise<void> {
+    this.setComments(worktreeId, await commands.codeUpdateComment(worktreeId, id, text));
+  }
+
+  async resolveComment(worktreeId: string, id: number, resolved: boolean): Promise<void> {
+    this.setComments(
+      worktreeId,
+      await commands.codeResolveComment(worktreeId, id, resolved),
+    );
+  }
+
+  async removeComment(worktreeId: string, id: number): Promise<void> {
+    this.setComments(worktreeId, await commands.codeRemoveComment(worktreeId, id));
+  }
+
+  async clearComments(worktreeId: string, resolvedOnly: boolean): Promise<void> {
+    this.setComments(
+      worktreeId,
+      await commands.codeClearComments(worktreeId, resolvedOnly),
+    );
+  }
+
+  async markSent(worktreeId: string, ids: number[], to: string): Promise<void> {
+    this.setComments(worktreeId, await commands.codeMarkCommentsSent(worktreeId, ids, to));
+  }
+
+  private setComments(worktreeId: string, list: CodeComment[]): void {
+    this.comments = { ...this.comments, [worktreeId]: list };
   }
 
   /** Open or close a folder. */

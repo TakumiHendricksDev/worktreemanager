@@ -1258,6 +1258,8 @@ pub async fn remove_worktree(
         // directory — offering to resume something that cannot be resumed.
         if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. }) {
             app.forget_worktree_sessions(&worktree_id);
+            // Comments on its lines are about files that no longer exist.
+            app.code_comments.forget(&worktree_id);
         }
 
         Ok(outcome)

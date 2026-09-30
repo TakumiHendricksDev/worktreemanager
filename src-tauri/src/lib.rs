@@ -13,6 +13,7 @@ pub mod browser;
 pub mod browser_bridge;
 pub mod browser_tools;
 pub mod code;
+pub mod code_comments;
 pub mod commands;
 pub mod dictate;
 pub mod display;
@@ -286,6 +287,13 @@ pub fn run() {
             code::code_changes,
             code::code_file_diff,
             code::code_base_version,
+            code_comments::code_list_comments,
+            code_comments::code_add_comment,
+            code_comments::code_update_comment,
+            code_comments::code_resolve_comment,
+            code_comments::code_remove_comment,
+            code_comments::code_clear_comments,
+            code_comments::code_mark_comments_sent,
             commands::answer_approval,
             commands::interrupt_turn,
             commands::list_agent_sessions,

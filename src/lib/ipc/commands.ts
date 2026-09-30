@@ -29,6 +29,7 @@ import type {
   ApprovalAnswer,
   Capability,
   CodeChanges,
+  CodeComment,
   CodeEntry,
   CodeHunk,
   CodeFile,
@@ -36,6 +37,7 @@ import type {
   CodeSearchOptions,
   CodeStat,
   CodeTree,
+  NewCodeComment,
   CreateOutcome,
   Doctor,
   Form,
@@ -473,6 +475,22 @@ export const commands = {
   /** A file's content at `rev`, or null when it did not exist there. */
   codeBaseVersion: (projectId: string, worktreeId: string, path: string, rev: string) =>
     invoke<string | null>('code_base_version', { projectId, worktreeId, path, rev }),
+  // Comments on lines. Each answers with the worktree's whole list, and announces it as well
+  // on `code:comments`, which is what every window draws from.
+  codeListComments: (worktreeId: string) =>
+    invoke<CodeComment[]>('code_list_comments', { worktreeId }),
+  codeAddComment: (worktreeId: string, comment: NewCodeComment) =>
+    invoke<CodeComment[]>('code_add_comment', { worktreeId, comment }),
+  codeUpdateComment: (worktreeId: string, id: number, text: string) =>
+    invoke<CodeComment[]>('code_update_comment', { worktreeId, id, text }),
+  codeResolveComment: (worktreeId: string, id: number, resolved: boolean) =>
+    invoke<CodeComment[]>('code_resolve_comment', { worktreeId, id, resolved }),
+  codeRemoveComment: (worktreeId: string, id: number) =>
+    invoke<CodeComment[]>('code_remove_comment', { worktreeId, id }),
+  codeClearComments: (worktreeId: string, resolvedOnly: boolean) =>
+    invoke<CodeComment[]>('code_clear_comments', { worktreeId, resolvedOnly }),
+  codeMarkCommentsSent: (worktreeId: string, ids: number[], to: string) =>
+    invoke<CodeComment[]>('code_mark_comments_sent', { worktreeId, ids, to }),
   /** When each open file last changed, so a refresh re-reads only what did. */
   codeStat: (projectId: string, worktreeId: string, paths: string[]) =>
     invoke<CodeStat[]>('code_stat', { projectId, worktreeId, paths }),

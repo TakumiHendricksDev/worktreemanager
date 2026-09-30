@@ -9,10 +9,14 @@
   import { onMount, untrack } from 'svelte';
 
   import { allAdded } from '../code-diff';
+  import type { CommentActions } from '../code-comment-marks';
+  import { askMessage, isOutdated, reviewMessage } from '../code-review';
+  import type { CodeComment } from '../ipc/types';
   import { code, type Popup } from '../state/code.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import CodeTree from './CodeTree.svelte';
+  import CodeReview from './CodeReview.svelte';
   import CodeViewer from './CodeViewer.svelte';
   import FindInFiles from './FindInFiles.svelte';
   import GoTo from './GoTo.svelte';
@@ -22,9 +26,12 @@
 
   const {
     visible,
+    onsessions,
   }: {
     /** Hidden rather than unmounted, so open folders and files outlive a switch of view. */
     visible: boolean;
+    /** Show the worktree's panes — where comments sent to an agent land. */
+    onsessions: () => void;
   } = $props();
 
   const projectId = $derived(workspace.activeProjectId);
@@ -57,6 +64,79 @@
     }
     return code.hunksOf(worktreeId, active);
   });
+  const comments = $derived(worktreeId ? code.commentsIn(worktreeId) : []);
+  const fileComments = $derived(active ? comments.filter((c) => c.path === active) : []);
+  const composing = $derived(
+    code.composing &&
+      code.composing.worktreeId === worktreeId &&
+      code.composing.path === active
+      ? { start: code.composing.start, end: code.composing.end }
+      : null,
+  );
+  /** The agent Ask drafts into, named: the last one focused in this worktree. */
+  const askTarget = $derived(worktreeId ? sessions.draftDestination(worktreeId) : null);
+  const askLabel = $derived.by(() => {
+    const pane = askTarget ? sessions.paneById(askTarget.id) : null;
+    return pane ? (pane.agentTitle ?? sessions.labelOf(pane)) : null;
+  });
+
+  /** A comment's lines no longer read as they did — when its file is open to tell. */
+  function outdated(comment: CodeComment): boolean {
+    if (!worktreeId) return false;
+    const state = code.fileOf(worktreeId, comment.path);
+    return state?.status === 'ready' && state.file.text !== null
+      ? isOutdated(comment, state.file.text)
+      : false;
+  }
+
+  /** Put a message in an agent's composer, and show it unless it is in a window of its own. */
+  function draft(paneId: string, message: string): void {
+    sessions.insertDraft(paneId, message);
+    if (!sessions.isOut(paneId)) onsessions();
+  }
+
+  const actions: CommentActions = {
+    compose: (start, end) => {
+      if (worktreeId && active) code.compose(worktreeId, active, start, end);
+    },
+    save: async (message, excerpt) => {
+      if (worktreeId) await code.addComment(worktreeId, message, excerpt);
+    },
+    cancel: () => (code.composing = null),
+    update: async (id, message) => {
+      if (worktreeId) await code.updateComment(worktreeId, id, message);
+    },
+    resolve: (id, resolved) => {
+      if (worktreeId) void code.resolveComment(worktreeId, id, resolved);
+    },
+    remove: (id) => {
+      if (worktreeId) void code.removeComment(worktreeId, id);
+    },
+    ask: (start, end, excerpt) => {
+      if (askTarget && active) draft(askTarget.id, askMessage(active, start, end, excerpt));
+    },
+  };
+
+  function sendComments(paneId: string, label: string, list: readonly CodeComment[]): void {
+    if (!worktreeId || list.length === 0) return;
+    draft(paneId, reviewMessage(list, outdated));
+    void code.markSent(
+      worktreeId,
+      list.map((c) => c.id),
+      label,
+    );
+  }
+
+  function copyComments(list: readonly CodeComment[]): void {
+    void navigator.clipboard.writeText(reviewMessage(list, outdated)).catch(() => {});
+  }
+
+  function jumpTo(comment: CodeComment): void {
+    if (projectId && worktreeId) {
+      code.open(projectId, worktreeId, comment.path, { line: comment.start });
+    }
+  }
+
   /** Which change the stepper last landed on, for "2 of 5". Reset when the file changes. */
   let stepAt = $state<number | null>(null);
 
@@ -157,6 +237,12 @@
     if (!visible || !projectId || !worktreeId || !active) return;
     const current = code.fileOf(worktreeId, active);
     if (!current) untrack(() => void code.ensure(projectId, worktreeId, active));
+  });
+
+  onMount(() => code.listenForComments());
+
+  $effect(() => {
+    if (worktreeId) void code.loadComments(worktreeId);
   });
 
   onMount(() => {
@@ -382,7 +468,17 @@
           </p>
         {/if}
 
-        <CodeViewer bind:this={viewer} {worktreeId} path={active} {file} {hunks} />
+        <CodeViewer
+          bind:this={viewer}
+          {worktreeId}
+          path={active}
+          {file}
+          {hunks}
+          comments={fileComments}
+          {composing}
+          {askLabel}
+          {actions}
+        />
 
         {#if !active}
           <div class="c-code-view__placeholder"><p>Choose a file on the left.</p></div>
@@ -400,6 +496,17 @@
           </div>
         {/if}
       </div>
+
+      {#if comments.length > 0}
+        <CodeReview
+          {worktreeId}
+          {comments}
+          {outdated}
+          onjump={jumpTo}
+          onsend={sendComments}
+          oncopy={copyComments}
+        />
+      {/if}
     </div>
   {:else}
     <div class="c-code-view__placeholder"><p>Select a worktree on the left.</p></div>

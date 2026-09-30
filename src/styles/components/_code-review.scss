@@ -1,0 +1,115 @@
+/*
+ * The Review drawer: the worktree's comments, beside the file being read.
+ *
+ * Components layer. A column of its own rather than a panel over the editor, for the same reason
+ * `Suggest` stays in the flow: covering the code to talk about the code is backwards.
+ */
+
+.c-code-review {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  width: 300px;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.c-code-review__head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--step--1);
+}
+
+.c-code-review__title {
+  font-weight: 600;
+}
+
+.c-code-review__count {
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}
+
+.c-code-review__spacer {
+  flex: 1 1 auto;
+}
+
+.c-code-review__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-1) 0;
+  list-style: none;
+}
+
+.c-code-review__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  font-size: var(--step--1);
+  color: var(--fg);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-resolved {
+    color: var(--fg-muted);
+  }
+}
+
+.c-code-review__where {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.c-code-review__text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  white-space: pre-wrap;
+}
+
+.c-code-review__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-code-review__warn {
+  color: var(--warn);
+}
+
+.c-code-review__note {
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--ok-line);
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}
+
+.c-code-review__foot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.c-code-review__none {
+  flex: 1 1 auto;
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}

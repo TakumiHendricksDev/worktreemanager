@@ -34,7 +34,18 @@
 
   import { changeGutter, hunkStarts, setHunks } from '../code-diff';
   import { readingExtensions } from '../code-editor';
-  import type { CodeHunk } from '../ipc/types';
+  import type { CodeComment, CodeHunk } from '../ipc/types';
+  import {
+    commentExtension,
+    linesText,
+    rangeLabel,
+    selectedLines,
+    setComments,
+    type CommentActions,
+    type CommentInput,
+  } from '../code-comment-marks';
+  import { item, popUp, separator } from '../native-menu';
+  import { reference } from '../code-review';
   import { languageFor } from '../code-languages';
   import { code, type FileState } from '../state/code.svelte';
 
@@ -43,6 +54,10 @@
     path,
     file,
     hunks,
+    comments,
+    composing,
+    askLabel,
+    actions,
   }: {
     worktreeId: string;
     /** The file on screen, or null when no tab is open. */
@@ -50,6 +65,13 @@
     file: FileState | null;
     /** How the file differs from what Changes compares with, for the gutter. Null: no markers. */
     hunks: readonly CodeHunk[] | null;
+    /** This file's comments. */
+    comments: readonly CodeComment[];
+    /** Lines a new comment is being written on, in this file. */
+    composing: { start: number; end: number } | null;
+    /** The agent Ask would draft into, or null when the worktree has none. */
+    askLabel: string | null;
+    actions: CommentActions;
   } = $props();
 
   interface Kept {
@@ -105,6 +127,10 @@
     keymap.of([...searchKeymap, ...foldKeymap, ...defaultKeymap]),
     changeGutter(),
     flashField,
+    commentExtension(
+      () => actions,
+      () => askLabel,
+    ),
     EditorView.contentAttributes.of({ 'aria-label': 'File contents' }),
     EditorView.updateListener.of((update) => {
       // Keep the stored state current, so a tab switch saves the selection and folds as they are.
@@ -138,9 +164,36 @@
     return kept;
   }
 
-  /** Replace a file's text after it changed on disk, keeping selection and scroll where they map. */
+  /**
+   * Replace a file's text after it changed on disk, touching only the part that changed.
+   *
+   * The common beginning and end are kept and only the middle is replaced, so the selection, the
+   * folds, the comments' tints and the scroll position all map through the edit as they would
+   * through typing. Replacing the whole document instead stretches any selection over all of it.
+   */
   function reload(key: string, kept: Kept, content: string): void {
-    const changes = { from: 0, to: kept.state.doc.length, insert: content };
+    const before = kept.state.doc.toString();
+    let from = 0;
+    while (
+      from < before.length &&
+      from < content.length &&
+      before[from] === content[from]
+    ) {
+      from += 1;
+    }
+    let tail = 0;
+    while (
+      tail < before.length - from &&
+      tail < content.length - from &&
+      before[before.length - 1 - tail] === content[content.length - 1 - tail]
+    ) {
+      tail += 1;
+    }
+    const changes = {
+      from,
+      to: before.length - tail,
+      insert: content.slice(from, content.length - tail),
+    };
     if (shown === key && view) view.dispatch({ changes });
     else kept.state = kept.state.update({ changes }).state;
     kept.text = content;
@@ -202,6 +255,57 @@
     });
   });
 
+  // Give the file on screen its comments, and the box for a new one when that is open here.
+  const commentsGiven = new Map<string, CommentInput>();
+  $effect(() => {
+    const p = path;
+    const input: CommentInput = { comments, composing };
+    if (!p || text === null) return;
+    untrack(() => {
+      const key = keyOf(p);
+      const kept = states.get(key);
+      const last = commentsGiven.get(key);
+      if (
+        !kept ||
+        (last && last.comments === input.comments && last.composing === input.composing)
+      ) {
+        return;
+      }
+      commentsGiven.set(key, input);
+      const effects = setComments.of(input);
+      if (shown === key && view) view.dispatch({ effects });
+      else kept.state = kept.state.update({ effects }).state;
+    });
+  });
+
+  /** Right-click: the same two offers as the selection's, and the ways to copy where you are. */
+  function onContextMenu(event: MouseEvent): void {
+    const editor = view;
+    const p = path;
+    if (!editor || !p || text === null) return;
+    if ((event.target as Element | null)?.closest?.('.c-code-editor__comment')) return;
+    event.preventDefault();
+    if (editor.state.selection.main.empty) {
+      const at = editor.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (at !== null) editor.dispatch({ selection: { anchor: at } });
+    }
+    const { start, end } = selectedLines(editor.state);
+    const where = reference(p, start, end);
+    const copy = (value: string) =>
+      void navigator.clipboard.writeText(value).catch(() => {});
+    void popUp([
+      item('Add Comment…', () => actions.compose(start, end)),
+      item(
+        askLabel ? `Ask ${askLabel} About ${rangeLabel(start, end)}` : 'Ask an Agent',
+        () => actions.ask(start, end, linesText(editor.state, start, end) ?? ''),
+        askLabel !== null,
+      ),
+      separator,
+      item(`Copy ${where}`, () => copy(where)),
+      item('Copy Path', () => copy(p)),
+    ]);
+  }
+
   // Forget the states of tabs that were closed.
   $effect(() => {
     const open = new Set((code.tabs[worktreeId] ?? []).map(keyOf));
@@ -209,6 +313,7 @@
       if (key.startsWith(`${worktreeId}\0`) && !open.has(key)) {
         states.delete(key);
         given.delete(key);
+        commentsGiven.delete(key);
       }
     }
   });
@@ -281,4 +386,6 @@
   class:has-selection={hasSelection}
   class:is-hidden={text === null}
   bind:this={host}
+  oncontextmenu={onContextMenu}
+  role="presentation"
 ></div>

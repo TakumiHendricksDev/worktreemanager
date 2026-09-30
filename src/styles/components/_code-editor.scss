@@ -261,3 +261,40 @@
   color: var(--fg);
   background: var(--danger-soft);
 }
+
+/* Lines with a comment on them, tinted so the card below is visibly about them. */
+.c-code-editor__commented {
+  &.is-open {
+    background: var(--accent-soft);
+  }
+
+  &.is-resolved {
+    background: var(--bg-hover);
+  }
+}
+
+/* The widget that holds a comment card: nothing of its own but room. */
+.c-code-editor__comment {
+  padding-left: var(--sp-2);
+}
+
+/* What to do with a selection, beside it: Comment, and Ask ‹agent›. */
+.c-code-editor .c-code-editor__actions {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-md);
+  font-family: var(--font-ui);
+}
+
+.c-code-editor__action {
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  font-size: var(--step--2);
+  color: var(--fg);
+  background: transparent;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+}
