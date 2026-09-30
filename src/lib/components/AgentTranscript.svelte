@@ -568,6 +568,25 @@
     return 'is-pending';
   }
 
+  /**
+   * The classes for a notice, by how much it should interrupt.
+   *
+   * Info used to fall through to the warning colour, so a record of something that went as planned
+   * — "Context compacted.", a slash command replayed from history, Codex's auto-reviewer letting a
+   * command through — looked like the same kind of row as a CLI complaining on stdout. A reader
+   * learns to skim past orange that is usually nothing, and then skims past the one that was not.
+   */
+  function noteClass(
+    level: Extract<Row, { kind: 'notice' }>['level'],
+  ):
+    | 'c-transcript__note c-status--danger'
+    | 'c-transcript__note c-status--warn'
+    | 'c-transcript__note c-transcript__note--info c-status--muted' {
+    if (level === 'error') return 'c-transcript__note c-status--danger';
+    if (level === 'warn') return 'c-transcript__note c-status--warn';
+    return 'c-transcript__note c-transcript__note--info c-status--muted';
+  }
+
   /** The status as a word, for the label beside the class. */
   function stepLabel(status: AgendaStep['status']): string {
     return status === 'in_progress' ? 'in progress' : status;
@@ -831,13 +850,7 @@
         </ol>
       </div>
     {:else if row.kind === 'notice'}
-      <p
-        class={row.level === 'error'
-          ? 'c-transcript__note c-status--danger'
-          : 'c-transcript__note c-status--warn'}
-      >
-        {row.text}
-      </p>
+      <p class={noteClass(row.level)}>{row.text}</p>
     {:else if row.kind === 'approval'}
       <p class="c-transcript__approval-receipt">{row.text}</p>
     {:else if row.kind === 'usage'}

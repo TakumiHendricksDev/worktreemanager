@@ -417,6 +417,12 @@
   overflow-wrap: anywhere;
 }
 
+/* A notice that asks for nothing is sized with the other records — the receipt, the usage line —
+   so it differs from a warning in size as well as colour, and colour is never the only signal. */
+.c-transcript__note--info {
+  font-size: var(--step--2);
+}
+
 /* A durable record after the interactive card has gone. It promises only "answered" because the
    provider's resolution event carries no outcome, and guessing Allow from subsequent work would
    make the transcript an unreliable audit trail. */

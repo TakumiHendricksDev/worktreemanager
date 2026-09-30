@@ -949,6 +949,73 @@ fn lifecycle_chatter_draws_nothing_while_an_unknown_method_still_does() {
 }
 
 #[test]
+fn an_auto_approved_command_is_one_quiet_line_rather_than_a_warning_and_two_raw_rows() {
+    // Captured from codex-cli 0.154.0 with `approvalsReviewer: "auto_review"`, verbatim, in the
+    // order they arrived: the verdict sentence lands *between* the review's two brackets. Before
+    // this, the three drew a warning-coloured paragraph and two collapsed `Raw` rows for every
+    // escalated command, which in Auto mode is most of them.
+    const WIRE: &[&str] = &[
+        r#"{"method":"item/autoApprovalReview/started","params":{"threadId":"01a0f2b0-1bd0-7b42-b4bf-cbf49753b10e","turnId":"01a0f2b0-1c61-7be2-823c-f23bcae790d5","startedAtMs":1790778029124,"reviewId":"5665c837-3869-4701-873c-18f751a64cda","targetItemId":"exec-2597418c-f30c-4a57-8828-656682604ca3","review":{"status":"inProgress","riskLevel":null,"userAuthorization":null,"rationale":null},"action":{"type":"command","source":"unifiedExec","command":"/bin/zsh -lc 'curl -sI https://example.com'","cwd":"/tmp/wtm-guardian-capture/ws"}},"emittedAtMs":1790778029124}"#,
+        r#"{"method":"guardianWarning","params":{"threadId":"01a0f2b0-1bd0-7b42-b4bf-cbf49753b10e","message":"Automatic approval review approved (risk: low, authorization: high): The user explicitly authorized this exact HEAD request to example.com; it sends no sensitive payload and has minimal side effects."},"emittedAtMs":1790778034226}"#,
+        r#"{"method":"item/autoApprovalReview/completed","params":{"threadId":"01a0f2b0-1bd0-7b42-b4bf-cbf49753b10e","turnId":"01a0f2b0-1c61-7be2-823c-f23bcae790d5","startedAtMs":1790778029124,"completedAtMs":1790778034226,"reviewId":"5665c837-3869-4701-873c-18f751a64cda","targetItemId":"exec-2597418c-f30c-4a57-8828-656682604ca3","decisionSource":"agent","review":{"status":"approved","riskLevel":"low","userAuthorization":"high","rationale":"The user explicitly authorized this exact HEAD request to example.com; it sends no sensitive payload and has minimal side effects."},"action":{"type":"command","source":"unifiedExec","command":"/bin/zsh -lc 'curl -sI https://example.com'","cwd":"/tmp/wtm-guardian-capture/ws"}},"emittedAtMs":1790778034226}"#,
+    ];
+
+    let mut driver = ready_driver();
+    let produced: Vec<AgentEvent> = WIRE
+        .iter()
+        .flat_map(|line| driver.on_line(line))
+        .filter_map(|step| match step {
+            Step::Emit(event) => Some(event),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        produced,
+        vec![AgentEvent::Notice {
+            level: NoticeLevel::Info,
+            message: "Automatic approval review approved (risk: low, authorization: high): The user explicitly authorized this exact HEAD request to example.com; it sends no sensitive payload and has minimal side effects.".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn an_auto_review_that_did_not_approve_stays_a_warning_and_keeps_its_raw_row() {
+    // The captured approval above with only the verdict changed. Nothing but an approval has been
+    // seen on the wire, so these assert the fallback rather than a wire shape: the one direction
+    // the demotion must never go is a refusal drawn as quietly as a pass.
+    let mut driver = ready_driver();
+
+    for message in [
+        "Automatic approval review denied (risk: high, authorization: low): Deletes files outside the workspace.",
+        "Automatic approval review failed: the reviewer did not answer.",
+        "Auto-review approved this, in words a later release might choose.",
+    ] {
+        let line = json!({
+            "method": "guardianWarning",
+            "params": { "threadId": "01a0f2b0-1bd0-7b42-b4bf-cbf49753b10e", "message": message },
+        })
+        .to_string();
+        assert_eq!(
+            events(&driver.on_line(&line)),
+            vec![&AgentEvent::Notice {
+                level: NoticeLevel::Warn,
+                message: message.to_owned(),
+            }],
+            "{message}"
+        );
+    }
+
+    assert!(matches!(
+        events(&driver.on_line(
+            r#"{"method":"item/autoApprovalReview/completed","params":{"threadId":"01a0f2b0-1bd0-7b42-b4bf-cbf49753b10e","reviewId":"5665c837-3869-4701-873c-18f751a64cda","review":{"status":"denied","riskLevel":"high","userAuthorization":"low","rationale":"Deletes files outside the workspace."}}}"#,
+        ))
+        .first(),
+        Some(AgentEvent::Raw { .. })
+    ));
+}
+
+#[test]
 fn a_rate_limits_update_with_an_exhausted_window_reports_limit_reached() {
     // `account/rateLimits/updated` used to be in the silent list outright. It still is for every
     // payload that has room left — see the test below — but a window at 100% is the one thing this

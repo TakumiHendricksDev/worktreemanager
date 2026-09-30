@@ -49,6 +49,13 @@ pub const ID: &str = "codex";
 /// kind of small dishonesty that makes a log untrustworthy later.
 const CLIENT_NAME: &str = "wtm";
 
+/// How the auto-reviewer's `guardianWarning` begins when it let an action through.
+///
+/// Verified against codex-cli 0.154.0, where the whole sentence is `Automatic approval review
+/// approved (risk: low, authorization: high): <rationale>`. See the `guardianWarning` arm for why
+/// the verdict has to be read out of the prose.
+const GUARDIAN_APPROVED: &str = "Automatic approval review approved";
+
 #[derive(Debug)]
 pub struct Codex;
 
@@ -724,16 +731,41 @@ impl CodexProtocol {
                         .unwrap_or_default(),
                 ),
             },
-            "warning" | "guardianWarning" | "configWarning" | "deprecationNotice" => {
+            /*
+             * The approval auto-reviewer's verdict, one sentence per escalated action.
+             *
+             * It arrives on the warning channel whatever the verdict, so in Auto mode — where an
+             * approval is the common case — every reviewed command drew a warning, and a turn that
+             * went exactly as intended read as a turn full of problems. Only an approval is
+             * demoted. A denial, a failed review and the "rejected too many" interrupt stay
+             * warnings, and so does a sentence this does not recognise: if Codex rewords it, the
+             * cost is the old loud row back, never a denial drawn quietly.
+             *
+             * Read out of the prose because the notification has nothing else. The verdict as data
+             * is on `item/autoApprovalReview/completed`, which arrives *after* this line.
+             */
+            "guardianWarning" => {
+                let message = params
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or(method);
                 AgentEvent::Notice {
-                    level: NoticeLevel::Warn,
-                    message: params
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or(method)
-                        .to_owned(),
+                    level: if message.starts_with(GUARDIAN_APPROVED) {
+                        NoticeLevel::Info
+                    } else {
+                        NoticeLevel::Warn
+                    },
+                    message: message.to_owned(),
                 }
             }
+            "warning" | "configWarning" | "deprecationNotice" => AgentEvent::Notice {
+                level: NoticeLevel::Warn,
+                message: params
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or(method)
+                    .to_owned(),
+            },
             "error" => limit_or_failure(
                 &provider_error_message(params)
                     .unwrap_or_else(|| "the app server reported an error".to_owned()),
@@ -767,13 +799,26 @@ impl CodexProtocol {
             // difference between this arm and the one below is "we know and there is nothing to
             // say" versus "we do not know", and collapsing the two would make an unrecognised
             // event silently disappear.
+            //
+            // `item/autoApprovalReview/started` opens the auto-reviewer's bracket around the
+            // `guardianWarning` above, which is what says the verdict. Drawn, it was counted among
+            // the "N steps" beside it.
             "thread/started"
             | "thread/status/changed"
             | "thread/settings/updated"
             | "mcpServer/startupStatus/updated"
             | "remoteControl/status/changed"
             | "account/updated"
-            | "serverRequest/resolved" => return Vec::new(),
+            | "serverRequest/resolved"
+            | "item/autoApprovalReview/started" => return Vec::new(),
+            // The bracket's close, silent only for an approval, where the sentence already said
+            // everything it holds. Any other verdict keeps its `Raw` row, because an approval is
+            // the only sequence that has been seen on the wire.
+            "item/autoApprovalReview/completed"
+                if params.pointer("/review/status").and_then(Value::as_str) == Some("approved") =>
+            {
+                return Vec::new();
+            }
             // Everything else — and there are around seventy notification methods — becomes a
             // collapsed row. Deliberate: see the `agent` model's docs on why this is the design
             // rather than a fallback.
