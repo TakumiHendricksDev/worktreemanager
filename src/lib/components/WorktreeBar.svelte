@@ -21,8 +21,9 @@
    * one is how it gets clicked by accident. Inside a menu, at the bottom, behind a separator and still
    * followed by its confirmation dialog, it is further from an accident than the hairline made it.
    *
-   * The facts moved into the Details dialog. The branch and the dirty state went too, because the
-   * selected tab beside it already says both.
+   * The facts moved into the Details dialog, and the dirty state went too, because the selected tab
+   * beside it already says it. The branch stays: while the sidebar is hidden there is no tab beside
+   * it, and this bar is the only place left that says which branch you are on.
    *
    * # The name is a switcher while the sidebar is hidden
    *
@@ -233,11 +234,16 @@
   {/if}
 
   <div class="c-worktree-bar__facts">
-    <!-- No branch, no "main worktree" badge and no "modified". The selected tab directly to the
-         left already shows all three — its second line is the branch unless `display.subtitle`
-         says otherwise, its tooltip is the branch either way, it has a `main` pill, and it carries
-         the dirty state — so here they repeated the one thing on screen the user had just clicked.
-         Details has the branch in full. -->
+    <!-- Shown with the sidebar open as well, although the selected tab there repeats it, so the
+         bar does not change shape each time the rail is toggled. -->
+    {#if worktree.branch}
+      <code class="c-worktree-bar__branch" title={worktree.branch}>{worktree.branch}</code>
+    {:else}
+      <span class="c-status--muted">detached</span>
+    {/if}
+    <!-- No "main worktree" badge and no "modified". The selected tab directly to the left already
+         shows both — it has a `main` pill and carries the dirty state — so here they repeated the
+         one thing on screen the user had just clicked. -->
     <!-- The `↑N↓N` divergence counter was here and is gone for the same reason it left
          `WorktreeTab`: it is a measurement presented as a status, and this header is the one place
          where the Inspector — which reports ahead, behind, staged and unstaged properly — is a

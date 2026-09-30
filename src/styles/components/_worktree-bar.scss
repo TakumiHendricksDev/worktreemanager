@@ -8,8 +8,9 @@
  *
  * # What gives way when the window is narrow
  *
- * The badges first, then the name, and the buttons never. The badges take only space nobody else
- * wants (a zero flex basis), the name shrinks and ellipsizes, and the actions do not shrink at all.
+ * The branch and badges first, then the name, and the buttons never. The branch and badges take only
+ * space nobody else wants (a zero flex basis), the name shrinks and ellipsizes, and the actions do
+ * not shrink at all.
  * The row used to be the other way round — a name that refused to shrink beside a fixed row of
  * buttons — so a narrow window pushed the last buttons off its edge, where they could not be
  * reached at all. A truncated name is still the name; the full one is in Details and the sidebar.
@@ -100,7 +101,7 @@
 }
 
 /*
- * The badges.
+ * The branch, plus the badges.
  *
  * Takes the slack so the actions stay pinned right however many badges there are, and hides the
  * overflow rather than wrapping: a bar that becomes two rows on a narrow window would move every
@@ -114,6 +115,13 @@
   gap: var(--sp-2);
   overflow: hidden;
   font-size: var(--step--1);
+}
+
+.c-worktree-bar__branch {
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .c-worktree-bar__actions {
