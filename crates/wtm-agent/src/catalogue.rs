@@ -28,10 +28,9 @@ pub struct ProviderEntry {
     pub blurb: &'static str,
     /// The mode a new session gets when nothing else says, in **this provider's own spelling**.
     ///
-    /// Per provider rather than one app-wide constant, because an approval policy is provider
-    /// vocabulary: Codex wants `on-request`, and Claude Code's own default already asks — passing
-    /// it `--permission-mode` unbidden would override a setting the user may have chosen in
-    /// `~/.claude/settings.json`. `None` means "say nothing and let the CLI decide".
+    /// Per provider rather than one app-wide constant, because a mode is provider vocabulary: every
+    /// entry below is named Auto in the picker, and each means something different on the wire.
+    /// `None` means "say nothing and let the CLI decide".
     ///
     /// Not translated into a wtm-side enum, deliberately: that would be a second name for the same
     /// thing, needing to be kept in step with two CLIs this app does not control.
@@ -60,10 +59,15 @@ pub const CATALOGUE: &[ProviderEntry] = &[
         id: claude::ID,
         label: "Claude Code",
         blurb: "Anthropic Claude Code, over stream-json",
-        // Its own default asks — verified by driving it, which produced a `can_use_tool` with no
-        // `--permission-mode` passed at all. Saying nothing also leaves whatever the user set in
-        // `~/.claude/settings.json` intact, which overriding would not.
-        default_mode: None,
+        // Auto, the CLI's own classifier deciding which tool calls need a person, where the CLI left
+        // alone asks before every one. This was `None` for a long time, so that `defaultMode` in
+        // `~/.claude/settings.json` could decide, and it does override that setting now — the cost
+        // of starting every agent wtm opens in Auto rather than Codex alone. Anyone who wants their
+        // own back says so in `[agent.claude] mode`, which outranks this.
+        //
+        // Safe to ask for where the account or model cannot have it: the CLI starts anyway and drops
+        // to `default`, and says so — see `AgentEvent::ModeChanged`.
+        default_mode: Some("auto"),
         default_effort: Some(crate::capability::PREFERRED_EFFORT),
         provider: &Claude,
     },
@@ -85,7 +89,10 @@ pub const CATALOGUE: &[ProviderEntry] = &[
         id: cursor::ID,
         label: "Cursor Agent",
         blurb: "Cursor CLI, over Agent Client Protocol",
-        default_mode: Some("agent"),
+        // Auto, like the other two — but this one is wtm's, not Cursor's: the wire stays on
+        // `agent` and wtm answers each permission prompt with allow-once, where Claude and Codex
+        // have a reviewer deciding. See `CursorProtocol::auto_approve`.
+        default_mode: Some("auto"),
         // Cursor's effort ladder moves with the selected model and is advertised live. Supplying a
         // compiled rung before that answer could reject a model that lacks it; no value honestly
         // means "use Cursor's current model default" until the picker or task chooses one.
@@ -119,6 +126,38 @@ mod tests {
     fn an_unknown_id_is_refused_rather_than_falling_back() {
         // A config naming an agent this build does not ship must not silently start another.
         assert!(entry("no-such-agent").is_none());
+    }
+
+    #[test]
+    fn every_provider_starts_in_auto_and_its_picker_agrees() {
+        // Two places decide a new pane's mode: the picker seeds it from the capability's
+        // `is_default` and sends it, and the spawn path falls back to `default_mode` when nothing
+        // was sent. If they named different modes, a pane opened before its capability loaded would
+        // start in one and a pane opened after it in the other, under the same pill.
+        let capabilities = [
+            (claude::ID, crate::capability::claude_capability().modes),
+            (codex::ID, crate::capability::codex_modes()),
+            (cursor::ID, cursor::cursor_modes()),
+        ];
+        assert_eq!(
+            capabilities.len(),
+            CATALOGUE.len(),
+            "a provider is missing from this test"
+        );
+        for (id, modes) in capabilities {
+            let entry = entry(id).expect("a catalogue entry");
+            assert_eq!(
+                entry.default_mode,
+                Some("auto"),
+                "{id} should start in Auto"
+            );
+            let marked: Vec<&str> = modes
+                .iter()
+                .filter(|m| m.is_default)
+                .map(|m| m.id.as_str())
+                .collect();
+            assert_eq!(marked, ["auto"], "{id}'s picker should seed the same mode");
+        }
     }
 
     #[test]

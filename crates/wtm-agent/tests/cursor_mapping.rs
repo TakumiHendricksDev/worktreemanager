@@ -460,6 +460,30 @@ fn the_live_capability_preserves_cursor_model_effort_and_mode_labels() {
     );
 }
 
+#[test]
+fn a_new_pane_starts_in_auto_although_cursor_reports_agent_as_its_mode() {
+    // `currentModeId` is the wire mode, and Auto runs on `agent` as well — so marking what Cursor
+    // reported as the default would seed every new pane in Agent, and the picker would send it.
+    let capability = parse_capability(&json!({
+        "result": {
+            "modes": {
+                "currentModeId": "agent",
+                "availableModes": [
+                    { "id": "agent", "name": "Agent" },
+                    { "id": "plan", "name": "Plan" }
+                ]
+            }
+        }
+    }));
+    let defaults: Vec<&str> = capability
+        .modes
+        .iter()
+        .filter(|mode| mode.is_default)
+        .map(|mode| mode.id.as_str())
+        .collect();
+    assert_eq!(defaults, ["auto"]);
+}
+
 // ── Steering ───────────────────────────────────────────────────────────────────────────────────
 //
 // Not captured: `cursor-agent` was not installed where these were written. The reply shape is

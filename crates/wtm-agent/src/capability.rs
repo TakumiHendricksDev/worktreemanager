@@ -162,11 +162,11 @@ pub fn claude_capability() -> AgentCapability {
         // `default` but the flag spells the same thing `manual` — and was missing `auto` entirely.
         // Both were wrong in the direction that fails at spawn time with the CLI's own error.
         //
-        // **No mode is marked default, and that is deliberate.** `ProviderEntry::default_mode` is
-        // `None` for this provider so wtm passes no `--permission-mode` at all, leaving whatever
-        // the user set in `~/.claude/settings.json` intact. Marking one here would make the picker
-        // send it on every session and quietly override that setting. The pane learns the real
-        // answer instead: `init` reports `permissionMode`, and `SessionReady` carries it back.
+        // Auto is marked default, to agree with `ProviderEntry::default_mode`: the picker seeds a
+        // new pane from this flag and sends what it seeded, so the two have to name the same mode
+        // or a new pane would start in one and the spawn path would resolve the other. The pane
+        // still learns the real answer — `init` reports `permissionMode`, and a `status` line
+        // reports the CLI dropping a mode it could not keep.
         modes: vec![
             mode(
                 "manual",
@@ -194,7 +194,7 @@ pub fn claude_capability() -> AgentCapability {
                 "Auto",
                 "Decide which tool permissions need approval; clarification questions are separate",
                 ModeRisk::Elevated,
-                false,
+                true,
             ),
             mode(
                 "dontAsk",

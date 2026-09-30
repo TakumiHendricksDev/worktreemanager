@@ -2226,9 +2226,9 @@ class Sessions {
     const preferred = capability?.models.find((m) => m.isDefault) ?? capability?.models[0];
     pane.model = preferred?.id ?? null;
     pane.effort = preferred?.defaultEffort ?? null;
-    // Left null for Claude, whose capability marks no mode as the default — it deliberately passes
-    // no flag so the user's own settings decide, and `session_ready` reports back what they said.
-    // Codex does mark one, because there the mode is two protocol fields that wtm has to send.
+    // Auto for all three: each capability marks it default, agreeing with
+    // `ProviderEntry::default_mode`, so the pill shows the mode the spawn below asks for. `null`
+    // before the capability lands leaves the choice to that same Rust default.
     pane.mode = capability?.modes.find((m) => m.isDefault)?.id ?? null;
 
     this.panes = [...this.panes, pane];
@@ -3685,10 +3685,13 @@ class Sessions {
       // exists — Claude chooses it on its init line, Codex assigns it when the thread opens.
       pane.providerSession = event.providerSessionId;
       this.remember(pane.worktreeId);
-      // The one setting wtm can learn rather than choose. Claude passes no `--permission-mode`
-      // precisely so `~/.claude/settings.json` decides, so without adopting the answer the mode
-      // pill would show a default the session is not in.
+      // The one setting wtm can learn rather than choose. A resumed Claude conversation keeps the
+      // mode it was in, so without adopting the answer the pill would show one it is not in.
       if (event.mode !== null) pane.mode = event.mode;
+    } else if (event.kind === 'mode_changed') {
+      // After `session_ready`, so it wins: Claude's `init` goes on naming the mode it was asked
+      // for, and this is the line that says it could not keep it.
+      pane.mode = event.mode;
     } else if (event.kind === 'usage') {
       pane.usage = {
         tokensIn: event.tokensIn,

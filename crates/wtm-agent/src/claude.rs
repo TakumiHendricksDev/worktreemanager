@@ -1199,9 +1199,9 @@ impl Protocol for ClaudeProtocol {
                             .and_then(Value::as_str)
                             .map(str::to_owned),
                         effort: None,
-                        // Whatever it resolved to, including from a `settings.json` wtm never saw.
-                        // Normalised because this message and the flag spell the same mode two
-                        // different ways — see `canonical_mode`.
+                        // Whatever it resolved to, which is not always what wtm asked for — a
+                        // resumed conversation keeps its own. Normalised because this message and
+                        // the flag spell the same mode two different ways — see `canonical_mode`.
                         mode: message
                             .get("permissionMode")
                             .and_then(Value::as_str)
@@ -1223,11 +1223,24 @@ impl Protocol for ClaudeProtocol {
                     }
                     steps
                 }
+                // A `status` line is mostly the CLI talking to its own UI, and draws nothing. But it
+                // also carries the mode, and that is how a mode the CLI could not keep is announced:
+                // `init` goes on reporting what was asked for. See `AgentEvent::ModeChanged`.
+                Some("status") => message
+                    .get("permissionMode")
+                    .and_then(Value::as_str)
+                    .map(|mode| {
+                        Step::Emit(AgentEvent::ModeChanged {
+                            mode: canonical_mode(mode).to_owned(),
+                        })
+                    })
+                    .into_iter()
+                    .collect(),
                 // Recognised, and deliberately not shown.
                 //
                 // `thinking_tokens` is a running estimate emitted many times a second — a real turn
                 // sent sixteen for one reply, and there is already a reasoning *stream* for the
-                // content. `status` and `post_turn_summary` are the CLI talking to its own UI.
+                // content. `post_turn_summary` is the CLI talking to its own UI.
                 // Suppressed rather than `Raw`-ed because a real turn produced three of them around
                 // a two-word answer, and each one is a collapsed row nobody wants.
                 //
@@ -1238,7 +1251,6 @@ impl Protocol for ClaudeProtocol {
                 // state with two lines of protocol debris the moment a pane opened.
                 Some(
                     "thinking_tokens"
-                    | "status"
                     | "post_turn_summary"
                     | "turn_starting"
                     | "turn_duration"

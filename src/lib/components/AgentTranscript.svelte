@@ -313,10 +313,11 @@
           });
           break;
 
-        // Deliberately not drawn. `session_ready` and `turn_started` are state the pane header
-        // shows; a mid-turn `usage` is superseded by the one on `turn_finished`; `skills_listed` is
-        // the composer's `/` menu, not a thing that happened.
+        // Deliberately not drawn. `session_ready`, `mode_changed` and `turn_started` are state the
+        // pane header shows; a mid-turn `usage` is superseded by the one on `turn_finished`;
+        // `skills_listed` is the composer's `/` menu, not a thing that happened.
         case 'session_ready':
+        case 'mode_changed':
         case 'turn_started':
         case 'usage':
         case 'skills_listed':

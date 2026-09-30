@@ -165,10 +165,9 @@
    * The mode on screen.
    *
    * Falls through to the capability's default and then to nothing — not to the first entry, unlike
-   * the model above. Claude marks no default deliberately, because wtm passes no
-   * `--permission-mode` and lets `~/.claude/settings.json` decide; picking `modes[0]` here would
-   * put a confident "Manual" on the pill during the second before `session_ready` says otherwise,
-   * and that second is exactly when someone might glance at it.
+   * the model above. The default is Auto on every provider, and it is what the spawn asks for;
+   * `modes[0]` is Manual on Claude, and would put a confident wrong answer on the pill during the
+   * second before `session_ready` says otherwise, which is exactly when someone might glance at it.
    */
   const currentMode = $derived(
     modes.find((m) => m.id === mode) ?? modes.find((m) => m.isDefault) ?? null,

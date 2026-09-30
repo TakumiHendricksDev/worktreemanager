@@ -658,13 +658,15 @@ export type AgentEvent =
       model: string | null;
       effort: string | null;
       /**
-       * The mode the provider resolved to, which for Claude wtm cannot otherwise know: it passes
-       * no `--permission-mode`, so `~/.claude/settings.json` is the only thing that decided it.
+       * The mode the provider resolved to, which is not always the one wtm asked for: a resumed
+       * Claude conversation keeps its own.
        */
       mode: string | null;
       tools: string[];
     }
   | { kind: 'skills_listed'; skills: AgentSkill[] }
+  /** The provider dropped the mode it was started in, as Claude does with an Auto it cannot keep. */
+  | { kind: 'mode_changed'; mode: string }
   | { kind: 'turn_started'; turn: string }
   | { kind: 'turn_finished'; turn: string; usage: AgentUsage; costUsd: number | null }
   | { kind: 'attachments'; attachments: AgentAttachment[] }

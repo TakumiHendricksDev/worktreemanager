@@ -1028,24 +1028,66 @@ fn every_offered_mode_is_one_the_permission_flag_actually_accepts() {
     assert_eq!(risk("dontAsk"), ModeRisk::Elevated);
     assert_eq!(risk("bypassPermissions"), ModeRisk::Unsandboxed);
 
-    // None marked default, unlike Codex. wtm passes no `--permission-mode` for this provider so
-    // that `~/.claude/settings.json` decides, and marking one here would make the picker send it on
-    // every session and silently override that setting. The pane learns the real mode from `init`.
-    assert!(
-        capability.modes.iter().all(|m| !m.is_default),
-        "a default here would override the user's own settings.json"
-    );
+    // Exactly one default, and it is Auto — the mode the picker seeds a new pane with and sends.
+    let defaults: Vec<&str> = capability
+        .modes
+        .iter()
+        .filter(|m| m.is_default)
+        .map(|m| m.id.as_str())
+        .collect();
+    assert_eq!(defaults, ["auto"]);
+}
 
-    // Codex is the other way round, and for a reason that is not symmetry: its mode is *two*
-    // protocol fields that only mean something together, so wtm has to send both or neither.
-    assert_eq!(
-        wtm_agent::codex_modes()
-            .iter()
-            .filter(|m| m.is_default)
-            .count(),
-        1,
-        "codex must start somewhere, since wtm is the one composing its two settings"
+#[test]
+fn a_new_session_asks_the_cli_for_auto_when_nothing_else_chose_a_mode() {
+    // What the catalogue default turns into on the wire. The CLI left to itself asks before every
+    // tool, so the flag has to be there for a new pane to start in Auto at all.
+    let argv = Claude.argv(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        mode: wtm_agent::entry("claude")
+            .and_then(|entry| entry.default_mode)
+            .map(str::to_owned),
+        ..SessionRequest::default()
+    });
+    let at = argv
+        .iter()
+        .position(|a| a == "--permission-mode")
+        .expect("--permission-mode");
+    assert_eq!(argv[at + 1], "auto");
+}
+
+#[test]
+fn a_status_line_that_names_a_mode_says_the_cli_dropped_the_one_it_was_asked_for() {
+    // Captured from CLI 2.1.280 asked for `auto` on Haiku 4.5: `init` reports `auto`, and this line
+    // follows it. Before it was read, the pill said Auto over a session that asked for every tool.
+    let mut d = driver();
+    let _ = d.open();
+    let _ = d.on_line(
+        r#"{"type":"system","subtype":"init","session_id":"e8581508-0000-4000-8000-06a0e8581508","tools":[],"model":"claude-haiku-4-5-20251001","permissionMode":"auto"}"#,
     );
+    let steps = d.on_line(
+        r#"{"type":"system","subtype":"status","status":null,"permissionMode":"default","session_id":"e8581508-0000-4000-8000-06a0e8581508"}"#,
+    );
+    // `default` arrives as `manual`, the spelling the picker and the flag use — see
+    // `the_mode_the_init_message_reports_is_spelled_the_way_the_flag_spells_it`.
+    assert_eq!(
+        events(&steps),
+        [&AgentEvent::ModeChanged {
+            mode: "manual".to_owned()
+        }]
+    );
+}
+
+#[test]
+fn a_status_line_without_a_mode_still_draws_nothing() {
+    // The reason `status` was suppressed in the first place: the CLI sends several a turn for its
+    // own UI, and each one used to be a collapsed row nobody wanted.
+    let mut d = driver();
+    let _ = d.open();
+    let steps = d.on_line(
+        r#"{"type":"system","subtype":"status","status":"compacting","session_id":"e8581508-0000-4000-8000-06a0e8581508"}"#,
+    );
+    assert!(events(&steps).is_empty(), "{steps:?}");
 }
 
 #[test]
@@ -1204,8 +1246,8 @@ fn the_slash_commands_the_init_message_lists_become_the_composers_skill_list() {
     // render one column instead of two.
     assert!(listed.iter().all(|s| s.description.is_none()));
 
-    // And the mode it resolved to, which wtm cannot otherwise know: it deliberately passes no
-    // `--permission-mode`, so `~/.claude/settings.json` is the only thing that decided this.
+    // And the mode it resolved to, which is not always the one wtm asked for: a resumed
+    // conversation keeps its own.
     match events(&steps).first().expect("SessionReady") {
         AgentEvent::SessionReady { mode, .. } => assert_eq!(mode.as_deref(), Some("acceptEdits")),
         other => panic!("expected SessionReady, got {other:?}"),

@@ -1287,9 +1287,6 @@ fn collect_options(value: Option<&Value>, out: &mut Vec<(String, String, Option<
 }
 
 fn parse_modes(result: &Value) -> Vec<AgentMode> {
-    let current = result
-        .pointer("/modes/currentModeId")
-        .and_then(Value::as_str);
     let mut modes: Vec<AgentMode> = result
         .pointer("/modes/availableModes")
         .and_then(Value::as_array)
@@ -1307,7 +1304,9 @@ fn parse_modes(result: &Value) -> Vec<AgentMode> {
                     .get("description")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
-                is_default: Some(id.as_str()) == current,
+                // Not `currentModeId`: that is the wire mode, and Auto runs on `agent` too, so a
+                // pane seeded from it would start in Agent. Set below, once Auto is in the list.
+                is_default: false,
                 risk: if matches!(id.as_str(), "plan" | "ask") {
                     ModeRisk::Normal
                 } else {
@@ -1325,6 +1324,10 @@ fn parse_modes(result: &Value) -> Vec<AgentMode> {
             .position(|mode| mode.id == "agent")
             .map_or(0, |i| i + 1);
         modes.insert(insert_at, cursor_auto_mode());
+    }
+    // wtm's default, as in `cursor_modes` — see `ProviderEntry::default_mode`.
+    for mode in &mut modes {
+        mode.is_default = mode.id == "auto";
     }
     modes
 }
@@ -1375,7 +1378,8 @@ pub fn cursor_modes() -> Vec<AgentMode> {
         id: id.to_owned(),
         label: label.to_owned(),
         description: Some(description.to_owned()),
-        is_default: id == "agent",
+        // wtm's default rather than Cursor's — see `ProviderEntry::default_mode`.
+        is_default: id == "auto",
         risk,
     })
     .collect()

@@ -208,10 +208,10 @@ pub enum AgentEvent {
         effort: Option<Effort>,
         /// The permission or approval mode the provider says it resolved to.
         ///
-        /// Load-bearing for Claude, where wtm deliberately passes no `--permission-mode` so as not
-        /// to override `~/.claude/settings.json` — see `ProviderEntry::default_mode`. Without this
-        /// the UI would have to *guess* which mode a session is in, and the guess would be wrong
-        /// for exactly the users who cared enough to configure one.
+        /// Load-bearing for Claude, which can land somewhere other than where wtm asked: a resumed
+        /// conversation keeps the mode it was in, and a mode the account or model cannot use is
+        /// dropped — see [`ModeChanged`](AgentEvent::ModeChanged). Without this the UI would have
+        /// to assume the session is in the mode it was started with.
         mode: Option<String>,
         /// Tool names the provider says it has. For display only — wtm does not gate on it.
         tools: Vec<String>,
@@ -228,6 +228,16 @@ pub enum AgentEvent {
     /// Replaces rather than appends: a provider that answers twice is correcting itself.
     SkillsListed {
         skills: Vec<AgentSkill>,
+    },
+    /// The provider moved the session to another permission mode by itself.
+    ///
+    /// Claude does this when it cannot keep the mode it was started in. Asked for `auto` on a model
+    /// without it, its `init` still reports `auto`, and a `status` line straight after says
+    /// `default` — observed on CLI 2.1.280 with Haiku 4.5. Without this the mode pill kept saying
+    /// Auto over a session that was asking before every tool. Spelled the way the flag spells it,
+    /// as [`SessionReady`](AgentEvent::SessionReady)'s `mode` is.
+    ModeChanged {
+        mode: String,
     },
     TurnStarted {
         turn: String,

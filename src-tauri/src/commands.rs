@@ -2637,12 +2637,12 @@ pub fn session_request_for(
         // installed while this picker was open is usable without rebuilding this request.
         executable: None,
         model,
-        // Ask before running anything, unless something asked for otherwise. A worktree is
-        // disposable and git is the undo, so a permissive default is defensible — but it is a
-        // decision the user should make deliberately rather than discover, and the safe
-        // direction is the one where the first surprising command is a card rather than a
-        // `git status` you cannot explain. The spelling is the provider's own; see
-        // `ProviderEntry::default_mode`.
+        // Auto, unless something asked for otherwise. This used to be "ask before running
+        // anything", on the grounds that a permissive default is a decision to make deliberately
+        // rather than discover. It has been made: a worktree is disposable and git is the undo, and
+        // a card before every `ls` is how approvals stop being read. Each provider's Auto still
+        // puts something between the model and the machine except Cursor's, which is wtm's own
+        // allow-once policy. The spelling is the provider's own; see `ProviderEntry::default_mode`.
         mode: mode
             .or_else(|| spec.mode.clone())
             .or(implied)

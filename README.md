@@ -36,7 +36,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | ✅ | Adopting an existing branch instead of creating one — the GUI form of the shell's numbered stdin picker |
 | ✅ | Removing a worktree: the project's teardown steps, then `git worktree remove`, then optionally the branch |
 | ✅ | Live terminal pane for setup output and ad-hoc `[[action]]`s, with input routed back so a prompt is answerable |
-| ✅ | Live Claude Code, Codex, and Cursor Agent sessions with normalized transcripts, approvals, model controls, resumable conversations, and internal MCP handoff |
+| ✅ | Live Claude Code, Codex, and Cursor Agent sessions with normalized transcripts, approvals, model controls, resumable conversations, and internal MCP handoff. New sessions start in Auto unless a repository's `[agent.<id>] mode` says otherwise |
 | ✅ | Claude's high-speed mode, from the composer's Fast pill or `/fast` — wtm drives the CLI over the Agent SDK protocol, so it declares the opt-in the SDK requires |
 | ✅ | Voice dictation into the prompt composer — hold or tap the mic, audio goes to Deepgram Nova-3, transcript lands in the draft unsent. Off by default; the only feature that sends anything off your machine |
 | ✅ | Cross-model delegation from one chat: one visible child or a customizable run of up to 20 child agents, with per-child model/effort/mode and navigable session status |
