@@ -18,7 +18,7 @@ impl Center {
         match *self {}
     }
 
-    pub(crate) fn request_permission(&self) -> bool {
+    pub(crate) fn request_permission(&self) -> Result<bool, Error> {
         match *self {}
     }
 

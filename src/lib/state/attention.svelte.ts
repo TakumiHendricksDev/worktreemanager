@@ -29,6 +29,7 @@
  */
 
 import { commands } from '../ipc/commands';
+import { isWtmError } from '../ipc/types';
 import { inPaneWindow } from '../window-role';
 import { workspace } from './workspace.svelte';
 
@@ -80,8 +81,27 @@ export interface Announceable {
 export type Announcement =
   'approval' | 'question' | 'plan' | 'finished' | 'failed' | 'limit';
 
-/** A toast's kind. `ask` is the one-time opt-in card, which has no pane behind it. */
-export type ToastKind = 'attention' | 'done' | 'failed' | 'ask';
+/**
+ * A toast's kind. `ask` is the one-time opt-in card and `notice` what wtm has to say back about it;
+ * neither has a pane behind it.
+ */
+export type ToastKind = 'attention' | 'done' | 'failed' | 'ask' | 'notice';
+
+/**
+ * Why notifications are not arriving, when they are not.
+ *
+ * Two reasons with opposite advice. `denied` is somebody's no, reversible in System Settings.
+ * `unavailable` is macOS refusing to deal with an unsigned build at all — it is not even listed in
+ * System Settings, so sending someone there to fix it is sending them to look for nothing.
+ */
+export type Blocked = 'denied' | 'unavailable';
+
+/** What `request_notification_permission` rejects with for an unsigned build. See `notifier.rs`. */
+const NOT_ALLOWED = 'notifications_not_allowed';
+
+function blockedBy(error: unknown): Blocked {
+  return isWtmError(error) && error.kind === NOT_ALLOWED ? 'unavailable' : 'denied';
+}
 
 export interface Toast {
   id: number;
@@ -97,12 +117,13 @@ class Attention {
   /** `ask` until the user has answered once, either way. */
   pref = $state<NotifyPref>('ask');
   /**
-   * True when the OS is refusing to deliver.
+   * Why the OS is not delivering, or null when nothing says it is refusing.
    *
    * Surfaced in Settings rather than swallowed: a notification preference that is on and silent is
-   * indistinguishable from a broken app, and the fix is in System Settings where wtm cannot reach.
+   * indistinguishable from a broken app, and the fix, when there is one, is in System Settings
+   * where wtm cannot reach.
    */
-  blocked = $state(false);
+  blocked = $state<Blocked | null>(null);
 
   /**
    * Whether the wtm window is in front.
@@ -167,11 +188,16 @@ class Attention {
       void commands
         .notificationPermission()
         .then((state) => {
-          if (state === 'denied') this.blocked = true;
+          if (state === 'denied') this.blocked = 'denied';
           if (state === 'prompt') {
-            void commands.requestNotificationPermission().then((granted) => {
-              this.blocked = !granted;
-            });
+            void commands.requestNotificationPermission().then(
+              (granted) => {
+                this.blocked = granted ? null : 'denied';
+              },
+              (e: unknown) => {
+                this.blocked = blockedBy(e);
+              },
+            );
           }
         })
         .catch(() => {
@@ -248,6 +274,10 @@ class Attention {
 
   /** Turn notifications on, asking the OS if it has not been asked. */
   async enable(): Promise<void> {
+    // Down before anything can wait. Nothing used to take the opt-in card down at all — neither
+    // answer, and it has no ✕ and no worktree to arrive at — so on a first run both buttons
+    // appeared to do nothing and the card stayed until the app was quit.
+    const asked = this.dropAsk();
     try {
       // One call rather than a check-then-ask pair: asking when already granted answers true
       // without a prompt, so the distinction bought nothing.
@@ -255,17 +285,32 @@ class Attention {
       // Refused at the OS level. Stored as `off` rather than left as `ask`, because the question has
       // now been answered — by the system rather than by the user, which `blocked` is what says.
       this.pref = granted ? 'on' : 'off';
-      this.blocked = !granted;
-    } catch {
+      this.blocked = granted ? null : 'denied';
+    } catch (e) {
       this.pref = 'off';
-      this.blocked = true;
+      this.blocked = blockedBy(e);
+    }
+    // Said where the question was, since that is where the user is looking. A `denied` needs no
+    // card: the no was the user's own, at the OS prompt a moment ago. From Settings there is no
+    // card to answer in, and the panel says it inline.
+    if (asked && this.blocked === 'unavailable') {
+      this.push({
+        kind: 'notice',
+        target: null,
+        title: "wtm can't send macOS notifications",
+        detail:
+          "This build isn't code-signed, and macOS won't deliver notifications for an unsigned " +
+          'app. A session that needs you still shows in the sidebar, on the dock icon and in ' +
+          'cards like this one.',
+      });
     }
     await this.remember();
   }
 
   async disable(): Promise<void> {
+    this.dropAsk();
     this.pref = 'off';
-    this.blocked = false;
+    this.blocked = null;
     await this.remember();
   }
 
@@ -286,6 +331,14 @@ class Attention {
       title: 'Notify you next time?',
       detail: 'A session needed you while wtm was in the background.',
     });
+  }
+
+  /** Take the opt-in card down, reporting whether it was up. */
+  private dropAsk(): boolean {
+    const next = this.toasts.filter((t) => t.kind !== 'ask');
+    if (next.length === this.toasts.length) return false;
+    this.toasts = next;
+    return true;
   }
 
   private async remember(): Promise<void> {
@@ -348,7 +401,8 @@ class Attention {
         paneId: pane.id,
       })
       .catch(() => {
-        this.blocked = true;
+        // `??=`: an `unavailable` already known is the more useful thing to keep saying.
+        this.blocked ??= 'denied';
       });
   }
 

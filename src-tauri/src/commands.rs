@@ -842,7 +842,7 @@ pub async fn request_notification_permission(handle: tauri::AppHandle) -> Reply<
     blocking(move || {
         use tauri::Manager;
         let notifier = handle.state::<Arc<crate::notifier::Notifier>>();
-        Ok(notifier.request_permission())
+        notifier.request_permission()
     })
     .await
 }

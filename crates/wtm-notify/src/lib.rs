@@ -64,6 +64,12 @@ pub enum Error {
     /// reach — surfaced rather than swallowed, so the frontend can say so.
     #[error("macOS is not delivering notifications for this app")]
     Denied,
+    /// The OS would not even ask. Not a refusal anyone made: `usernotificationsd` turns away an app
+    /// whose code signature does not name its bundle, and a linker-signed ad-hoc build — what an
+    /// unsigned `tauri build` produces — is signed as `wtm-<hash>`, not `dev.takumihendricks.wtm`.
+    /// Nothing in System Settings can change that, which is why it is not [`Denied`](Self::Denied).
+    #[error("macOS does not let an unsigned build of wtm send notifications")]
+    NotAllowed,
     /// The payload could not be encoded. Unreachable for the struct above, but lying about
     /// that with an `unwrap` would make the one impossible case an abort.
     #[error("the click payload could not be encoded: {0}")]
@@ -99,7 +105,12 @@ impl Center {
 
     /// Ask the OS for permission, blocking until the user answers the prompt (or a bounded
     /// timeout, read as a refusal). Called from a worker thread, never an event loop.
-    pub fn request_permission(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotAllowed`] when the OS refuses to ask at all, which it answers at once. `Ok(false)`
+    /// is the user saying no, or saying nothing until the timeout.
+    pub fn request_permission(&self) -> Result<bool, Error> {
         self.0.request_permission()
     }
 

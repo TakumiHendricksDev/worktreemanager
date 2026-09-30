@@ -68,7 +68,8 @@
   border-color: var(--info-line);
 }
 
-.c-toast--ask {
+.c-toast--ask,
+.c-toast--notice {
   border-color: var(--border-strong);
 }
 
@@ -87,6 +88,12 @@
   cursor: pointer;
   color: inherit;
   font: inherit;
+}
+
+/* The two cards whose body is text rather than a button — the opt-in and a notice — so the pointer
+   does not promise a click that goes nowhere. */
+.c-toast__body--static {
+  cursor: default;
 }
 
 .c-toast__title {

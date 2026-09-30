@@ -31,8 +31,8 @@
     }) => void;
   } = $props();
 
-  /** Which dot a card shows. `ask` has no session behind it and renders none. */
-  const DOT: Record<Exclude<Toast['kind'], 'ask'>, PaneStatus> = {
+  /** Which dot a card shows. `ask` and `notice` have no session behind them and render none. */
+  const DOT: Record<Exclude<Toast['kind'], 'ask' | 'notice'>, PaneStatus> = {
     attention: 'attention',
     failed: 'failed',
     done: 'done',
@@ -60,7 +60,7 @@
         <!-- The one-time opt-in, asked here rather than in a dialog. It arrives on the first focus
              *after* something was actually missed, so it is a question about an event the user
              remembers — and a modal for it would interrupt whatever they came back to do. -->
-        <div class="c-toast__body">
+        <div class="c-toast__body c-toast__body--static">
           <span class="c-toast__title">{toast.title}</span>
           <span class="c-toast__detail">{toast.detail}</span>
           <div class="c-toast__actions">
@@ -72,6 +72,22 @@
             </Button>
           </div>
         </div>
+      {:else if toast.kind === 'notice'}
+        <!-- Something wtm has to tell you, with nowhere to go: a body that is not a button, and the
+             same ✕ as every other card, because a card that cannot be dismissed is the bug that
+             made the opt-in above look frozen. -->
+        <div class="c-toast__body c-toast__body--static">
+          <span class="c-toast__title">{toast.title}</span>
+          <span class="c-toast__detail">{toast.detail}</span>
+        </div>
+        <button
+          class="c-toast__close"
+          title="Dismiss"
+          onclick={() => attention.dismiss(toast.id)}
+        >
+          <Icon name="close" size={12} />
+          <span class="u-visually-hidden">Dismiss</span>
+        </button>
       {:else}
         <button class="c-toast__body" onclick={() => go(toast)}>
           <span class="c-toast__title">

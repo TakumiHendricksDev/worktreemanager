@@ -98,11 +98,21 @@ impl Notifier {
 
     /// Ask the OS for permission. Blocks until the user answers, so callers go through
     /// `blocking()`. Trivially true on the fallback path, where there is nothing to ask.
-    #[must_use]
-    pub fn request_permission(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// `notifications_not_allowed` when the OS will not ask at all — an unsigned build. Its own
+    /// kind rather than `false`, because the frontend's advice for the two is opposite: a user who
+    /// said no can say yes in System Settings, and this app is not listed there to say it for.
+    pub fn request_permission(&self) -> Result<bool, ErrorView> {
         match &self.center {
-            Some(center) => center.request_permission(),
-            None => true,
+            Some(center) => center.request_permission().map_err(|e| match e {
+                wtm_notify::Error::NotAllowed => {
+                    ErrorView::new("notifications_not_allowed", e.to_string())
+                }
+                other => ErrorView::new("notification", other.to_string()),
+            }),
+            None => Ok(true),
         }
     }
 }

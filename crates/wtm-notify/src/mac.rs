@@ -12,8 +12,9 @@
 //!
 //! The 0.3 objc2 bindings make the center's own methods safe; what cannot be safe is defining
 //! an Objective-C class (`define_class!` is a contract with the runtime), sending `init` to a
-//! superclass, and dereferencing the pointer a completion block is handed. Each site carries
-//! its own SAFETY comment; the crate-level lint is `deny`, loosened for this module alone.
+//! superclass, dereferencing the pointer a completion block is handed, and reading a framework's
+//! `extern` constant. Each site carries its own SAFETY comment; the crate-level lint is `deny`,
+//! loosened for this module alone.
 #![allow(unsafe_code)]
 
 use std::ptr::NonNull;
@@ -26,9 +27,9 @@ use objc2::runtime::{Bool, ProtocolObject};
 use objc2::{AnyThread, DefinedClass, define_class, msg_send};
 use objc2_foundation::{NSBundle, NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::{
-    UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent,
-    UNNotificationRequest, UNNotificationResponse, UNNotificationSettings,
-    UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+    UNAuthorizationOptions, UNAuthorizationStatus, UNErrorCode, UNErrorDomain,
+    UNMutableNotificationContent, UNNotificationRequest, UNNotificationResponse,
+    UNNotificationSettings, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
 
 use crate::{ClickPayload, Error, OnClick, Permission};
@@ -93,17 +94,28 @@ impl Center {
         }
     }
 
-    pub(crate) fn request_permission(&self) -> bool {
+    pub(crate) fn request_permission(&self) -> Result<bool, Error> {
         let (tx, rx) = mpsc::channel();
-        let block = RcBlock::new(move |granted: Bool, _error: *mut NSError| {
-            let _ = tx.send(granted.as_bool());
+        let block = RcBlock::new(move |granted: Bool, error: *mut NSError| {
+            // SAFETY: the error pointer is null or valid for the duration of the call, as with the
+            // settings block above, and it is only read here.
+            let refused = unsafe { error.as_ref() }.is_some_and(not_allowed);
+            let _ = tx.send((granted.as_bool(), refused));
         });
         self.center
             .requestAuthorizationWithOptions_completionHandler(
                 UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
                 &block,
             );
-        rx.recv_timeout(PROMPT_TIMEOUT).unwrap_or(false)
+        // The error used to be dropped, which made this indistinguishable from the user clicking
+        // Don't Allow — and made the frontend send them to System Settings, where an unsigned build
+        // is not listed at all. Answered in about ten milliseconds, measured against a probe app
+        // signed the way `tauri build` signs wtm; the timeout is for a human at a real prompt.
+        match rx.recv_timeout(PROMPT_TIMEOUT) {
+            Ok((_, true)) => Err(Error::NotAllowed),
+            Ok((granted, false)) => Ok(granted),
+            Err(_) => Ok(false),
+        }
     }
 
     pub(crate) fn post(
@@ -137,6 +149,20 @@ impl Center {
             .addNotificationRequest_withCompletionHandler(&request, None);
         Ok(())
     }
+}
+
+/// Whether `error` is the daemon refusing to deal with this app at all.
+///
+/// `UNErrorCodeNotificationsNotAllowed` is what `requestAuthorization` answers when
+/// `usernotificationsd` turns the connection away — logged on its side as "Entitlement
+/// 'com.apple.private.usernotifications.bundle-identifiers' required to request user
+/// notifications", because an app signed under one name asking for another bundle is what that
+/// entitlement exists for.
+fn not_allowed(error: &NSError) -> bool {
+    // SAFETY: an immutable framework constant, read once per answer.
+    let domain = unsafe { UNErrorDomain };
+    domain.is_some_and(|domain| *error.domain() == *domain)
+        && error.code() == UNErrorCode::NotificationsNotAllowed.0
 }
 
 struct Ivars {

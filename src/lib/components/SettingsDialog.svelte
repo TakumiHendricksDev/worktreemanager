@@ -529,7 +529,15 @@
           the pane and in the sidebar. Nothing is ever sent about the worktree you are
           looking at.
         </p>
-        {#if attention.blocked}
+        {#if attention.blocked === 'unavailable'}
+          <!-- Not the System Settings advice below: an unsigned build is not listed there, so that
+               sentence would send someone looking for a switch that does not exist. -->
+          <p class="c-field__help c-status--warn">
+            This build of wtm isn't code-signed, and macOS won't deliver notifications for
+            an unsigned app — it isn't listed in System Settings → Notifications either. A
+            session that needs you still shows in the sidebar and on the dock icon.
+          </p>
+        {:else if attention.blocked}
           <!-- Said rather than swallowed: a preference that is on and silent is indistinguishable
                from a broken app, and the fix is somewhere wtm cannot reach. -->
           <p class="c-field__help c-status--warn">

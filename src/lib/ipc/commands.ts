@@ -526,7 +526,10 @@ export const commands = {
   notificationPermission: () =>
     invoke<'granted' | 'denied' | 'prompt'>('notification_permission'),
 
-  /** Ask the OS for permission. Resolves when the user answers the prompt. */
+  /**
+   * Ask the OS for permission. Resolves when the user answers the prompt, and rejects with kind
+   * `notifications_not_allowed` at once when macOS will not ask an unsigned build at all.
+   */
   requestNotificationPermission: () => invoke<boolean>('request_notification_permission'),
 
   // ── open in ──
