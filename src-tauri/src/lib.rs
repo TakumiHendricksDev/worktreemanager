@@ -12,6 +12,7 @@ pub mod bridge;
 pub mod browser;
 pub mod browser_bridge;
 pub mod browser_tools;
+pub mod code;
 pub mod commands;
 pub mod dictate;
 pub mod display;
@@ -277,6 +278,8 @@ pub fn run() {
             commands::stage_agent_attachment,
             commands::configure_session,
             commands::list_worktree_files,
+            code::code_tree,
+            code::code_list_dir,
             commands::answer_approval,
             commands::interrupt_turn,
             commands::list_agent_sessions,

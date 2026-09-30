@@ -210,6 +210,28 @@ export interface TablePageRequest {
   orderBy: string | null;
 }
 
+/** A worktree's files for the Code tab's tree. Mirrors `CodeTreeView` in `src-tauri/src/code.rs`. */
+export interface CodeTree {
+  /** Tracked files and untracked ones that are not ignored, relative to the worktree. */
+  files: string[];
+  /** Ignored paths at their shallowest ignored level. A directory ends in `/`. */
+  ignored: string[];
+  /** Listed paths that are directories on disk: submodules, and links to directories. */
+  dirs: string[];
+  symlinks: string[];
+  /** Listed, but deleted from the working tree. */
+  missing: string[];
+  /** A listing was cut short, so the tree is not the whole worktree. */
+  truncated: boolean;
+}
+
+/** One entry of a directory git did not list. Mirrors `CodeEntryView`. */
+export interface CodeEntry {
+  name: string;
+  kind: 'file' | 'dir' | 'other';
+  symlink: boolean;
+}
+
 export interface Field {
   key: string;
   label: string;

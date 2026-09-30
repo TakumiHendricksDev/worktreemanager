@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use wtm_core::error::{ExecError, GitError};
 use wtm_core::model::{
-    BranchRef, Checkout, CommitId, TrackMode, WorkingTreeStatus, Worktree, WorktreeId,
+    BranchRef, Checkout, CommitId, PathList, TrackMode, WorkingTreeStatus, Worktree, WorktreeId,
 };
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation};
 use wtm_core::ports::git::{AddOptions, BranchFilter, Git};
@@ -244,6 +244,40 @@ impl Git for GitCli {
             QUERY_TIMEOUT,
         )?;
         Ok(porcelain::parse_status(&out))
+    }
+
+    fn files(&self, worktree_path: &Path) -> Result<PathList, GitError> {
+        let out = self.git(
+            worktree_path,
+            &[
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+            QUERY_TIMEOUT,
+        )?;
+        Ok(porcelain::parse_path_list(&out))
+    }
+
+    fn ignored(&self, worktree_path: &Path) -> Result<PathList, GitError> {
+        // `--directory` is what keeps this small: an ignored directory is reported once, as
+        // itself, instead of every file under it. Without it a JavaScript project's
+        // `node_modules` alone is hundreds of thousands of paths.
+        let out = self.git(
+            worktree_path,
+            &[
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+                "-z",
+            ],
+            QUERY_TIMEOUT,
+        )?;
+        Ok(porcelain::parse_path_list(&out))
     }
 
     fn ahead_behind(

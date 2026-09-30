@@ -55,6 +55,7 @@
   } from '../native-menu';
   import { arrange } from '../sidebar';
   import type { Worktree } from '../ipc/types';
+  import type { WorktreeView } from '../worktree-view';
   import LinksButton from './LinksButton.svelte';
   import OpenInButton from './OpenInButton.svelte';
   import Button from './ui/Button.svelte';
@@ -63,10 +64,11 @@
   const {
     worktree,
     projectId,
-    databaseActive,
+    view,
     sidebarCollapsed,
     onsessions,
     ondatabase,
+    oncode,
     onremove,
     onfavorite,
     oninspect,
@@ -75,11 +77,13 @@
   }: {
     worktree: Worktree;
     projectId: string;
-    databaseActive: boolean;
+    /** Which of the worktree's views is showing, for the switch's pressed state. */
+    view: WorktreeView;
     /** Whether the name is a switcher. See the header. */
     sidebarCollapsed: boolean;
     onsessions: () => void;
     ondatabase: () => void;
+    oncode: () => void;
     onremove: () => void;
     onfavorite: () => void;
     oninspect: () => void;
@@ -231,16 +235,22 @@
   <div class="c-worktree-bar__actions">
     <div class="c-worktree-bar__view-switch" aria-label="Worktree view">
       <Button
-        variant={databaseActive ? 'quiet' : 'neutral'}
+        variant={view === 'sessions' ? 'neutral' : 'quiet'}
         size="sm"
-        ariaPressed={!databaseActive}
+        ariaPressed={view === 'sessions'}
         onclick={onsessions}>Sessions</Button
       >
       <Button
-        variant={databaseActive ? 'neutral' : 'quiet'}
+        variant={view === 'database' ? 'neutral' : 'quiet'}
         size="sm"
-        ariaPressed={databaseActive}
+        ariaPressed={view === 'database'}
         onclick={ondatabase}>Database</Button
+      >
+      <Button
+        variant={view === 'code' ? 'neutral' : 'quiet'}
+        size="sm"
+        ariaPressed={view === 'code'}
+        onclick={oncode}>Code</Button
       >
     </div>
 

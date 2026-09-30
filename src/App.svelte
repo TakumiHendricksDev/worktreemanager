@@ -12,6 +12,7 @@
   import { onMount, untrack } from 'svelte';
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
+  import CodeSurface from './lib/components/CodeSurface.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
@@ -62,7 +63,7 @@
    * terminal need the room, and a modal implies a quick decision when a setup run can take
    * minutes. Removal stays a modal — a destructive confirmation should block.
    */
-  let mainView = $state<'worktree' | 'database' | 'new'>('worktree');
+  let mainView = $state<'worktree' | 'database' | 'code' | 'new'>('worktree');
   let showAddProject = $state(false);
   let showRemove = $state(false);
   /**
@@ -444,9 +445,7 @@
       <Sidebar
         onnew={() => (mainView = 'new')}
         onselectworktree={() => (mainView = 'worktree')}
-        detailId={mainView === 'worktree' || mainView === 'database'
-          ? 'worktree-detail'
-          : null}
+        detailId={mainView === 'new' ? null : 'worktree-detail'}
       />
     </aside>
 
@@ -603,10 +602,11 @@
         <Detail
           worktree={workspace.selected}
           projectId={workspace.activeProjectId ?? ''}
-          databaseActive={mainView === 'database'}
+          view={mainView === 'database' || mainView === 'code' ? mainView : 'sessions'}
           {sidebarCollapsed}
           onsessions={() => (mainView = 'worktree')}
           ondatabase={() => (mainView = 'database')}
+          oncode={() => (mainView = 'code')}
           onremove={() => (showRemove = true)}
           oninspect={() => (showInspector = true)}
           onfavorite={() => {
@@ -638,6 +638,7 @@
         visible={booted && mainView === 'database'}
         onsessions={() => (mainView = 'worktree')}
       />
+      <CodeSurface visible={booted && mainView === 'code'} />
     </main>
   </div>
 

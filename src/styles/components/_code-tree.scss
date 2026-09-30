@@ -1,0 +1,98 @@
+/*
+ * The Code tab's project tree.
+ *
+ * Components layer. Indentation is a custom property the row sets from its depth, so the rows are
+ * siblings — see `CodeTree`'s header for why the list is flat.
+ *
+ * # Dimmed, not hidden
+ *
+ * An ignored path is drawn in `--fg-subtle`, the way an IDE colours `node_modules`. It is still
+ * there to open, because "what did the build put in `dist/`" is a reviewing question too; it is
+ * only search that leaves ignored files out.
+ */
+
+.c-code-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-1) 0 var(--sp-3);
+  font-size: var(--step--1);
+}
+
+.c-code-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  text-align: left;
+  padding-inline: calc(var(--sp-2) + var(--depth, 0) * 14px) var(--sp-2);
+  color: var(--fg);
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+  /* A long listing costs layout only for what is on screen (ARCHITECTURE §8). */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 24px;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-cursor {
+    background: var(--accent-soft);
+  }
+
+  &.is-ignored {
+    color: var(--fg-subtle);
+  }
+
+  &.is-missing {
+    color: var(--fg-subtle);
+    text-decoration: line-through;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--border-focus);
+  }
+}
+
+.c-code-tree__twisty {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 12px;
+  color: var(--fg-subtle);
+}
+
+.c-code-tree__icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--fg-muted);
+}
+
+.c-code-tree__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.c-code-tree__mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--fg-subtle);
+}
+
+.c-code-tree__note {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-code-tree__empty {
+  padding: var(--sp-3);
+  color: var(--fg-muted);
+}

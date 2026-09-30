@@ -73,6 +73,7 @@ wtm-agent  = { workspace = true }
 wtm-dictate = { workspace = true }
 wtm-update = { workspace = true }
 wtm-db      = { workspace = true }
+wtm-code    = { workspace = true }
 wtm-git    = { workspace = true }
 wtm-render = { workspace = true }
 parking_lot = { workspace = true }

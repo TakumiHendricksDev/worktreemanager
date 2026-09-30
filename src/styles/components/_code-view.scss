@@ -1,0 +1,92 @@
+/*
+ * The Code tab: a project tree on the left, the file being read on the right.
+ *
+ * Components layer, one block. Hidden with `display: none` rather than unmounted, for the reason
+ * `_surface.scss` gives: the open folders and the files in their editors outlive a trip to
+ * another view.
+ *
+ * The explorer is resized with `resize: horizontal` rather than a splitter widget. The browser's
+ * handle is mouse-only, which is acceptable here because nothing depends on the width: the tree
+ * reads the same at any size, and the default fits a deep path.
+ */
+
+.c-code-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+
+  &.is-hidden {
+    display: none;
+  }
+}
+
+.c-code-view__body {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-code-view__explorer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  width: 280px;
+  min-width: 180px;
+  max-width: 60%;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  resize: horizontal;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.c-code-view__explorer-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-code-view__explorer-title {
+  flex: 1 1 auto;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-code-view__notice {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--info-line);
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  background: var(--info-soft);
+}
+
+.c-code-view__notice--error {
+  border-bottom-color: var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.c-code-view__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-code-view__placeholder {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  padding: var(--sp-6);
+  font-size: var(--step--1);
+  color: var(--fg-muted);
+}

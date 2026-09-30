@@ -27,7 +27,9 @@
 use std::path::PathBuf;
 
 use wtm_core::error::GitError;
-use wtm_core::model::{BranchRef, Checkout, CommitId, WorkingTreeStatus, Worktree, WorktreeId};
+use wtm_core::model::{
+    BranchRef, Checkout, CommitId, PathList, WorkingTreeStatus, Worktree, WorktreeId,
+};
 
 /// Prefix git uses for local branch refs.
 const HEADS_PREFIX: &str = "refs/heads/";
@@ -92,6 +94,27 @@ pub fn parse_worktree_list(output: &str) -> Result<Vec<Worktree>, GitError> {
     }
 
     Ok(worktrees)
+}
+
+/// Parse a `-z` path listing: `git ls-files -z` and its relatives.
+///
+/// Every path is terminated by a NUL, so a complete listing ends in one. Anything after the last
+/// NUL is therefore a listing the runner cut off — its capture is capped, and it appends a marker
+/// where it stopped — and that fragment is a path that does not exist, so it is dropped and the
+/// list is reported truncated rather than handed on with a nonsense entry at the end.
+pub fn parse_path_list(output: &str) -> PathList {
+    let (complete, rest) = match output.rfind('\0') {
+        Some(end) => (&output[..end], &output[end + 1..]),
+        None => ("", output),
+    };
+    PathList {
+        paths: complete
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        truncated: !rest.is_empty(),
+    }
 }
 
 /// Parse `git status --porcelain=v1 -z`.
@@ -488,5 +511,31 @@ mod tests {
         let branches = parse_branch_lines("origin/main\nupstream/main\n", Some("origin"));
         assert_eq!(branches.len(), 1);
         assert_eq!(branches[0].as_str(), "main");
+    }
+
+    #[test]
+    fn a_path_list_keeps_every_nul_terminated_path_including_odd_ones() {
+        // A space and a newline are both legal in a filename, which is the whole reason for -z.
+        let list = parse_path_list("src/a b.py\0docs/line\nbreak.md\0README.md\0");
+
+        assert_eq!(
+            list.paths,
+            ["src/a b.py", "docs/line\nbreak.md", "README.md"]
+        );
+        assert!(!list.truncated);
+    }
+
+    #[test]
+    fn a_path_list_cut_off_by_the_runner_drops_the_partial_path_and_says_so() {
+        // What the runner leaves when it stops capturing: a path it read half of, then its marker.
+        let list = parse_path_list("src/one.py\0src/tw\n[output truncated by wtm]\n");
+
+        assert_eq!(list.paths, ["src/one.py"]);
+        assert!(list.truncated);
+    }
+
+    #[test]
+    fn an_empty_listing_is_an_empty_list_and_not_a_truncated_one() {
+        assert_eq!(parse_path_list(""), PathList::default());
     }
 }

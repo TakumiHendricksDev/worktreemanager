@@ -47,13 +47,13 @@ pub type AppState<'a> = State<'a, Arc<App>>;
 /// later is one function rather than a silent reset of everyone's setting.
 const OPENER_PREF: &str = "ui.opener";
 
-type Reply<T> = Result<T, ErrorView>;
+pub(crate) type Reply<T> = Result<T, ErrorView>;
 
 /// Run blocking work off the webview thread.
 ///
 /// The one helper every command goes through, so no command can accidentally block the
 /// UI thread by forgetting.
-async fn blocking<T, F>(work: F) -> Reply<T>
+pub(crate) async fn blocking<T, F>(work: F) -> Reply<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Reply<T> + Send + 'static,
@@ -2097,7 +2097,8 @@ pub async fn configure_session(
 ///
 /// It is also why this is `git` rather than a `walkdir` dependency: the ignore rules are already
 /// implemented, correctly, by the tool that owns them, and re-implementing `.gitignore` semantics
-/// well enough to agree with the repository is not a small job.
+/// well enough to agree with the repository is not a small job. It is `Git::files`, the listing
+/// the Code tab's tree is drawn from, so the two can never disagree about what a worktree holds.
 ///
 /// Paths come back relative to the worktree root and are handed to the model that way. Absolute
 /// paths would be correct too, but they are long, they bury the part that identifies the file, and
@@ -2106,46 +2107,19 @@ pub async fn configure_session(
 pub async fn list_worktree_files(app: AppState<'_>, worktree_id: String) -> Reply<Vec<String>> {
     let app = Arc::clone(&app);
     blocking(move || {
-        let inv = wtm_core::ports::exec::Invocation::new(
-            vec![
-                "git".to_owned(),
-                "ls-files".to_owned(),
-                "--cached".to_owned(),
-                "--others".to_owned(),
-                "--exclude-standard".to_owned(),
-                // NUL-separated, because a filename may legally contain a newline and splitting on
-                // one would turn a single odd path into two paths that do not exist.
-                "-z".to_owned(),
-            ],
-            std::path::PathBuf::from(&worktree_id),
-            FILES_TIMEOUT_MS,
-        );
-
-        // `run_allow_failure`: a worktree that has been removed from disk, or a directory that is
-        // not a repository, is an empty list rather than a banner. This backs a convenience, and
-        // the composer still works without it — the user types the path.
-        let output = app
-            .runner
-            .run_allow_failure(&inv, &wtm_core::ports::exec::CancelToken::new())
-            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
-        if !output.is_success() {
-            tracing::debug!(stderr = %output.stderr, "could not list worktree files");
-            return Ok(Vec::new());
+        // An error is an empty list rather than a banner: a worktree that has been removed from
+        // disk, or a directory that is not a repository. This backs a convenience, and the
+        // composer still works without it — the user types the path.
+        match app.git.files(std::path::Path::new(&worktree_id)) {
+            Ok(listing) => Ok(listing.paths),
+            Err(error) => {
+                tracing::debug!(%error, "could not list worktree files");
+                Ok(Vec::new())
+            }
         }
-
-        Ok(output
-            .stdout
-            .split('\0')
-            .filter(|p| !p.is_empty())
-            .map(str::to_owned)
-            .collect())
     })
     .await
 }
-
-/// How long to wait for `git ls-files`. Generous for a cold cache on a large repository, short
-/// enough that a hung git does not leave the `@` list spinning.
-const FILES_TIMEOUT_MS: u64 = 5_000;
 
 /// Ask a session to stop the turn it is running.
 #[tauri::command]

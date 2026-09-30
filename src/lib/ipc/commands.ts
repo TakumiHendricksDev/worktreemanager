@@ -28,6 +28,8 @@ import type {
   BrowserView,
   ApprovalAnswer,
   Capability,
+  CodeEntry,
+  CodeTree,
   CreateOutcome,
   Doctor,
   Form,
@@ -433,6 +435,14 @@ export const commands = {
     invoke<QueryResult>('database_table_page', { session, request }),
   cancelDatabaseQuery: (session: string) =>
     invoke<void>('cancel_database_query', { session }),
+
+  // ── the Code tab ──
+  /** Every file git lists in the worktree, the ignored paths, and which ones are not plain. */
+  codeTree: (projectId: string, worktreeId: string) =>
+    invoke<CodeTree>('code_tree', { projectId, worktreeId }),
+  /** One level of a directory git did not list — ignored, a submodule, or a link. */
+  codeListDir: (projectId: string, worktreeId: string, dir: string) =>
+    invoke<CodeEntry[]>('code_list_dir', { projectId, worktreeId, dir }),
 
   /** Opens an http/https URL. The scheme is validated in Rust — see `open_url`. */
   openUrl: (url: string) => invoke<void>('open_url', { url }),

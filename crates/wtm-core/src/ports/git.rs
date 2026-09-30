@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::GitError;
-use crate::model::{BranchRef, CommitId, TrackMode, WorkingTreeStatus, Worktree};
+use crate::model::{BranchRef, CommitId, PathList, TrackMode, WorkingTreeStatus, Worktree};
 
 /// Which refs to list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,18 @@ pub trait Git: Send + Sync {
     fn rev_parse(&self, repo_root: &Path, rev: &str) -> Result<Option<CommitId>, GitError>;
 
     fn status(&self, worktree_path: &Path) -> Result<WorkingTreeStatus, GitError>;
+
+    /// Every file worth showing in a worktree: tracked, plus untracked-but-not-ignored.
+    ///
+    /// Relative to the worktree, `/`-separated. Git owns the ignore rules, so this is the
+    /// question asked of git rather than a directory walk that would have to agree with it.
+    fn files(&self, worktree_path: &Path) -> Result<PathList, GitError>;
+
+    /// What the worktree ignores, each collapsed to its shallowest ignored path.
+    ///
+    /// `node_modules/` rather than the hundreds of thousands of files beneath it; a directory
+    /// ends in `/`. A single ignored file inside a tracked directory is listed as itself.
+    fn ignored(&self, worktree_path: &Path) -> Result<PathList, GitError>;
 
     /// Divergence of `branch` from `base`, as `(ahead, behind)`.
     fn ahead_behind(
@@ -188,6 +200,12 @@ mod tests {
             unused!()
         }
         fn status(&self, _: &Path) -> Result<WorkingTreeStatus, GitError> {
+            unused!()
+        }
+        fn files(&self, _: &Path) -> Result<PathList, GitError> {
+            unused!()
+        }
+        fn ignored(&self, _: &Path) -> Result<PathList, GitError> {
             unused!()
         }
         fn ahead_behind(&self, _: &Path, _: &BranchRef, _: &str) -> Result<(u32, u32), GitError> {

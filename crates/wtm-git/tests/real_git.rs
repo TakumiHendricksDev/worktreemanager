@@ -269,6 +269,38 @@ fn status_distinguishes_staged_dirty_and_untracked() {
 }
 
 #[test]
+fn files_lists_tracked_and_untracked_but_leaves_ignored_to_ignored() {
+    let fixture = GitFixture::new();
+    let git = git_cli();
+
+    fixture.commit(".gitignore", "node_modules/\n*.log\n", "ignore");
+    fixture.write("src/app.py", "print(1)\n");
+    fixture.write("node_modules/left-pad/index.js", "module.exports = 1;\n");
+    fixture.write("node_modules/left-pad/package.json", "{}\n");
+    fixture.write("src/debug.log", "noise\n");
+
+    let files = git.files(fixture.root()).unwrap();
+    assert!(files.paths.contains(&".gitignore".to_owned()));
+    assert!(files.paths.contains(&"README.md".to_owned()));
+    assert!(
+        files.paths.contains(&"src/app.py".to_owned()),
+        "untracked is shown"
+    );
+    assert!(
+        files.paths.iter().all(|p| !p.starts_with("node_modules")),
+        "ignored files are not in the listing: {:?}",
+        files.paths
+    );
+    assert!(!files.truncated);
+
+    // An ignored directory comes back once, as itself, however much is under it — and an ignored
+    // file inside a directory that is not ignored comes back as itself.
+    let mut ignored = git.ignored(fixture.root()).unwrap().paths;
+    ignored.sort();
+    assert_eq!(ignored, ["node_modules/", "src/debug.log"]);
+}
+
+#[test]
 fn ahead_behind_reports_divergence_in_the_right_direction() {
     let fixture = GitFixture::new();
     // A base with one extra commit, and a branch with two of its own.
