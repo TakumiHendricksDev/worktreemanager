@@ -234,7 +234,8 @@
        *
        * ⌘F is left alone deliberately, even though it is `forward-char` in readline: the sidebar
        * owns it, and taking it away from the filter to give it to the shell is a different
-       * trade-off that nobody has asked for.
+       * trade-off that nobody has asked for. The database view is the exception — with a grid on
+       * screen ⌘F finds in it, and `DatabaseSurface` explains how it takes the chord.
        */
       if (meta && event.key === 'r') {
         const target = event.target as HTMLElement | null;

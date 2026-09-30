@@ -16,6 +16,12 @@
    *
    * A right-click offers the other formats and hands the selection to an agent; Enter, Space or a
    * double-click opens the focused cell in `DatabaseValue`.
+   *
+   * # Find
+   *
+   * `openFind` is ⌘F's target — `DatabaseSurface` routes the chord here. It searches the rows this
+   * grid holds, which for table data is one page; WHERE is what searches the table. A match moves
+   * the selection, so ⌘C straight after Enter copies what was found.
    */
   import { onDestroy, tick, untrack } from 'svelte';
 
@@ -33,6 +39,8 @@
   import type { DatabaseRelation, QueryCell, QueryResult } from '../ipc/types';
   import { item, popUp, separator, type MenuEntry } from '../native-menu';
   import DatabaseValue from './DatabaseValue.svelte';
+  import Button from './ui/Button.svelte';
+  import Icon from './ui/Icon.svelte';
 
   const {
     result,
@@ -44,6 +52,7 @@
     relation = null,
     sendLabel = null,
     onsend,
+    findPlaceholder = 'Find in these rows',
   }: {
     result: QueryResult;
     /** Where this page starts in the whole relation, so page two is numbered from 101. */
@@ -57,6 +66,7 @@
     /** The agent a selection would be sent to, or null when this worktree has none. */
     sendLabel?: string | null;
     onsend?: (selection: SelectedCells) => void;
+    findPlaceholder?: string;
   } = $props();
 
   let grid = $state<HTMLTableElement | null>(null);
@@ -69,8 +79,51 @@
   /** Whether `DatabaseValue` is open. It shows whichever cell has focus. */
   let viewing = $state(false);
 
-  /** Result row indices in display order. Every row today; find will narrow it. */
-  const visible = $derived(result.rows.map((_, index) => index));
+  let finding = $state(false);
+  let findInput = $state<HTMLInputElement | null>(null);
+  /** What is typed, and what is searched for — the second trails the first by a few keystrokes. */
+  let needle = $state('');
+  let query = $state('');
+  let findTimer: ReturnType<typeof setTimeout> | undefined;
+  let onlyMatches = $state(false);
+  let matchIndex = $state(0);
+
+  /** `row:col` of every matching cell, in result-row space so hiding rows does not change it. */
+  const matched = $derived.by(() => {
+    const found = new Set<string>();
+    const lower = query.toLowerCase();
+    if (!finding || lower === '') return found;
+    result.rows.forEach((row, index) =>
+      row.forEach((cell, col) => {
+        if (cell.value?.toLowerCase().includes(lower)) found.add(`${index}:${col}`);
+      }),
+    );
+    return found;
+  });
+
+  /** Result row indices in display order: every row, or only those with a match. */
+  const visible = $derived.by(() => {
+    const all = result.rows.map((_, index) => index);
+    if (!onlyMatches || matched.size === 0) return all;
+    return all.filter((index) =>
+      result.columns.some((_, col) => matched.has(`${index}:${col}`)),
+    );
+  });
+
+  /** The matches in reading order, addressed as the grid shows them. */
+  const matches = $derived.by(() => {
+    const list: CellAt[] = [];
+    if (matched.size === 0) return list;
+    visible.forEach((index, row) =>
+      result.columns.forEach((_, col) => {
+        if (matched.has(`${index}:${col}`)) list.push({ row, col });
+      }),
+    );
+    return list;
+  });
+
+  /** The match Enter last moved to. Ringed apart from focus, which leaves the grid for the input. */
+  const current = $derived(matches[matchIndex] ?? null);
   const lastRow = $derived(visible.length - 1);
   const lastCol = $derived(result.columns.length - 1);
   const rect = $derived(anchor && focus ? rectOf(anchor, focus) : null);
@@ -84,6 +137,67 @@
       viewing = false;
     });
   });
+
+  // The same when "only matches" hides or restores rows: a position on screen is a different row.
+  $effect.pre(() => {
+    void visible;
+    untrack(() => {
+      anchor = null;
+      focus = null;
+    });
+  });
+
+  /** ⌘F. Reopening keeps the last search and selects it, so typing replaces it. */
+  export async function openFind(): Promise<void> {
+    finding = true;
+    await tick();
+    findInput?.focus();
+    findInput?.select();
+  }
+
+  function closeFind(): void {
+    finding = false;
+    onlyMatches = false;
+    grid?.focus({ preventScroll: true });
+  }
+
+  function typed(event: Event): void {
+    needle = (event.currentTarget as HTMLInputElement).value;
+    clearTimeout(findTimer);
+    // Short enough to feel live, long enough that `1` then `12` does not scan the rows twice.
+    findTimer = setTimeout(() => {
+      query = needle.trim();
+      matchIndex = 0;
+      void tick().then(() => showMatch(0));
+    }, 80);
+  }
+
+  function showMatch(index: number): void {
+    const count = matches.length;
+    if (count === 0) return;
+    matchIndex = ((index % count) + count) % count;
+    const at = matches[matchIndex];
+    if (!at) return;
+    select(at);
+    reveal(at);
+  }
+
+  function findKey(event: KeyboardEvent): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      showMatch(matchIndex + (event.shiftKey ? -1 : 1));
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeFind();
+    }
+  }
+
+  /** Where the selection lands after hiding rows: back on the match the search was on. */
+  async function toggleOnlyMatches(): Promise<void> {
+    onlyMatches = !onlyMatches;
+    await tick();
+    showMatch(matchIndex);
+  }
 
   function select(from: CellAt, to: CellAt = from): void {
     anchor = from;
@@ -382,7 +496,10 @@
     };
   });
 
-  onDestroy(() => clearTimeout(copyTimer));
+  onDestroy(() => {
+    clearTimeout(copyTimer);
+    clearTimeout(findTimer);
+  });
 
   function sortGlyph(column: string): string {
     if (sortColumn !== column) return '⇅';
@@ -392,6 +509,61 @@
 
 {#if result.columns.length > 0}
   <div class="c-database__result-body">
+    {#if finding}
+      <div class="c-database__find" role="search">
+        <span class="c-database__search-icon"><Icon name="search" size={14} /></span>
+        <input
+          class="c-database__find-input"
+          type="search"
+          value={needle}
+          oninput={typed}
+          onkeydown={findKey}
+          placeholder={findPlaceholder}
+          aria-label={findPlaceholder}
+          autocomplete="off"
+          spellcheck="false"
+          bind:this={findInput}
+        />
+        <span class="c-database__find-count" role="status">
+          {#if query === ''}
+            &nbsp;
+          {:else if matches.length === 0}
+            No matches
+          {:else}
+            {(matchIndex + 1).toLocaleString()} / {matches.length.toLocaleString()}
+          {/if}
+        </span>
+        <Button
+          variant="quiet"
+          size="sm"
+          icon="sm"
+          ariaLabel="Previous match"
+          disabled={matches.length === 0}
+          onclick={() => showMatch(matchIndex - 1)}>↑</Button
+        >
+        <Button
+          variant="quiet"
+          size="sm"
+          icon="sm"
+          ariaLabel="Next match"
+          disabled={matches.length === 0}
+          onclick={() => showMatch(matchIndex + 1)}>↓</Button
+        >
+        <span class="c-database__find-toggle">
+          <Button
+            variant="quiet"
+            size="sm"
+            ariaPressed={onlyMatches}
+            disabled={query === ''}
+            title="Hide the rows with no match"
+            onclick={() => void toggleOnlyMatches()}>Only matches</Button
+          >
+        </span>
+        <Button variant="inline" size="sm" ariaLabel="Close find" onclick={closeFind}>
+          <Icon name="close" size={12} />
+        </Button>
+      </div>
+    {/if}
     <div class="c-database__grid-wrap">
       <table
         class="c-database__grid"
@@ -465,6 +637,10 @@
                 <td
                   class="c-database__cell"
                   class:is-selected={selected}
+                  class:is-match={matched.has(`${index}:${col}`)}
+                  class:is-current={current !== null &&
+                    current.row === row &&
+                    current.col === col}
                   class:is-focus={focus !== null && focus.row === row && focus.col === col}
                   aria-selected={selected}
                   data-row={row}

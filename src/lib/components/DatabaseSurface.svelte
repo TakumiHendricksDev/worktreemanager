@@ -194,6 +194,34 @@ password = "{{ env.DB_PASSWORD }}"`;
     return () => window.removeEventListener('focus', onFocus);
   });
 
+  let tableGrid = $state<ReturnType<typeof DatabaseResult> | null>(null);
+  let queryGrid = $state<ReturnType<typeof DatabaseResult> | null>(null);
+
+  /*
+   * ⌘F finds in the grid while this view is showing.
+   *
+   * The sidebar has owned ⌘F everywhere, focusing its worktree filter — but with a table on screen
+   * that is not what anyone reaching for find means. Capture phase, so this runs before the
+   * sidebar's listener and can stop it. Two places keep their own: the SQL editor, where
+   * CodeMirror's search panel is find, and the sidebar itself.
+   */
+  onMount(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!visible || !(event.metaKey || event.ctrlKey) || event.key !== 'f') return;
+      if (event.shiftKey || event.altKey) return;
+      const target = event.target as Element | null;
+      if (target?.closest?.('.cm-editor, .c-sidebar')) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      const grid = current?.mode === 'query' ? queryGrid : tableGrid;
+      if (!grid) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void grid.openFind();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
+
   function chooseProfile(event: Event): void {
     const id = (event.currentTarget as HTMLSelectElement).value;
     if (!contextKey || !projectId || !worktreeId) return;
@@ -733,6 +761,8 @@ password = "{{ env.DB_PASSWORD }}"`;
                   <div class="c-database__result-empty">Loading table rows…</div>
                 {:else if typedTable}
                   <DatabaseResult
+                    bind:this={tableGrid}
+                    findPlaceholder="Find on this page"
                     result={typedTable}
                     rowOffset={current.offset}
                     sortable={true}
@@ -822,6 +852,7 @@ password = "{{ env.DB_PASSWORD }}"`;
                 <div class="c-database__result-empty">Running query…</div>
               {:else if current.queryResult}
                 <DatabaseResult
+                  bind:this={queryGrid}
                   result={current.queryResult}
                   sendLabel={destination?.label ?? null}
                   onsend={(selection) => sendToAgent(selection, 'query')}

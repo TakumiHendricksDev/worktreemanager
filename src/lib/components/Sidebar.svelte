@@ -127,9 +127,14 @@
    * Registered here rather than alongside the other shortcuts in `App.svelte` because the
    * thing it acts on is this component's input element. Reaching it from the parent would
    * mean exporting a ref upward for one keystroke.
+   *
+   * Unless something nearer the keystroke already took it. The database view's grid and
+   * CodeMirror's search panel both handle ⌘F and cancel it, and without this check the filter
+   * stole focus from the find field each of them had just opened.
    */
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
         event.preventDefault();
         searchEl?.focus();
