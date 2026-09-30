@@ -209,6 +209,7 @@ pub fn serve_stdio() {
     let agents = agents_from_env();
     let awareness = std::env::var(handoff::AWARENESS_ENV).as_deref() == Ok("on");
     let browser = std::env::var(handoff::BROWSER_TOOLS_ENV).as_deref() == Ok("on");
+    let code = std::env::var(handoff::CODE_TOOLS_ENV).as_deref() == Ok("on");
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -229,8 +230,8 @@ pub fn serve_stdio() {
 
         let reply = match method {
             "initialize" => Some(result(&id, &initialize(&params))),
-            "tools/list" => Some(result(&id, &tools(&agents, awareness, browser))),
-            "tools/call" => Some(result(&id, &call(&params, browser))),
+            "tools/list" => Some(result(&id, &tools(&agents, awareness, browser, code))),
+            "tools/call" => Some(result(&id, &call(&params, browser, code))),
             // `ping` is in the spec and costs one line. Everything else gets the standard
             // method-not-found rather than silence, so a client waiting on a reply is not wedged.
             "ping" => Some(result(&id, &json!({}))),
@@ -298,7 +299,7 @@ fn initialize(params: &Value) -> Value {
 /// `enum` on `agent` is the other half. Without it a model guesses an id — "codex-cli", "gpt" — and
 /// gets an error it has to recover from; with it the choice is closed and the labels tell it which is
 /// which.
-fn tools(agents: &[(String, String)], awareness: bool, browser: bool) -> Value {
+fn tools(agents: &[(String, String)], awareness: bool, browser: bool, code: bool) -> Value {
     let ids: Vec<&str> = agents.iter().map(|(id, _)| id.as_str()).collect();
     let roster = agents
         .iter()
@@ -442,12 +443,25 @@ fn tools(agents: &[(String, String)], awareness: bool, browser: bool) -> Value {
     if browser && let Some(entries) = listed["tools"].as_array_mut() {
         entries.extend(crate::browser_tools::definitions());
     }
+    // Last, for the same reason the browser's come after the coordination tools.
+    if code && let Some(entries) = listed["tools"].as_array_mut() {
+        entries.extend(crate::code_tools::definitions());
+    }
     listed
 }
 
 /// Run a `tools/call` by asking the app.
-fn call(params: &Value, browser: bool) -> Value {
+fn call(params: &Value, browser: bool, code: bool) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    if code && name.starts_with(crate::code_tools::PREFIX) {
+        return call_code(
+            name,
+            params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        );
+    }
     // A browser tool's arguments cross untouched: the app validates them, and a name list here
     // would be a second copy of `browser_tools::definitions` that could drift from the first.
     if browser && name.starts_with(crate::browser_tools::PREFIX) {
@@ -556,6 +570,7 @@ fn call(params: &Value, browser: bool) -> Value {
             tasks,
             concurrency,
             browser: None,
+            code: None,
         },
     ) {
         Ok(response) if response.ok => json!({
@@ -563,6 +578,32 @@ fn call(params: &Value, browser: bool) -> Value {
             "isError": false,
         }),
         Ok(response) => tool_error(response.error.as_deref().unwrap_or("the handoff failed")),
+        Err(error) => tool_error(&error),
+    }
+}
+
+/// Forward one `code_*` call. Text only: nothing these tools answer is an image.
+fn call_code(name: &str, arguments: Value) -> Value {
+    let Ok(token) = std::env::var(handoff::TOKEN_ENV) else {
+        return tool_error("this bridge was started without a session token");
+    };
+    let socket = std::env::var(handoff::SOCKET_ENV)
+        .map_or_else(|_| socket_path().unwrap_or_default(), PathBuf::from);
+    let request = Request {
+        token,
+        action: handoff::Action::Code,
+        code: Some(handoff::CodeCall {
+            tool: name.to_owned(),
+            args: arguments,
+        }),
+        ..Request::default()
+    };
+    match ask(&socket, &request) {
+        Ok(response) if response.ok => json!({
+            "content": [{ "type": "text", "text": response.text.unwrap_or_default() }],
+            "isError": false,
+        }),
+        Ok(response) => tool_error(response.error.as_deref().unwrap_or("the code tool failed")),
         Err(error) => tool_error(&error),
     }
 }
@@ -669,6 +710,7 @@ mod tests {
             ],
             false,
             false,
+            false,
         );
         let entries = listed["tools"]
             .as_array()
@@ -693,8 +735,8 @@ mod tests {
     #[test]
     fn session_awareness_adds_one_parameterless_tool_only_when_enabled() {
         let agents = [("codex".to_owned(), "Codex".to_owned())];
-        let disabled = tools(&agents, false, false);
-        let enabled = tools(&agents, true, false);
+        let disabled = tools(&agents, false, false, false);
+        let enabled = tools(&agents, true, false, false);
 
         assert_eq!(disabled["tools"].as_array().map(Vec::len), Some(3));
         assert_eq!(enabled["tools"].as_array().map(Vec::len), Some(4));
@@ -726,8 +768,8 @@ mod tests {
     #[test]
     fn browser_tools_are_listed_only_when_the_bridge_is_told_they_are_on() {
         let agents = [("codex".to_owned(), "Codex".to_owned())];
-        let without = tools(&agents, false, false);
-        let with = tools(&agents, false, true);
+        let without = tools(&agents, false, false, false);
+        let with = tools(&agents, false, true, false);
         let base = without["tools"].as_array().map(Vec::len).unwrap();
         let listed = with["tools"].as_array().unwrap();
         assert_eq!(
@@ -745,9 +787,56 @@ mod tests {
     }
 
     #[test]
+    fn the_code_tools_are_listed_last_and_only_with_their_flag() {
+        let agents = [("claude".to_owned(), "Claude Code".to_owned())];
+        let names = |listed: &Value| -> Vec<String> {
+            listed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let without = names(&tools(&agents, false, false, false));
+        let with = names(&tools(&agents, false, false, true));
+
+        assert!(
+            without.iter().all(|n| !n.starts_with("code_")),
+            "{without:?}"
+        );
+        assert_eq!(
+            &with[..without.len()],
+            &without[..],
+            "the tools before them do not move"
+        );
+        assert_eq!(
+            &with[without.len()..],
+            ["code_read_comments", "code_resolve_comment"]
+        );
+    }
+
+    #[test]
+    fn a_code_tool_is_unknown_to_a_bridge_started_without_the_flag() {
+        let reply = call(
+            &json!({ "name": "code_read_comments", "arguments": {} }),
+            false,
+            false,
+        );
+        assert_eq!(reply["isError"], true);
+        assert!(
+            reply["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("no tool named"),
+            "{reply}"
+        );
+    }
+
+    #[test]
     fn a_browser_tool_is_unknown_to_a_bridge_started_without_the_flag() {
         let reply = call(
             &json!({ "name": "browser_snapshot", "arguments": {} }),
+            false,
             false,
         );
         assert_eq!(reply["isError"], true);

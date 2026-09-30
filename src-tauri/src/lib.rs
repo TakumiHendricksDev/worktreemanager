@@ -14,6 +14,7 @@ pub mod browser_bridge;
 pub mod browser_tools;
 pub mod code;
 pub mod code_comments;
+pub mod code_tools;
 pub mod commands;
 pub mod dictate;
 pub mod display;

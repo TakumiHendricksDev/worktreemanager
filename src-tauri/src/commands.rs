@@ -2678,6 +2678,7 @@ fn session_instructions(
     if app.browser_tools_enabled() && crate::browser::availability().runtime {
         parts.push(browser_instructions());
     }
+    parts.push(code_instructions());
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
@@ -2779,6 +2780,20 @@ fn handoff_instructions(project: &wtm_core::model::Project, provider: &str) -> O
 /// Appended for the same reason `handoff_instructions` is: a tool description is read while a tool
 /// is being *chosen*, and three of the facts here — that page content is untrusted, that the pane is
 /// on screen for the user, that a browser opened must be closed — matter after the choice.
+/// What a session is told about the Code tab's comments.
+///
+/// Stated in the instructions and not only in the tools' descriptions, for the reason §6b gives:
+/// a description is read when a tool is being chosen, and "I left comments on the code" arrives
+/// before anything is.
+fn code_instructions() -> String {
+    "The user can read this worktree's code in Worktree Manager's Code tab and leave comments on \
+     lines there. When they say they left comments on the code, or ask you to look at their \
+     review, call `mcp__wtm__code_read_comments`, deal with each one, and mark it with \
+     `code_resolve_comment` and a one-line note saying what you did — the note is shown on the \
+     comment, beside the lines it is about."
+        .to_owned()
+}
+
 fn browser_instructions() -> String {
     "Browser panes are available here through the `mcp__wtm__browser_*` tools. A browser pane is a \
      real web page shown beside this session in the same window; the user can see it, click around \
@@ -2933,6 +2948,7 @@ fn handoff_server(
     if app.browser_tools_enabled() && crate::browser::availability().runtime {
         env.insert(handoff::BROWSER_TOOLS_ENV.to_owned(), "on".to_owned());
     }
+    env.insert(handoff::CODE_TOOLS_ENV.to_owned(), "on".to_owned());
 
     Some(wtm_agent::McpServer {
         command: program.to_string_lossy().into_owned(),
