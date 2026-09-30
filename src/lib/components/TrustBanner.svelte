@@ -15,6 +15,7 @@
    */
   import type { Project } from '../ipc/types';
   import { errorMessage } from '../ipc/types';
+  import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
 
@@ -30,6 +31,23 @@
     failure = null;
     try {
       await workspace.decideTrust(project.trust.path, approve);
+    } catch (e) {
+      failure = errorMessage(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // Unconfirmed, unlike the title bar's Remove, because this card already is the question: it names
+  // the project, says why wtm could not load it, and offers removal as one of two answers. Its panes
+  // still close, for the reason `sessions.closeProject` gives.
+  async function remove() {
+    const { id, root } = project;
+    busy = true;
+    failure = null;
+    try {
+      await workspace.removeProject(root);
+      sessions.closeProject(id);
     } catch (e) {
       failure = errorMessage(e);
     } finally {
@@ -97,10 +115,11 @@
       <strong class="c-trust__who">{project.name} could not be loaded</strong>
     </header>
     <p class="c-status--danger">{project.problem}</p>
+    {#if failure}
+      <p class="c-status--danger">{failure}</p>
+    {/if}
     <div class="c-trust__actions">
-      <Button variant="neutral" onclick={() => workspace.removeProject(project.root)}>
-        Remove from wtm
-      </Button>
+      <Button variant="neutral" onclick={remove} disabled={busy}>Remove from wtm</Button>
       <Button variant="accent" onclick={() => workspace.refreshProjects()}>Retry</Button>
     </div>
   {/if}

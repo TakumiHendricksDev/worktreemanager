@@ -15,6 +15,7 @@
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
+  import RemoveProjectDialog from './lib/components/RemoveProjectDialog.svelte';
   import RemoveWorktreeDialog from './lib/components/RemoveWorktreeDialog.svelte';
   import Inspector from './lib/components/Inspector.svelte';
   import SessionSurface from './lib/components/SessionSurface.svelte';
@@ -29,7 +30,7 @@
   import Icon from './lib/components/ui/Icon.svelte';
   import Logo from './lib/components/ui/Logo.svelte';
   import { commands } from './lib/ipc/commands';
-  import { errorMessage, type NotificationClick } from './lib/ipc/types';
+  import { errorMessage, type NotificationClick, type Project } from './lib/ipc/types';
   import { attention } from './lib/state/attention.svelte';
   import { composerPrefs } from './lib/state/composer.svelte';
   import { dictation } from './lib/state/dictate.svelte';
@@ -63,6 +64,13 @@
   let mainView = $state<'worktree' | 'database' | 'new'>('worktree');
   let showAddProject = $state(false);
   let showRemove = $state(false);
+  /**
+   * The project being removed, captured when the dialog opens.
+   *
+   * Not `workspace.activeProject` read at render time: removal selects the next project before it
+   * finishes, and a dialog reading the active one would spend its last frames naming that instead.
+   */
+  let removingProject = $state<Project | null>(null);
   let showSettings = $state(false);
   let showInspector = $state(false);
   /**
@@ -398,6 +406,7 @@
     {sidebarCollapsed}
     ontogglesidebar={toggleSidebar}
     onaddproject={addProject}
+    onremoveproject={() => (removingProject = workspace.activeProject)}
     onsettings={() => (showSettings = true)}
   />
 
@@ -606,6 +615,13 @@
 
   {#if showAddProject}
     <AddProjectDialog onclose={() => (showAddProject = false)} />
+  {/if}
+
+  {#if removingProject}
+    <RemoveProjectDialog
+      project={removingProject}
+      onclose={() => (removingProject = null)}
+    />
   {/if}
 
   {#if showRemove && workspace.selected && workspace.activeProjectId}

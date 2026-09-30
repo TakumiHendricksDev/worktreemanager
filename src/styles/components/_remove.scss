@@ -1,8 +1,9 @@
 /*
- * Remove worktree.
+ * Remove worktree, and remove repository.
  *
  * Only two rules survive as its own: the path being removed, and the branch line under it.
- * Everything else is Dialog, Choice, PreflightList, c-note and the status colours.
+ * Everything else is Dialog, Choice, PreflightList, c-note and the status colours. The repository
+ * dialog uses the first alone: its root is the same kind of answer to the same question.
  *
  * The path is the one thing in this dialog a person must read carefully — it is the answer to
  * "am I about to delete the right directory" — so it gets the body size rather than the dialog

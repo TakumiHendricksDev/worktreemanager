@@ -3413,6 +3413,18 @@ class Sessions {
   }
 
   /**
+   * End every pane in a project wtm has stopped listing.
+   *
+   * `reconcile` with nothing alive, because that is what an unregistered project is. The surface
+   * only ever reconciles the *active* project, so without this a removed project's shells and agents
+   * would keep running with no row, tab or picker entry left to reach them by — still counted by the
+   * dock badge, and restored again on every launch.
+   */
+  closeProject(projectId: string): void {
+    this.reconcile(projectId, []);
+  }
+
+  /**
    * Drop panes for worktrees that are no longer in `ids`.
    *
    * Removal through the app already ends a worktree's sessions before teardown runs. This is for the

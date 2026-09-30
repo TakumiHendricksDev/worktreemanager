@@ -39,11 +39,13 @@
     sidebarCollapsed,
     ontogglesidebar,
     onaddproject,
+    onremoveproject,
     onsettings,
   }: {
     sidebarCollapsed: boolean;
     ontogglesidebar: () => void;
     onaddproject: () => void;
+    onremoveproject: () => void;
     onsettings: () => void;
   } = $props();
 
@@ -74,10 +76,12 @@
 
   async function onProjectChange(event: Event) {
     const select = event.currentTarget as HTMLSelectElement;
-    if (select.value === '__add__') {
+    const chosen = select.value;
+    if (chosen === '__add__' || chosen === '__remove__') {
       // Re-select the current project so the picker does not stay on the sentinel.
       select.value = workspace.activeProjectId ?? '';
-      onaddproject();
+      if (chosen === '__add__') onaddproject();
+      else onremoveproject();
       return;
     }
     await workspace.selectProject(select.value);
@@ -143,16 +147,38 @@
           only the *active* project's worktrees — so the row dots alone still leave a session blocked
           in another project completely invisible. This and the dock badge are what close that.
         -->
-        {#each workspace.projects as project (project.id)}
-          <option value={project.id}>
-            {project.name}{project.usable ? '' : '  ⚠'}{sessions.wantsAttentionIn(
-              project.id,
-            )
-              ? '  ●'
-              : ''}
-          </option>
-        {/each}
-        <option value="__add__">Add a repository…</option>
+        {#if workspace.projects.length > 0}
+          <optgroup label="Repositories">
+            {#each workspace.projects as project (project.id)}
+              <option value={project.id}>
+                {project.name}{project.usable ? '' : '  ⚠'}{sessions.wantsAttentionIn(
+                  project.id,
+                )
+                  ? '  ●'
+                  : ''}
+              </option>
+            {/each}
+          </optgroup>
+        {/if}
+        <!--
+          The two actions under a heading of their own, because as bare rows at the foot of the list
+          they read as two more repositories. A labelled `<optgroup>` rather than an `<hr>`: a
+          separator inside a `<select>` is recent HTML that not every WebKit this app runs on draws,
+          while every engine draws a group heading — and the worktree switcher already uses them.
+
+          Remove sits beside Add because this is where a person looks for it: the list of
+          repositories is the thing being edited. It used to exist only on the error card of a
+          project that failed to load, so a working repository could not be removed at all. It names
+          the active project rather than offering a submenu of all of them, because a `<select>` has
+          no submenus — and removing the one on screen is a choice made while looking at it.
+        -->
+        <optgroup label="Manage">
+          <option value="__add__">Add a repository…</option>
+          {#if workspace.activeProject}
+            {@const name = workspace.activeProject.name}
+            <option value="__remove__">Remove “{name}” from wtm…</option>
+          {/if}
+        </optgroup>
       </select>
     </div>
 
