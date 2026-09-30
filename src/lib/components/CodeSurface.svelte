@@ -13,6 +13,7 @@
   import { askMessage, isOutdated, reviewMessage } from '../code-review';
   import type { CodeComment } from '../ipc/types';
   import { code, type Popup } from '../state/code.svelte';
+  import { codeRequests } from '../state/code-request.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import CodeTree from './CodeTree.svelte';
@@ -199,6 +200,24 @@
   function stepChange(direction: 1 | -1): void {
     stepAt = viewer?.step(direction)?.index ?? null;
   }
+
+  /** The last file request opened. `App` has already selected its worktree and this view. */
+  let requestedFor = 0;
+  $effect(() => {
+    const request = codeRequests.request;
+    if (!request || request.id === requestedFor || !visible) return;
+    if (request.worktreeId !== worktreeId || request.projectId !== projectId) return;
+    requestedFor = request.id;
+    untrack(() => {
+      code.open(
+        request.projectId,
+        request.worktreeId,
+        request.path,
+        request.line ? { line: request.line } : undefined,
+      );
+      void code.locate(request.projectId, request.worktreeId, request.path);
+    });
+  });
 
   // A shortcut asked for a popup. `App` has already switched to this view.
   $effect(() => {

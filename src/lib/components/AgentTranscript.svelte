@@ -25,15 +25,19 @@
   } from '../ipc/types';
   import { tick } from 'svelte';
   import Button from './ui/Button.svelte';
-  import Markdown from './Markdown.svelte';
+  import Markdown, { type CodeLink } from './Markdown.svelte';
+  import { diffHeaderPath } from '../code-links';
 
   const {
     events,
     onrunsql,
+    codeLink,
   }: {
     events: AgentEvent[];
     /** A reply's SQL to run in the Database console. See `Markdown`. */
     onrunsql?: (sql: string) => void;
+    /** File references that open in the Code tab — in replies, and on a patch's file headers. */
+    codeLink?: CodeLink;
   } = $props();
 
   /**
@@ -620,6 +624,12 @@
     return `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
   }
 
+  /** A patch's `+++ b/…` header as a link to the file, when the file is in the worktree. */
+  function fileRef(line: string) {
+    const path = diffHeaderPath(line);
+    return path && codeLink ? codeLink.resolve(path) : null;
+  }
+
   /**
    * Split a unified diff into classified lines.
    *
@@ -764,7 +774,9 @@
     {:else if row.kind === 'assistant'}
       <!-- The one place arbitrary document structure appears. Rendered as elements rather than a
            string of HTML, so nothing a model writes can become markup — see `markdown.ts`. -->
-      <div class="c-transcript__said"><Markdown source={row.text} {onrunsql} /></div>
+      <div class="c-transcript__said">
+        <Markdown source={row.text} {onrunsql} {codeLink} />
+      </div>
     {:else if row.kind === 'thinking'}
       <!--
         The narration line, and the reason it is one line rather than the word `Thinking`.
@@ -827,9 +839,15 @@
         <summary>Code changes · {formatBytes(row.diff.length * 2)}</summary>
         {#if disclosures[row.key]}
           {@const page = diffPage(row.diff, diffLimits[row.key] ?? 300)}
-          <pre class="c-transcript__diff">{#each page.lines as line, i (i)}<span
+          <pre class="c-transcript__diff">{#each page.lines as line, i (i)}{@const ref =
+                line.cls === 'is-meta' ? fileRef(line.text) : null}<span
                 class="c-transcript__diff-line {line.cls}"
-                >{line.text}
+                >{#if ref}<button
+                    type="button"
+                    class="c-transcript__diff-file"
+                    title="Open in the Code tab"
+                    onclick={() => codeLink?.open(ref)}>{line.text}</button
+                  >{:else}{line.text}{/if}
 </span>{/each}</pre>
           {#if page.more}
             <div class="c-transcript__paging">

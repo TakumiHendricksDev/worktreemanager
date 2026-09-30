@@ -71,7 +71,15 @@ export type PaneIntent =
   /** ⌘J from inside a browser pane: a shell in this worktree, which lives in the main window. */
   | { kind: 'focusOrOpenShell'; projectId: string; worktreeId: string }
   /** Run a reply's SQL in the Database console, which only the main window has. */
-  | { kind: 'openInDatabase'; projectId: string; worktreeId: string; sql: string };
+  | { kind: 'openInDatabase'; projectId: string; worktreeId: string; sql: string }
+  /** Open a file a reply named in the Code tab, which only the main window has. */
+  | {
+      kind: 'openInCode';
+      projectId: string;
+      worktreeId: string;
+      path: string;
+      line: number | null;
+    };
 
 /** What the main window tells a pane window's frontend. */
 export type PaneCommand =

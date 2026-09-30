@@ -26,6 +26,9 @@
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
+  import { fileIndex, resolveRef, type CodeRef } from '../code-links';
+  import { codeRequests } from '../state/code-request.svelte';
+  import { workspace } from '../state/workspace.svelte';
   import AgentTranscript from './AgentTranscript.svelte';
   import BrowserPane from './BrowserPane.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
@@ -133,6 +136,26 @@
   });
 
   const isFocused = $derived(sessions.focused[pane.worktreeId] === pane.id);
+
+  /*
+   * A reply's file references, opening in the Code tab. Resolved against the worktree's own file
+   * list — the `@` list's — so only a path that is really there becomes a link.
+   */
+  $effect(() => {
+    if (provider !== null && !sessions.files[pane.worktreeId]) {
+      void sessions.loadFiles(pane.worktreeId);
+    }
+  });
+  const codeLink = $derived.by(() => {
+    const root =
+      workspace.worktrees.find((w) => w.id === pane.worktreeId)?.path ?? pane.worktreeId;
+    const index = fileIndex(sessions.files[pane.worktreeId] ?? [], root);
+    return {
+      resolve: (text: string) => resolveRef(text, index),
+      open: (ref: CodeRef) =>
+        codeRequests.open(pane.projectId, pane.worktreeId, ref.path, ref.line),
+    };
+  });
 
   /**
    * What a restored pane says about the conversation it is holding a place for.
@@ -1459,6 +1482,7 @@
           <AgentTranscript
             events={pane.events}
             onrunsql={(sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}
+            {codeLink}
           />
 
           {#if blocking}

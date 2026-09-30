@@ -15,6 +15,7 @@
   import CodeSurface from './lib/components/CodeSurface.svelte';
   import { chordOf } from './lib/code-shortcuts';
   import { code } from './lib/state/code.svelte';
+  import { codeRequests } from './lib/state/code-request.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
@@ -139,6 +140,22 @@
       void arrive(request.projectId, request.worktreeId).then(
         () => (mainView = 'database'),
       );
+    });
+  });
+
+  /** The last file request navigated for. Same contract as `navigatedFor`. */
+  let openedFor = 0;
+
+  /*
+   * A reply's file link: to the worktree the pane is in, and its Code view. `CodeSurface` takes the
+   * same request from there and opens the file — see `code-request.svelte.ts`.
+   */
+  $effect(() => {
+    const request = codeRequests.request;
+    if (!booted || !request || request.id === openedFor) return;
+    openedFor = request.id;
+    untrack(() => {
+      void arrive(request.projectId, request.worktreeId).then(() => (mainView = 'code'));
     });
   });
 

@@ -193,3 +193,18 @@
   border: 0;
   background: var(--border);
 }
+
+/*
+ * Inline code that names a real file in the worktree: a button that opens it in the Code tab.
+ * Drawn as the code it is, with a dotted underline that says it goes somewhere, rather than as a
+ * link — its text is still the path the agent wrote, and should read as one.
+ */
+.c-markdown__path {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--accent);
+  }
+}
