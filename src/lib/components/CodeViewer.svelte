@@ -32,7 +32,9 @@
   import { defaultKeymap } from '@codemirror/commands';
   import { onMount, untrack } from 'svelte';
 
+  import { changeGutter, hunkStarts, setHunks } from '../code-diff';
   import { readingExtensions } from '../code-editor';
+  import type { CodeHunk } from '../ipc/types';
   import { languageFor } from '../code-languages';
   import { code, type FileState } from '../state/code.svelte';
 
@@ -40,11 +42,14 @@
     worktreeId,
     path,
     file,
+    hunks,
   }: {
     worktreeId: string;
     /** The file on screen, or null when no tab is open. */
     path: string | null;
     file: FileState | null;
+    /** How the file differs from what Changes compares with, for the gutter. Null: no markers. */
+    hunks: readonly CodeHunk[] | null;
   } = $props();
 
   interface Kept {
@@ -63,7 +68,11 @@
   let lastReveal = 0;
 
   const keyOf = (p: string) => `${worktreeId}\0${p}`;
-  const text = $derived(file?.status === 'ready' ? file.file.text : null);
+  const text = $derived(
+    file?.status === 'ready' ? file.file.text : file?.status === 'base' ? file.text : null,
+  );
+  /** Which hunks each state was last given, so an unchanged answer is not dispatched again. */
+  const given = new Map<string, readonly CodeHunk[] | null>();
 
   /*
    * A line that briefly lights up where a search result or a link landed, so the eye finds it.
@@ -94,6 +103,7 @@
     highlightActiveLine(),
     search({ top: true }),
     keymap.of([...searchKeymap, ...foldKeymap, ...defaultKeymap]),
+    changeGutter(),
     flashField,
     EditorView.contentAttributes.of({ 'aria-label': 'File contents' }),
     EditorView.updateListener.of((update) => {
@@ -176,11 +186,30 @@
     });
   });
 
+  // Give the file on screen its change markers. After the effect above, so the state is shown.
+  $effect(() => {
+    const p = path;
+    const marks = hunks;
+    if (!p || text === null) return;
+    untrack(() => {
+      const key = keyOf(p);
+      const kept = states.get(key);
+      if (!kept || given.get(key) === marks) return;
+      given.set(key, marks);
+      const effects = setHunks.of(marks);
+      if (shown === key && view) view.dispatch({ effects });
+      else kept.state = kept.state.update({ effects }).state;
+    });
+  });
+
   // Forget the states of tabs that were closed.
   $effect(() => {
     const open = new Set((code.tabs[worktreeId] ?? []).map(keyOf));
     for (const key of states.keys()) {
-      if (key.startsWith(`${worktreeId}\0`) && !open.has(key)) states.delete(key);
+      if (key.startsWith(`${worktreeId}\0`) && !open.has(key)) {
+        states.delete(key);
+        given.delete(key);
+      }
     }
   });
 
@@ -208,6 +237,36 @@
       }, 1200);
     });
   });
+
+  /**
+   * Move to the next or previous change, wrapping, and say which one of how many it is.
+   *
+   * Changes are counted by hunk, not by line, so a block of ten edited lines is one step.
+   */
+  export function step(direction: 1 | -1): { index: number; count: number } | null {
+    const editor = view;
+    const marks = hunks;
+    if (!editor || !marks || marks.length === 0) return null;
+    const starts = hunkStarts(marks);
+    const here = editor.state.doc.lineAt(editor.state.selection.main.head).number;
+    let index =
+      direction === 1
+        ? starts.findIndex((line) => line > here)
+        : starts.length - 1 - [...starts].reverse().findIndex((line) => line < here);
+    if (index < 0 || index >= starts.length)
+      index = direction === 1 ? 0 : starts.length - 1;
+    const doc = editor.state.doc;
+    const line = doc.line(Math.min(starts[index] ?? 1, doc.lines));
+    editor.dispatch({
+      selection: { anchor: line.from },
+      effects: [EditorView.scrollIntoView(line.from, { y: 'center' }), flash.of(line.from)],
+    });
+    editor.focus();
+    setTimeout(() => {
+      if (view === editor) editor.dispatch({ effects: flash.of(null) });
+    }, 1200);
+    return { index, count: starts.length };
+  }
 
   /** ⌘F from outside the editor: focus it and open its find panel. */
   export function find(): void {

@@ -110,6 +110,42 @@ pub struct CodeSearchView {
     pub ignored_stopped: bool,
 }
 
+/// What a worktree has changed, for the Changes view and the tree's colours.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeChangesView {
+    /// `branch` or `uncommitted`: the scope actually used. A branch with no base to compare with
+    /// falls back to its uncommitted changes, and says so here.
+    pub scope: &'static str,
+    /// What the changes are against, to show: the base branch's name, or `HEAD`.
+    pub against: String,
+    /// The revision `code_file_diff` and `code_base_version` compare with — the merge base, or
+    /// `HEAD`. Handed back by the frontend as it was given.
+    pub rev: String,
+    pub changes: Vec<CodeChangeView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeChangeView {
+    pub path: String,
+    /// `added`, `modified`, `deleted`, `renamed`, `untracked` or `other`.
+    pub kind: &'static str,
+    /// Where a renamed file was.
+    pub from: Option<String>,
+}
+
+/// One region of a file that differs from the revision. See `wtm_core::model::Hunk`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeHunkView {
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    pub removed: Vec<String>,
+}
+
 impl From<wtm_code::CodeError> for ErrorView {
     fn from(err: wtm_code::CodeError) -> Self {
         let kind = match &err {
@@ -182,6 +218,151 @@ pub async fn code_list_dir(
                 symlink: entry.symlink,
             })
             .collect())
+    })
+    .await
+}
+
+/// A revision the frontend hands back must be one `code_changes` gave it: a commit id or `HEAD`.
+///
+/// `--end-of-options` already stops git reading it as a flag. This is the second half: nothing but
+/// a hash or `HEAD` reaches git at all, so no `rev:path` spelling can name something else.
+fn checked_rev(rev: &str) -> Result<&str, ErrorView> {
+    let hash = rev.len() >= 7 && rev.chars().all(|c| c.is_ascii_hexdigit());
+    if rev == "HEAD" || hash {
+        Ok(rev)
+    } else {
+        Err(ErrorView::new(
+            "badRevision",
+            format!("`{rev}` is not a revision to compare with"),
+        ))
+    }
+}
+
+/// What the worktree has changed: against the base branch, or only what is uncommitted.
+///
+/// Against the base branch means against the *merge base* of `HEAD` and that branch, so the view
+/// shows what this branch did and not what the base has done since it forked. It is compared with
+/// the working tree, so committed and uncommitted work both count. Untracked files are added.
+#[tauri::command]
+pub async fn code_changes(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    scope: String,
+) -> Reply<CodeChangesView> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let project = app.project(&project_id)?;
+        let worktrees = app.git.list_worktrees(&project.root)?;
+        let root = worktrees
+            .iter()
+            .find(|w| w.id.as_str() == worktree_id)
+            .map(|w| w.path.clone())
+            .ok_or_else(|| wtm_core::error::WtmError::UnknownWorktree(worktree_id.clone()))?;
+
+        let branch = if scope == "branch" {
+            app.base_branch(&project, &worktrees).and_then(|base| {
+                let fork = app.git.merge_base(&root, "HEAD", &base).ok().flatten()?;
+                Some((fork.as_str().to_owned(), base))
+            })
+        } else {
+            None
+        };
+        let (used, rev, against) = match branch {
+            Some((rev, base)) => ("branch", rev, base),
+            None => ("uncommitted", "HEAD".to_owned(), "HEAD".to_owned()),
+        };
+
+        // A repository with no commits has no `HEAD` to diff against; everything in it is new.
+        let tracked = app.git.changed_paths(&root, &rev).unwrap_or_default();
+        let mut changes: Vec<CodeChangeView> = tracked
+            .into_iter()
+            .map(|change| {
+                let (kind, from) = match change.kind {
+                    wtm_core::model::ChangeKind::Added => ("added", None),
+                    wtm_core::model::ChangeKind::Modified => ("modified", None),
+                    wtm_core::model::ChangeKind::Deleted => ("deleted", None),
+                    wtm_core::model::ChangeKind::Renamed { from } => ("renamed", Some(from)),
+                    wtm_core::model::ChangeKind::Untracked => ("untracked", None),
+                    wtm_core::model::ChangeKind::Other => ("other", None),
+                };
+                CodeChangeView {
+                    path: change.path,
+                    kind,
+                    from,
+                }
+            })
+            .collect();
+        changes.extend(
+            app.git
+                .untracked(&root)?
+                .paths
+                .into_iter()
+                .map(|path| CodeChangeView {
+                    path,
+                    kind: "untracked",
+                    from: None,
+                }),
+        );
+        changes.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(CodeChangesView {
+            scope: used,
+            against,
+            rev,
+            changes,
+        })
+    })
+    .await
+}
+
+/// How one file differs from the Changes view's revision, for the viewer's gutter.
+#[tauri::command]
+pub async fn code_file_diff(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    path: String,
+    rev: String,
+    from: Option<String>,
+) -> Reply<Vec<CodeHunkView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let root = root_of(&app, &project_id, &worktree_id)?;
+        wtm_code::resolve(&root, &path)?;
+        if let Some(from) = &from {
+            wtm_code::resolve(&root, from)?;
+        }
+        let hunks = app
+            .git
+            .file_hunks(&root, checked_rev(&rev)?, &path, from.as_deref())?;
+        Ok(hunks
+            .into_iter()
+            .map(|hunk| CodeHunkView {
+                old_start: hunk.old_start,
+                old_lines: hunk.old_lines,
+                new_start: hunk.new_start,
+                new_lines: hunk.new_lines,
+                removed: hunk.removed,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// A file as it was at the Changes view's revision: what a deleted file held.
+#[tauri::command]
+pub async fn code_base_version(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    path: String,
+    rev: String,
+) -> Reply<Option<String>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let root = root_of(&app, &project_id, &worktree_id)?;
+        wtm_code::resolve(&root, &path)?;
+        Ok(app.git.show_file(&root, checked_rev(&rev)?, &path)?)
     })
     .await
 }
@@ -362,5 +543,22 @@ mod tests {
         let object = json.as_object().unwrap();
         assert!(object.contains_key("mtimeMs"), "{object:?}");
         assert!(!object.contains_key("mtime_ms"));
+    }
+
+    #[test]
+    fn only_a_commit_id_or_head_is_accepted_as_a_revision_to_compare_with() {
+        assert!(checked_rev("HEAD").is_ok());
+        assert!(checked_rev("3f2a9c1").is_ok());
+        assert!(checked_rev("3f2a9c1e0b9d7a6c5f4e3d2c1b0a998877665544").is_ok());
+        for bad in [
+            "--output=/tmp/x",
+            "main",
+            "HEAD~1",
+            "abc",
+            "3f2a9c1:secret",
+            "",
+        ] {
+            assert!(checked_rev(bad).is_err(), "{bad}");
+        }
     }
 }

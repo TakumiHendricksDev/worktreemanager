@@ -28,7 +28,9 @@ import type {
   BrowserView,
   ApprovalAnswer,
   Capability,
+  CodeChanges,
   CodeEntry,
+  CodeHunk,
   CodeFile,
   CodeSearch,
   CodeSearchOptions,
@@ -457,6 +459,20 @@ export const commands = {
     query: string,
     options: CodeSearchOptions,
   ) => invoke<CodeSearch>('code_search', { projectId, worktreeId, query, options }),
+  /** What the worktree changed, against its base branch's merge base or against `HEAD`. */
+  codeChanges: (projectId: string, worktreeId: string, scope: 'branch' | 'uncommitted') =>
+    invoke<CodeChanges>('code_changes', { projectId, worktreeId, scope }),
+  /** One file's zero-context hunks against `rev`, which must be what `codeChanges` returned. */
+  codeFileDiff: (
+    projectId: string,
+    worktreeId: string,
+    path: string,
+    rev: string,
+    from: string | null,
+  ) => invoke<CodeHunk[]>('code_file_diff', { projectId, worktreeId, path, rev, from }),
+  /** A file's content at `rev`, or null when it did not exist there. */
+  codeBaseVersion: (projectId: string, worktreeId: string, path: string, rev: string) =>
+    invoke<string | null>('code_base_version', { projectId, worktreeId, path, rev }),
   /** When each open file last changed, so a refresh re-reads only what did. */
   codeStat: (projectId: string, worktreeId: string, paths: string[]) =>
     invoke<CodeStat[]>('code_stat', { projectId, worktreeId, paths }),

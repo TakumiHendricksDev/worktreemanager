@@ -17,6 +17,10 @@ export interface CodeCache {
   tabs: string[];
   active: string | null;
   expanded: string[];
+  /** The tree's view: every file, or only the changed ones. */
+  view: 'project' | 'changes';
+  /** What Changes compares with: the base branch, or `HEAD`. */
+  scope: 'branch' | 'uncommitted';
 }
 
 export function readCodeCache(worktreeId: string): CodeCache | null {
@@ -34,6 +38,8 @@ export function readCodeCache(worktreeId: string): CodeCache | null {
       expanded: Array.isArray(parsed.expanded)
         ? parsed.expanded.filter((t) => typeof t === 'string')
         : [],
+      view: parsed.view === 'changes' ? 'changes' : 'project',
+      scope: parsed.scope === 'uncommitted' ? 'uncommitted' : 'branch',
     };
   } catch {
     return null;

@@ -1045,12 +1045,13 @@ impl App {
         status
     }
 
-    /// The ref to measure divergence against.
+    /// The ref to measure divergence against, and the one the Code tab's Changes view compares
+    /// a branch with.
     ///
     /// Uses the project's configured default base when it resolves, else the main
     /// worktree's own branch. Without a base there is nothing meaningful to be "ahead of",
     /// so `None` simply means no ahead/behind is shown.
-    fn base_branch(&self, project: &Project, worktrees: &[Worktree]) -> Option<String> {
+    pub(crate) fn base_branch(&self, project: &Project, worktrees: &[Worktree]) -> Option<String> {
         let configured = project
             .field(&project.create.base_field)
             .and_then(|field| field.default.as_ref())

@@ -53,6 +53,18 @@
     text-decoration: line-through;
   }
 
+  &.is-added {
+    color: var(--change-added);
+  }
+
+  &.is-modified {
+    color: var(--change-modified);
+  }
+
+  &.is-deleted {
+    color: var(--change-deleted);
+  }
+
   &:focus-visible {
     outline: none;
     box-shadow: inset 0 0 0 1px var(--border-focus);
@@ -95,4 +107,13 @@
 .c-code-tree__empty {
   padding: var(--sp-3);
   color: var(--fg-muted);
+}
+
+/* A change's letter at the end of its row: what says it, where the colour only repeats it. */
+.c-code-tree__status {
+  margin-left: auto;
+  padding-left: var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  font-weight: 600;
 }

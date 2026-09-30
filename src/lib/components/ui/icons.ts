@@ -46,6 +46,7 @@ export type IconName =
   | 'chevron-down'
   | 'chevron-left'
   | 'chevron-right'
+  | 'chevron-up'
   | 'check'
   | 'close'
   | 'collapse'
@@ -98,6 +99,7 @@ export const icons: Record<IconName, IconSpec> = {
   'chevron-down': { stroke: 'M4 6.25 L8 10.25 L12 6.25' },
   'chevron-left': { stroke: 'M9.75 4 L5.75 8 L9.75 12' },
   'chevron-right': { stroke: 'M6.25 4 L10.25 8 L6.25 12' },
+  'chevron-up': { stroke: 'M4 9.75 L8 5.75 L12 9.75' },
   check: { stroke: 'M3.5 8.25 L6.5 11.25 L12.5 4.75' },
   /**
    * A lightning bolt, filled rather than stroked.

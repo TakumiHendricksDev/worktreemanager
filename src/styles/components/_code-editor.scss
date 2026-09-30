@@ -212,3 +212,52 @@
     background: transparent;
   }
 }
+
+/*
+ * The change gutter: a bar beside added and edited lines, a wedge where lines were deleted.
+ *
+ * Narrow and without a border, between the line numbers and the text, as an IDE draws it. The
+ * marker is the gutter element's own background — `elementClass` puts these classes on the gutter
+ * element of the marked line — so a run of changed lines reads as one continuous bar.
+ */
+.c-code-editor .c-code-editor__changes {
+  width: 4px;
+  cursor: pointer;
+}
+
+.c-code-editor__change--added {
+  box-shadow: inset 3px 0 0 var(--change-added);
+}
+
+.c-code-editor__change--modified {
+  box-shadow: inset 3px 0 0 var(--change-modified);
+}
+
+/* A deletion happened between this line and the next: a wedge on the line's lower edge. */
+.c-code-editor__change--deleted {
+  background: linear-gradient(to bottom right, transparent 60%, var(--change-deleted) 60%);
+}
+
+/* What a marked region used to be, opened by clicking its marker. */
+.c-code-editor__old {
+  max-width: min(640px, 70vw);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--step--2);
+}
+
+.c-code-editor__old-head {
+  color: var(--fg-muted);
+}
+
+.c-code-editor__old-lines {
+  max-height: 16rem;
+  margin-top: var(--sp-1);
+  overflow: auto;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--change-deleted);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  white-space: pre;
+  color: var(--fg);
+  background: var(--danger-soft);
+}

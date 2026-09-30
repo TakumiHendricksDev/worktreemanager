@@ -12,7 +12,8 @@
    */
   import { tick } from 'svelte';
 
-  import { visibleRows, type TreeRow } from '../code-tree';
+  import { folderPaths, visibleRows, type TreeRow } from '../code-tree';
+  import type { CodeChangeKind } from '../ipc/types';
   import { code } from '../state/code.svelte';
   import Icon from './ui/Icon.svelte';
 
@@ -28,11 +29,39 @@
   } = $props();
 
   const tree = $derived(code.treeOf(worktreeId));
-  const rows = $derived(
-    tree
+  const view = $derived(code.view[worktreeId] ?? 'project');
+  const changes = $derived(code.changes[worktreeId] ?? null);
+  /*
+   * The Changes view is its own small tree, of changed files only, with every folder open: it is
+   * a list to walk through, and a folder you had to open to find the one change in it would hide
+   * exactly what the view is for.
+   */
+  const rows = $derived.by(() => {
+    if (view === 'changes') {
+      return changes ? visibleRows(changes.root, folderPaths(changes.root), new Map()) : [];
+    }
+    return tree
       ? visibleRows(tree.root, code.expandedIn(worktreeId), code.loadedIn(worktreeId))
-      : [],
-  );
+      : [];
+  });
+
+  /** A change's letter, which is what says it — the colour only repeats it. */
+  const LETTERS: Record<CodeChangeKind, string> = {
+    added: 'A',
+    modified: 'M',
+    deleted: 'D',
+    renamed: 'R',
+    untracked: 'U',
+    other: 'M',
+  };
+  const WORDS: Record<CodeChangeKind, string> = {
+    added: 'added',
+    modified: 'modified',
+    deleted: 'deleted',
+    renamed: 'renamed',
+    untracked: 'untracked',
+    other: 'changed',
+  };
   const cursor = $derived(code.cursor[worktreeId] ?? rows[0]?.node.path ?? null);
 
   /** Row element ids are derived from the path, which is unique in the tree and stable. */
@@ -43,8 +72,12 @@
   function activate(row: TreeRow): void {
     code.setCursor(worktreeId, row.node.path);
     if (row.node.kind === 'dir') {
-      void code.toggle(projectId, worktreeId, row.node.path);
-    } else if (!row.node.missing && !row.node.special) {
+      if (view === 'project') void code.toggle(projectId, worktreeId, row.node.path);
+    } else if (
+      !row.node.special &&
+      (!row.node.missing || code.changeOf(worktreeId, row.node.path))
+    ) {
+      // A deleted file opens only where there is a change to say what it was.
       onopen(row.node.path);
     }
   }
@@ -126,6 +159,8 @@
 <!-- svelte-ignore a11y_interactive_supports_focus -->
 <div class="c-code-tree" role="tree" aria-label="Files" onkeydown={onKeydown}>
   {#each rows as row (row.node.path)}
+    {@const change =
+      row.node.kind === 'file' ? code.changeOf(worktreeId, row.node.path) : null}
     <button
       type="button"
       id={rowId(row.node.path)}
@@ -133,13 +168,22 @@
       class:is-cursor={row.node.path === cursor}
       class:is-ignored={row.node.ignored}
       class:is-missing={row.node.missing}
+      class:is-added={change?.kind === 'added' || change?.kind === 'untracked'}
+      class:is-modified={change?.kind === 'modified' ||
+        change?.kind === 'renamed' ||
+        change?.kind === 'other'}
+      class:is-deleted={change?.kind === 'deleted'}
       role="treeitem"
       aria-level={row.depth + 1}
       aria-expanded={row.node.kind === 'dir' ? row.expanded : undefined}
       aria-selected={row.node.path === cursor}
       tabindex={row.node.path === cursor ? 0 : -1}
       style:--depth={row.depth}
-      title={row.node.missing ? `${row.node.path} — deleted` : row.node.path}
+      title={change
+        ? `${row.node.path} — ${WORDS[change.kind]}${change.from ? ` from ${change.from}` : ''}`
+        : row.node.missing
+          ? `${row.node.path} — deleted`
+          : row.node.path}
       onclick={() => activate(row)}
     >
       <span class="c-code-tree__twisty" aria-hidden="true">
@@ -156,13 +200,24 @@
           <Icon name="symlink" size={12} label="link" />
         </span>
       {/if}
+      {#if change}
+        <span class="c-code-tree__status" aria-label={WORDS[change.kind]}>
+          {LETTERS[change.kind]}
+        </span>
+      {/if}
       {#if row.loading}
         <span class="c-code-tree__note">Loading…</span>
       {/if}
     </button>
   {:else}
     <p class="c-code-tree__empty">
-      {code.loading[worktreeId] ? 'Reading the worktree…' : 'No files.'}
+      {#if code.loading[worktreeId]}
+        Reading the worktree…
+      {:else if view === 'changes'}
+        {changes ? 'Nothing has changed.' : 'git could not say what changed.'}
+      {:else}
+        No files.
+      {/if}
     </p>
   {/each}
 </div>

@@ -130,6 +130,11 @@
   --syntax-tag: var(--blue-500);
   --syntax-invalid: var(--danger);
 
+  /* How a file differs from what the Code tab's Changes view compares with. See the dark block. */
+  --change-added: var(--green-500);
+  --change-modified: var(--blue-500);
+  --change-deleted: var(--red-500);
+
   /* Two levels, because the app has two elevated things: a control that has taken focus, and a
      modal over a scrim. A middle rung was defined here for a year and never used once — see the
      dark block for the argument against keeping one on spec. */
@@ -211,6 +216,18 @@
   --syntax-meta: var(--amber-400);
   --syntax-tag: var(--yellow-400);
   --syntax-invalid: var(--danger);
+
+  /*
+   * A file's change against a revision: the tree's colours and the viewer's gutter bars.
+   *
+   * Their own roles rather than `--ok` and `--danger`, though they share the hues: "added" is not
+   * "fine" and "deleted" is not a failure, and the day a status colour is retuned for contrast the
+   * gutter should not move with it. The tree never relies on these alone — every changed row also
+   * carries its letter, A, M, D, R or U.
+   */
+  --change-added: var(--green-400);
+  --change-modified: var(--blue-400);
+  --change-deleted: var(--red-400);
 
   /*
    * `--shadow-md` was here and is deliberately gone.

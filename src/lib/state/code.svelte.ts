@@ -25,7 +25,14 @@ import {
   type TreeNode,
 } from '../code-tree';
 import { commands } from '../ipc/commands';
-import { errorMessage, type CodeFile, type CodeSearchOptions } from '../ipc/types';
+import {
+  errorMessage,
+  type CodeChange,
+  type CodeChanges,
+  type CodeFile,
+  type CodeHunk,
+  type CodeSearchOptions,
+} from '../ipc/types';
 import { dropCodeCaches, readCodeCache, writeCodeCache } from './code-cache';
 
 interface Loaded {
@@ -54,7 +61,12 @@ export type FileState =
   | { status: 'loading' }
   | { status: 'ready'; file: CodeFile }
   | { status: 'gone' }
+  /** A deleted file, shown as it was at the revision Changes compares with. */
+  | { status: 'base'; text: string; against: string }
   | { status: 'error'; message: string };
+
+export type TreeView = 'project' | 'changes';
+export type Scope = 'branch' | 'uncommitted';
 
 /**
  * Where the viewer should put the caret next: a line in a file, from search or a link.
@@ -93,6 +105,16 @@ class CodeState {
   active = $state<Record<string, string | null>>({});
   /** Every open file's contents, keyed by worktree and path. */
   files = $state.raw<Record<string, FileState>>({});
+  /** The tree shows every file or only the changed ones, by worktree. */
+  view = $state<Record<string, TreeView>>({});
+  /** What Changes compares with, by worktree. */
+  scope = $state<Record<string, Scope>>({});
+  /** The last answer to `code_changes`, by worktree, with a lookup by path and a tree of its own. */
+  changes = $state.raw<
+    Record<string, { answer: CodeChanges; byPath: Map<string, CodeChange>; root: TreeNode }>
+  >({});
+  /** Each changed file's hunks, keyed by worktree, path and revision. */
+  hunks = $state.raw<Record<string, CodeHunk[]>>({});
   reveal = $state<Reveal | null>(null);
   popup = $state<Popup | null>(null);
   /**
@@ -148,6 +170,8 @@ class CodeState {
     this.tabs[worktreeId] = cache.tabs;
     this.active[worktreeId] = cache.active;
     this.expanded[worktreeId] = cache.expanded;
+    this.view[worktreeId] = cache.view;
+    this.scope[worktreeId] = cache.scope;
   }
 
   private persist(worktreeId: string): void {
@@ -158,6 +182,8 @@ class CodeState {
       tabs: this.tabs[worktreeId] ?? [],
       active: this.active[worktreeId] ?? null,
       expanded: this.expanded[worktreeId] ?? [],
+      view: this.view[worktreeId] ?? 'project',
+      scope: this.scope[worktreeId] ?? 'branch',
     });
   }
 
@@ -190,11 +216,107 @@ class CodeState {
         await this.loadIfLazy(projectId, worktreeId, path);
       }
       await this.restat(projectId, worktreeId);
+      await this.refreshChanges(projectId, worktreeId);
     } catch (error) {
       this.errors[worktreeId] = errorMessage(error);
     } finally {
       this.inflight.delete(worktreeId);
       this.loading[worktreeId] = false;
+    }
+  }
+
+  changeOf(worktreeId: string, path: string): CodeChange | null {
+    return this.changes[worktreeId]?.byPath.get(path) ?? null;
+  }
+
+  hunksOf(worktreeId: string, path: string): CodeHunk[] | null {
+    const rev = this.changes[worktreeId]?.answer.rev;
+    return rev ? (this.hunks[`${key(worktreeId, path)}\0${rev}`] ?? null) : null;
+  }
+
+  setView(worktreeId: string, view: TreeView): void {
+    this.view[worktreeId] = view;
+    this.persist(worktreeId);
+  }
+
+  async setScope(projectId: string, worktreeId: string, scope: Scope): Promise<void> {
+    this.scope[worktreeId] = scope;
+    this.persist(worktreeId);
+    await this.refreshChanges(projectId, worktreeId);
+  }
+
+  /**
+   * Ask git what changed. Not fatal when it fails — a repository with no commits yet, a base
+   * that no longer resolves — since the tree and the files are still worth showing without it.
+   */
+  async refreshChanges(projectId: string, worktreeId: string): Promise<void> {
+    try {
+      const answer = await commands.codeChanges(
+        projectId,
+        worktreeId,
+        this.scope[worktreeId] ?? 'branch',
+      );
+      const byPath = new Map(answer.changes.map((change) => [change.path, change]));
+      const root = buildTree({
+        files: answer.changes.map((change) => change.path),
+        ignored: [],
+        dirs: [],
+        symlinks: [],
+        missing: answer.changes.filter((c) => c.kind === 'deleted').map((c) => c.path),
+        truncated: false,
+      });
+      this.changes = { ...this.changes, [worktreeId]: { answer, byPath, root } };
+      // Hunks were for the old answer; the viewer asks again for the file it is showing.
+      const prefix = `${worktreeId}\0`;
+      this.hunks = Object.fromEntries(
+        Object.entries(this.hunks).filter(([k]) => !k.startsWith(prefix)),
+      );
+    } catch {
+      const changes = { ...this.changes };
+      delete changes[worktreeId];
+      this.changes = changes;
+    }
+  }
+
+  /** Fetch a changed file's hunks against the current revision, once per answer. */
+  async loadHunks(projectId: string, worktreeId: string, path: string): Promise<void> {
+    const entry = this.changes[worktreeId];
+    const change = entry?.byPath.get(path);
+    if (!entry || !change || (change.kind !== 'modified' && change.kind !== 'renamed'))
+      return;
+    const slot = `${key(worktreeId, path)}\0${entry.answer.rev}`;
+    if (slot in this.hunks) return;
+    this.hunks = { ...this.hunks, [slot]: [] };
+    try {
+      const hunks = await commands.codeFileDiff(
+        projectId,
+        worktreeId,
+        path,
+        entry.answer.rev,
+        change.from,
+      );
+      this.hunks = { ...this.hunks, [slot]: hunks };
+    } catch {
+      /* No markers is the honest fallback for a diff that could not be read. */
+    }
+  }
+
+  /** Show a deleted file as it was, in its tab. */
+  async openBase(projectId: string, worktreeId: string, path: string): Promise<void> {
+    const entry = this.changes[worktreeId];
+    if (!entry) return;
+    const text = await commands.codeBaseVersion(
+      projectId,
+      worktreeId,
+      path,
+      entry.answer.rev,
+    );
+    if (text !== null && this.isOpen(worktreeId, path)) {
+      this.setFile(worktreeId, path, {
+        status: 'base',
+        text,
+        against: entry.answer.against,
+      });
     }
   }
 
@@ -308,6 +430,7 @@ class CodeState {
   ): Promise<void> {
     const current = this.fileOf(worktreeId, path);
     if (current && !force && current.status !== 'error') return;
+    if (current?.status === 'base') return;
     if (!current) this.setFile(worktreeId, path, { status: 'loading' });
     try {
       const file = await commands.codeReadFile(projectId, worktreeId, path);
@@ -350,8 +473,18 @@ class CodeState {
       delete this.expanded[worktreeId];
     }
     const trees = { ...this.trees };
-    for (const worktreeId of doomed) delete trees[worktreeId];
+    const changes = { ...this.changes };
+    for (const worktreeId of doomed) {
+      delete trees[worktreeId];
+      delete changes[worktreeId];
+      delete this.view[worktreeId];
+      delete this.scope[worktreeId];
+    }
     this.trees = trees;
+    this.changes = changes;
+    this.hunks = Object.fromEntries(
+      Object.entries(this.hunks).filter(([k]) => !doomed.has(k.slice(0, k.indexOf('\0')))),
+    );
     this.files = Object.fromEntries(
       Object.entries(this.files).filter(([k]) => !doomed.has(k.slice(0, k.indexOf('\0')))),
     );
@@ -374,6 +507,7 @@ class CodeState {
     const stats = await commands.codeStat(projectId, worktreeId, open);
     for (const stat of stats) {
       const current = this.fileOf(worktreeId, stat.path);
+      if (current?.status === 'base') continue;
       if (!stat.exists) {
         if (current?.status !== 'gone')
           this.setFile(worktreeId, stat.path, { status: 'gone' });

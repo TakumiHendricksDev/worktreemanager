@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use parking_lot::Mutex;
 use wtm_core::error::{ConfigError, ExecError, GitError};
 use wtm_core::model::{
-    BranchRef, Checkout, CommitId, PathList, TrackMode, WorkingTreeStatus, Worktree, WorktreeId,
+    BranchRef, Checkout, CommitId, FileChange, Hunk, PathList, TrackMode, WorkingTreeStatus,
+    Worktree, WorktreeId,
 };
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation, Output};
@@ -564,6 +565,46 @@ impl Git for FakeGit {
 
     fn ignored(&self, _worktree_path: &Path) -> Result<PathList, GitError> {
         Ok(PathList::default())
+    }
+
+    fn untracked(&self, _worktree_path: &Path) -> Result<PathList, GitError> {
+        Ok(PathList::default())
+    }
+
+    fn merge_base(
+        &self,
+        _worktree_path: &Path,
+        _a: &str,
+        _b: &str,
+    ) -> Result<Option<CommitId>, GitError> {
+        Ok(None)
+    }
+
+    fn changed_paths(
+        &self,
+        _worktree_path: &Path,
+        _rev: &str,
+    ) -> Result<Vec<FileChange>, GitError> {
+        Ok(Vec::new())
+    }
+
+    fn file_hunks(
+        &self,
+        _worktree_path: &Path,
+        _rev: &str,
+        _path: &str,
+        _from: Option<&str>,
+    ) -> Result<Vec<Hunk>, GitError> {
+        Ok(Vec::new())
+    }
+
+    fn show_file(
+        &self,
+        _worktree_path: &Path,
+        _rev: &str,
+        _path: &str,
+    ) -> Result<Option<String>, GitError> {
+        Ok(None)
     }
 
     fn ahead_behind(

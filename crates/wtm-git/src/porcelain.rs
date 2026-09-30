@@ -28,7 +28,8 @@ use std::path::PathBuf;
 
 use wtm_core::error::GitError;
 use wtm_core::model::{
-    BranchRef, Checkout, CommitId, PathList, WorkingTreeStatus, Worktree, WorktreeId,
+    BranchRef, ChangeKind, Checkout, CommitId, FileChange, Hunk, PathList, WorkingTreeStatus,
+    Worktree, WorktreeId,
 };
 
 /// Prefix git uses for local branch refs.
@@ -115,6 +116,89 @@ pub fn parse_path_list(output: &str) -> PathList {
             .collect(),
         truncated: !rest.is_empty(),
     }
+}
+
+/// Parse `git diff --name-status -z -M`.
+///
+/// Each entry is a status then one path, NUL-separated — except a rename or a copy, whose status
+/// (`R100`, `C75`: the letter and a similarity) is followed by *two* paths, old then new. Reading
+/// one path for those would shift every entry after them by one field, so the second path is what
+/// decides where the file is now.
+pub fn parse_name_status(output: &str) -> Vec<FileChange> {
+    let mut changes = Vec::new();
+    let mut fields = output.split('\0').filter(|f| !f.is_empty());
+    while let Some(status) = fields.next() {
+        let Some(letter) = status.chars().next() else {
+            continue;
+        };
+        let Some(first) = fields.next() else { break };
+        let (path, kind) = match letter {
+            'R' | 'C' => {
+                let Some(to) = fields.next() else { break };
+                let kind = if letter == 'R' {
+                    ChangeKind::Renamed {
+                        from: first.to_owned(),
+                    }
+                } else {
+                    ChangeKind::Added
+                };
+                (to, kind)
+            }
+            'A' => (first, ChangeKind::Added),
+            'M' => (first, ChangeKind::Modified),
+            'D' => (first, ChangeKind::Deleted),
+            _ => (first, ChangeKind::Other),
+        };
+        changes.push(FileChange {
+            path: path.to_owned(),
+            kind,
+        });
+    }
+    changes
+}
+
+/// Parse `git diff -U0` for one file into its hunks.
+///
+/// With no context lines each hunk is its header, the removed lines and the added ones. A count
+/// missing from a header (`@@ -3 +3 @@`) means one line. The `\ No newline at end of file` note
+/// is git's, not the file's, and is skipped.
+pub fn parse_hunks(output: &str) -> Vec<Hunk> {
+    let mut hunks: Vec<Hunk> = Vec::new();
+    for line in output.lines() {
+        if let Some(header) = line.strip_prefix("@@ ") {
+            if let Some(hunk) = parse_hunk_header(header) {
+                hunks.push(hunk);
+            }
+        } else if let Some(removed) = line.strip_prefix('-') {
+            // `---` is the file header before the first hunk, not a removed line.
+            if let Some(hunk) = hunks.last_mut() {
+                hunk.removed.push(removed.trim_end_matches('\r').to_owned());
+            }
+        }
+    }
+    hunks
+}
+
+/// `-12,3 +12,4 @@ context` → the four numbers.
+fn parse_hunk_header(header: &str) -> Option<Hunk> {
+    let mut parts = header.split_whitespace();
+    let old = parts.next()?.strip_prefix('-')?;
+    let new = parts.next()?.strip_prefix('+')?;
+    let range = |spec: &str| -> Option<(u32, u32)> {
+        match spec.split_once(',') {
+            Some((start, count)) => Some((start.parse().ok()?, count.parse().ok()?)),
+            None => Some((spec.parse().ok()?, 1)),
+        }
+    };
+    let (old_start, old_lines) = range(old)?;
+    let (new_start, new_lines) = range(new)?;
+    Some(Hunk {
+        old_start,
+        old_lines,
+        new_start,
+        new_lines,
+        removed: Vec::new(),
+    })
 }
 
 /// Parse `git status --porcelain=v1 -z`.
@@ -537,5 +621,88 @@ mod tests {
     #[test]
     fn an_empty_listing_is_an_empty_list_and_not_a_truncated_one() {
         assert_eq!(parse_path_list(""), PathList::default());
+    }
+
+    #[test]
+    fn name_status_reads_a_rename_s_two_paths_and_keeps_the_entries_after_it_in_step() {
+        let out =
+            "M\0src/app.py\0R087\0old/name.py\0new/name.py\0A\0docs/new.md\0D\0gone.txt\0T\0link\0";
+
+        assert_eq!(
+            parse_name_status(out),
+            [
+                FileChange {
+                    path: "src/app.py".to_owned(),
+                    kind: ChangeKind::Modified
+                },
+                FileChange {
+                    path: "new/name.py".to_owned(),
+                    kind: ChangeKind::Renamed {
+                        from: "old/name.py".to_owned()
+                    }
+                },
+                FileChange {
+                    path: "docs/new.md".to_owned(),
+                    kind: ChangeKind::Added
+                },
+                FileChange {
+                    path: "gone.txt".to_owned(),
+                    kind: ChangeKind::Deleted
+                },
+                FileChange {
+                    path: "link".to_owned(),
+                    kind: ChangeKind::Other
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn hunks_read_their_ranges_with_a_missing_count_meaning_one_and_keep_removed_lines() {
+        let out = concat!(
+            "diff --git a/app.py b/app.py\n",
+            "--- a/app.py\n",
+            "+++ b/app.py\n",
+            "@@ -3 +3 @@ def a():\n",
+            "-    return 1\n",
+            "+    return 2\n",
+            "@@ -10,2 +9,0 @@\n",
+            "--- a comment that started with two dashes\n",
+            "-gone()\n",
+            "@@ -20,0 +18,3 @@ class B:\n",
+            "+one\n",
+            "+two\n",
+            "+three\n",
+            "\\ No newline at end of file\n",
+        );
+
+        let hunks = parse_hunks(out);
+
+        assert_eq!(hunks.len(), 3);
+        assert_eq!(
+            (
+                hunks[0].old_start,
+                hunks[0].old_lines,
+                hunks[0].new_start,
+                hunks[0].new_lines
+            ),
+            (3, 1, 3, 1)
+        );
+        assert_eq!(hunks[0].removed, ["    return 1"]);
+        assert_eq!(
+            (hunks[1].new_start, hunks[1].new_lines),
+            (9, 0),
+            "a deletion"
+        );
+        assert_eq!(
+            hunks[1].removed,
+            ["-- a comment that started with two dashes", "gone()"]
+        );
+        assert_eq!(
+            (hunks[2].old_lines, hunks[2].new_lines),
+            (0, 3),
+            "an insertion"
+        );
+        assert!(hunks[2].removed.is_empty());
     }
 }

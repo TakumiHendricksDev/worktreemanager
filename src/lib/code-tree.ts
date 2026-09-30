@@ -218,3 +218,17 @@ export function findNode(
   }
   return current;
 }
+
+/** Every folder under a root, for a tree that shows all of them open — the Changes view. */
+export function folderPaths(root: TreeNode): Set<string> {
+  const out = new Set<string>();
+  const walk = (dir: TreeNode): void => {
+    for (const child of dir.children) {
+      if (child.kind !== 'dir') continue;
+      out.add(child.path);
+      walk(child);
+    }
+  };
+  walk(root);
+  return out;
+}

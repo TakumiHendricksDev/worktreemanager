@@ -180,3 +180,42 @@
     display: none;
   }
 }
+
+.c-code-view__views {
+  display: flex;
+  gap: 2px;
+}
+
+.c-code-view__count {
+  margin-left: 5px;
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}
+
+.c-code-view__spacer {
+  flex: 1 1 auto;
+}
+
+/* What Changes compares with, under the tree's header. */
+.c-code-view__scope {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: 4px var(--sp-2) 4px var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--step--2);
+}
+
+.c-code-view__against {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
+.c-code-view__changes {
+  color: var(--fg-muted);
+}

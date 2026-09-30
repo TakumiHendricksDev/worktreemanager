@@ -285,6 +285,38 @@ export interface CodeSearch {
   ignoredStopped: boolean;
 }
 
+/** How a file differs from the Changes view's revision. */
+export type CodeChangeKind =
+  'added' | 'modified' | 'deleted' | 'renamed' | 'untracked' | 'other';
+
+/** Mirrors `CodeChangeView`. */
+export interface CodeChange {
+  path: string;
+  kind: CodeChangeKind;
+  /** Where a renamed file was. */
+  from: string | null;
+}
+
+/** Mirrors `CodeChangesView`. */
+export interface CodeChanges {
+  /** The scope actually used: a branch with no base falls back to uncommitted. */
+  scope: 'branch' | 'uncommitted';
+  /** The base branch's name, or `HEAD`. */
+  against: string;
+  /** Handed back to `codeFileDiff` and `codeBaseVersion` as given. */
+  rev: string;
+  changes: CodeChange[];
+}
+
+/** Mirrors `CodeHunkView`. A zero count means that side has no lines here. */
+export interface CodeHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  removed: string[];
+}
+
 export interface Field {
   key: string;
   label: string;

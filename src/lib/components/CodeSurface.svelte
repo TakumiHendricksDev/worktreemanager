@@ -8,6 +8,7 @@
    */
   import { onMount, untrack } from 'svelte';
 
+  import { allAdded } from '../code-diff';
   import { code, type Popup } from '../state/code.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
@@ -35,6 +36,29 @@
   const tabs = $derived(worktreeId ? (code.tabs[worktreeId] ?? []) : []);
   const active = $derived(worktreeId ? (code.active[worktreeId] ?? null) : null);
   const file = $derived(worktreeId && active ? code.fileOf(worktreeId, active) : null);
+  const view = $derived(worktreeId ? (code.view[worktreeId] ?? 'project') : 'project');
+  const scope = $derived(worktreeId ? (code.scope[worktreeId] ?? 'branch') : 'branch');
+  const changes = $derived(worktreeId ? (code.changes[worktreeId]?.answer ?? null) : null);
+  const change = $derived(worktreeId && active ? code.changeOf(worktreeId, active) : null);
+  /** The open file's text, whichever way it arrived. */
+  const text = $derived(
+    file?.status === 'ready' ? file.file.text : file?.status === 'base' ? file.text : null,
+  );
+  /*
+   * The gutter's hunks. A new or untracked file is all added, which needs no diff; an edited or
+   * renamed one asks git; anything else has no markers.
+   */
+  const hunks = $derived.by(() => {
+    if (!worktreeId || !active || !change || text === null) return null;
+    if (change.kind === 'added' || change.kind === 'untracked') {
+      return allAdded(
+        text.endsWith('\n') ? text.split('\n').length - 1 : text.split('\n').length,
+      );
+    }
+    return code.hunksOf(worktreeId, active);
+  });
+  /** Which change the stepper last landed on, for "2 of 5". Reset when the file changes. */
+  let stepAt = $state<number | null>(null);
 
   /** The popup on screen, from `code.popup`, and the last request already opened. */
   let popup = $state<Popup | null>(null);
@@ -72,6 +96,28 @@
 
   function kib(bytes: number): string {
     return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024).toLocaleString()} KiB`;
+  }
+
+  // A changed file's hunks, for the gutter, once per answer from git.
+  $effect(() => {
+    if (!visible || !projectId || !worktreeId || !active || !change) return;
+    untrack(() => void code.loadHunks(projectId, worktreeId, active));
+  });
+
+  // A deleted file, opened from Changes, shows what it was rather than a dead end.
+  $effect(() => {
+    if (!projectId || !worktreeId || !active || file?.status !== 'gone') return;
+    if (change?.kind !== 'deleted') return;
+    untrack(() => void code.openBase(projectId, worktreeId, active));
+  });
+
+  $effect(() => {
+    void active;
+    stepAt = null;
+  });
+
+  function stepChange(direction: 1 | -1): void {
+    stepAt = viewer?.step(direction)?.index ?? null;
   }
 
   // A shortcut asked for a popup. `App` has already switched to this view.
@@ -151,7 +197,25 @@
     <div class="c-code-view__body">
       <aside class="c-code-view__explorer" aria-label="Project files">
         <header class="c-code-view__explorer-head">
-          <span class="c-code-view__explorer-title">Project</span>
+          <div class="c-code-view__views" role="group" aria-label="Tree">
+            <Button
+              variant={view === 'project' ? 'neutral' : 'quiet'}
+              size="sm"
+              ariaPressed={view === 'project'}
+              onclick={() => code.setView(worktreeId, 'project')}>Project</Button
+            >
+            <Button
+              variant={view === 'changes' ? 'neutral' : 'quiet'}
+              size="sm"
+              ariaPressed={view === 'changes'}
+              title="Only the files this worktree changed"
+              onclick={() => code.setView(worktreeId, 'changes')}
+              >Changes{#if changes && changes.changes.length > 0}<span
+                  class="c-code-view__count">{changes.changes.length}</span
+                >{/if}</Button
+            >
+          </div>
+          <span class="c-code-view__spacer"></span>
           <Button
             variant="quiet"
             size="sm"
@@ -195,6 +259,36 @@
             onclick={refresh}><Icon name="restart" size={14} /></Button
           >
         </header>
+        {#if view === 'changes'}
+          <div class="c-code-view__scope">
+            <span class="c-code-view__against">
+              {#if changes?.scope === 'branch'}
+                Since <code>{changes.against}</code>
+              {:else}
+                Not yet committed
+              {/if}
+            </span>
+            <Button
+              variant="link"
+              size="sm"
+              title={scope === 'branch'
+                ? 'Show only what is not committed yet'
+                : 'Show everything this branch changed since its base'}
+              onclick={() =>
+                projectId &&
+                code.setScope(
+                  projectId,
+                  worktreeId,
+                  scope === 'branch' ? 'uncommitted' : 'branch',
+                )}>{scope === 'branch' ? 'Uncommitted only' : 'Whole branch'}</Button
+            >
+          </div>
+          {#if scope === 'branch' && changes?.scope === 'uncommitted'}
+            <p class="c-code-view__notice">
+              There is no base branch to compare with, so this is what is not committed yet.
+            </p>
+          {/if}
+        {/if}
         {#if error}
           <p class="c-code-view__notice c-code-view__notice--error">{error}</p>
         {/if}
@@ -249,7 +343,37 @@
             {#if file?.status === 'ready' && file.file.outside}
               <span class="c-code-view__flag">outside the worktree, through a link</span>
             {/if}
+            {#if hunks && hunks.length > 0}
+              <span class="c-code-view__spacer"></span>
+              <span class="c-code-view__changes">
+                {stepAt === null
+                  ? `${hunks.length} change${hunks.length === 1 ? '' : 's'}`
+                  : `${stepAt + 1} of ${hunks.length}`}
+              </span>
+              <Button
+                variant="quiet"
+                size="sm"
+                icon="sm"
+                title="Previous change"
+                ariaLabel="Previous change"
+                onclick={() => stepChange(-1)}><Icon name="chevron-up" size={12} /></Button
+              >
+              <Button
+                variant="quiet"
+                size="sm"
+                icon="sm"
+                title="Next change"
+                ariaLabel="Next change"
+                onclick={() => stepChange(1)}><Icon name="chevron-down" size={12} /></Button
+              >
+            {/if}
           </div>
+        {/if}
+
+        {#if file?.status === 'base'}
+          <p class="c-code-view__notice">
+            Deleted. This is how it was on <code>{file.against}</code>.
+          </p>
         {/if}
 
         {#if file?.status === 'ready' && file.file.truncated}
@@ -258,7 +382,7 @@
           </p>
         {/if}
 
-        <CodeViewer bind:this={viewer} {worktreeId} path={active} {file} />
+        <CodeViewer bind:this={viewer} {worktreeId} path={active} {file} {hunks} />
 
         {#if !active}
           <div class="c-code-view__placeholder"><p>Choose a file on the left.</p></div>
@@ -270,7 +394,7 @@
           </div>
         {:else if file.status === 'error'}
           <div class="c-code-view__placeholder"><p>{file.message}</p></div>
-        {:else if file.file.text === null}
+        {:else if file.status === 'ready' && file.file.text === null}
           <div class="c-code-view__placeholder">
             <p>A binary file, {kib(file.file.size)}. Nothing to read here.</p>
           </div>
