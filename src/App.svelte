@@ -13,6 +13,8 @@
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
   import CodeSurface from './lib/components/CodeSurface.svelte';
+  import { chordOf } from './lib/code-shortcuts';
+  import { code } from './lib/state/code.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
@@ -316,10 +318,29 @@
     };
     window.addEventListener('keydown', onKey);
 
+    /*
+     * The Code tab's chords — ⇧⌘O and the rest in `code-shortcuts.ts` — from any view.
+     *
+     * Here because each one first switches the main pane to Code, and this file owns which view is
+     * showing. Capture phase, and stopped, so neither a focused terminal's xterm nor a CodeMirror
+     * keymap sees the chord first. A modal on screen keeps the keyboard; nothing opens over it.
+     */
+    const onCodeChord = (event: KeyboardEvent) => {
+      const chord = chordOf(event);
+      if (!chord || !booted || !workspace.selected) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      mainView = 'code';
+      code.ask(chord, window.getSelection()?.toString().trim().split('\n')[0] ?? '');
+    };
+    window.addEventListener('keydown', onCodeChord, true);
+
     return () => {
       gone = true;
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onCodeChord, true);
       void unlistenSettings.then((off) => off());
       void unlistenUpdates.then((off) => off());
       void unlistenClicks.then((off) => off());

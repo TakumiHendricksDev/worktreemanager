@@ -30,7 +30,23 @@ import { dropCodeCaches, readCodeCache, writeCodeCache } from './code-cache';
 
 interface Loaded {
   root: TreeNode;
+  /** Every file git listed that is still on disk and is a file, for Go to File. */
+  paths: string[];
   truncated: boolean;
+}
+
+/**
+ * One of the Code tab's popups, asked for by a shortcut.
+ *
+ * `App` owns the shortcuts, because it owns which view is showing and every one of them first
+ * switches to Code; `CodeSurface` owns the popups, because it knows the worktree. This is the note
+ * one leaves for the other. `id` makes the same shortcut twice two requests.
+ */
+export interface Popup {
+  id: number;
+  kind: 'file';
+  /** What to start the query with — the text selected when the shortcut was pressed. */
+  query: string;
 }
 
 /** An open file, as the viewer needs it. */
@@ -78,8 +94,10 @@ class CodeState {
   /** Every open file's contents, keyed by worktree and path. */
   files = $state.raw<Record<string, FileState>>({});
   reveal = $state<Reveal | null>(null);
+  popup = $state<Popup | null>(null);
 
   private revealed = 0;
+  private popups = 0;
   /** Which project each worktree's state belongs to, for persisting and pruning. */
   private projectOf = new Map<string, string>();
   /** Requests in flight, so a focus refresh during a slow listing does not start a second. */
@@ -141,9 +159,15 @@ class CodeState {
     this.loading[worktreeId] = true;
     try {
       const listing = await commands.codeTree(projectId, worktreeId);
+      // Not a file to open: deleted from disk, or a directory git listed as one entry.
+      const missing = new Set([...listing.missing, ...listing.dirs]);
       this.trees = {
         ...this.trees,
-        [worktreeId]: { root: buildTree(listing), truncated: listing.truncated },
+        [worktreeId]: {
+          root: buildTree(listing),
+          paths: listing.files.filter((path) => !missing.has(path)),
+          truncated: listing.truncated,
+        },
       };
       this.errors[worktreeId] = null;
       this.loaded = { ...this.loaded, [worktreeId]: new Map() };
@@ -229,6 +253,12 @@ class CodeState {
       this.reveal = { id: this.revealed, worktreeId, path, ...at };
     }
     void this.ensure(projectId, worktreeId, path);
+  }
+
+  /** Ask for a popup. `CodeSurface` opens it for the worktree on screen. */
+  ask(kind: Popup['kind'], query = ''): void {
+    this.popups += 1;
+    this.popup = { id: this.popups, kind, query };
   }
 
   /** Switch tabs without changing which are open. */

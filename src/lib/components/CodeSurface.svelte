@@ -8,13 +8,15 @@
    */
   import { onMount, untrack } from 'svelte';
 
-  import { code } from '../state/code.svelte';
+  import { code, type Popup } from '../state/code.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import CodeTree from './CodeTree.svelte';
   import CodeViewer from './CodeViewer.svelte';
+  import GoTo from './GoTo.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
+  import { GO_TO_FILE_SHORTCUT } from '../code-shortcuts';
 
   const {
     visible,
@@ -32,6 +34,10 @@
   const tabs = $derived(worktreeId ? (code.tabs[worktreeId] ?? []) : []);
   const active = $derived(worktreeId ? (code.active[worktreeId] ?? null) : null);
   const file = $derived(worktreeId && active ? code.fileOf(worktreeId, active) : null);
+
+  /** The popup on screen, from `code.popup`, and the last request already opened. */
+  let popup = $state<Popup | null>(null);
+  let poppedFor = 0;
 
   let treeView = $state<ReturnType<typeof CodeTree> | null>(null);
   let viewer = $state<ReturnType<typeof CodeViewer> | null>(null);
@@ -66,6 +72,14 @@
   function kib(bytes: number): string {
     return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024).toLocaleString()} KiB`;
   }
+
+  // A shortcut asked for a popup. `App` has already switched to this view.
+  $effect(() => {
+    const request = code.popup;
+    if (!request || request.id === poppedFor || !visible || !worktreeId) return;
+    poppedFor = request.id;
+    popup = request;
+  });
 
   // Re-read whenever the tab is looked at, including arriving on another worktree while it shows.
   $effect(() => {
@@ -137,6 +151,14 @@
       <aside class="c-code-view__explorer" aria-label="Project files">
         <header class="c-code-view__explorer-head">
           <span class="c-code-view__explorer-title">Project</span>
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title={`Go to file (${GO_TO_FILE_SHORTCUT})`}
+            ariaLabel="Go to file"
+            onclick={() => code.ask('file')}><Icon name="search" size={14} /></Button
+          >
           <Button
             variant="quiet"
             size="sm"
@@ -250,3 +272,12 @@
     <div class="c-code-view__placeholder"><p>Select a worktree on the left.</p></div>
   {/if}
 </section>
+
+{#if popup?.kind === 'file' && worktreeId}
+  <GoTo
+    paths={tree?.paths ?? []}
+    initial={popup.query}
+    onpick={open}
+    onclose={() => (popup = null)}
+  />
+{/if}

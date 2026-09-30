@@ -80,9 +80,11 @@
     onsubmit,
     closeDisabled = false,
     wide = false,
+    shape = 'dialog',
     body,
     footer,
   }: {
+    /** Read by screen readers always; drawn only by the `dialog` shape, which has a header. */
     title: string;
     onclose: () => void;
     /**
@@ -94,8 +96,16 @@
     /** True while an operation is in flight and dismissing would abandon it mid-way. */
     closeDisabled?: boolean;
     wide?: boolean;
+    /**
+     * `dialog` is the modal with a header and a footer. The other two are the Code tab's popups —
+     * a question you type into rather than one you answer — so they have neither, hang from the
+     * top of the window instead of sitting in its middle, and keep everything else: the scrim,
+     * Escape, the focus trap and hiding native browser views. `palette` is Go to File's size;
+     * `finder` is Find in Files', which needs room for a result list and a preview.
+     */
+    shape?: 'dialog' | 'palette' | 'finder';
     body: Snippet;
-    footer: Snippet;
+    footer?: Snippet;
   } = $props();
 
   let panel = $state<HTMLElement | null>(null);
@@ -210,22 +220,26 @@
     bind:this={panel}
     class="c-dialog"
     class:c-dialog--wide={wide}
+    class:c-dialog--palette={shape === 'palette'}
+    class:c-dialog--finder={shape === 'finder'}
     role="dialog"
     aria-modal="true"
     aria-label={title}
   >
-    <div class="c-dialog__head">
-      <h2 class="c-dialog__title">{title}</h2>
-      <Button
-        variant="quiet"
-        icon="md"
-        disabled={closeDisabled}
-        onclick={onclose}
-        ariaLabel="Close"
-      >
-        <Icon name="close" />
-      </Button>
-    </div>
+    {#if shape === 'dialog'}
+      <div class="c-dialog__head">
+        <h2 class="c-dialog__title">{title}</h2>
+        <Button
+          variant="quiet"
+          icon="md"
+          disabled={closeDisabled}
+          onclick={onclose}
+          ariaLabel="Close"
+        >
+          <Icon name="close" />
+        </Button>
+      </div>
+    {/if}
 
     {#if onsubmit}
       <!-- `display: contents` so the form participates in no layout: the panel's flex column
@@ -233,11 +247,15 @@
            scrollable and the footer pinned. -->
       <form {onsubmit} class="c-dialog__form">
         <div class="c-dialog__body">{@render body()}</div>
-        <div class="c-dialog__foot">{@render footer()}</div>
+        {#if footer}<div class="c-dialog__foot">{@render footer()}</div>{/if}
       </form>
-    {:else}
+    {:else if shape === 'dialog'}
       <div class="c-dialog__body">{@render body()}</div>
-      <div class="c-dialog__foot">{@render footer()}</div>
+      {#if footer}<div class="c-dialog__foot">{@render footer()}</div>{/if}
+    {:else}
+      <!-- A popup's body lays itself out: its list scrolls, not the panel. -->
+      {@render body()}
+      {#if footer}<div class="c-dialog__foot">{@render footer()}</div>{/if}
     {/if}
   </div>
 </div>

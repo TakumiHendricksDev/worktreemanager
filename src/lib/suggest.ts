@@ -120,6 +120,36 @@ export function matchFiles(paths: readonly string[], query: string): Suggestion[
   });
 }
 
+/**
+ * Rank paths for Go to File, where the file's own name is what was typed.
+ *
+ * `matchFiles` scores the whole path, which suits `@` in the composer — people type a folder there
+ * as often as a name. A Go to File query is almost always the name, so a hit in the name outranks
+ * any hit that needs the folders to make it: `views` puts `events/views.py` above
+ * `reviews/admin.py`. A query with a `/` in it is about folders and is scored on the whole path.
+ */
+export function matchFileNames(paths: readonly string[], query: string): Suggestion[] {
+  const q = query.toLowerCase();
+  if (q === '') return matchFiles(paths, '');
+  const hits: { path: string; score: number }[] = [];
+  for (const path of paths) {
+    const lower = path.toLowerCase();
+    const name = q.includes('/')
+      ? null
+      : score_(lower.slice(lower.lastIndexOf('/') + 1), q);
+    const score = name !== null ? name + NAME_BONUS : score_(lower, q);
+    if (score !== null) hits.push({ path, score });
+  }
+  hits.sort((a, b) => b.score - a.score || a.path.length - b.path.length);
+  return matchFiles(
+    hits.slice(0, LIMIT).map((hit) => hit.path),
+    '',
+  );
+}
+
+/** Lifts a name hit above every path-only tier, which top out at 3000. */
+const NAME_BONUS = 4000;
+
 /** Rank skills against a query. Matched on the name only — a description is context, not a key. */
 export function matchSkills(
   skills: readonly { name: string; description: string | null }[],
