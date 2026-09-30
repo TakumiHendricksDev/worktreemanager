@@ -350,7 +350,7 @@ impl Runner {
     /// Read a pipe to completion on its own thread, capped at
     /// [`MAX_CAPTURE_BYTES`].
     fn drain<R: Read + Send + 'static>(reader: Option<R>) -> Drained {
-        let buffer = Arc::new(Mutex::new(String::new()));
+        let buffer = Arc::new(Mutex::new(Vec::new()));
         let truncated = Arc::new(AtomicBool::new(false));
 
         let Some(mut reader) = reader else {
@@ -378,10 +378,11 @@ impl Runner {
                     continue;
                 }
                 total += n;
-                // Lossy: terminal output is not guaranteed to be valid UTF-8, and
-                // a captured command's diagnostics are worth more than byte
-                // fidelity.
-                sink.lock().push_str(&String::from_utf8_lossy(&chunk[..n]));
+                // Bytes, not text: a read ends wherever the pipe happened to split, which
+                // is often inside a multibyte character, and decoding each read on its
+                // own turned every such character into two replacement marks. `take`
+                // decodes the whole capture once.
+                sink.lock().extend_from_slice(&chunk[..n]);
             }
         });
 
@@ -395,7 +396,7 @@ impl Runner {
 
 /// A pipe being drained on a background thread.
 struct Drained {
-    buffer: Arc<Mutex<String>>,
+    buffer: Arc<Mutex<Vec<u8>>>,
     truncated: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -409,7 +410,10 @@ impl Drained {
             // propagating — it would mask the command's own failure.
             let _ = handle.join();
         }
-        let mut out = std::mem::take(&mut *self.buffer.lock());
+        // Lossy: terminal output is not guaranteed to be valid UTF-8, and a captured
+        // command's diagnostics are worth more than byte fidelity.
+        let bytes = std::mem::take(&mut *self.buffer.lock());
+        let mut out = String::from_utf8_lossy(&bytes).into_owned();
         if self.truncated.load(Ordering::SeqCst) {
             out.push_str("\n[output truncated by wtm]\n");
         }
@@ -645,6 +649,27 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "cancel must be prompt: {err:?}"
         );
+    }
+
+    #[test]
+    fn a_multibyte_character_split_between_two_reads_arrives_whole() {
+        // Three-byte characters, so no fixed read size lines up with them: some read is
+        // certain to end inside one, which is where per-read decoding used to leave two
+        // replacement marks.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("euros.txt");
+        let text = "€".repeat(30_000);
+        std::fs::write(&file, &text).unwrap();
+
+        let out = runner()
+            .run(
+                &inv(&["cat", &file.to_string_lossy()], 5_000),
+                &CancelToken::new(),
+            )
+            .unwrap();
+
+        assert!(!out.stdout.contains('\u{FFFD}'), "a character was split");
+        assert_eq!(out.stdout, text);
     }
 
     #[test]
