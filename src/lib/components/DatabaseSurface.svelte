@@ -407,6 +407,12 @@ password = "{{ env.DB_PASSWORD }}"`;
     }
   }
 
+  /** `postgres 16.4`: the engine, and the server's version without its build note. */
+  function serverLabel(session: DatabaseSession): string {
+    const version = session.serverVersion?.split(' ')[0];
+    return version ? `${session.engine} ${version}` : session.engine;
+  }
+
   function relationLabel(kind: DatabaseRelation['kind']): string {
     if (kind === 'materialized_view') return 'materialized view';
     return kind;
@@ -461,13 +467,24 @@ password = "{{ env.DB_PASSWORD }}"`;
         <span class="c-badge"
           >{connection.access === 'read_only' ? 'read only' : 'read/write'}</span
         >
+        <!-- With the badges rather than beside Disconnect: it describes this connection, the way
+             they do, and next to the button it read as the button's label. -->
+        <span
+          class="c-database__status"
+          class:is-connected={!!current?.session}
+          class:is-connecting={!current?.session && current?.connecting}
+          title={current?.session ? serverLabel(current.session) : undefined}
+        >
+          {current?.session
+            ? 'connected'
+            : current?.connecting
+              ? 'connecting…'
+              : 'not connected'}
+        </span>
       {/if}
 
       <span class="c-database__toolbar-spacer"></span>
       {#if current?.session}
-        <span class="c-status--ok" title={current.session.serverVersion ?? undefined}
-          >connected</span
-        >
         <Button variant="quiet" size="sm" onclick={() => void disconnect()}
           >Disconnect</Button
         >
@@ -506,7 +523,7 @@ password = "{{ env.DB_PASSWORD }}"`;
         <aside class="c-database__explorer" aria-label="Database objects">
           <div class="c-database__explorer-title">
             <strong>{current.session.label}</strong>
-            <span>{current.session.engine}</span>
+            <span>{serverLabel(current.session)}</span>
           </div>
           <div class="c-database__search" role="search">
             <span class="c-database__search-icon"><Icon name="search" size={14} /></span>

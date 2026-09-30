@@ -42,6 +42,51 @@
   flex: 1 1 auto;
 }
 
+/*
+ * The connection's state, shaped like the `.c-badge`s it sits with so the row reads as one set of
+ * facts. The dot is hollow while disconnected, filled once connected and pulsing between — shape
+ * and word as well as hue, by the same rule `_dot.scss` explains.
+ */
+.c-database__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  background: var(--bg-hover);
+  white-space: nowrap;
+}
+
+.c-database__status::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-radius: 999px;
+}
+
+.c-database__status.is-connected {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.c-database__status.is-connected::before {
+  background: currentColor;
+}
+
+.c-database__status.is-connecting::before {
+  animation: c-dot-pulse 1.6s var(--ease) infinite;
+}
+
+/* `animation: none` rather than the global duration clamp, which would flicker it — see `_dot.scss`. */
+@media (prefers-reduced-motion: reduce) {
+  .c-database__status.is-connecting::before {
+    animation: none;
+  }
+}
+
 .c-database__notice,
 .c-database__error {
   flex: 0 0 auto;
