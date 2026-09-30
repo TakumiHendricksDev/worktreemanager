@@ -253,6 +253,38 @@ export interface CodeStat {
   size: number;
 }
 
+/** Find in Files' toggles. Mirrors `CodeSearchOptionsView`. */
+export interface CodeSearchOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  /** Comma-separated globs: `*.py, !*.min.js`. A glob with a `/` is a path from the root. */
+  mask: string;
+  includeIgnored: boolean;
+}
+
+/** One matching line. Mirrors `CodeHitView`. */
+export interface CodeHit {
+  path: string;
+  /** 1-based. */
+  line: number;
+  /** The line, or a window of a long one around its first match. */
+  text: string;
+  /** Where `text` starts in the line, in UTF-16 units. */
+  offset: number;
+  /** `[start, end)` in UTF-16 units into `text` — a JS string's own indexing. */
+  ranges: [number, number][];
+}
+
+/** Mirrors `CodeSearchView`. */
+export interface CodeSearch {
+  hits: CodeHit[];
+  matches: number;
+  files: number;
+  truncated: boolean;
+  ignoredStopped: boolean;
+}
+
 export interface Field {
   key: string;
   label: string;

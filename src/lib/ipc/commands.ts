@@ -30,6 +30,8 @@ import type {
   Capability,
   CodeEntry,
   CodeFile,
+  CodeSearch,
+  CodeSearchOptions,
   CodeStat,
   CodeTree,
   CreateOutcome,
@@ -448,6 +450,13 @@ export const commands = {
   /** One file's text, up to five mebibytes; a binary file comes back without any. */
   codeReadFile: (projectId: string, worktreeId: string, path: string) =>
     invoke<CodeFile>('code_read_file', { projectId, worktreeId, path }),
+  /** Find in Files. Starting one stops the one before, which then rejects as `cancelled`. */
+  codeSearch: (
+    projectId: string,
+    worktreeId: string,
+    query: string,
+    options: CodeSearchOptions,
+  ) => invoke<CodeSearch>('code_search', { projectId, worktreeId, query, options }),
   /** When each open file last changed, so a refresh re-reads only what did. */
   codeStat: (projectId: string, worktreeId: string, paths: string[]) =>
     invoke<CodeStat[]>('code_stat', { projectId, worktreeId, paths }),

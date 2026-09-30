@@ -25,7 +25,7 @@ import {
   type TreeNode,
 } from '../code-tree';
 import { commands } from '../ipc/commands';
-import { errorMessage, type CodeFile } from '../ipc/types';
+import { errorMessage, type CodeFile, type CodeSearchOptions } from '../ipc/types';
 import { dropCodeCaches, readCodeCache, writeCodeCache } from './code-cache';
 
 interface Loaded {
@@ -44,7 +44,7 @@ interface Loaded {
  */
 export interface Popup {
   id: number;
-  kind: 'file';
+  kind: 'file' | 'find';
   /** What to start the query with — the text selected when the shortcut was pressed. */
   query: string;
 }
@@ -95,6 +95,21 @@ class CodeState {
   files = $state.raw<Record<string, FileState>>({});
   reveal = $state<Reveal | null>(null);
   popup = $state<Popup | null>(null);
+  /**
+   * Find in Files' last query and toggles, so ⇧⌘F reopens where it was left — PyCharm's
+   * behaviour, and the one that makes "search, open one, come back for the next" work.
+   */
+  find = $state<{ query: string; options: CodeSearchOptions; masked: boolean }>({
+    query: '',
+    options: {
+      caseSensitive: false,
+      wholeWord: false,
+      regex: false,
+      mask: '',
+      includeIgnored: false,
+    },
+    masked: false,
+  });
 
   private revealed = 0;
   private popups = 0;

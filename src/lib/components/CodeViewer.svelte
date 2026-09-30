@@ -22,31 +22,17 @@
   import {
     Decoration,
     EditorView,
-    drawSelection,
     highlightActiveLine,
     highlightActiveLineGutter,
-    highlightSpecialChars,
     keymap,
-    lineNumbers,
     type DecorationSet,
   } from '@codemirror/view';
-  import {
-    bracketMatching,
-    foldGutter,
-    foldKeymap,
-    syntaxHighlighting,
-  } from '@codemirror/language';
-  import {
-    highlightSelectionMatches,
-    openSearchPanel,
-    search,
-    searchKeymap,
-  } from '@codemirror/search';
+  import { foldGutter, foldKeymap } from '@codemirror/language';
+  import { openSearchPanel, search, searchKeymap } from '@codemirror/search';
   import { defaultKeymap } from '@codemirror/commands';
-  import { classHighlighter } from '@lezer/highlight';
   import { onMount, untrack } from 'svelte';
 
-  import { detailHighlighter, selectionTheme } from '../code-editor';
+  import { readingExtensions } from '../code-editor';
   import { languageFor } from '../code-languages';
   import { code, type FileState } from '../state/code.svelte';
 
@@ -102,22 +88,14 @@
   });
 
   const base: Extension = [
-    lineNumbers(),
+    ...readingExtensions(),
     highlightActiveLineGutter(),
-    highlightSpecialChars(),
     foldGutter(),
-    drawSelection(),
-    EditorState.readOnly.of(true),
-    syntaxHighlighting(classHighlighter),
-    syntaxHighlighting(detailHighlighter),
-    bracketMatching(),
     highlightActiveLine(),
-    highlightSelectionMatches(),
     search({ top: true }),
     keymap.of([...searchKeymap, ...foldKeymap, ...defaultKeymap]),
-    selectionTheme,
     flashField,
-    EditorView.contentAttributes.of({ 'aria-label': 'File contents', spellcheck: 'false' }),
+    EditorView.contentAttributes.of({ 'aria-label': 'File contents' }),
     EditorView.updateListener.of((update) => {
       // Keep the stored state current, so a tab switch saves the selection and folds as they are.
       const kept = shown ? states.get(shown) : undefined;

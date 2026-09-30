@@ -13,10 +13,11 @@
   import { workspace } from '../state/workspace.svelte';
   import CodeTree from './CodeTree.svelte';
   import CodeViewer from './CodeViewer.svelte';
+  import FindInFiles from './FindInFiles.svelte';
   import GoTo from './GoTo.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
-  import { GO_TO_FILE_SHORTCUT } from '../code-shortcuts';
+  import { FIND_IN_FILES_SHORTCUT, GO_TO_FILE_SHORTCUT } from '../code-shortcuts';
 
   const {
     visible,
@@ -155,9 +156,17 @@
             variant="quiet"
             size="sm"
             icon="sm"
+            title={`Find in files (${FIND_IN_FILES_SHORTCUT})`}
+            ariaLabel="Find in files"
+            onclick={() => code.ask('find')}><Icon name="search" size={14} /></Button
+          >
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
             title={`Go to file (${GO_TO_FILE_SHORTCUT})`}
             ariaLabel="Go to file"
-            onclick={() => code.ask('file')}><Icon name="search" size={14} /></Button
+            onclick={() => code.ask('file')}><Icon name="file" size={14} /></Button
           >
           <Button
             variant="quiet"
@@ -273,7 +282,24 @@
   {/if}
 </section>
 
-{#if popup?.kind === 'file' && worktreeId}
+{#if popup?.kind === 'find' && projectId && worktreeId}
+  <FindInFiles
+    {projectId}
+    {worktreeId}
+    initial={popup.query}
+    onopen={(hit) => {
+      const [from, to] = hit.ranges[0] ?? [0, 0];
+      if (projectId && worktreeId) {
+        code.open(projectId, worktreeId, hit.path, {
+          line: hit.line,
+          from: hit.offset + from,
+          to: hit.offset + to,
+        });
+      }
+    }}
+    onclose={() => (popup = null)}
+  />
+{:else if popup?.kind === 'file' && worktreeId}
   <GoTo
     paths={tree?.paths ?? []}
     initial={popup.query}

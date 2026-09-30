@@ -13,12 +13,18 @@
 //! [`resolve`] before anything touches the disk. See its documentation for the rule.
 
 mod dir;
+mod mask;
 mod path;
 mod read;
+mod search;
 
-pub use dir::{Entry, EntryKind, Kinds, classify, list_dir};
+pub use dir::{Entry, EntryKind, Kinds, MAX_IGNORED_FILES, classify, list_dir, walk_ignored};
+pub use mask::Mask;
 pub use path::resolve;
 pub use read::{Content, FileText, MAX_READ_BYTES, read_file, stat};
+pub use search::{
+    Hit, MAX_LINES_PER_FILE, MAX_MATCHES, MAX_SEARCH_BYTES, SearchOptions, SearchResults, search,
+};
 
 /// Why a file or directory could not be shown.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -35,6 +41,12 @@ pub enum CodeError {
     NotAFile(String),
     #[error("could not read `{path}`: {message}")]
     Io { path: String, message: String },
+    /// The query or the file mask is not one that can be searched for: an invalid regex, or empty.
+    #[error("{0}")]
+    BadQuery(String),
+    /// A newer search replaced this one before it finished.
+    #[error("the search was replaced by a newer one")]
+    Cancelled,
 }
 
 impl CodeError {

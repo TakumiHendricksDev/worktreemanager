@@ -97,6 +97,65 @@ pub fn classify<'a>(root: &Path, paths: impl IntoIterator<Item = &'a str>) -> Ki
     kinds
 }
 
+/// The most files [`walk_ignored`] collects before it stops.
+///
+/// An ignored tree is where the hundreds of thousands of files are — one `node_modules` measured
+/// 784,571 — and a search over all of them would take long enough that nobody would wait. Two
+/// hundred thousand is room for a virtualenv and a build directory; past it the search says it
+/// stopped, and the file mask is how to aim it at the part that matters.
+pub const MAX_IGNORED_FILES: usize = 200_000;
+
+/// Every file under what git ignores, for a search that includes them.
+///
+/// `ignored` is `Git::ignored`'s listing: files as themselves, directories ending in `/`. Walked
+/// depth first without following links, so a link back up the tree cannot loop and a link out of
+/// the worktree is not searched. Returns the paths and whether it stopped before the end, at the
+/// cap or because `stop` said so.
+pub fn walk_ignored(
+    root: &Path,
+    ignored: &[String],
+    limit: usize,
+    stop: &dyn Fn() -> bool,
+) -> (Vec<String>, bool) {
+    let mut found = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for entry in ignored {
+        match entry.strip_suffix('/') {
+            Some(folder) => pending.push(folder.to_owned()),
+            None => found.push(entry.clone()),
+        }
+    }
+    while let Some(folder) = pending.pop() {
+        if found.len() >= limit || stop() {
+            found.truncate(limit);
+            return (found, true);
+        }
+        let Ok(dir) = resolve(root, &folder) else {
+            continue;
+        };
+        let Ok(read) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = format!("{folder}/{name}");
+            if kind.is_dir() {
+                if name != ".git" {
+                    pending.push(path);
+                }
+            } else if kind.is_file() {
+                found.push(path);
+            }
+        }
+    }
+    let stopped = found.len() > limit;
+    found.truncate(limit);
+    (found, stopped)
+}
+
 fn kind_of(path: &Path) -> EntryKind {
     match fs::metadata(path) {
         Ok(meta) if meta.is_dir() => EntryKind::Dir,
@@ -160,6 +219,52 @@ mod tests {
             list_dir(dir.path(), "gone"),
             Err(CodeError::NotFound("gone".to_owned()))
         );
+    }
+
+    #[test]
+    fn the_ignored_walk_finds_files_under_ignored_folders_without_following_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("node_modules/pkg/lib")).unwrap();
+        fs::write(dir.path().join("node_modules/pkg/lib/index.js"), "").unwrap();
+        fs::write(dir.path().join("node_modules/pkg/package.json"), "").unwrap();
+        fs::write(elsewhere.path().join("secret.txt"), "").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("node_modules/out")).unwrap();
+        // A link back up the tree, which a walk that followed links would never finish.
+        std::os::unix::fs::symlink(dir.path(), dir.path().join("node_modules/loop")).unwrap();
+        fs::write(dir.path().join("debug.log"), "").unwrap();
+
+        let (mut files, stopped) = walk_ignored(
+            dir.path(),
+            &["node_modules/".to_owned(), "debug.log".to_owned()],
+            MAX_IGNORED_FILES,
+            &|| false,
+        );
+        files.sort();
+
+        assert_eq!(
+            files,
+            [
+                "debug.log",
+                "node_modules/pkg/lib/index.js",
+                "node_modules/pkg/package.json"
+            ]
+        );
+        assert!(!stopped);
+    }
+
+    #[test]
+    fn the_ignored_walk_stops_at_its_limit_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("dist")).unwrap();
+        for i in 0..10 {
+            fs::write(dir.path().join(format!("dist/{i}.js")), "").unwrap();
+        }
+
+        let (files, stopped) = walk_ignored(dir.path(), &["dist/".to_owned()], 4, &|| false);
+
+        assert_eq!(files.len(), 4);
+        assert!(stopped);
     }
 
     #[test]

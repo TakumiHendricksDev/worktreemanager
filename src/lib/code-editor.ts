@@ -5,16 +5,21 @@
  * so that the two editors cannot drift apart on it.
  */
 
-import { syntaxTree } from '@codemirror/language';
+import { EditorState, type Extension } from '@codemirror/state';
+import { bracketMatching, syntaxHighlighting, syntaxTree } from '@codemirror/language';
+import { highlightSelectionMatches } from '@codemirror/search';
 import {
   Decoration,
   EditorView,
   MatchDecorator,
   ViewPlugin,
+  drawSelection,
+  highlightSpecialChars,
+  lineNumbers,
   type DecorationSet,
   type ViewUpdate,
 } from '@codemirror/view';
-import { tagHighlighter, tags as t } from '@lezer/highlight';
+import { classHighlighter, tagHighlighter, tags as t } from '@lezer/highlight';
 
 /*
  * The one colour decision that cannot live in the stylesheet, and it only names a token.
@@ -90,3 +95,25 @@ export const pythonSelf = ViewPlugin.fromClass(
   },
   { decorations: (plugin) => plugin.marks },
 );
+
+/**
+ * What every read-only view of a file has: the Code tab's viewer and Find in Files' preview.
+ *
+ * Read-only through the state rather than the view, so the content stays focusable — see
+ * `CodeViewer`. Each caller adds what only it needs: the viewer its folds, keymaps and find
+ * panel; the preview nothing more.
+ */
+export function readingExtensions(): Extension[] {
+  return [
+    lineNumbers(),
+    highlightSpecialChars(),
+    drawSelection(),
+    EditorState.readOnly.of(true),
+    syntaxHighlighting(classHighlighter),
+    syntaxHighlighting(detailHighlighter),
+    bracketMatching(),
+    highlightSelectionMatches(),
+    selectionTheme,
+    EditorView.contentAttributes.of({ spellcheck: 'false' }),
+  ];
+}

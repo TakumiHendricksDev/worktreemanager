@@ -282,6 +282,7 @@ pub fn run() {
             code::code_list_dir,
             code::code_read_file,
             code::code_stat,
+            code::code_search,
             commands::answer_approval,
             commands::interrupt_turn,
             commands::list_agent_sessions,

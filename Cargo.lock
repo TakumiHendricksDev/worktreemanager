@@ -5856,6 +5856,7 @@ dependencies = [
 name = "wtm-code"
 version = "2.1.1"
 dependencies = [
+ "regex",
  "tempfile",
  "thiserror 2.0.21",
  "wtm-core",

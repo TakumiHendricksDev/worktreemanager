@@ -11,7 +11,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use wtm_core::ports::exec::CancelToken;
 
 use crate::app::App;
 use crate::commands::{AppState, Reply, blocking};
@@ -70,6 +71,45 @@ pub struct CodeStatView {
     pub size: u64,
 }
 
+/// Find in Files' toggles, as the popup sends them.
+// Four independent switches, each its own button in the popup. Folding any two into an enum would
+// invent states the popup does not have.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeSearchOptionsView {
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub regex: bool,
+    /// Comma-separated globs; see `wtm_code::Mask`.
+    pub mask: String,
+    /// Also search what `.gitignore` hides, which is walked rather than listed and is bounded.
+    pub include_ignored: bool,
+}
+
+/// One matching line. See `wtm_code::Hit` for what the numbers count.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeHitView {
+    pub path: String,
+    pub line: u32,
+    pub text: String,
+    pub offset: u32,
+    pub ranges: Vec<[u32; 2]>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeSearchView {
+    pub hits: Vec<CodeHitView>,
+    pub matches: usize,
+    pub files: usize,
+    /// It stopped at a cap, so there are more matches than these.
+    pub truncated: bool,
+    /// The walk of ignored files stopped before it had seen them all.
+    pub ignored_stopped: bool,
+}
+
 impl From<wtm_code::CodeError> for ErrorView {
     fn from(err: wtm_code::CodeError) -> Self {
         let kind = match &err {
@@ -78,6 +118,8 @@ impl From<wtm_code::CodeError> for ErrorView {
             wtm_code::CodeError::NotADirectory(_) => "notADirectory",
             wtm_code::CodeError::NotAFile(_) => "notAFile",
             wtm_code::CodeError::Io { .. } => "io",
+            wtm_code::CodeError::BadQuery(_) => "badQuery",
+            wtm_code::CodeError::Cancelled => "cancelled",
         };
         Self::new(kind, err.to_string())
     }
@@ -140,6 +182,76 @@ pub async fn code_list_dir(
                 symlink: entry.symlink,
             })
             .collect())
+    })
+    .await
+}
+
+/// The search that is running, so the next one can stop it.
+///
+/// One for the whole app, not one per worktree: there is one Find in Files popup, and a query typed
+/// into it supersedes the last whichever worktree that was for. A static rather than a field on
+/// `App` because nothing else about the app has any business with it.
+static CURRENT_SEARCH: parking_lot::Mutex<Option<CancelToken>> = parking_lot::Mutex::new(None);
+
+/// Find in Files.
+///
+/// Starting a search cancels the one before it, which the popup does on every pause in typing; the
+/// cancelled one answers `cancelled`, and the popup ignores answers it has moved past anyway.
+#[tauri::command]
+pub async fn code_search(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    query: String,
+    options: CodeSearchOptionsView,
+) -> Reply<CodeSearchView> {
+    let cancel = CancelToken::new();
+    if let Some(previous) = CURRENT_SEARCH.lock().replace(cancel.clone()) {
+        previous.cancel();
+    }
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let root = root_of(&app, &project_id, &worktree_id)?;
+        let mut files = app.git.files(&root)?.paths;
+        let mut ignored_stopped = false;
+        if options.include_ignored {
+            let ignored = app.git.ignored(&root)?;
+            let (more, stopped) =
+                wtm_code::walk_ignored(&root, &ignored.paths, wtm_code::MAX_IGNORED_FILES, &|| {
+                    cancel.is_cancelled()
+                });
+            files.extend(more);
+            ignored_stopped = stopped;
+        }
+        let results = wtm_code::search(
+            &root,
+            &files,
+            &query,
+            &wtm_code::SearchOptions {
+                case_sensitive: options.case_sensitive,
+                whole_word: options.whole_word,
+                regex: options.regex,
+                mask: options.mask,
+            },
+            &cancel,
+        )?;
+        Ok(CodeSearchView {
+            hits: results
+                .hits
+                .into_iter()
+                .map(|hit| CodeHitView {
+                    path: hit.path,
+                    line: hit.line,
+                    text: hit.text,
+                    offset: hit.offset,
+                    ranges: hit.ranges.into_iter().map(|(a, b)| [a, b]).collect(),
+                })
+                .collect(),
+            matches: results.matches,
+            files: results.files,
+            truncated: results.truncated,
+            ignored_stopped,
+        })
     })
     .await
 }
