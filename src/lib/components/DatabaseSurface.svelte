@@ -649,6 +649,7 @@ password = "{{ env.DB_PASSWORD }}"`;
                 {:else if current.tableResult}
                   <DatabaseResult
                     result={current.tableResult}
+                    rowOffset={current.offset}
                     sortable={true}
                     sortColumn={current.sortColumn}
                     sortDirection={current.sortDirection}
