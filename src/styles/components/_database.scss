@@ -481,12 +481,37 @@
   background: var(--bg-hover);
 }
 
+/* The active line is an opaque background on the line element, and CodeMirror draws the selection
+   in a layer *behind* the lines. So the cursor's line hid its share of any selection, and three
+   selected lines looked like two. While anything is selected the selection is the highlight. */
+.c-database__editor.has-selection .cm-activeLine,
+.c-database__editor.has-selection .cm-activeLineGutter {
+  background: transparent;
+}
+
 .c-database__editor .cm-cursor {
   border-left-color: var(--fg);
 }
 
+/* Unfocused only. The focused selection outranks anything this file may write, so `SqlEditor`
+   names the same token in the one theme rule it has. */
 .c-database__editor .cm-selectionBackground {
+  background: var(--selection);
+}
+
+/* CodeMirror's own match colours are fixed light-theme literals — lime and yellow — whichever
+   theme is showing. These tie its base theme's specificity and win on order. */
+.c-database__editor .cm-selectionMatch {
   background: var(--accent-soft);
+}
+
+.c-database__editor .cm-searchMatch {
+  background: var(--warn-mark);
+}
+
+/* The match the panel is on also carries `.cm-searchMatch`, so it keeps that tint and gains a ring. */
+.c-database__editor .cm-searchMatch-selected {
+  outline: 1px solid var(--warn);
 }
 
 .c-database__editor .cm-panels,

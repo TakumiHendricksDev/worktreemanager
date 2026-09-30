@@ -20,6 +20,24 @@
 
   let host = $state<HTMLDivElement | null>(null);
   let editorView = $state<EditorView | null>(null);
+  /** Any range non-empty — the host's `has-selection`, which stops the active line hiding it. */
+  let hasSelection = $state(false);
+
+  /*
+   * The one colour decision that cannot live in the stylesheet, and it only names a token.
+   *
+   * CodeMirror's base theme paints a focused selection with
+   * `.ͼ2.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground` — five classes,
+   * which no selector inside the two-compound-part limit can outrank. So the stylesheet's colour
+   * showed only while the editor was unfocused, and a focused selection was the base theme's
+   * fixed light lavender — which washes the dark theme's light text out to nearly nothing. A
+   * theme's rule ties that specificity and wins, because CodeMirror mounts themes after its base.
+   */
+  const selectionTheme = EditorView.theme({
+    '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+      background: 'var(--selection)',
+    },
+  });
 
   function sqlToRun(view: EditorView): string {
     const range = view.state.selection.main;
@@ -50,8 +68,10 @@
         basicSetup,
         sql({ dialect: PostgreSQL, upperCaseKeywords: true }),
         // Static token classes keep every colour decision in the global stylesheet instead of
-        // letting a JavaScript editor theme become a second visual system.
+        // letting a JavaScript editor theme become a second visual system. `selectionTheme` is
+        // the single exception, and its header says why.
         syntaxHighlighting(classHighlighter),
+        selectionTheme,
         placeholder('SELECT * FROM …'),
         EditorView.contentAttributes.of({
           'aria-label': 'SQL query',
@@ -63,6 +83,7 @@
           if (update.docChanged || update.selectionSet) {
             const range = update.state.selection.main;
             selection = update.state.sliceDoc(range.from, range.to).trim();
+            hasSelection = update.state.selection.ranges.some((r) => !r.empty);
           }
         }),
       ],
@@ -89,4 +110,4 @@
   });
 </script>
 
-<div class="c-database__editor" bind:this={host}></div>
+<div class="c-database__editor" class:has-selection={hasSelection} bind:this={host}></div>

@@ -113,6 +113,10 @@
   /* Its own role rather than `--warn-soft`: this one sits behind text rather than filling a
      panel, and needs more presence to read as a highlight at all. Same argument as `--star`. */
   --warn-mark: color-mix(in oklab, var(--amber-500) 16%, transparent);
+  /* A range the user has selected and is about to act on: text in the SQL editor, cells in a
+     result grid. Its own role rather than `--accent-soft`, which at 12% reads as a hover — three
+     selected lines over code looked like nothing was selected at all. */
+  --selection: color-mix(in oklab, var(--brand-500) 24%, transparent);
 
   /* Two levels, because the app has two elevated things: a control that has taken focus, and a
      modal over a scrim. A middle rung was defined here for a year and never used once — see the
@@ -171,6 +175,7 @@
   --ok-soft: color-mix(in oklab, var(--green-400) 10%, transparent);
   --ok-line: color-mix(in oklab, var(--green-400) 40%, transparent);
   --warn-mark: color-mix(in oklab, var(--amber-400) 16%, transparent);
+  --selection: color-mix(in oklab, var(--brand-400) 32%, transparent);
 
   /*
    * `--shadow-md` was here and is deliberately gone.
