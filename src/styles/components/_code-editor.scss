@@ -1,0 +1,140 @@
+/*
+ * CodeMirror, drawn in the app's tokens: the SQL console's editor and the Code tab's viewer.
+ *
+ * Components layer, as one block rather than a copy under each host: the two editors are the
+ * same widget, and the rules below are about CodeMirror's own elements — the gutter, the
+ * selection layer, the search panel, the token classes `classHighlighter` emits — not about
+ * where it is mounted. Size, border and focus ring stay with the host (`.c-database__editor`),
+ * because those are the only things the two places disagree on.
+ *
+ * Colours come from here and nowhere else. `code-editor.ts` holds the single rule that has to be
+ * an `EditorView.theme`, and its comment says why.
+ */
+
+.c-code-editor .cm-editor {
+  height: 100%;
+  color: var(--fg);
+  background: var(--bg-code);
+}
+
+.c-code-editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.c-code-editor .cm-scroller {
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.c-code-editor .cm-content {
+  padding: var(--sp-3) 0;
+  caret-color: var(--fg);
+}
+
+.c-code-editor .cm-line {
+  padding-inline: var(--sp-2) var(--sp-3);
+}
+
+.c-code-editor .cm-gutters {
+  border-right: 1px solid var(--border);
+  color: var(--fg-subtle);
+  background: var(--bg-elevated);
+}
+
+.c-code-editor .cm-activeLine,
+.c-code-editor .cm-activeLineGutter {
+  background: var(--bg-hover);
+}
+
+/* The active line is an opaque background on the line element, and CodeMirror draws the selection
+   in a layer *behind* the lines. So the cursor's line hid its share of any selection, and three
+   selected lines looked like two. While anything is selected the selection is the highlight. */
+.c-code-editor.has-selection .cm-activeLine,
+.c-code-editor.has-selection .cm-activeLineGutter {
+  background: transparent;
+}
+
+.c-code-editor .cm-cursor {
+  border-left-color: var(--fg);
+}
+
+/* Unfocused only. The focused selection outranks anything this file may write, so
+   `code-editor.ts` names the same token in the one theme rule it has. */
+.c-code-editor .cm-selectionBackground {
+  background: var(--selection);
+}
+
+/* CodeMirror's own match colours are fixed light-theme literals — lime and yellow — whichever
+   theme is showing. These tie its base theme's specificity and win on order. */
+.c-code-editor .cm-selectionMatch {
+  background: var(--accent-soft);
+}
+
+.c-code-editor .cm-searchMatch {
+  background: var(--warn-mark);
+}
+
+/* The match the panel is on also carries `.cm-searchMatch`, so it keeps that tint and gains a ring. */
+.c-code-editor .cm-searchMatch-selected {
+  outline: 1px solid var(--warn);
+}
+
+.c-code-editor .cm-panels,
+.c-code-editor .cm-tooltip {
+  color: var(--fg);
+  background: var(--bg-elevated);
+}
+
+.c-code-editor .cm-panels {
+  border-color: var(--border);
+}
+
+.c-code-editor .cm-tooltip {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.c-code-editor .cm-textfield,
+.c-code-editor .cm-button {
+  border: 1px solid var(--border);
+  color: var(--fg);
+  background: var(--bg-input);
+}
+
+.c-code-editor [aria-selected='true'] {
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+
+.c-code-editor .tok-keyword,
+.c-code-editor .tok-operator {
+  color: var(--accent);
+}
+
+.c-code-editor .tok-typeName,
+.c-code-editor .tok-variableName2 {
+  color: var(--info);
+}
+
+.c-code-editor .tok-string,
+.c-code-editor .tok-string2 {
+  color: var(--ok);
+}
+
+.c-code-editor .tok-number,
+.c-code-editor .tok-bool,
+.c-code-editor .tok-atom {
+  color: var(--warn);
+}
+
+.c-code-editor .tok-comment {
+  font-style: italic;
+  color: var(--fg-subtle);
+}
+
+.c-code-editor .tok-invalid {
+  color: var(--danger);
+}
