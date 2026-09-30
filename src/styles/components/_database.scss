@@ -342,6 +342,14 @@
   border-top: 1px solid var(--border);
 }
 
+/* The grid, and the value panel beside it when one is open. The footer stays full-width below. */
+.c-database__result-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
 .c-database__grid-wrap {
   flex: 1 1 auto;
   min-width: 0;
@@ -454,6 +462,71 @@
 
 .c-database__sort.is-active {
   color: var(--accent);
+}
+
+/* A fixed width rather than a share of the row: the grid should keep its columns where they were,
+   so arrowing down a column with the panel open does not reflow what you are reading along. */
+.c-database__value {
+  flex: 0 0 min(24rem, 40%);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.c-database__value-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-database__value-head div {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--step--1);
+}
+
+.c-database__value-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-database__value-head span {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+/* Selectable, unlike the grid's cells: taking part of a long value is the point of opening it. */
+.c-database__value-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: var(--sp-3);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.c-database__value-note {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
 }
 
 .c-database__null {

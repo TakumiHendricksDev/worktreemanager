@@ -609,7 +609,10 @@
         hidden while the create pane owns the screen.
       -->
       <SessionSurface visible={booted && mainView === 'worktree'} />
-      <DatabaseSurface visible={booted && mainView === 'database'} />
+      <DatabaseSurface
+        visible={booted && mainView === 'database'}
+        onsessions={() => (mainView = 'worktree')}
+      />
     </main>
   </div>
 

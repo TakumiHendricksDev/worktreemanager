@@ -17,6 +17,8 @@
     type DatabaseSession,
     type QueryResult,
   } from '../ipc/types';
+  import { quoteIdentifier, toCsv, type SelectedCells } from '../database-grid';
+  import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -25,9 +27,12 @@
 
   const {
     visible,
+    onsessions,
   }: {
     /** Hidden rather than unmounted so shared consoles and local table positions remain intact. */
     visible: boolean;
+    /** Show the worktree's panes — where a selection sent to an agent lands. */
+    onsessions: () => void;
   } = $props();
 
   type Mode = 'data' | 'query';
@@ -43,6 +48,8 @@
     mode: Mode;
     tableResult: QueryResult | null;
     queryResult: QueryResult | null;
+    /** The statement `queryResult` came from, which the editor may no longer hold. */
+    querySql: string;
     sql: string;
     relationFilter: string;
     offset: number;
@@ -109,6 +116,7 @@ password = "{{ env.DB_PASSWORD }}"`;
       mode: 'data',
       tableResult: null,
       queryResult: null,
+      querySql: '',
       sql: '',
       relationFilter: '',
       offset: 0,
@@ -391,6 +399,7 @@ password = "{{ env.DB_PASSWORD }}"`;
     state.error = null;
     try {
       state.queryResult = await commands.runDatabaseQuery(state.session.id, sql);
+      state.querySql = sql;
     } catch (error) {
       state.error = errorMessage(error);
     } finally {
@@ -411,6 +420,82 @@ password = "{{ env.DB_PASSWORD }}"`;
   function serverLabel(session: DatabaseSession): string {
     const version = session.serverVersion?.split(' ')[0];
     return version ? `${session.engine} ${version}` : session.engine;
+  }
+
+  /**
+   * The page with each column's type from the relation's schema. Postgres results arrive untyped —
+   * the simple query protocol carries names only — so without this the header tooltips and the
+   * value panel had nothing to say about what a column holds.
+   */
+  const typedTable = $derived.by(() => {
+    const result = current?.tableResult;
+    if (!result) return null;
+    const types = new Map(current.columns.map((column) => [column.name, column.typeName]));
+    return {
+      ...result,
+      columns: result.columns.map((column) => ({
+        ...column,
+        typeName: column.typeName ?? types.get(column.name) ?? null,
+      })),
+    };
+  });
+
+  /** The agent a selection would go to: the focused one in this worktree, else its first. */
+  const destination = $derived(worktreeId ? sessions.draftDestination(worktreeId) : null);
+
+  /** More than this is a wall no one reads in a composer, and a context window's worth of rows. */
+  const SEND_ROWS = 200;
+  const SEND_CHARS = 30_000;
+
+  /** The page on screen as a statement an agent can read and rerun. */
+  function tablePageSql(state: ConnectionState, relation: DatabaseRelation): string {
+    let sql = `SELECT *\nFROM ${quoteIdentifier(relation.schema)}.${quoteIdentifier(relation.name)}`;
+    if (state.sortColumn) {
+      sql += `\nORDER BY ${quoteIdentifier(state.sortColumn)} ${state.sortDirection === 'desc' ? 'DESC' : 'ASC'}`;
+    }
+    return `${sql}\nLIMIT ${state.limit} OFFSET ${state.offset};`;
+  }
+
+  /**
+   * Put a selection into the agent's composer — the statement it came from and the cells as CSV —
+   * and show the pane. Nothing is sent: the user adds the question and presses Enter, which is the
+   * direct action that sends database rows to a model provider.
+   */
+  function sendToAgent(selection: SelectedCells, from: Mode): void {
+    const state = current;
+    const target = destination;
+    if (!state?.session || !target || !connection) return;
+
+    let rows = selection.rows.slice(0, SEND_ROWS);
+    let csv = toCsv([selection.header, ...rows]);
+    while (csv.length > SEND_CHARS && rows.length > 1) {
+      rows = rows.slice(0, Math.ceil(rows.length / 2));
+      csv = toCsv([selection.header, ...rows]);
+    }
+    const total = selection.rows.length;
+    const relation = from === 'data' ? state.selectedRelation : null;
+    const source = relation ? `\`${relation.schema}.${relation.name}\`` : 'a query';
+    const sql = relation ? tablePageSql(state, relation) : state.querySql;
+    const shown =
+      rows.length < total
+        ? `the first ${rows.length.toLocaleString()} of ${total.toLocaleString()} selected rows`
+        : `${total.toLocaleString()} row${total === 1 ? '' : 's'}`;
+
+    const text = [
+      `Here are ${shown} from ${source} on ${connection.label} (${connection.environment}):`,
+      '',
+      '```sql',
+      sql.trim(),
+      '```',
+      '',
+      '```csv',
+      csv,
+      '```',
+      '',
+      '',
+    ].join('\n');
+    sessions.insertDraft(target.id, text);
+    onsessions();
   }
 
   function relationLabel(kind: DatabaseRelation['kind']): string {
@@ -646,14 +731,17 @@ password = "{{ env.DB_PASSWORD }}"`;
               <div class="c-database__results">
                 {#if current.loadingTable}
                   <div class="c-database__result-empty">Loading table rows…</div>
-                {:else if current.tableResult}
+                {:else if typedTable}
                   <DatabaseResult
-                    result={current.tableResult}
+                    result={typedTable}
                     rowOffset={current.offset}
                     sortable={true}
                     sortColumn={current.sortColumn}
                     sortDirection={current.sortDirection}
                     onsort={sortTable}
+                    relation={current.selectedRelation}
+                    sendLabel={destination?.label ?? null}
+                    onsend={(selection) => sendToAgent(selection, 'data')}
                   />
                 {/if}
               </div>
@@ -733,7 +821,11 @@ password = "{{ env.DB_PASSWORD }}"`;
               {#if current.runningQuery}
                 <div class="c-database__result-empty">Running query…</div>
               {:else if current.queryResult}
-                <DatabaseResult result={current.queryResult} />
+                <DatabaseResult
+                  result={current.queryResult}
+                  sendLabel={destination?.label ?? null}
+                  onsend={(selection) => sendToAgent(selection, 'query')}
+                />
               {:else}
                 <div class="c-database__result-empty">Query results appear here.</div>
               {/if}
