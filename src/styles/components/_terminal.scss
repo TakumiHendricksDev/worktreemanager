@@ -18,13 +18,43 @@
   gap: var(--sp-2);
 }
 
+/*
+ * The frame: padding, border and background, and nothing xterm measures.
+ *
+ * No minimum height. This had `min-height: 180px`, and a shell pane is a tile a split can make as
+ * short as a tenth of the surface — below the floor the screen stopped shrinking with the pane, the
+ * pane clipped it, and the observer never fired because the grid's own box never changed. So the
+ * bottom rows sat under the pane's edge for as long as the tile stayed short. The two callers that
+ * need a size of their own set it on their wrapper: `.c-new-worktree__terminal` a floor,
+ * `.c-dialog__terminal` a fixed height.
+ */
 .c-terminal__screen {
+  display: flex;
   flex: 1 1 auto;
-  min-height: 180px;
+  min-height: 0;
   padding: var(--sp-2);
   background: var(--bg-code);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+/*
+ * The element xterm mounts into, and the one the fit addon measures. Must stay free of padding and
+ * border.
+ *
+ * `proposeDimensions` reads this element's computed `height` and `width` and subtracts only the
+ * padding of `.xterm` inside it. Under the reset's `border-box`, a computed height *includes*
+ * padding and border — so when the frame above was also the mount, every fit sized the grid for
+ * 18px more than the box had, in both directions: about a row hidden under the bottom edge and two
+ * columns under the right, however the pane was sized. Put the padding back here and that returns.
+ *
+ * Sized by the frame's flex row — stretched on the cross axis — rather than by `height: 100%`, which
+ * only resolves when the frame's own height counts as definite.
+ */
+.c-terminal__grid {
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
 }
 

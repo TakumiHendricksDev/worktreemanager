@@ -329,12 +329,16 @@
 </script>
 
 <div class="c-terminal">
-  <div
-    class="c-terminal__screen"
-    bind:this={host}
-    role="log"
-    aria-label="Terminal output"
-  ></div>
+  <!-- Two elements rather than one: the fit addon measures xterm's parent, and that parent must
+       have no padding or border — see `.c-terminal__grid`. -->
+  <div class="c-terminal__screen">
+    <div
+      class="c-terminal__grid"
+      bind:this={host}
+      role="log"
+      aria-label="Terminal output"
+    ></div>
+  </div>
   {#if status}
     <p class="c-terminal__status" aria-live="polite">{status}</p>
   {/if}
