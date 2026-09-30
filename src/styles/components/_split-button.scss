@@ -1,5 +1,5 @@
 /*
- * The Open-in split button: an action on the left, a menu on the right.
+ * The split buttons, Open in and Links: an action on the left, a menu on the right.
  *
  * # Both halves used to be named after other things
  *
@@ -16,6 +16,7 @@
  * but it does mean changing the action's padding silently moves the icon's centring target.
  */
 
+@use '../settings/config' as *;
 @use '../tools' as t;
 
 /* One control drawn as two: a shared border with a divider, so it reads as a split button
@@ -66,6 +67,36 @@
   &:focus-within {
     background: var(--bg-hover);
     @include t.focus-ring-inset;
+  }
+}
+
+/*
+ * The Links button's action: an icon beside a label that is capped.
+ *
+ * Capped because a link's name is whatever a project's config calls it, and the worktree bar's
+ * actions never shrink (see `_worktree-bar.scss`), so an uncapped one would push the row past the
+ * edge of a narrow window rather than ellipsizing. The URL is the button's tooltip, so a truncated
+ * name still says where it goes.
+ */
+.c-split-button__action--link {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.c-split-button__label {
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * Icon only, in a narrow bar. The button keeps its name — `LinksButton` gives it an `aria-label` and
+ * a tooltip with the label and the URL — so what goes is only the text on screen.
+ */
+@container worktree-bar (max-width: #{$bar-links-fold}) {
+  .c-split-button__label {
+    display: none;
   }
 }
 

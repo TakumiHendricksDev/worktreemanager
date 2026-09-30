@@ -2,7 +2,7 @@
   /**
    * One row above the sessions: what this worktree is, and what you can do to it.
    *
-   * # Five controls, grouped by what they do
+   * # Six controls, grouped by what they do
    *
    * It had grown to ten, one per action, and they no longer fitted: at the smallest window the bar
    * gets about 580 pixels with the sidebar open, and the row needed about 900, so the last buttons
@@ -12,10 +12,13 @@
    *   * **New** is everything that opens a pane here — the agents, a shell, a browser. They used to
    *     be a New agent menu and two buttons beside it.
    *   * **Open in** keeps its split button. It is the one action here most people use every time.
-   *   * **⋯** is what you reach for occasionally: Details, the configured links, and Remove.
+   *   * **Links** is a split button too, when the project configures any: the one last opened, and
+   *     the rest. They were a submenu of ⋯ until it was clear that most people open the same link
+   *     every time, and three steps to reach it was the cost — see `LinksButton.svelte`.
+   *   * **⋯** is what you reach for occasionally: Details and Remove.
    *
-   * Both menus are native — see `native-menu.ts` — so they cost no `z-index`, which is what keeps
-   * `settings/_config.scss`'s rule intact, and Links becomes a submenu rather than a third menu.
+   * The menus are native — see `native-menu.ts` — so they cost no `z-index`, which is what keeps
+   * `settings/_config.scss`'s rule intact.
    *
    * Remove used to sit alone past a hairline, because a destructive control flush against a neutral
    * one is how it gets clicked by accident. Inside a menu, at the bottom, behind a separator and still
@@ -38,12 +41,12 @@
    */
   import { browsers } from '../state/browsers.svelte';
   import { sessions } from '../state/sessions.svelte';
-  import { commands } from '../ipc/commands';
   import { INSPECTOR_SHORTCUT, SHELL_SHORTCUT } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { item, popUp, separator, under, type MenuEntry } from '../native-menu';
   import { arrange } from '../sidebar';
   import type { Worktree } from '../ipc/types';
+  import LinksButton from './LinksButton.svelte';
   import OpenInButton from './OpenInButton.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -127,14 +130,6 @@
     else if (choice !== worktree.id) onselect(choice);
   }
 
-  async function openLink(url: string) {
-    try {
-      await commands.openUrl(url);
-    } catch {
-      /* The scheme is validated in Rust; nothing useful to do if the OS declines. */
-    }
-  }
-
   function newMenu(event: MouseEvent) {
     const entries: MenuEntry[] = [
       // Available even when the only pane is a shell; starting an agent never has to replace it.
@@ -161,17 +156,6 @@
   function moreMenu(event: MouseEvent) {
     const entries: MenuEntry[] = [
       item('Details…', oninspect),
-      ...(worktree.links.length > 0
-        ? [
-            {
-              kind: 'submenu' as const,
-              text: 'Links',
-              items: worktree.links.map((link) =>
-                item(`${link.label} — ${link.url}`, () => void openLink(link.url)),
-              ),
-            },
-          ]
-        : []),
       separator,
       // Disabled rather than left out on the main worktree: git refuses to remove it, and so does the
       // pipeline, and a menu that sometimes has no Remove teaches nobody where Remove lives.
@@ -282,11 +266,13 @@
 
     <OpenInButton {projectId} worktreeId={worktree.id} />
 
+    <LinksButton {projectId} links={worktree.links} />
+
     <Button
       variant="quiet"
       size="sm"
       icon="sm"
-      title="Details ({INSPECTOR_SHORTCUT}), links and Remove"
+      title="Details ({INSPECTOR_SHORTCUT}) and Remove"
       ariaLabel="More actions for this worktree"
       ariaHaspopup="menu"
       onclick={moreMenu}

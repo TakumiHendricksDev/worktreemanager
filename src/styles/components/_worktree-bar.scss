@@ -29,6 +29,9 @@
   gap: var(--sp-3);
   padding: var(--sp-2) var(--sp-4);
   border-bottom: 1px solid var(--border);
+  /* A container, so the Links button can drop its label on the bar's own width. See the end of
+     `_split-button.scss`. The bar's width is not the window's: the sidebar takes a resizable share. */
+  container: worktree-bar / inline-size;
 }
 
 .c-worktree-bar__title {

@@ -55,6 +55,16 @@ const WORKTREE_CACHE_PREFIX = 'wtm.worktrees.';
 const LAYOUT_CACHE_PREFIX = 'wtm.sidebar.';
 
 /**
+ * The label of the link last opened in each project, for the Links button's primary half.
+ *
+ * `localStorage`, as `wtm.lastProject` is, because it is the same kind of fact — where you were
+ * last — and losing it costs one click. Not a preference like `OPENER_PREF` below: that one is a
+ * setting someone chose and might hand-edit, and this is a trail nobody would. Keyed by label
+ * because the label is what a project's config declares once; the URL is rendered per worktree.
+ */
+const LAST_LINK_PREFIX = 'wtm.lastLink.';
+
+/**
  * Where the chosen "Open in …" tool is remembered.
  *
  * A backend preference rather than `localStorage`, unlike the two keys above: those are
@@ -107,10 +117,10 @@ function writeLayoutCache(projectId: string, layout: SidebarLayout): void {
   }
 }
 
-/** Drop cached lists and layouts for projects that are no longer registered. */
+/** Drop cached lists, layouts and last links for projects that are no longer registered. */
 function pruneCache(keep: string[]): void {
   try {
-    const prefixes = [WORKTREE_CACHE_PREFIX, LAYOUT_CACHE_PREFIX];
+    const prefixes = [WORKTREE_CACHE_PREFIX, LAYOUT_CACHE_PREFIX, LAST_LINK_PREFIX];
     const live = new Set(keep.flatMap((id) => prefixes.map((prefix) => prefix + id)));
     const doomed = Object.keys(localStorage).filter(
       (key) => prefixes.some((prefix) => key.startsWith(prefix)) && !live.has(key),
@@ -245,6 +255,14 @@ class Workspace {
   preferredOpener = $state<string | null>(null);
 
   /**
+   * Links opened since launch, by project, over what `localStorage` said.
+   *
+   * State rather than a read each time because a read is not reactive: without this the button
+   * would open the link and keep its old label until something else re-rendered it.
+   */
+  private openedLinks = $state<Record<string, string>>({});
+
+  /**
    * Know one worktree, without listing or selecting anything. For a pane window.
    *
    * `init` reads the project list, lands on the last project and writes it back as the last one —
@@ -309,6 +327,25 @@ class Workspace {
     } catch (e) {
       this.preferredOpener = previous;
       this.error = errorMessage(e);
+    }
+  }
+
+  /** The label of the link last opened in `projectId`, or null if none has been. */
+  lastLink(projectId: string): string | null {
+    if (projectId in this.openedLinks) return this.openedLinks[projectId] ?? null;
+    try {
+      return localStorage.getItem(LAST_LINK_PREFIX + projectId);
+    } catch {
+      return null;
+    }
+  }
+
+  rememberLink(projectId: string, label: string): void {
+    this.openedLinks[projectId] = label;
+    try {
+      localStorage.setItem(LAST_LINK_PREFIX + projectId, label);
+    } catch {
+      /* See writeCache. */
     }
   }
 

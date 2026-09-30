@@ -26,6 +26,18 @@ $pane-fold: 320px;
 /// session that started it. That label is wider than the other four buttons together.
 $pane-fold-origin: 420px;
 
+/// The worktree bar width below which the Links button drops its label and keeps only its icon.
+///
+/// Measured rather than chosen. The bar's actions are 364px without Links, and Links adds 99px with
+/// a short label and up to 164px with a capped long one. At the smallest window with the sidebar
+/// open the bar is about 583px, and a labelled Links button left the worktree's name 24px — "abc…" —
+/// where it had 123px before the button existed. Icon-only gives it back 56px there, and a 720px bar
+/// with a labelled one still leaves it at least 95px.
+///
+/// 688 rather than 720 because a container query measures the content box, inside the bar's 16px
+/// padding on each side.
+$bar-links-fold: 688px;
+
 /// The modal's two levels: the scrim covers the app, the dialog sits on the scrim.
 ///
 /// These were for a long time *the* two levels, and the rule they came with still holds: nothing in
