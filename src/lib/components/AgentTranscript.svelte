@@ -27,7 +27,14 @@
   import Button from './ui/Button.svelte';
   import Markdown from './Markdown.svelte';
 
-  const { events }: { events: AgentEvent[] } = $props();
+  const {
+    events,
+    onrunsql,
+  }: {
+    events: AgentEvent[];
+    /** A reply's SQL to run in the Database console. See `Markdown`. */
+    onrunsql?: (sql: string) => void;
+  } = $props();
 
   /**
    * Stable identity for a transcript event, keyed by object identity rather than array
@@ -757,7 +764,7 @@
     {:else if row.kind === 'assistant'}
       <!-- The one place arbitrary document structure appears. Rendered as elements rather than a
            string of HTML, so nothing a model writes can become markup — see `markdown.ts`. -->
-      <div class="c-transcript__said"><Markdown source={row.text} /></div>
+      <div class="c-transcript__said"><Markdown source={row.text} {onrunsql} /></div>
     {:else if row.kind === 'thinking'}
       <!--
         The narration line, and the reason it is one line rather than the word `Thinking`.

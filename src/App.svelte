@@ -9,7 +9,7 @@
    */
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
@@ -41,6 +41,7 @@
   import { browsers } from './lib/state/browsers.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { updates } from './lib/state/update.svelte';
+  import { databaseConsole } from './lib/state/database-console.svelte';
   import { workspace } from './lib/state/workspace.svelte';
 
   const MIN_SIDEBAR = 200;
@@ -102,10 +103,7 @@
     // There is nothing to navigate yet, and boot lands on the last active project on its own;
     // the click still brought the window to the front, which is all it ever did before.
     if (!booted) return;
-    if (target.projectId !== workspace.activeProjectId) {
-      await workspace.selectProject(target.projectId);
-    }
-    workspace.select(target.worktreeId);
+    await arrive(target.projectId, target.worktreeId);
     mainView = 'worktree';
     const alive = sessions.panes.some(
       (p) => p.id === target.paneId && p.worktreeId === target.worktreeId,
@@ -114,6 +112,32 @@
     // Arriving is what clears the worktree's dots and toasts, exactly as ⌘-Tabbing back does.
     sessions.markSeen(target.worktreeId);
   }
+
+  /** Bring a worktree up: the half of `goTo` a reply's Run shares, before it picks a view. */
+  async function arrive(projectId: string, worktreeId: string): Promise<void> {
+    if (projectId !== workspace.activeProjectId) {
+      await workspace.selectProject(projectId);
+    }
+    workspace.select(worktreeId);
+  }
+
+  /** The last request navigated for. Not state: it only stops one request navigating twice. */
+  let navigatedFor = 0;
+
+  /*
+   * A reply's Run: to the worktree the pane is in, and its Database view. `DatabaseSurface` takes
+   * the same request from there and does the running — see `database-console.svelte.ts`.
+   */
+  $effect(() => {
+    const request = databaseConsole.request;
+    if (!booted || !request || request.id === navigatedFor) return;
+    navigatedFor = request.id;
+    untrack(() => {
+      void arrive(request.projectId, request.worktreeId).then(
+        () => (mainView = 'database'),
+      );
+    });
+  });
 
   onMount(() => {
     let gone = false;

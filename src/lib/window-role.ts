@@ -69,7 +69,9 @@ export type PaneIntent =
   /** Put text into an agent's composer. The agent is wherever it is. */
   | { kind: 'insertDraft'; paneId: string; text: string }
   /** ⌘J from inside a browser pane: a shell in this worktree, which lives in the main window. */
-  | { kind: 'focusOrOpenShell'; projectId: string; worktreeId: string };
+  | { kind: 'focusOrOpenShell'; projectId: string; worktreeId: string }
+  /** Run a reply's SQL in the Database console, which only the main window has. */
+  | { kind: 'openInDatabase'; projectId: string; worktreeId: string; sql: string };
 
 /** What the main window tells a pane window's frontend. */
 export type PaneCommand =

@@ -16,7 +16,33 @@
   import { onDestroy } from 'svelte';
   import Button from './ui/Button.svelte';
 
-  const { source }: { source: string } = $props();
+  const {
+    source,
+    onrunsql,
+  }: {
+    source: string;
+    /**
+     * Where a code block's SQL goes to be run — the Database console. Opt-in, because this renders
+     * plans, approval requests and side answers too, and only an agent's reply in a pane has a
+     * worktree whose database the SQL is about.
+     */
+    onrunsql?: (sql: string) => void;
+  } = $props();
+
+  /** The fence languages an agent tags SQL with. Untagged blocks get no Run: a guess would misfire. */
+  const SQL = new Set([
+    'sql',
+    'postgres',
+    'postgresql',
+    'pgsql',
+    'psql',
+    'plpgsql',
+    'sqlite',
+  ]);
+
+  function runnable(lang: string | null): boolean {
+    return onrunsql !== undefined && lang !== null && SQL.has(lang.toLowerCase());
+  }
 
   const blocks = $derived(parse(source));
 
@@ -76,10 +102,18 @@
            of what highlighting communicates here and the rest costs a dependency and a theme. -->
       <div class="c-markdown__block">
         {#if block.lang}<span class="c-markdown__lang">{block.lang}</span>{/if}
-        <span class="c-markdown__copy">
+        <span class="c-markdown__actions">
           <Button variant="quiet" size="sm" onclick={() => void copyBlock(block.text, i)}>
             {copiedBlock === i ? 'Copied' : 'Copy'}
           </Button>
+          {#if runnable(block.lang)}
+            <Button
+              variant="quiet"
+              size="sm"
+              title="Run read-only in the Database console"
+              onclick={() => onrunsql?.(block.text)}>Run</Button
+            >
+          {/if}
         </span>
         <pre>{block.text}</pre>
       </div>

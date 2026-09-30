@@ -98,6 +98,36 @@
     };
   });
 
+  /**
+   * Add a statement below what is already here and select it — SQL arriving from an agent's reply.
+   *
+   * Appended rather than replacing the editor, because whatever the user had typed is theirs, and
+   * a dispatched change is on the undo stack either way. Selected, so the console's Run runs this
+   * statement and not everything above it.
+   */
+  export function append(text: string): void {
+    const view = editorView;
+    if (!view) return;
+    const doc = view.state.doc;
+    const existing = doc.toString();
+    if (existing.trim() === '') {
+      view.dispatch({
+        changes: { from: 0, to: doc.length, insert: text },
+        selection: { anchor: 0, head: text.length },
+        scrollIntoView: true,
+      });
+    } else {
+      const gap = existing.endsWith('\n\n') ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
+      const from = doc.length + gap.length;
+      view.dispatch({
+        changes: { from: doc.length, insert: gap + text },
+        selection: { anchor: from, head: from + text.length },
+        scrollIntoView: true,
+      });
+    }
+    view.focus();
+  }
+
   $effect(() => {
     const view = editorView;
     const next = value;

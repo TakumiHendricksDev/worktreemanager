@@ -54,6 +54,7 @@
     sendLabel = null,
     onsend,
     onfilter,
+    note = null,
     findPlaceholder = 'Find in these rows',
   }: {
     result: QueryResult;
@@ -70,6 +71,8 @@
     onsend?: (selection: SelectedCells) => void;
     /** Narrow the table to a condition — "Filter by this value". Table data only. */
     onfilter?: (condition: string) => void;
+    /** Something the footer should say about how these rows were fetched. */
+    note?: string | null;
     findPlaceholder?: string;
   } = $props();
 
@@ -702,5 +705,6 @@
   {#if result.affectedRows > 0}<span>{result.affectedRows.toLocaleString()} affected</span
     >{/if}
   {#if result.truncated}<span class="c-status--warn">result truncated</span>{/if}
+  {#if note}<span>{note}</span>{/if}
   {#if copied}<span class="c-status--ok" role="status">{copied}</span>{/if}
 </footer>

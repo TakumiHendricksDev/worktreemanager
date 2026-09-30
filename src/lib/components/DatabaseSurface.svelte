@@ -6,7 +6,7 @@
    * in this always-mounted surface means a local database never bleeds into another worktree while
    * shared TEST/STAGING/PROD sessions survive ordinary worktree navigation.
    */
-  import { onMount } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
 
   import { commands } from '../ipc/commands';
   import {
@@ -24,6 +24,7 @@
     toCsv,
     type SelectedCells,
   } from '../database-grid';
+  import { databaseConsole } from '../state/database-console.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
@@ -57,6 +58,10 @@
     queryResult: QueryResult | null;
     /** The statement `queryResult` came from, which the editor may no longer hold. */
     querySql: string;
+    /** Whether `queryResult` came from a read-only run — a reply's SQL — so its footer can say so. */
+    queryReadOnly: boolean;
+    /** A reply's SQL that arrived before Connect was pressed, to run once it has been. */
+    pendingRun: string | null;
     sql: string;
     relationFilter: string;
     offset: number;
@@ -125,6 +130,8 @@ password = "{{ env.DB_PASSWORD }}"`;
       tableResult: null,
       queryResult: null,
       querySql: '',
+      queryReadOnly: false,
+      pendingRun: null,
       sql: '',
       relationFilter: '',
       offset: 0,
@@ -256,6 +263,14 @@ password = "{{ env.DB_PASSWORD }}"`;
       current.error = errorMessage(error);
     } finally {
       current.connecting = false;
+    }
+    // The Run pressed in the reply, carried out now that there is a connection. Connect was the
+    // click that crossed the trust boundary; asking for a second one would add nothing.
+    const pending = current.pendingRun;
+    if (current.session && pending) {
+      current.pendingRun = null;
+      current.mode = 'query';
+      await runQuery(pending, true);
     }
   }
 
@@ -449,7 +464,8 @@ password = "{{ env.DB_PASSWORD }}"`;
 
   const tableSort = $derived(current ? sortOf(current.orderBy) : null);
 
-  async function runQuery(candidate?: string): Promise<void> {
+  /** `readOnly` for a reply's SQL — see `QueryMode::ReadOnly` for what it guarantees. */
+  async function runQuery(candidate?: string, readOnly = false): Promise<void> {
     const state = current;
     if (!state?.session || productionLocked) return;
     const sql = candidate?.trim() || state.sql.trim();
@@ -457,13 +473,54 @@ password = "{{ env.DB_PASSWORD }}"`;
     state.runningQuery = true;
     state.error = null;
     try {
-      state.queryResult = await commands.runDatabaseQuery(state.session.id, sql);
+      state.queryResult = await commands.runDatabaseQuery(state.session.id, sql, readOnly);
       state.querySql = sql;
+      state.queryReadOnly = readOnly;
     } catch (error) {
-      state.error = errorMessage(error);
+      // The refusal is the guarantee working, so say what to do next rather than only what failed.
+      state.error = readOnly
+        ? `${errorMessage(error)} — SQL from a reply runs read-only, one statement at a time. It is in the editor: press Run to execute it as written.`
+        : errorMessage(error);
     } finally {
       state.runningQuery = false;
     }
+  }
+
+  let editor = $state<ReturnType<typeof SqlEditor> | null>(null);
+  /** The last request acted on. Not state: it only stops one request being acted on twice. */
+  let handledRequest = 0;
+
+  /*
+   * A reply's Run, arriving through `databaseConsole` once `App` has brought this worktree up.
+   *
+   * It waits for the worktree's profiles to have loaded, so that "no databases configured" is a
+   * known answer rather than a list that has not arrived yet. The profile is whichever this
+   * worktree has selected, which is its local one unless the user chose otherwise.
+   */
+  $effect(() => {
+    const request = databaseConsole.request;
+    if (!request || request.id === handledRequest) return;
+    if (request.projectId !== projectId || request.worktreeId !== worktreeId) return;
+    if (!contextKey || !(contextKey in connectionLists)) return;
+    handledRequest = request.id;
+    const state = current;
+    if (!state) return;
+    untrack(() => void receive(state, request.sql));
+  });
+
+  async function receive(state: ConnectionState, sql: string): Promise<void> {
+    state.mode = 'query';
+    state.error = null;
+    if (!state.session) {
+      // No editor is on screen without a connection, so the text goes into what it will open with.
+      state.sql = state.sql.trim() ? `${state.sql.trimEnd()}\n\n${sql}` : sql;
+      state.pendingRun = sql;
+      return;
+    }
+    await tick();
+    editor?.append(sql);
+    // Locked, the SQL waits in the editor and the lock's banner says why nothing ran.
+    if (!productionLocked) await runQuery(sql, true);
   }
 
   async function cancelQuery(): Promise<void> {
@@ -880,6 +937,7 @@ password = "{{ env.DB_PASSWORD }}"`;
             {/if}
 
             <SqlEditor
+              bind:this={editor}
               bind:value={current.sql}
               bind:selection={selectedSql}
               onrun={(sql) => void runQuery(sql)}
@@ -891,6 +949,7 @@ password = "{{ env.DB_PASSWORD }}"`;
                 <DatabaseResult
                   bind:this={queryGrid}
                   result={current.queryResult}
+                  note={current.queryReadOnly ? 'read-only run' : null}
                   sendLabel={destination?.label ?? null}
                   onsend={(selection) => sendToAgent(selection, 'query')}
                 />
@@ -903,7 +962,11 @@ password = "{{ env.DB_PASSWORD }}"`;
       </div>
     {:else if connection?.available}
       <div class="c-database__empty">
-        <p>Connect to inspect schemas, browse table rows, or open a query console.</p>
+        {#if current?.pendingRun}
+          <p>Connect to run the query from the agent's reply. It runs read-only.</p>
+        {:else}
+          <p>Connect to inspect schemas, browse table rows, or open a query console.</p>
+        {/if}
         {#if connection.scope === 'worktree'}
           <span class="c-status--subtle"
             >This connection belongs only to the selected worktree.</span

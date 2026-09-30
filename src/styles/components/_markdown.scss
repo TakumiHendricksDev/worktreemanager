@@ -115,10 +115,12 @@
   overflow-y: auto;
 }
 
-.c-markdown__copy {
+.c-markdown__actions {
   position: absolute;
   top: var(--sp-1);
   right: var(--sp-1);
+  display: flex;
+  gap: var(--sp-1);
 }
 
 /* The language, where a highlighter's theme would otherwise be doing the telling. Positioned rather

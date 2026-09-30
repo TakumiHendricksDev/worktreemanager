@@ -20,6 +20,7 @@
   import { errorMessage, type AgentAttachment } from '../ipc/types';
   import { commandsFor } from '../agent-commands';
   import { composerPrefs } from '../state/composer.svelte';
+  import { databaseConsole } from '../state/database-console.svelte';
   import { DESTINATION, dictation } from '../state/dictate.svelte';
   import { item, popUp, under, type MenuEntry } from '../native-menu';
   import { sessions, type Pane } from '../state/sessions.svelte';
@@ -1455,7 +1456,10 @@
           {#if pane.events.length === 0 && pane.ready}
             <p class="c-pane__empty">Ask {label} something.</p>
           {/if}
-          <AgentTranscript events={pane.events} />
+          <AgentTranscript
+            events={pane.events}
+            onrunsql={(sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}
+          />
 
           {#if blocking}
             <!--
