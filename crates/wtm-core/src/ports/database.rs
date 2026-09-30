@@ -118,11 +118,18 @@ pub struct QueryResult {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SortDirection {
-    Asc,
-    Desc,
+/// Whether a query may change anything.
+///
+/// `ReadOnly` is for SQL the console's Run button did not send as typed: a statement relayed from
+/// an agent's reply, or a table page assembled around typed WHERE and ORDER BY fragments. The
+/// guarantee has to hold whatever that text says, so it means exactly one statement, run where the
+/// server itself refuses writes — not a setting the same text could turn off first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryMode {
+    /// Whatever the connection's access allows, several statements at once included.
+    Normal,
+    /// One statement, which the server will not let write.
+    ReadOnly,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -132,8 +139,12 @@ pub struct TablePageRequest {
     pub table: String,
     pub offset: u64,
     pub limit: u32,
-    pub sort_column: Option<String>,
-    pub sort_direction: Option<SortDirection>,
+    /// A WHERE condition as the user typed it. The page runs read-only, so it can narrow the rows
+    /// but not change them.
+    pub filter: Option<String>,
+    /// An ORDER BY list as typed. The grid's sort toggle writes one of these too, so there is one
+    /// way to sort rather than a structured column and a free-text one that could disagree.
+    pub order_by: Option<String>,
 }
 
 /// Live database sessions. Implementations own concrete connections and cancellation handles.
@@ -152,7 +163,13 @@ pub trait DatabaseHost: Send + Sync + std::fmt::Debug {
         schema: &str,
         relation: &str,
     ) -> Result<Vec<DatabaseColumn>, DatabaseError>;
-    fn query(&self, session: &str, sql: &str, max_rows: u32) -> Result<QueryResult, DatabaseError>;
+    fn query(
+        &self,
+        session: &str,
+        sql: &str,
+        max_rows: u32,
+        mode: QueryMode,
+    ) -> Result<QueryResult, DatabaseError>;
     fn table_page(
         &self,
         session: &str,

@@ -20,7 +20,7 @@ use wtm_core::model::{DatabaseAccess, DatabaseEngine, DatabaseTls};
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::database::{
     DatabaseColumn, DatabaseConnection, DatabaseHost, DatabaseRelation, DatabaseSchema,
-    DatabaseSession, QueryCell, QueryColumn, QueryResult, RelationKind, SortDirection,
+    DatabaseSession, QueryCell, QueryColumn, QueryMode, QueryResult, RelationKind,
     TablePageRequest,
 };
 
@@ -260,7 +260,13 @@ impl DatabaseHost for Host {
         }
     }
 
-    fn query(&self, session: &str, sql: &str, max_rows: u32) -> Result<QueryResult, DatabaseError> {
+    fn query(
+        &self,
+        session: &str,
+        sql: &str,
+        max_rows: u32,
+        mode: QueryMode,
+    ) -> Result<QueryResult, DatabaseError> {
         if sql.trim().is_empty() {
             return Err(DatabaseError::Query("the query is empty".to_owned()));
         }
@@ -269,11 +275,12 @@ impl DatabaseHost for Host {
         let limit = max_rows.clamp(1, MAX_PAGE_ROWS);
         match &entry.connection {
             Connection::Postgres(postgres) => {
-                let messages = postgres
-                    .client
-                    .lock()
-                    .simple_query(sql)
-                    .map_err(|error| postgres_query_error(&error))?;
+                let mut client = postgres.client.lock();
+                let messages = match mode {
+                    QueryMode::Normal => client.simple_query(sql),
+                    QueryMode::ReadOnly => postgres_read_only(&mut client, sql),
+                }
+                .map_err(|error| postgres_query_error(&error))?;
                 Ok(messages_result(
                     messages,
                     limit,
@@ -282,7 +289,7 @@ impl DatabaseHost for Host {
             }
             Connection::Sqlite(sqlite) => {
                 let mut client = sqlite.client.lock();
-                let mut result = sqlite_query(&mut client, sql, limit, 0)?;
+                let mut result = sqlite_query(&mut client, sql, limit, mode)?;
                 result.duration_ms = self.clock.monotonic_ms().saturating_sub(started);
                 Ok(result)
             }
@@ -301,13 +308,6 @@ impl DatabaseHost for Host {
                 "the relation no longer exists".to_owned(),
             ));
         }
-        if let Some(sort) = &request.sort_column
-            && !columns.iter().any(|column| column.name == *sort)
-        {
-            return Err(DatabaseError::Query(
-                "the sort column does not exist".to_owned(),
-            ));
-        }
 
         let projection = columns
             .iter()
@@ -319,15 +319,20 @@ impl DatabaseHost for Host {
             quote_identifier(&request.schema),
             quote_identifier(&request.table)
         );
-        if let Some(column) = &request.sort_column {
-            let direction = match request.sort_direction.unwrap_or(SortDirection::Asc) {
-                SortDirection::Asc => "ASC",
-                SortDirection::Desc => "DESC",
-            };
-            let _ = write!(sql, " ORDER BY {} {direction}", quote_identifier(column));
+        // Each typed fragment on lines of its own. A `--` comment in one then ends at its newline;
+        // on the same line as the LIMIT it would have commented the LIMIT out and fetched the whole
+        // table into memory. What keeps a fragment from doing anything *else* is the read-only run
+        // below, not this layout.
+        if let Some(filter) = fragment(request.filter.as_deref()) {
+            let _ = write!(sql, "\nWHERE\n{filter}");
         }
-        let _ = write!(sql, " LIMIT {limit} OFFSET {}", request.offset);
-        self.query(session, &sql, limit)
+        if let Some(order) = fragment(request.order_by.as_deref()) {
+            let _ = write!(sql, "\nORDER BY\n{order}");
+        }
+        let _ = write!(sql, "\nLIMIT {limit} OFFSET {}", request.offset);
+        // Always read-only, fragments or not: browsing a table never needs to write, and this is
+        // what lets table data stay open on a production connection whose console is locked.
+        self.query(session, &sql, limit, QueryMode::ReadOnly)
     }
 
     fn cancel(&self, session: &str) -> Result<(), DatabaseError> {
@@ -449,15 +454,52 @@ fn sqlite_columns(
         .collect()
 }
 
+/// A typed fragment, or nothing when it is blank. One trailing `;` is dropped: it is what a hand
+/// used to finishing statements types, and inside the page's statement it could only be an error.
+fn fragment(text: Option<&str>) -> Option<&str> {
+    let text = text?.trim();
+    let text = text.strip_suffix(';').unwrap_or(text).trim_end();
+    (!text.is_empty()).then_some(text)
+}
+
+/// One statement, in a transaction the server keeps read-only, and rolled back afterwards.
+///
+/// `prepare` comes first because Postgres's extended protocol parses exactly one statement and
+/// refuses more — the only test of "one statement" that parses the text the way the server will.
+/// The simple protocol that then runs it executes whatever it is handed, so text that got a
+/// `COMMIT;` past a check of our own would have left the read-only transaction and written. One
+/// statement cannot: a read-only transaction refuses to become read-write, and a `COMMIT` has
+/// nothing to keep. Rolling back rather than committing is the same point made twice.
+///
+/// The session's own `default_transaction_read_only`, set for read-only profiles, is no defence
+/// here: it is a setting, and `SET … = off;` in front of the statement would turn it off.
+fn postgres_read_only(
+    client: &mut Client,
+    sql: &str,
+) -> Result<Vec<SimpleQueryMessage>, postgres::Error> {
+    let mut transaction = client.build_transaction().read_only(true).start()?;
+    transaction.prepare(sql)?;
+    let messages = transaction.simple_query(sql)?;
+    transaction.rollback()?;
+    Ok(messages)
+}
+
 fn sqlite_query(
     client: &mut SqliteConnection,
     sql: &str,
     max_rows: u32,
-    duration_ms: u64,
+    mode: QueryMode,
 ) -> Result<QueryResult, DatabaseError> {
+    // rusqlite's `prepare` already refuses a second statement, so only the write needs checking —
+    // and SQLite answers that from the compiled statement, before anything runs.
     let mut statement = client
         .prepare(sql)
         .map_err(|error| sqlite_query_error(&error))?;
+    if mode == QueryMode::ReadOnly && !statement.readonly() {
+        return Err(DatabaseError::Query(
+            "a read-only run cannot execute a statement that writes".to_owned(),
+        ));
+    }
     if statement.column_count() == 0 {
         let affected_rows = statement
             .execute([])
@@ -466,7 +508,8 @@ fn sqlite_query(
             columns: Vec::new(),
             rows: Vec::new(),
             affected_rows,
-            duration_ms,
+            // The caller times the whole call, connection lock included.
+            duration_ms: 0,
             truncated: false,
             message: None,
         });
@@ -506,7 +549,7 @@ fn sqlite_query(
         columns,
         rows,
         affected_rows: 0,
-        duration_ms,
+        duration_ms: 0,
         truncated,
         message: None,
     })
@@ -607,6 +650,7 @@ fn sqlite_query_error(error: &rusqlite::Error) -> DatabaseError {
 fn sqlite_driver_message(error: &rusqlite::Error) -> String {
     match error {
         rusqlite::Error::SqliteFailure(_, Some(message)) => message.clone(),
+        rusqlite::Error::MultipleStatement => "SQLite runs one statement at a time".to_owned(),
         _ => "SQLite refused the operation".to_owned(),
     }
 }
@@ -751,12 +795,14 @@ mod tests {
             &session.id,
             "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT)",
             100,
+            QueryMode::Normal,
         )
         .unwrap();
         host.query(
             &session.id,
             "INSERT INTO people (name, note) VALUES ('Ada', NULL)",
             100,
+            QueryMode::Normal,
         )
         .unwrap();
 
@@ -777,8 +823,8 @@ mod tests {
                     table: "people".to_owned(),
                     offset: 0,
                     limit: 100,
-                    sort_column: Some("name".to_owned()),
-                    sort_direction: Some(SortDirection::Asc),
+                    filter: None,
+                    order_by: Some("\"name\" ASC".to_owned()),
                 },
             )
             .unwrap();
@@ -795,16 +841,169 @@ mod tests {
         let writable = host
             .connect(sqlite_connection(path.clone(), DatabaseAccess::ReadWrite))
             .unwrap();
-        host.query(&writable.id, "CREATE TABLE records (id INTEGER)", 100)
-            .unwrap();
+        host.query(
+            &writable.id,
+            "CREATE TABLE records (id INTEGER)",
+            100,
+            QueryMode::Normal,
+        )
+        .unwrap();
         host.disconnect(&writable.id).unwrap();
 
         let readonly = host
             .connect(sqlite_connection(path, DatabaseAccess::ReadOnly))
             .unwrap();
         let error = host
-            .query(&readonly.id, "INSERT INTO records VALUES (1)", 100)
+            .query(
+                &readonly.id,
+                "INSERT INTO records VALUES (1)",
+                100,
+                QueryMode::Normal,
+            )
             .unwrap_err();
         assert!(matches!(error, DatabaseError::Query(_)));
+    }
+
+    /// A writable session on a fresh file holding `people`: Ada, Grace and Linus, in id order.
+    fn people(directory: &tempfile::TempDir) -> (Host, String) {
+        let host = Host::new(Arc::new(FakeClock::new()));
+        let session = host
+            .connect(sqlite_connection(
+                directory.path().join("app.sqlite3"),
+                DatabaseAccess::ReadWrite,
+            ))
+            .unwrap()
+            .id;
+        for sql in [
+            "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            "INSERT INTO people (name) VALUES ('Ada'), ('Grace'), ('Linus')",
+        ] {
+            host.query(&session, sql, 100, QueryMode::Normal).unwrap();
+        }
+        (host, session)
+    }
+
+    fn count(host: &Host, session: &str) -> String {
+        host.query(session, "SELECT count(*) FROM people", 1, QueryMode::Normal)
+            .unwrap()
+            .rows[0][0]
+            .value
+            .clone()
+            .unwrap()
+    }
+
+    fn page(filter: Option<&str>, order_by: Option<&str>, limit: u32) -> TablePageRequest {
+        TablePageRequest {
+            schema: "main".to_owned(),
+            table: "people".to_owned(),
+            offset: 0,
+            limit,
+            filter: filter.map(str::to_owned),
+            order_by: order_by.map(str::to_owned),
+        }
+    }
+
+    fn names(result: &QueryResult) -> Vec<&str> {
+        result
+            .rows
+            .iter()
+            .map(|row| row[1].value.as_deref().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_read_only_run_refuses_a_statement_that_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let (host, session) = people(&directory);
+
+        let error = host
+            .query(&session, "DELETE FROM people", 100, QueryMode::ReadOnly)
+            .unwrap_err();
+
+        assert!(matches!(error, DatabaseError::Query(_)));
+        assert_eq!(count(&host, &session), "3");
+    }
+
+    #[test]
+    fn a_read_only_run_refuses_a_second_statement() {
+        let directory = tempfile::tempdir().unwrap();
+        let (host, session) = people(&directory);
+
+        let error = host
+            .query(
+                &session,
+                "SELECT 1; DELETE FROM people",
+                100,
+                QueryMode::ReadOnly,
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, DatabaseError::Query(_)));
+        assert_eq!(count(&host, &session), "3");
+    }
+
+    #[test]
+    fn a_read_only_run_still_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let (host, session) = people(&directory);
+
+        let result = host
+            .query(
+                &session,
+                "SELECT * FROM people WHERE name = 'Grace';",
+                100,
+                QueryMode::ReadOnly,
+            )
+            .unwrap();
+
+        assert_eq!(names(&result), ["Grace"]);
+    }
+
+    #[test]
+    fn a_table_page_applies_its_where_and_order_by_fragments() {
+        let directory = tempfile::tempdir().unwrap();
+        let (host, session) = people(&directory);
+
+        // The trailing semicolon is what a hand used to finishing statements types.
+        let result = host
+            .table_page(
+                &session,
+                &page(Some("name <> 'Linus';"), Some("name DESC"), 100),
+            )
+            .unwrap();
+
+        assert_eq!(names(&result), ["Grace", "Ada"]);
+    }
+
+    #[test]
+    fn a_where_fragment_cannot_smuggle_in_a_second_statement() {
+        let directory = tempfile::tempdir().unwrap();
+        let (host, session) = people(&directory);
+
+        let error = host
+            .table_page(
+                &session,
+                &page(Some("1 = 1; DELETE FROM people"), None, 100),
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, DatabaseError::Query(_)));
+        assert_eq!(count(&host, &session), "3");
+    }
+
+    #[test]
+    fn a_line_comment_in_a_fragment_cannot_swallow_the_pages_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let (host, session) = people(&directory);
+
+        let result = host
+            .table_page(
+                &session,
+                &page(Some("1 = 1 -- every row"), Some("id --"), 2),
+            )
+            .unwrap();
+
+        assert_eq!(names(&result), ["Ada", "Grace"]);
+        assert!(!result.truncated);
     }
 }

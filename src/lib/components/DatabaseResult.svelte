@@ -28,6 +28,7 @@
   import {
     cellText,
     contains,
+    equalsCondition,
     rectOf,
     toCsv,
     toInsert,
@@ -52,6 +53,7 @@
     relation = null,
     sendLabel = null,
     onsend,
+    onfilter,
     findPlaceholder = 'Find in these rows',
   }: {
     result: QueryResult;
@@ -66,6 +68,8 @@
     /** The agent a selection would be sent to, or null when this worktree has none. */
     sendLabel?: string | null;
     onsend?: (selection: SelectedCells) => void;
+    /** Narrow the table to a condition — "Filter by this value". Table data only. */
+    onfilter?: (condition: string) => void;
     findPlaceholder?: string;
   } = $props();
 
@@ -442,6 +446,15 @@
         () => void write(names.join(', ')),
       ),
       separator,
+      item(
+        'Filter by this value',
+        () => {
+          const cell = selectedCells()[0]?.[0];
+          const name = names[0];
+          if (cell && name !== undefined) onfilter?.(equalsCondition(name, cell.value));
+        },
+        single && onfilter !== undefined,
+      ),
       item(single ? 'Open value' : 'Open focused value', () => (viewing = true)),
       separator,
       item(

@@ -423,8 +423,12 @@ export const commands = {
     invoke<DatabaseRelation[]>('database_relations', { session, schema }),
   databaseColumns: (session: string, schema: string, relation: string) =>
     invoke<DatabaseColumn[]>('database_columns', { session, schema, relation }),
-  runDatabaseQuery: (session: string, sql: string, maxRows = 500) =>
-    invoke<QueryResult>('run_database_query', { session, sql, maxRows }),
+  /**
+   * `readOnly` runs one statement in a transaction the server keeps read-only — for SQL the user
+   * did not type into the console, such as a statement from an agent's reply.
+   */
+  runDatabaseQuery: (session: string, sql: string, readOnly = false, maxRows = 500) =>
+    invoke<QueryResult>('run_database_query', { session, sql, maxRows, readOnly }),
   databaseTablePage: (session: string, request: TablePageRequest) =>
     invoke<QueryResult>('database_table_page', { session, request }),
   cancelDatabaseQuery: (session: string) =>

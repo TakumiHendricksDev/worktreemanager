@@ -204,8 +204,10 @@ export interface TablePageRequest {
   table: string;
   offset: number;
   limit: number;
-  sortColumn: string | null;
-  sortDirection: 'asc' | 'desc' | null;
+  /** A WHERE condition as typed. The page runs read-only, so it narrows rows and changes none. */
+  filter: string | null;
+  /** An ORDER BY list as typed; the grid's sort toggle writes one too. */
+  orderBy: string | null;
 }
 
 export interface Field {

@@ -17,11 +17,18 @@
     type DatabaseSession,
     type QueryResult,
   } from '../ipc/types';
-  import { quoteIdentifier, toCsv, type SelectedCells } from '../database-grid';
+  import {
+    quoteIdentifier,
+    sortClause,
+    sortOf,
+    toCsv,
+    type SelectedCells,
+  } from '../database-grid';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
+  import DatabaseFilters from './DatabaseFilters.svelte';
   import DatabaseResult from './DatabaseResult.svelte';
   import SqlEditor from './SqlEditor.svelte';
 
@@ -54,8 +61,9 @@
     relationFilter: string;
     offset: number;
     limit: number;
-    sortColumn: string | null;
-    sortDirection: 'asc' | 'desc' | null;
+    /** The WHERE and ORDER BY the page on screen was fetched with. Empty when there is none. */
+    filter: string;
+    orderBy: string;
     connecting: boolean;
     loadingTable: boolean;
     runningQuery: boolean;
@@ -121,8 +129,8 @@ password = "{{ env.DB_PASSWORD }}"`;
       relationFilter: '',
       offset: 0,
       limit: 100,
-      sortColumn: null,
-      sortDirection: null,
+      filter: '',
+      orderBy: '',
       connecting: false,
       loadingTable: false,
       runningQuery: false,
@@ -349,8 +357,8 @@ password = "{{ env.DB_PASSWORD }}"`;
     current.selectedRelation = relation;
     current.mode = 'data';
     current.offset = 0;
-    current.sortColumn = null;
-    current.sortDirection = null;
+    current.filter = '';
+    current.orderBy = '';
     if (!current.sql.trim()) {
       current.sql = `SELECT *\nFROM "${relation.schema.replaceAll('"', '""')}"."${relation.name.replaceAll('"', '""')}"\nLIMIT 100;`;
     }
@@ -364,8 +372,8 @@ password = "{{ env.DB_PASSWORD }}"`;
           table: relation.name,
           offset: 0,
           limit: current.limit,
-          sortColumn: null,
-          sortDirection: null,
+          filter: null,
+          orderBy: null,
         }),
       ]);
       current.columns = columns;
@@ -377,46 +385,69 @@ password = "{{ env.DB_PASSWORD }}"`;
     }
   }
 
-  async function loadTable(): Promise<void> {
-    if (!current?.session || !current.selectedRelation) return;
-    current.loadingTable = true;
-    current.error = null;
+  /**
+   * Fetch a page, with any of its WHERE, ORDER BY or offset replaced.
+   *
+   * The replacements are recorded only once a page has come back with them. A fragment the server
+   * refuses then leaves the last good rows on screen, still described by the filter that fetched
+   * them, and the refused text stays in its field to be fixed.
+   */
+  async function loadTable(
+    next: { filter?: string; orderBy?: string; offset?: number } = {},
+  ): Promise<void> {
+    const state = current;
+    const relation = state?.selectedRelation;
+    if (!state?.session || !relation) return;
+    const filter = next.filter ?? state.filter;
+    const orderBy = next.orderBy ?? state.orderBy;
+    const offset = next.offset ?? state.offset;
+    state.loadingTable = true;
+    state.error = null;
     try {
-      current.tableResult = await commands.databaseTablePage(current.session.id, {
-        schema: current.selectedRelation.schema,
-        table: current.selectedRelation.name,
-        offset: current.offset,
-        limit: current.limit,
-        sortColumn: current.sortColumn,
-        sortDirection: current.sortDirection,
+      state.tableResult = await commands.databaseTablePage(state.session.id, {
+        schema: relation.schema,
+        table: relation.name,
+        offset,
+        limit: state.limit,
+        filter: filter || null,
+        orderBy: orderBy || null,
       });
+      state.filter = filter;
+      state.orderBy = orderBy;
+      state.offset = offset;
     } catch (error) {
-      current.error = errorMessage(error);
+      state.error = errorMessage(error);
     } finally {
-      current.loadingTable = false;
+      state.loadingTable = false;
     }
   }
 
+  /** The header's toggle: ascending, descending, then no order — written into ORDER BY. */
   function sortTable(column: string): void {
     if (!current) return;
-    if (current.sortColumn !== column) {
-      current.sortColumn = column;
-      current.sortDirection = 'asc';
-    } else if (current.sortDirection === 'asc') {
-      current.sortDirection = 'desc';
-    } else {
-      current.sortColumn = null;
-      current.sortDirection = null;
-    }
-    current.offset = 0;
-    void loadTable();
+    const sort = sortOf(current.orderBy);
+    const next =
+      sort?.column !== column
+        ? sortClause(column, 'asc')
+        : sort.direction === 'asc'
+          ? sortClause(column, 'desc')
+          : '';
+    void loadTable({ orderBy: next, offset: 0 });
+  }
+
+  /** "Filter by this value", added to whatever the page is already filtered by. */
+  function filterBy(condition: string): void {
+    if (!current) return;
+    const filter = current.filter ? `(${current.filter}) AND ${condition}` : condition;
+    void loadTable({ filter, offset: 0 });
   }
 
   function page(delta: number): void {
     if (!current) return;
-    current.offset = Math.max(0, current.offset + delta * current.limit);
-    void loadTable();
+    void loadTable({ offset: Math.max(0, current.offset + delta * current.limit) });
   }
+
+  const tableSort = $derived(current ? sortOf(current.orderBy) : null);
 
   async function runQuery(candidate?: string): Promise<void> {
     const state = current;
@@ -478,9 +509,8 @@ password = "{{ env.DB_PASSWORD }}"`;
   /** The page on screen as a statement an agent can read and rerun. */
   function tablePageSql(state: ConnectionState, relation: DatabaseRelation): string {
     let sql = `SELECT *\nFROM ${quoteIdentifier(relation.schema)}.${quoteIdentifier(relation.name)}`;
-    if (state.sortColumn) {
-      sql += `\nORDER BY ${quoteIdentifier(state.sortColumn)} ${state.sortDirection === 'desc' ? 'DESC' : 'ASC'}`;
-    }
+    if (state.filter) sql += `\nWHERE ${state.filter}`;
+    if (state.orderBy) sql += `\nORDER BY ${state.orderBy}`;
     return `${sql}\nLIMIT ${state.limit} OFFSET ${state.offset};`;
   }
 
@@ -756,6 +786,12 @@ password = "{{ env.DB_PASSWORD }}"`;
                 {/each}
               </div>
 
+              <DatabaseFilters
+                filter={current.filter}
+                orderBy={current.orderBy}
+                onapply={(next) => void loadTable({ ...next, offset: 0 })}
+              />
+
               <div class="c-database__results">
                 {#if current.loadingTable}
                   <div class="c-database__result-empty">Loading table rows…</div>
@@ -766,8 +802,9 @@ password = "{{ env.DB_PASSWORD }}"`;
                     result={typedTable}
                     rowOffset={current.offset}
                     sortable={true}
-                    sortColumn={current.sortColumn}
-                    sortDirection={current.sortDirection}
+                    sortColumn={tableSort?.column ?? null}
+                    sortDirection={tableSort?.direction ?? null}
+                    onfilter={filterBy}
                     onsort={sortTable}
                     relation={current.selectedRelation}
                     sendLabel={destination?.label ?? null}

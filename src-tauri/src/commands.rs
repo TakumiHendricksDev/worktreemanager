@@ -605,11 +605,18 @@ pub async fn run_database_query(
     session: String,
     sql: String,
     max_rows: Option<u32>,
+    read_only: Option<bool>,
 ) -> Reply<wtm_core::ports::database::QueryResult> {
+    use wtm_core::ports::database::QueryMode;
     let app = Arc::clone(&app);
+    let mode = if read_only.unwrap_or(false) {
+        QueryMode::ReadOnly
+    } else {
+        QueryMode::Normal
+    };
     blocking(move || {
         app.database
-            .query(&session, &sql, max_rows.unwrap_or(500))
+            .query(&session, &sql, max_rows.unwrap_or(500), mode)
             .map_err(Into::into)
     })
     .await

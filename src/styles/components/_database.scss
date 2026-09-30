@@ -331,6 +331,77 @@
   color: var(--fg);
 }
 
+/* WHERE | ORDER BY, one row, as in PyCharm. WHERE gets the wider share because conditions run
+   longer than sort lists. */
+.c-database__filters {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  border-top: 1px solid var(--border);
+}
+
+.c-database__filter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 0 var(--sp-3);
+  cursor: text;
+}
+
+.c-database__filter + .c-database__filter {
+  border-left: 1px solid var(--border);
+}
+
+/* The field's own ring would be clipped by the grid row; an underline says the same inside it. */
+.c-database__filter:focus-within {
+  box-shadow: inset 0 -2px 0 var(--border-focus);
+}
+
+.c-database__filter-label {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  font-weight: 600;
+  color: var(--fg-subtle);
+}
+
+/* Lit while a condition is applied, so a table that is showing fewer rows says why. */
+.c-database__filter.is-applied .c-database__filter-label {
+  color: var(--accent);
+}
+
+.c-database__filter-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--fg);
+  background: transparent;
+}
+
+.c-database__filter-input::placeholder {
+  color: var(--fg-subtle);
+}
+
+.c-database__filter-input:focus-visible {
+  outline: none;
+}
+
+/* Shown only once the text differs from what is applied: Enter has something to do. */
+.c-database__filter-hint {
+  flex: 0 0 auto;
+  visibility: hidden;
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-database__filter.is-dirty .c-database__filter-hint {
+  visibility: visible;
+}
+
 .c-database__results {
   flex: 1 1 auto;
   display: flex;

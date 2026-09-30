@@ -152,3 +152,31 @@ export function prettyJson(value: string): string | null {
     return null;
   }
 }
+
+/** What the grid's sort toggle writes into ORDER BY. */
+export function sortClause(column: string, direction: 'asc' | 'desc'): string {
+  return `${quoteIdentifier(column)} ${direction === 'desc' ? 'DESC' : 'ASC'}`;
+}
+
+/**
+ * The column and direction when ORDER BY is exactly what the toggle writes, else null — so the
+ * header shows an arrow for its own sort and none for an ORDER BY typed by hand, which may name an
+ * expression or several columns the arrow could not describe.
+ */
+export function sortOf(
+  orderBy: string,
+): { column: string; direction: 'asc' | 'desc' } | null {
+  const match = /^"((?:[^"]|"")+)"\s+(ASC|DESC)$/i.exec(orderBy.trim());
+  if (!match?.[1] || !match[2]) return null;
+  return {
+    column: match[1].replaceAll('""', '"'),
+    direction: match[2].toLowerCase() === 'desc' ? 'desc' : 'asc',
+  };
+}
+
+/** "Filter by this value": the condition that keeps rows whose column holds exactly this. */
+export function equalsCondition(column: string, value: string | null): string {
+  return value === null
+    ? `${quoteIdentifier(column)} IS NULL`
+    : `${quoteIdentifier(column)} = ${sqlLiteral(value)}`;
+}
