@@ -232,6 +232,27 @@ export interface CodeEntry {
   symlink: boolean;
 }
 
+/** A file for the viewer. Mirrors `CodeFileView`. */
+export interface CodeFile {
+  /** Null for a binary file, which is described rather than shown. */
+  text: string | null;
+  size: number;
+  /** The text stops before the file does — it is past the five-mebibyte cap. */
+  truncated: boolean;
+  mtimeMs: number | null;
+  symlink: boolean;
+  /** It resolves to somewhere outside the worktree, through a link. */
+  outside: boolean;
+}
+
+/** Whether an open file changed, without reading it. Mirrors `CodeStatView`. */
+export interface CodeStat {
+  path: string;
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number;
+}
+
 export interface Field {
   key: string;
   label: string;

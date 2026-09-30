@@ -14,9 +14,11 @@
 
 mod dir;
 mod path;
+mod read;
 
 pub use dir::{Entry, EntryKind, Kinds, classify, list_dir};
 pub use path::resolve;
+pub use read::{Content, FileText, MAX_READ_BYTES, read_file, stat};
 
 /// Why a file or directory could not be shown.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -28,6 +30,9 @@ pub enum CodeError {
     NotFound(String),
     #[error("`{0}` is not a directory")]
     NotADirectory(String),
+    /// A directory, a FIFO, a socket: something that exists and is not a file to read.
+    #[error("`{0}` is not a file")]
+    NotAFile(String),
     #[error("could not read `{path}`: {message}")]
     Io { path: String, message: String },
 }

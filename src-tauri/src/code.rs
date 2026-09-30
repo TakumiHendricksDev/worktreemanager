@@ -44,12 +44,39 @@ pub struct CodeEntryView {
     pub symlink: bool,
 }
 
+/// A file for the viewer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeFileView {
+    /// `None` for a binary file, which is described rather than shown.
+    pub text: Option<String>,
+    pub size: u64,
+    /// The text stops before the file does. See `wtm_code::MAX_READ_BYTES`.
+    pub truncated: bool,
+    pub mtime_ms: Option<u64>,
+    pub symlink: bool,
+    /// It resolves to somewhere outside the worktree, through a link.
+    pub outside: bool,
+}
+
+/// Whether an open file changed, without reading it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeStatView {
+    pub path: String,
+    /// `false` when the file is gone, or is no longer a file.
+    pub exists: bool,
+    pub mtime_ms: Option<u64>,
+    pub size: u64,
+}
+
 impl From<wtm_code::CodeError> for ErrorView {
     fn from(err: wtm_code::CodeError) -> Self {
         let kind = match &err {
             wtm_code::CodeError::BadPath(_) => "badPath",
             wtm_code::CodeError::NotFound(_) => "notFound",
             wtm_code::CodeError::NotADirectory(_) => "notADirectory",
+            wtm_code::CodeError::NotAFile(_) => "notAFile",
             wtm_code::CodeError::Io { .. } => "io",
         };
         Self::new(kind, err.to_string())
@@ -117,6 +144,65 @@ pub async fn code_list_dir(
     .await
 }
 
+/// One file, for the viewer.
+#[tauri::command]
+pub async fn code_read_file(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    path: String,
+) -> Reply<CodeFileView> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let root = root_of(&app, &project_id, &worktree_id)?;
+        let file = wtm_code::read_file(&root, &path)?;
+        Ok(CodeFileView {
+            text: match file.content {
+                wtm_code::Content::Text(text) => Some(text),
+                wtm_code::Content::Binary => None,
+            },
+            size: file.size,
+            truncated: file.truncated,
+            mtime_ms: file.mtime_ms,
+            symlink: file.symlink,
+            outside: file.outside,
+        })
+    })
+    .await
+}
+
+/// When each open file last changed, so a refresh re-reads only the ones that did.
+#[tauri::command]
+pub async fn code_stat(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+    paths: Vec<String>,
+) -> Reply<Vec<CodeStatView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let root = root_of(&app, &project_id, &worktree_id)?;
+        Ok(paths
+            .into_iter()
+            .map(|path| match wtm_code::stat(&root, &path) {
+                Some((mtime_ms, size)) => CodeStatView {
+                    path,
+                    exists: true,
+                    mtime_ms,
+                    size,
+                },
+                None => CodeStatView {
+                    path,
+                    exists: false,
+                    mtime_ms: None,
+                    size: 0,
+                },
+            })
+            .collect())
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -148,5 +234,21 @@ mod tests {
                 "truncated"
             ]
         );
+    }
+
+    #[test]
+    fn the_file_view_is_camel_case() {
+        let view = CodeFileView {
+            text: None,
+            size: 0,
+            truncated: false,
+            mtime_ms: Some(1),
+            symlink: false,
+            outside: false,
+        };
+        let json = serde_json::to_value(&view).unwrap();
+        let object = json.as_object().unwrap();
+        assert!(object.contains_key("mtimeMs"), "{object:?}");
+        assert!(!object.contains_key("mtime_ms"));
     }
 }

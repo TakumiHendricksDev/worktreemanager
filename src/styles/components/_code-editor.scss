@@ -109,32 +109,106 @@
   background: var(--accent-soft);
 }
 
+/*
+ * Token colours, from `--syntax-*` roles.
+ *
+ * `classHighlighter` gives every token one coarse class, and the viewer adds finer ones beside it
+ * (`detailHighlighter` in `code-editor.ts`). The finer rules come later in this file than the
+ * coarse ones they refine, so a `def`'s name — `tok-variableName tok-definition tok-fn-def` — takes
+ * the definition colour on order, at the same specificity.
+ */
 .c-code-editor .tok-keyword,
 .c-code-editor .tok-operator {
-  color: var(--accent);
+  color: var(--syntax-keyword);
 }
 
-.c-code-editor .tok-typeName,
-.c-code-editor .tok-variableName2 {
-  color: var(--info);
+/* An operator in SQL is `AND`; in code it is `+`, which should not shout. */
+.c-code-editor--viewer .tok-operator {
+  color: inherit;
 }
 
 .c-code-editor .tok-string,
 .c-code-editor .tok-string2 {
-  color: var(--ok);
+  color: var(--syntax-string);
 }
 
 .c-code-editor .tok-number,
 .c-code-editor .tok-bool,
-.c-code-editor .tok-atom {
-  color: var(--warn);
+.c-code-editor .tok-atom,
+.c-code-editor .tok-literal {
+  color: var(--syntax-number);
 }
 
 .c-code-editor .tok-comment {
   font-style: italic;
-  color: var(--fg-subtle);
+  color: var(--syntax-comment);
+}
+
+.c-code-editor .tok-typeName,
+.c-code-editor .tok-className,
+.c-code-editor .tok-namespace,
+.c-code-editor .tok-variableName2 {
+  color: var(--syntax-type);
+}
+
+.c-code-editor .tok-propertyName,
+.c-code-editor .tok-self {
+  color: var(--syntax-member);
+}
+
+.c-code-editor .tok-meta,
+.c-code-editor .tok-macroName {
+  color: var(--syntax-meta);
+}
+
+.c-code-editor .tok-tag,
+.c-code-editor .tok-heading {
+  color: var(--syntax-tag);
+}
+
+.c-code-editor .tok-heading,
+.c-code-editor .tok-strong {
+  font-weight: 600;
+}
+
+.c-code-editor .tok-emphasis {
+  font-style: italic;
+}
+
+.c-code-editor .tok-link,
+.c-code-editor .tok-url {
+  text-decoration: underline;
+}
+
+.c-code-editor .tok-attr {
+  color: var(--fg-muted);
+}
+
+/* A call is plain, as in PyCharm — even a method, which is otherwise a property name above. */
+.c-code-editor .tok-fn {
+  color: inherit;
+}
+
+.c-code-editor .tok-fn-def,
+.c-code-editor .tok-class-def {
+  color: var(--syntax-definition);
 }
 
 .c-code-editor .tok-invalid {
-  color: var(--danger);
+  color: var(--syntax-invalid);
+}
+
+/* Where a search result or a link just landed. Fades so it marks the spot without staying. */
+.c-code-editor__flash {
+  animation: c-code-editor-flash 1.2s ease-out;
+}
+
+@keyframes c-code-editor-flash {
+  from {
+    background: var(--warn-mark);
+  }
+
+  to {
+    background: transparent;
+  }
 }

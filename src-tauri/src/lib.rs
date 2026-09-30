@@ -280,6 +280,8 @@ pub fn run() {
             commands::list_worktree_files,
             code::code_tree,
             code::code_list_dir,
+            code::code_read_file,
+            code::code_stat,
             commands::answer_approval,
             commands::interrupt_turn,
             commands::list_agent_sessions,

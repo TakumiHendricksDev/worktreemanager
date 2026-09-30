@@ -44,6 +44,7 @@ import {
   type Worktree,
 } from '../ipc/types';
 import { emptyLayout, FAVORITES, toggleStar } from '../sidebar';
+import { dropCodeCaches } from './code-cache';
 
 const LAST_PROJECT_KEY = 'wtm.lastProject';
 const WORKTREE_CACHE_PREFIX = 'wtm.worktrees.';
@@ -117,7 +118,10 @@ function writeLayoutCache(projectId: string, layout: SidebarLayout): void {
   }
 }
 
-/** Drop cached lists, layouts and last links for projects that are no longer registered. */
+/**
+ * Drop cached lists, layouts, last links and Code tab state for projects that are no longer
+ * registered.
+ */
 function pruneCache(keep: string[]): void {
   try {
     const prefixes = [WORKTREE_CACHE_PREFIX, LAYOUT_CACHE_PREFIX, LAST_LINK_PREFIX];
@@ -129,6 +133,9 @@ function pruneCache(keep: string[]): void {
   } catch {
     /* See writeCache. */
   }
+  // The Code tab's entries are per worktree, so they are matched by the project stored inside.
+  const live = new Set(keep);
+  dropCodeCaches((_, cache) => !live.has(cache.projectId));
 }
 
 /**

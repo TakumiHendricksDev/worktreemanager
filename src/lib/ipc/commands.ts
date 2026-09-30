@@ -29,6 +29,8 @@ import type {
   ApprovalAnswer,
   Capability,
   CodeEntry,
+  CodeFile,
+  CodeStat,
   CodeTree,
   CreateOutcome,
   Doctor,
@@ -443,6 +445,12 @@ export const commands = {
   /** One level of a directory git did not list — ignored, a submodule, or a link. */
   codeListDir: (projectId: string, worktreeId: string, dir: string) =>
     invoke<CodeEntry[]>('code_list_dir', { projectId, worktreeId, dir }),
+  /** One file's text, up to five mebibytes; a binary file comes back without any. */
+  codeReadFile: (projectId: string, worktreeId: string, path: string) =>
+    invoke<CodeFile>('code_read_file', { projectId, worktreeId, path }),
+  /** When each open file last changed, so a refresh re-reads only what did. */
+  codeStat: (projectId: string, worktreeId: string, paths: string[]) =>
+    invoke<CodeStat[]>('code_stat', { projectId, worktreeId, paths }),
 
   /** Opens an http/https URL. The scheme is validated in Rust — see `open_url`. */
   openUrl: (url: string) => invoke<void>('open_url', { url }),

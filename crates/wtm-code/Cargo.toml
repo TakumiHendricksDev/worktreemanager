@@ -17,3 +17,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wtm-core = { workspace = true }
+wtm-exec = { workspace = true }

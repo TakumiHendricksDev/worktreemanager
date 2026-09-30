@@ -90,3 +90,93 @@
   font-size: var(--step--1);
   color: var(--fg-muted);
 }
+
+/* The open files, one tab each. Scrolls sideways rather than squeezing names past reading. */
+.c-code-view__tabs {
+  display: flex;
+  flex: 0 0 auto;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  scrollbar-width: thin;
+}
+
+.c-code-view__tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border-right: 1px solid var(--border);
+  color: var(--fg-muted);
+
+  &:hover {
+    color: var(--fg);
+    background: var(--bg-hover);
+  }
+
+  /* The underline, not a fill: a fill on a tab reads as selected text. */
+  &.is-active {
+    color: var(--fg);
+    background: var(--bg);
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+}
+
+.c-code-view__tab-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding: 6px 4px 6px var(--sp-3);
+  font-size: var(--step--1);
+  white-space: nowrap;
+}
+
+.c-code-view__tab-hint {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-code-view__tab-close {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  border-radius: var(--r-sm);
+  color: var(--fg-subtle);
+
+  &:hover {
+    color: var(--fg);
+    background: var(--bg-active);
+  }
+}
+
+/* Where the file is, folder by folder. */
+.c-code-view__crumbs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  font-size: var(--step--2);
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
+.c-code-view__flag {
+  margin-left: var(--sp-2);
+  color: var(--warn);
+}
+
+.c-code-view__editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  color: var(--fg);
+  background: var(--bg-code);
+
+  &.is-hidden {
+    display: none;
+  }
+}

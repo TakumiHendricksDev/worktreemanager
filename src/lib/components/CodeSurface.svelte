@@ -6,11 +6,13 @@
    * open folders and files survive a trip to Sessions and back. It follows the selected worktree;
    * each worktree keeps its own state in the `code` store.
    */
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
 
   import { code } from '../state/code.svelte';
+  import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import CodeTree from './CodeTree.svelte';
+  import CodeViewer from './CodeViewer.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
 
@@ -27,16 +29,73 @@
   const worktreeId = $derived(worktree?.id ?? null);
   const tree = $derived(worktreeId ? code.treeOf(worktreeId) : null);
   const error = $derived(worktreeId ? (code.errors[worktreeId] ?? null) : null);
-  const cursor = $derived(worktreeId ? (code.cursor[worktreeId] ?? null) : null);
+  const tabs = $derived(worktreeId ? (code.tabs[worktreeId] ?? []) : []);
+  const active = $derived(worktreeId ? (code.active[worktreeId] ?? null) : null);
+  const file = $derived(worktreeId && active ? code.fileOf(worktreeId, active) : null);
+
+  let treeView = $state<ReturnType<typeof CodeTree> | null>(null);
+  let viewer = $state<ReturnType<typeof CodeViewer> | null>(null);
 
   function refresh(): void {
     if (projectId && worktreeId) void code.refresh(projectId, worktreeId);
+  }
+
+  function open(path: string): void {
+    if (projectId && worktreeId) code.open(projectId, worktreeId, path);
+  }
+
+  async function locate(): Promise<void> {
+    if (!projectId || !worktreeId || !active) return;
+    await code.locate(projectId, worktreeId, active);
+    await treeView?.reveal(active);
+  }
+
+  function nameOf(path: string): string {
+    return path.slice(path.lastIndexOf('/') + 1);
+  }
+
+  /** Two tabs with the same file name say which folder each is in, as an IDE's tabs do. */
+  function tabLabel(path: string): { name: string; hint: string | null } {
+    const name = nameOf(path);
+    const twin = tabs.some((other) => other !== path && nameOf(other) === name);
+    if (!twin) return { name, hint: null };
+    const parts = path.split('/');
+    return { name, hint: parts.length > 1 ? (parts[parts.length - 2] ?? null) : null };
+  }
+
+  function kib(bytes: number): string {
+    return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024).toLocaleString()} KiB`;
   }
 
   // Re-read whenever the tab is looked at, including arriving on another worktree while it shows.
   $effect(() => {
     if (!visible || !projectId || !worktreeId) return;
     void code.refresh(projectId, worktreeId);
+  });
+
+  // An agent here finished a turn: its edits have landed, so look again — only while showing, since
+  // becoming visible refreshes anyway.
+  $effect(() => {
+    const epoch = worktreeId ? sessions.turnEpoch[worktreeId] : undefined;
+    if (epoch === undefined) return;
+    untrack(() => {
+      if (visible) refresh();
+    });
+  });
+
+  // Forget worktrees that are gone. Same guard, and the same reason, as `sessions.reconcile`.
+  $effect(() => {
+    const project = workspace.activeProjectId;
+    if (!project || workspace.stale || workspace.loadingWorktrees) return;
+    const ids = workspace.worktrees.map((w) => w.id);
+    untrack(() => code.reconcile(project, ids));
+  });
+
+  // Reading a file that is not open yet — after a relaunch, the tab that was active.
+  $effect(() => {
+    if (!visible || !projectId || !worktreeId || !active) return;
+    const current = code.fileOf(worktreeId, active);
+    if (!current) untrack(() => void code.ensure(projectId, worktreeId, active));
   });
 
   onMount(() => {
@@ -46,6 +105,30 @@
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   });
+
+  /*
+   * ⌘F finds in the open file while this view is showing — from the tree, too.
+   *
+   * The sidebar has owned ⌘F everywhere, focusing its worktree filter. With a file on screen, find
+   * means the file. Capture phase so this runs before the sidebar's listener; the editor's own
+   * keymap already handles ⌘F when the editor has focus, and the sidebar keeps its own.
+   */
+  onMount(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!visible || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f')
+        return;
+      if (event.shiftKey || event.altKey) return;
+      const target = event.target as Element | null;
+      if (target?.closest?.('.cm-editor, .c-sidebar')) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      if (!viewer || !active) return;
+      event.preventDefault();
+      event.stopPropagation();
+      viewer.find();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
 </script>
 
 <section class="c-code-view" class:is-hidden={!visible} id="code-view" aria-label="Code">
@@ -54,6 +137,15 @@
       <aside class="c-code-view__explorer" aria-label="Project files">
         <header class="c-code-view__explorer-head">
           <span class="c-code-view__explorer-title">Project</span>
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title="Select the open file in the tree"
+            ariaLabel="Select the open file in the tree"
+            disabled={!active}
+            onclick={locate}><Icon name="locate" size={14} /></Button
+          >
           <Button
             variant="quiet"
             size="sm"
@@ -80,21 +172,78 @@
             This worktree lists more files than wtm reads at once, so some are missing here.
           </p>
         {/if}
-        <CodeTree
-          {projectId}
-          {worktreeId}
-          onopen={(path) => code.setCursor(worktreeId, path)}
-        />
+        <CodeTree bind:this={treeView} {projectId} {worktreeId} onopen={open} />
       </aside>
 
       <div class="c-code-view__main">
-        <div class="c-code-view__placeholder">
-          {#if cursor}
-            <p><code>{cursor}</code></p>
-          {:else}
-            <p>Choose a file on the left.</p>
-          {/if}
-        </div>
+        {#if tabs.length > 0}
+          <div class="c-code-view__tabs" role="tablist" aria-label="Open files">
+            {#each tabs as tab (tab)}
+              {@const label = tabLabel(tab)}
+              <div class="c-code-view__tab" class:is-active={tab === active}>
+                <button
+                  type="button"
+                  role="tab"
+                  class="c-code-view__tab-name"
+                  aria-selected={tab === active}
+                  title={tab}
+                  onclick={() => projectId && code.activate(projectId, worktreeId, tab)}
+                  onauxclick={(event) => {
+                    if (event.button === 1) code.close(worktreeId, tab);
+                  }}
+                >
+                  {label.name}
+                  {#if label.hint}<span class="c-code-view__tab-hint">{label.hint}</span
+                    >{/if}
+                </button>
+                <button
+                  type="button"
+                  class="c-code-view__tab-close"
+                  title="Close"
+                  aria-label={`Close ${label.name}`}
+                  onclick={() => code.close(worktreeId, tab)}
+                  ><Icon name="close" size={12} /></button
+                >
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if active}
+          <div class="c-code-view__crumbs" title={active}>
+            {#each active.split('/') as part, i (i)}
+              {#if i > 0}<Icon name="chevron-right" size={10} />{/if}
+              <span>{part}</span>
+            {/each}
+            {#if file?.status === 'ready' && file.file.outside}
+              <span class="c-code-view__flag">outside the worktree, through a link</span>
+            {/if}
+          </div>
+        {/if}
+
+        {#if file?.status === 'ready' && file.file.truncated}
+          <p class="c-code-view__notice">
+            Showing the first 5 MiB of {kib(file.file.size)}.
+          </p>
+        {/if}
+
+        <CodeViewer bind:this={viewer} {worktreeId} path={active} {file} />
+
+        {#if !active}
+          <div class="c-code-view__placeholder"><p>Choose a file on the left.</p></div>
+        {:else if !file || file.status === 'loading'}
+          <div class="c-code-view__placeholder"><p>Reading…</p></div>
+        {:else if file.status === 'gone'}
+          <div class="c-code-view__placeholder">
+            <p>This file is no longer in the worktree.</p>
+          </div>
+        {:else if file.status === 'error'}
+          <div class="c-code-view__placeholder"><p>{file.message}</p></div>
+        {:else if file.file.text === null}
+          <div class="c-code-view__placeholder">
+            <p>A binary file, {kib(file.file.size)}. Nothing to read here.</p>
+          </div>
+        {/if}
       </div>
     </div>
   {:else}

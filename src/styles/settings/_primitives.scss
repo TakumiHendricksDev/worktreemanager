@@ -222,6 +222,26 @@ $default-depth: 'deep';
   --blue-500: #2f6ea8;
 
   /*
+   * Syntax colours, for the code viewer and the SQL editor and nothing else.
+   *
+   * A highlighter needs more hues than the four statuses, and borrowing those would make a
+   * string look like "this is fine" and a keyword like a warning. So these are their own
+   * primitives, reached only through the `--syntax-*` roles, and like the statuses they do not
+   * move with the palette: code reads the same in Pine as in Harbor.
+   *
+   * Same `400`-dark / `500`-light split as the statuses. Measured against `--bg-code` in all
+   * nine palettes in both modes, every `--syntax-*` role built from these is at least 4.5:1; the
+   * lowest is 4.52.
+   */
+  --orange-400: #df8f52;
+  --orange-500: #a14b0c;
+  --purple-400: #b690dc;
+  --purple-500: #8540a6;
+  --teal-400: #52b5aa;
+  --teal-500: #0f6e66;
+  --yellow-400: #e3c275;
+
+  /*
    * Append-only past the existing entries, never insert or reorder. macOS WebKit
    * resolves `ui-sans-serif` / `ui-monospace` on the first name and never reads
    * further, so everything after them is unreachable there — which is what makes
