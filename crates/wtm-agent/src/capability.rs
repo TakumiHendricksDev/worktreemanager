@@ -50,6 +50,15 @@ pub const CODEX_ULTRA: &str = "ultra";
 /// have to agree and they reach it by different routes.
 pub const PREFERRED_EFFORT: &str = "xhigh";
 
+/// The mode a session carries on in once its plan is approved.
+///
+/// Auto, the same as a new session starts in — see `ProviderEntry::default_mode`. Left to itself,
+/// Claude leaves plan mode for `default`, so the first command of the work you just approved stopped
+/// for another card; observed on CLI 2.1.280, where the same approval carrying this mode went on to
+/// make its edit without asking. Both providers that plan spell it the same, Cursor's being wtm's
+/// own policy rather than a wire mode.
+pub const PLAN_APPROVED_MODE: &str = "auto";
+
 /// The shared rungs, weakest first — the vocabulary both providers spell the same way.
 ///
 /// Neither provider's *top* rung is on this list, and that is the point: `ultracode` and

@@ -569,6 +569,8 @@ struct Pending {
     input: Value,
     /// What the CLI itself suggested granting, used by "always this session".
     suggestions: Value,
+    /// Whether this is `ExitPlanMode`, whose approval also says which mode the work runs in.
+    plan: bool,
 }
 
 /// Where the UI's turn stands.
@@ -1068,6 +1070,7 @@ impl ClaudeProtocol {
                     .get("permission_suggestions")
                     .cloned()
                     .unwrap_or(Value::Null),
+                plan: tool == "ExitPlanMode",
             },
         );
 
@@ -1306,6 +1309,7 @@ impl Protocol for ClaudeProtocol {
                                 request_id,
                                 input: Value::Null,
                                 suggestions: Value::Null,
+                                plan: false,
                             },
                         );
                         vec![Step::Emit(AgentEvent::Raw {
@@ -1449,7 +1453,7 @@ impl Protocol for ClaudeProtocol {
             })];
         };
 
-        let response = match answer {
+        let mut response = match answer {
             // `updatedInput` carries the original back. It was *required* before 2.1.207, and
             // echoing what arrived is the correct no-op on every version.
             ApprovalAnswer::Allow => json!({
@@ -1488,6 +1492,20 @@ impl Protocol for ClaudeProtocol {
                 })
             }
         };
+        // In the approval itself rather than a `set_permission_mode` after it, because the CLI
+        // starts the work the moment it reads this reply, and a mode change that arrived a frame
+        // later would miss the first tool call. `setMode` is the update the CLI's own "Yes, and
+        // auto-accept edits" sends. Replaces, not appends: `ExitPlanMode` suggests nothing — its
+        // `permission_suggestions` were `null` — and a second `setMode` beside this one would make
+        // the landing mode depend on the order the CLI applies them in. The CLI announces where it
+        // landed on a `status` line, so a model without Auto still shows the truth.
+        if pending.plan && response["behavior"] == "allow" {
+            response["updatedPermissions"] = json!([{
+                "type": "setMode",
+                "mode": crate::capability::PLAN_APPROVED_MODE,
+                "destination": "session",
+            }]);
+        }
 
         vec![
             Self::control_response(&pending.request_id, &response),

@@ -1509,10 +1509,11 @@ class Sessions {
         this.error = errorMessage(e);
       }
     }
-    // An approved plan takes the CLI out of plan mode, and it announces nothing when it goes —
-    // `permission_mode_changed` is telemetry, not a stream event. The landing mode depends on
-    // `updatedPermissions` this side never sees, so the only honest pill is the "session hasn't
-    // said" sentinel, not a stale "Plan" and never a guess.
+    // An approved plan takes the session out of plan mode and into Auto — both drivers ask for it,
+    // see `PLAN_APPROVED_MODE` — and the provider's `mode_changed` says where it really landed: the
+    // CLI's own `status` line for Claude, which is `default` on a model without Auto, and the driver
+    // at once for Cursor. Until then the honest pill is the "session hasn't said" sentinel, not a
+    // stale "Plan" and not the mode it was asked for.
     if (pane && request.kind === 'plan_review' && answer.kind !== 'deny') {
       pane.mode = null;
     }

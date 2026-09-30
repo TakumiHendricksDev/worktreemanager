@@ -899,12 +899,32 @@ impl Protocol for CursorProtocol {
                 })];
             }
         };
-        vec![
+        let accepted_plan = matches!(
+            (&pending.kind, answer),
+            (
+                PendingKind::Plan,
+                ApprovalAnswer::Allow | ApprovalAnswer::AllowForSession
+            )
+        );
+        let mut steps = vec![
             Step::Write(
                 json!({ "jsonrpc": "2.0", "id": pending.rpc_id, "result": result }).to_string(),
             ),
             Step::Emit(AgentEvent::ApprovalResolved { id: id.to_owned() }),
-        ]
+        ];
+        // The work an approved plan describes runs in Auto — see `PLAN_APPROVED_MODE`. Here that is
+        // wtm answering the permission prompts, so it takes effect before the next one arrives,
+        // whichever order Cursor reads these frames in; `set_mode` only moves the wire off `plan`.
+        // Announced from here, because Cursor would report `agent`, and `current_mode_update` is
+        // ignored for that reason.
+        if accepted_plan {
+            let mode = crate::capability::PLAN_APPROVED_MODE;
+            steps.extend(self.reconfigure(None, None, Some(mode), None));
+            steps.push(Step::Emit(AgentEvent::ModeChanged {
+                mode: mode.to_owned(),
+            }));
+        }
+        steps
     }
 
     fn interrupt(&mut self) -> Vec<Step> {

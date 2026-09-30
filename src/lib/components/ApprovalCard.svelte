@@ -431,7 +431,14 @@
       >
         Request changes
       </Button>
-      <Button variant="accent" size="sm" onclick={() => onanswer({ kind: 'allow' })}>
+      <!-- Says where the work goes next, because it is not where the session was before it planned:
+           an approved plan carries on in Auto. See `PLAN_APPROVED_MODE` in `capability.rs`. -->
+      <Button
+        variant="accent"
+        size="sm"
+        title="Approve the plan. The session carries on in Auto."
+        onclick={() => onanswer({ kind: 'allow' })}
+      >
         Approve
       </Button>
     {:else}

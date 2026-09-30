@@ -591,6 +591,58 @@ fn exit_plan_mode_becomes_a_plan_review_rather_than_an_ordinary_tool_approval() 
     }
 }
 
+/// An `ExitPlanMode` request as CLI 2.1.280 sent it, with the id the approval is answered by.
+const EXIT_PLAN_MODE: &str = r##"{"type":"control_request","request_id":"r3","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","display_name":"ExitPlanMode","input":{"allowedPrompts":[],"plan":"# Append a line\n\nAppend hello to notes.txt.\n","planFilePath":"/home/.claude/plans/quiet-lake.md"},"permission_suggestions":null,"tool_use_id":"toolu_01XUbNV","requires_user_interaction":true}}"##;
+
+#[test]
+fn approving_a_plan_asks_the_cli_to_carry_on_in_auto() {
+    // Left to itself the CLI leaves plan mode for `default`, and the first command of the approved
+    // work stopped for another card — seen against 2.1.280, where the same approval with this
+    // `setMode` went on to make its edit without asking and reported `auto` on a `status` line.
+    let mut d = driver();
+    let _ = d.on_line(EXIT_PLAN_MODE);
+    let frames = writes(&d.answer("r3", &ApprovalAnswer::Allow));
+    let response = &frames[0]["response"]["response"];
+    assert_eq!(response["behavior"], "allow");
+    assert_eq!(
+        response["updatedPermissions"],
+        serde_json::json!([{ "type": "setMode", "mode": "auto", "destination": "session" }])
+    );
+}
+
+#[test]
+fn sending_a_plan_back_changes_no_mode() {
+    // A rejected plan keeps the session planning, which is the point of rejecting it.
+    let mut d = driver();
+    let _ = d.on_line(EXIT_PLAN_MODE);
+    let frames = writes(&d.answer(
+        "r3",
+        &ApprovalAnswer::Deny {
+            message: Some("Revise it".to_owned()),
+        },
+    ));
+    let response = &frames[0]["response"]["response"];
+    assert_eq!(response["behavior"], "deny");
+    assert!(response.get("updatedPermissions").is_none(), "{response}");
+}
+
+#[test]
+fn allowing_an_ordinary_tool_changes_no_mode() {
+    // Only a plan's approval says where the work goes next. Any other Allow moving the session into
+    // Auto would be one click granting far more than the card asked about.
+    let mut d = driver();
+    let _ = d.on_line(
+        r#"{"type":"control_request","request_id":"b1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"permission_suggestions":null,"tool_use_id":"toolu_02"}}"#,
+    );
+    let frames = writes(&d.answer("b1", &ApprovalAnswer::Allow));
+    assert!(
+        frames[0]["response"]["response"]
+            .get("updatedPermissions")
+            .is_none(),
+        "{frames:?}"
+    );
+}
+
 #[test]
 fn a_control_request_this_build_does_not_handle_is_still_declinable() {
     // An unanswered control request blocks the CLI exactly as an unanswered approval does, so an

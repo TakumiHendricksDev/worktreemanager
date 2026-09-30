@@ -340,6 +340,77 @@ fn auto_mode_answers_permission_prompts_without_showing_a_card() {
 }
 
 #[test]
+fn accepting_a_plan_carries_on_in_auto() {
+    // The work an approved plan describes runs without a card per tool, the same as a new session
+    // does. Announced by the driver, because Cursor's own report would say `agent`.
+    let mut driver = opened_driver(&SessionRequest {
+        mode: Some("plan".to_owned()),
+        ..SessionRequest::default()
+    });
+    let _ = driver.on_line(
+        r##"{"jsonrpc":"2.0","id":"plan-1","method":"cursor/create_plan","params":{"plan":"# Append a line"}}"##,
+    );
+    let steps = driver.answer("cursor:plan-1", &ApprovalAnswer::Allow);
+    let frames = writes(&steps);
+    assert_eq!(frames[0]["result"]["outcome"]["outcome"], "accepted");
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame["method"] == "session/set_mode"
+                && frame["params"]["modeId"] == "agent"),
+        "the wire should leave plan: {frames:?}"
+    );
+    assert!(
+        events(&steps).contains(&&AgentEvent::ModeChanged {
+            mode: "auto".to_owned()
+        }),
+        "{steps:?}"
+    );
+
+    // And it is Auto rather than a label: the next permission prompt is answered, not shown.
+    let prompt = driver.on_line(
+        r#"{"jsonrpc":"2.0","id":"permission-2","method":"session/request_permission","params":{"toolCall":{"title":"edit notes.txt","kind":"edit"},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"}]}}"#,
+    );
+    assert_eq!(
+        writes(&prompt)[0]["result"]["outcome"]["optionId"],
+        "allow-once"
+    );
+}
+
+#[test]
+fn rejecting_a_plan_leaves_the_mode_alone() {
+    let mut driver = opened_driver(&SessionRequest {
+        mode: Some("plan".to_owned()),
+        ..SessionRequest::default()
+    });
+    let _ = driver.on_line(
+        r##"{"jsonrpc":"2.0","id":"plan-1","method":"cursor/create_plan","params":{"plan":"# Append a line"}}"##,
+    );
+    let steps = driver.answer(
+        "cursor:plan-1",
+        &ApprovalAnswer::Deny {
+            message: Some("Revise it".to_owned()),
+        },
+    );
+    assert_eq!(
+        writes(&steps)[0]["result"]["outcome"]["outcome"],
+        "rejected"
+    );
+    assert!(
+        !events(&steps)
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ModeChanged { .. })),
+        "{steps:?}"
+    );
+    assert!(
+        !writes(&steps)
+            .iter()
+            .any(|frame| frame["method"] == "session/set_mode"),
+        "{steps:?}"
+    );
+}
+
+#[test]
 fn auto_mode_is_sent_as_agent_because_cursor_has_no_such_mode() {
     let mut driver = opened_driver(&SessionRequest::default());
     let frames = writes(&driver.reconfigure(None, None, Some("auto"), None));
