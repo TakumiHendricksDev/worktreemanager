@@ -519,6 +519,19 @@ class CodeState {
     this.persist(worktreeId);
   }
 
+  /** Close every tab in a worktree — the tab strip's ⋯ → Close All Tabs. */
+  closeAll(worktreeId: string): void {
+    this.tabs[worktreeId] = [];
+    this.active[worktreeId] = null;
+    const prefix = `${worktreeId}\0`;
+    this.files = Object.fromEntries(
+      Object.entries(this.files).filter(([k]) => !k.startsWith(prefix)),
+    );
+    // A comment half-written on a file that is no longer open has nowhere to be drawn.
+    if (this.composing?.worktreeId === worktreeId) this.composing = null;
+    this.persist(worktreeId);
+  }
+
   /** Read a file if this window has not yet, or read it again. */
   async ensure(
     projectId: string,

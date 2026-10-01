@@ -91,14 +91,30 @@
   color: var(--fg-muted);
 }
 
-/* The open files, one tab each. Scrolls sideways rather than squeezing names past reading. */
-.c-code-view__tabs {
+/* The open files, then the strip's ⋯ menu, which does not scroll away with them. */
+.c-code-view__tabbar {
   display: flex;
   flex: 0 0 auto;
-  overflow-x: auto;
+  align-items: stretch;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);
+}
+
+/* One tab per open file. Scrolls sideways rather than squeezing names past reading. */
+.c-code-view__tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
   scrollbar-width: thin;
+}
+
+.c-code-view__tabs-menu {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0 var(--sp-1);
+  border-left: 1px solid var(--border);
 }
 
 .c-code-view__tab {

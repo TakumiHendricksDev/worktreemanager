@@ -13,6 +13,7 @@
   import { askMessage, isOutdated, reviewMessage } from '../code-review';
   import type { CodeComment } from '../ipc/types';
   import { commands } from '../ipc/commands';
+  import { item, popUp, under } from '../native-menu';
   import { code, type Popup } from '../state/code.svelte';
   import { codeRequests } from '../state/code-request.svelte';
   import { sessions } from '../state/sessions.svelte';
@@ -182,6 +183,18 @@
     if (!projectId || !worktreeId || !active) return;
     await code.locate(projectId, worktreeId, active);
     await treeView?.reveal(active);
+  }
+
+  let tabsMenu = $state<HTMLElement | null>(null);
+
+  /** The tab strip's ⋯ menu. One entry today, PyCharm's Close All Tabs; more can join it. */
+  function openTabsMenu(): void {
+    if (!tabsMenu || !worktreeId) return;
+    const id = worktreeId;
+    void popUp(
+      [item('Close All Tabs', () => code.closeAll(id), tabs.length > 0)],
+      under(tabsMenu),
+    );
   }
 
   function nameOf(path: string): string {
@@ -429,35 +442,49 @@
 
       <div class="c-code-view__main">
         {#if tabs.length > 0}
-          <div class="c-code-view__tabs" role="tablist" aria-label="Open files">
-            {#each tabs as tab (tab)}
-              {@const label = tabLabel(tab)}
-              <div class="c-code-view__tab" class:is-active={tab === active}>
-                <button
-                  type="button"
-                  role="tab"
-                  class="c-code-view__tab-name"
-                  aria-selected={tab === active}
-                  title={tab}
-                  onclick={() => projectId && code.activate(projectId, worktreeId, tab)}
-                  onauxclick={(event) => {
-                    if (event.button === 1) code.close(worktreeId, tab);
-                  }}
-                >
-                  {label.name}
-                  {#if label.hint}<span class="c-code-view__tab-hint">{label.hint}</span
-                    >{/if}
-                </button>
-                <button
-                  type="button"
-                  class="c-code-view__tab-close"
-                  title="Close"
-                  aria-label={`Close ${label.name}`}
-                  onclick={() => code.close(worktreeId, tab)}
-                  ><Icon name="close" size={12} /></button
-                >
-              </div>
-            {/each}
+          <div class="c-code-view__tabbar">
+            <div class="c-code-view__tabs" role="tablist" aria-label="Open files">
+              {#each tabs as tab (tab)}
+                {@const label = tabLabel(tab)}
+                <div class="c-code-view__tab" class:is-active={tab === active}>
+                  <button
+                    type="button"
+                    role="tab"
+                    class="c-code-view__tab-name"
+                    aria-selected={tab === active}
+                    title={tab}
+                    onclick={() => projectId && code.activate(projectId, worktreeId, tab)}
+                    onauxclick={(event) => {
+                      if (event.button === 1) code.close(worktreeId, tab);
+                    }}
+                  >
+                    {label.name}
+                    {#if label.hint}<span class="c-code-view__tab-hint">{label.hint}</span
+                      >{/if}
+                  </button>
+                  <button
+                    type="button"
+                    class="c-code-view__tab-close"
+                    title="Close"
+                    aria-label={`Close ${label.name}`}
+                    onclick={() => code.close(worktreeId, tab)}
+                    ><Icon name="close" size={12} /></button
+                  >
+                </div>
+              {/each}
+            </div>
+            <!-- Outside the scrolling strip, so it stays at the end however many tabs are open. -->
+            <span class="c-code-view__tabs-menu" bind:this={tabsMenu}>
+              <Button
+                variant="quiet"
+                size="sm"
+                icon="sm"
+                title="Tab actions"
+                ariaLabel="Tab actions"
+                ariaHaspopup="menu"
+                onclick={openTabsMenu}><Icon name="more-vertical" size={14} /></Button
+              >
+            </span>
           </div>
         {/if}
 

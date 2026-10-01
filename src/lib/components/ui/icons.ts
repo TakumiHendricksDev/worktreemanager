@@ -75,6 +75,7 @@ export type IconName =
   | 'bolt'
   | 'mic'
   | 'more'
+  | 'more-vertical'
   | 'warn';
 
 export interface IconSpec {
@@ -134,6 +135,14 @@ export const icons: Record<IconName, IconSpec> = {
       'M2.25 8 A1.25 1.25 0 1 0 4.75 8 A1.25 1.25 0 1 0 2.25 8 Z ' +
       'M6.75 8 A1.25 1.25 0 1 0 9.25 8 A1.25 1.25 0 1 0 6.75 8 Z ' +
       'M11.25 8 A1.25 1.25 0 1 0 13.75 8 A1.25 1.25 0 1 0 11.25 8 Z',
+  },
+  // The same three dots stood on end: PyCharm's ⋮ at the end of its editor tabs, which the Code
+  // tab's strip copies so the control is where a PyCharm user's hand already goes.
+  'more-vertical': {
+    fill:
+      'M8 2.25 A1.25 1.25 0 1 0 8 4.75 A1.25 1.25 0 1 0 8 2.25 Z ' +
+      'M8 6.75 A1.25 1.25 0 1 0 8 9.25 A1.25 1.25 0 1 0 8 6.75 Z ' +
+      'M8 11.25 A1.25 1.25 0 1 0 8 13.75 A1.25 1.25 0 1 0 8 11.25 Z',
   },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
   // Two chevrons folding up: every open folder closes. The Code tab's tree header.
