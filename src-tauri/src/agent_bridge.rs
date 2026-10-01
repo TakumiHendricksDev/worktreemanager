@@ -141,7 +141,8 @@ struct AgentReadyPayload {
 /// Forwards a session's events to the window as Tauri events.
 pub struct AgentEventSink {
     handle: AppHandle,
-    /// For the resume list. `None` in the one place a sink exists without app state — a test.
+    /// For the resume list and the usage record. `None` in the one place a sink exists without app
+    /// state — a test.
     app: Option<Arc<App>>,
 }
 
@@ -236,6 +237,16 @@ impl AgentEventSink {
 
 impl AgentSink for AgentEventSink {
     fn on_event(&self, session: &SessionId, event: &AgentEvent) {
+        // The account's figures, not this session's: filed in the app's record and announced from
+        // there, and kept out of the stream so a replay can never repaint old ones. See the
+        // variant's docs.
+        if let AgentEvent::LimitsUpdated(limits) = event {
+            if let Some(app) = &self.app {
+                crate::usage::report(&self.handle, app, limits.clone());
+            }
+            return;
+        }
+
         // Before the emit, so a slow write cannot delay what the user sees.
         self.remember(session, event);
         self.title(session, event);

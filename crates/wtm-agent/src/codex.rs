@@ -35,7 +35,8 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 use wtm_core::model::{
     AgendaStatus, AgendaStep, AgentAttachment, AgentEvent, AgentSkill, ApprovalAnswer,
-    ApprovalRequest, NoticeLevel, Usage, UserInputOption, UserInputQuestion,
+    ApprovalRequest, LimitWindow, NoticeLevel, Usage, UsageLimits, UserInputOption,
+    UserInputQuestion,
 };
 
 use crate::provider::{McpServer, Protocol, Provider, ProviderId, SessionRequest, Step};
@@ -771,26 +772,34 @@ impl CodexProtocol {
                     .unwrap_or_else(|| "the app server reported an error".to_owned()),
             ),
             /*
-             * The account's rate-limit windows, which arrive routinely and mean nothing until one
-             * is full.
+             * The account's rate-limit windows, which arrive routinely during a turn.
              *
-             * Was in the silent list below, and for every payload on record it still is: the
-             * captured one carries `params: {}`, and a notification that fires on a schedule must
-             * not draw a row for saying "you have plenty left".
+             * The figures go out as `LimitsUpdated`, which never becomes a transcript row (see its
+             * docs), so a notification that fires on a schedule still draws nothing while there is
+             * room left. The captured payloads so far carry `params: {}`, and those emit nothing
+             * at all.
              *
-             * `usedPercent` at or over 100 is the signal. Codex states the reset as a *duration*
-             * (`resetsInSeconds`), which cannot become a timestamp here — a `Protocol` is a pure
-             * state machine with no clock, which is what makes it testable from recorded lines —
-             * so it goes into the sentence instead, where being approximate is honest.
+             * A window at or over 100% is also a `LimitReached`. Codex 0.154 states the reset as
+             * `resetsAt`, Unix seconds, which goes straight into the event. Older app servers sent
+             * `resetsInSeconds`, a duration that a clockless `Protocol` cannot turn into an
+             * instant, so for those the wait goes into the sentence instead.
              */
             "account/rateLimits/updated" => {
-                let Some(exhausted) = exhausted_window(params) else {
-                    return Vec::new();
-                };
-                AgentEvent::LimitReached {
-                    message: exhausted,
-                    resets_at: None,
+                let mut steps = Vec::new();
+                if let Some(snapshot) = params.get("rateLimits") {
+                    let limits = UsageLimits {
+                        plan: snapshot_plan(snapshot),
+                        windows: snapshot_windows(snapshot),
+                        ..UsageLimits::empty(ID)
+                    };
+                    if !limits.windows.is_empty() || limits.plan.is_some() {
+                        steps.push(Step::Emit(AgentEvent::LimitsUpdated(limits)));
+                    }
                 }
+                if let Some((message, resets_at)) = exhausted_window(params) {
+                    steps.push(Step::Emit(AgentEvent::LimitReached { message, resets_at }));
+                }
+                return steps;
             }
             // Recognised, and deliberately not shown. These are lifecycle chatter with nothing in
             // them for a reader, and a real turn emitted eleven of them — six
@@ -1248,17 +1257,22 @@ fn provider_error_message(value: &Value) -> Option<String> {
     value.get("error").and_then(provider_error_message)
 }
 
-/// A sentence about the first rate-limit window that is full, or `None` while there is room.
+/// A sentence about the first rate-limit window that is full and when it resets, or `None` while
+/// there is room.
 ///
 /// ```text
-/// params.rateLimits.primary   = { usedPercent, windowMinutes, resetsInSeconds }
+/// params.rateLimits.primary   = { usedPercent, windowDurationMins, resetsAt }
 /// params.rateLimits.secondary = { … the same, for the longer window … }
 /// ```
 ///
 /// The window *names* are what Codex calls them and mean nothing to a reader, so the sentence is
 /// built from the numbers instead. Both windows are checked because either can be the binding one:
 /// the short window fills during a burst of tool calls, the long one over a working day.
-fn exhausted_window(params: &Value) -> Option<String> {
+///
+/// This used to read only `resetsInSeconds`, a field the 0.154 protocol does not have, so a full
+/// window never said when it would lift. `resetsAt` is read first now, and the old duration is
+/// still understood for an app server old enough to send it.
+fn exhausted_window(params: &Value) -> Option<(String, Option<u64>)> {
     let limits = params.get("rateLimits")?.as_object()?;
     let full = limits.values().find(|window| {
         window
@@ -1266,6 +1280,13 @@ fn exhausted_window(params: &Value) -> Option<String> {
             .and_then(Value::as_f64)
             .is_some_and(|used| used >= 100.0)
     })?;
+
+    if let Some(resets_at) = full.get("resetsAt").and_then(Value::as_u64) {
+        return Some((
+            "Codex has used its whole rate-limit window.".to_owned(),
+            Some(resets_at),
+        ));
+    }
 
     // Minutes rather than seconds: this is rendered as prose, and "resets in about 210 minutes" is
     // read at a glance where "12600 seconds" has to be divided first. Rounded up, so the sentence
@@ -1275,13 +1296,121 @@ fn exhausted_window(params: &Value) -> Option<String> {
         .and_then(Value::as_u64)
         .map(|seconds| seconds.div_ceil(60));
 
-    Some(match wait {
+    let message = match wait {
         Some(minutes) if minutes > 0 => format!(
             "Codex has used its whole rate-limit window — it resets in about {minutes} minute{}.",
             if minutes == 1 { "" } else { "s" }
         ),
         _ => "Codex has used its whole rate-limit window.".to_owned(),
-    })
+    };
+    Some((message, None))
+}
+
+/// The windows in one `RateLimitSnapshot`, as the domain names them.
+///
+/// The default bucket, `limitId: "codex"`, is the account's own. Any other bucket is a narrower
+/// limit, so its windows carry its name as their scope. `windowMinutes` is the spelling older app
+/// servers used for `windowDurationMins`, and both are read.
+fn snapshot_windows(snapshot: &Value) -> Vec<LimitWindow> {
+    let text = |key: &str| snapshot.get(key).and_then(Value::as_str);
+    let scope = match text("limitId") {
+        None | Some("codex") => None,
+        Some(id) => Some(
+            text("limitName")
+                .or_else(|| text("normalModelSlug"))
+                .unwrap_or(id)
+                .to_owned(),
+        ),
+    };
+
+    ["primary", "secondary"]
+        .iter()
+        .filter_map(|key| {
+            let window = snapshot.get(key)?;
+            Some(LimitWindow {
+                minutes: window
+                    .get("windowDurationMins")
+                    .or_else(|| window.get("windowMinutes"))
+                    .and_then(Value::as_u64),
+                scope: scope.clone(),
+                used_percent: window.get("usedPercent").and_then(Value::as_f64)?,
+                resets_at: window.get("resetsAt").and_then(Value::as_u64),
+            })
+        })
+        .collect()
+}
+
+/// The plan a snapshot names, as a reader would.
+///
+/// Codex's `PlanType` is a wire vocabulary with seventeen members, several of them billing
+/// variants of one plan (`self_serve_business_prolite`, `self_serve_business_usage_based` and
+/// `business` are all Business to the person paying). Matched on the stem so a new variant of a
+/// known plan still gets its plain name. `unknown`, and a stem this list has never seen, give no
+/// plan rather than a wire word on screen.
+fn snapshot_plan(snapshot: &Value) -> Option<String> {
+    let plan = snapshot.get("planType").and_then(Value::as_str)?;
+    let label = if plan.contains("business") {
+        "Business"
+    } else if plan.starts_with("ent") {
+        "Enterprise"
+    } else if plan.starts_with("edu") {
+        "Edu"
+    } else {
+        match plan {
+            "free" => "Free",
+            "go" => "Go",
+            "plus" => "Plus",
+            "pro" => "Pro",
+            "prolite" => "Pro Lite",
+            "team" => "Team",
+            _ => return None,
+        }
+    };
+    Some(label.to_owned())
+}
+
+/// The account's limits out of an `account/rateLimits/read` reply.
+///
+/// Reads `rateLimitsByLimitId` when the reply has it, because that is the view with every bucket
+/// in it, and the single `rateLimits` snapshot otherwise. The reply also carries the account id and
+/// the full list of granted resets with their descriptions. Only the count of resets still
+/// available is kept.
+///
+/// # Errors
+///
+/// The app server's own message, when it refused. An account signed in with an API key has no
+/// rate-limit windows to read, and the reason it gives is worth showing as it is.
+pub fn parse_rate_limits(reply: &Value) -> Result<UsageLimits, String> {
+    if let Some(error) = reply.get("error") {
+        return Err(provider_error_message(error)
+            .unwrap_or_else(|| "codex refused to read its rate limits".to_owned()));
+    }
+    let result = reply
+        .get("result")
+        .ok_or("codex answered without its rate limits")?;
+
+    let buckets: Vec<&Value> = match result.get("rateLimitsByLimitId").and_then(Value::as_object) {
+        Some(by_id) if !by_id.is_empty() => by_id.values().collect(),
+        _ => result.get("rateLimits").into_iter().collect(),
+    };
+
+    let mut limits = UsageLimits::empty(ID);
+    limits.absorb(
+        UsageLimits {
+            plan: buckets.iter().find_map(|bucket| snapshot_plan(bucket)),
+            windows: buckets
+                .iter()
+                .flat_map(|bucket| snapshot_windows(bucket))
+                .collect(),
+            reset_credits: result
+                .pointer("/rateLimitResetCredits/availableCount")
+                .and_then(Value::as_u64)
+                .and_then(|count| u32::try_from(count).ok()),
+            ..UsageLimits::empty(ID)
+        },
+        true,
+    );
+    Ok(limits)
 }
 
 /// The whole of a resumed app-server thread, not just its prose.
@@ -1737,15 +1866,12 @@ fn parse_skills(reply: &Value) -> Vec<AgentSkill> {
         .collect()
 }
 
-/// The frames that ask the app server for its model catalogue.
+/// Frames for a throwaway app server that asks one question: `initialize`, `initialized`, and
+/// `method` on [`PROBE_ID`].
 ///
-/// Returned as data rather than sent, because this crate cannot spawn — see the crate docs. The
-/// composition root writes these, collects lines until it sees the reply to id 3, and hands it to
-/// [`parse_models`].
-///
-/// Ids 1–3 rather than a counter: this is a throwaway connection with no other traffic on it.
+/// Ids 1 and 3 rather than a counter: this is a throwaway connection with no other traffic on it.
 #[must_use]
-pub fn model_list_frames() -> Vec<String> {
+pub fn probe_frames(method: &str) -> Vec<String> {
     vec![
         json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -1753,13 +1879,26 @@ pub fn model_list_frames() -> Vec<String> {
         })
         .to_string(),
         json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }).to_string(),
-        // No `experimentalApi` capability: `model/list` does not need one, verified by asking.
-        json!({ "jsonrpc": "2.0", "id": 3, "method": "model/list", "params": {} }).to_string(),
+        json!({ "jsonrpc": "2.0", "id": PROBE_ID, "method": method, "params": {} }).to_string(),
     ]
 }
 
+/// The JSON-RPC id a [`probe_frames`] question is answered on.
+pub const PROBE_ID: i64 = 3;
+
+/// The frames that ask the app server for its model catalogue.
+///
+/// Returned as data rather than sent, because this crate cannot spawn — see the crate docs. The
+/// composition root writes these, collects lines until it sees the reply to [`MODEL_LIST_ID`],
+/// and hands it to [`parse_models`].
+#[must_use]
+pub fn model_list_frames() -> Vec<String> {
+    // No `experimentalApi` capability: `model/list` does not need one, verified by asking.
+    probe_frames("model/list")
+}
+
 /// The JSON-RPC id [`model_list_frames`] expects its answer on.
-pub const MODEL_LIST_ID: i64 = 3;
+pub const MODEL_LIST_ID: i64 = PROBE_ID;
 
 /// Turn a `model/list` reply into the domain's model list.
 ///

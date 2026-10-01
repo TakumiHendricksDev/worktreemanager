@@ -24,6 +24,7 @@
   import Inspector from './lib/components/Inspector.svelte';
   import SessionSurface from './lib/components/SessionSurface.svelte';
   import SettingsDialog from './lib/components/SettingsDialog.svelte';
+  import UsageDialog from './lib/components/UsageDialog.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
   import Toasts from './lib/components/Toasts.svelte';
@@ -45,6 +46,7 @@
   import { browsers } from './lib/state/browsers.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { updates } from './lib/state/update.svelte';
+  import { usage } from './lib/state/usage.svelte';
   import { databaseConsole } from './lib/state/database-console.svelte';
   import { workspace } from './lib/state/workspace.svelte';
 
@@ -77,6 +79,7 @@
    */
   let removingProject = $state<Project | null>(null);
   let showSettings = $state(false);
+  let showUsage = $state(false);
   let showInspector = $state(false);
   /**
    * Teardown for the session event listeners.
@@ -248,6 +251,11 @@
     const unlistenSettings = listen('wtm:settings', () => (showSettings = true));
     /* Check for Updates… from the same menu, by the same route. Always runs and always answers. */
     const unlistenUpdates = listen('wtm:check-updates', () => void updates.check(true));
+    /*
+     * The usage registry. Independent of everything above, so not in the boot chain: the figures
+     * come from Rust's record whenever they land, and nothing waits on them.
+     */
+    const unlistenUsage = usage.init();
 
     /*
      * A macOS notification was clicked. The payload is the pane's address, attached by
@@ -360,6 +368,7 @@
       window.removeEventListener('keydown', onCodeChord, true);
       void unlistenSettings.then((off) => off());
       void unlistenUpdates.then((off) => off());
+      void unlistenUsage.then((off) => off());
       void unlistenClicks.then((off) => off());
       offWindows?.();
       offSessions?.();
@@ -471,6 +480,7 @@
     ontogglesidebar={toggleSidebar}
     onaddproject={addProject}
     onremoveproject={() => (removingProject = workspace.activeProject)}
+    onusage={() => (showUsage = true)}
     onsettings={() => (showSettings = true)}
   />
 
@@ -704,6 +714,9 @@
 
   {#if showSettings}
     <SettingsDialog onclose={() => (showSettings = false)} />
+  {/if}
+  {#if showUsage}
+    <UsageDialog onclose={() => (showUsage = false)} />
   {/if}
 
   <UpdateDialog />

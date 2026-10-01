@@ -9,6 +9,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type {
+  AccountUsage,
   DictationStatus,
   DatabaseColumn,
   DatabaseConnection,
@@ -261,6 +262,24 @@ export const commands = {
    * or two, so callers should fetch it once when a picker is first opened rather than per render.
    */
   agentCapability: (agentId: string) => invoke<Capability>('agent_capability', { agentId }),
+
+  /**
+   * Every provider's usage record as Rust holds it, without asking any provider.
+   *
+   * What a window seeds the usage store with, so a reload or a popped-out pane starts from what
+   * the app already knows. Live changes arrive as `usage:limits`.
+   */
+  usageLimits: () => invoke<AccountUsage[]>('usage_limits'),
+
+  /**
+   * Ask one provider directly for what it will say, and get its record back.
+   *
+   * Starts a short-lived CLI, so it takes from half a second (Claude, Cursor) to a few (Codex, which
+   * starts its MCP servers first). Call it when the usage view opens, not per render. A failed ask
+   * still resolves, with `error` set on the record.
+   */
+  refreshUsageLimits: (agentId: string) =>
+    invoke<AccountUsage>('refresh_usage_limits', { agentId }),
 
   /** Send one turn. Queued by the provider if the handshake has not finished yet. */
   sendTurn: (session: string, text: string, attachments: AgentAttachment[] = []) =>

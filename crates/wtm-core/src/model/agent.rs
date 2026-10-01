@@ -373,6 +373,20 @@ pub enum AgentEvent {
         /// the moment the window lost focus.
         resets_at: Option<u64>,
     },
+    /// How much of the account's allowance is spent, as the provider reported it mid-session.
+    ///
+    /// # Never part of a session's stream
+    ///
+    /// The figures are the account's, not this session's, so the bridge in `src-tauri` files them
+    /// in the app's one record per provider and announces that record as `usage:limits`. They
+    /// never reach a pane's transcript or its replay buffer. That matters for more than tidiness:
+    /// a replayed snapshot is old by definition, and a pane that repainted from one would put
+    /// last hour's figures over the ones another pane reported a minute ago.
+    ///
+    /// A driver emits this whenever a report carries figures, including while there is plenty
+    /// left. Whether a figure is worth drawing attention to is the UI's call. A transcript row per
+    /// report would be noise, which is why it does not become one.
+    LimitsUpdated(super::UsageLimits),
     /// An event this build does not recognise. See the module docs — this is deliberate.
     Raw {
         provider: String,

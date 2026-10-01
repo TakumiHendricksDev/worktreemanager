@@ -639,6 +639,9 @@ pub struct App {
     /// Comments left on lines in the Code tab. Here rather than in the window because agents read
     /// them too, over MCP — see `code_comments.rs`.
     pub code_comments: crate::code_comments::Store,
+    /// What each provider account has left. Here rather than in a window because sessions report
+    /// it from their reader threads, and every window shows the same record — see `usage.rs`.
+    pub usage: crate::usage::Registry,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
     /// Events from agent sessions that are not in [`Self::agents`] yet. See
     /// [`Self::record_agent_event`].
@@ -745,6 +748,7 @@ impl App {
             handoff: crate::handoff::Hub::default(),
             browsers: crate::browser::Host::default(),
             code_comments: crate::code_comments::Store::default(),
+            usage: crate::usage::Registry::default(),
             dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             early_replay: parking_lot::Mutex::new(BTreeMap::new()),

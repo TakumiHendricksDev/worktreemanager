@@ -46,6 +46,45 @@ pub fn executable_candidates(home: Option<&Path>) -> Vec<PathBuf> {
     candidates
 }
 
+/// The argv that asks the CLI about the account it is signed in to, without opening ACP.
+///
+/// `about` is the only account fact the CLI offers. It has no usage command and ACP has no usage
+/// method, so of everything the usage view shows, Cursor can supply only its plan. Its own
+/// dashboard reads the figures from a private API (`aiserver.v1.DashboardService`, seen in the
+/// CLI's bundle), and calling that with Cursor's token would be wtm reaching into another app's
+/// login for an undocumented endpoint.
+#[must_use]
+pub fn about_argv(program: &str) -> Vec<String> {
+    vec![
+        program.to_owned(),
+        "about".to_owned(),
+        "--format".to_owned(),
+        "json".to_owned(),
+    ]
+}
+
+/// The plan out of `about --format json`, which says `"subscriptionTier": "Team"`.
+///
+/// Only the tier is read. The same reply carries the signed-in email address, which a meter has no
+/// use for and the webview has no need to hold.
+#[must_use]
+pub fn parse_about(stdout: &str) -> wtm_core::model::UsageLimits {
+    let plan = serde_json::from_str::<Value>(stdout)
+        .ok()
+        .and_then(|reply| {
+            reply
+                .get("subscriptionTier")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|tier| !tier.is_empty())
+                .map(str::to_owned)
+        });
+    wtm_core::model::UsageLimits {
+        plan,
+        ..wtm_core::model::UsageLimits::empty(ID)
+    }
+}
+
 #[derive(Debug)]
 pub struct Cursor;
 

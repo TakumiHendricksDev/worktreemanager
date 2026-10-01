@@ -9,6 +9,7 @@
 //! - [`naming`] — which template tokens are legal at each stage.
 //! - [`plan`] — what we intend to do, and what happened.
 //! - [`agent`] — what an agent session reports, normalized across providers.
+//! - [`limits`] — what a provider *account* has left, which outlives any one session.
 //! - [`files`] — what git lists inside one worktree, for the Code tab.
 //!
 //! Note that [`plan`] owns the name `Plan` and has since v0.1, for the create pipeline's
@@ -18,6 +19,7 @@
 
 pub mod agent;
 pub mod files;
+pub mod limits;
 pub mod naming;
 pub mod plan;
 pub mod project;
@@ -30,6 +32,7 @@ pub use agent::{
     Usage, UserInputOption, UserInputQuestion,
 };
 pub use files::{ChangeKind, FileChange, Hunk, PathList};
+pub use limits::{LimitWindow, UsageLimits};
 pub use naming::{RESERVED_PREFIXES, TokenScope, TokenSet, namespace_of, shadows_reserved_prefix};
 pub use plan::{
     BranchChoice, BranchPlan, CreateOutcome, CreatePlan, ExitOutcome, PlanPreview, PlanWarning,

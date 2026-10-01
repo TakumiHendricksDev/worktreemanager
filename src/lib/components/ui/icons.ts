@@ -55,6 +55,7 @@ export type IconName =
   | 'globe'
   | 'file'
   | 'folder'
+  | 'gauge'
   | 'grip'
   | 'locate'
   | 'star'
@@ -123,6 +124,14 @@ export const icons: Record<IconName, IconSpec> = {
       'M8 2.25 A1.75 1.75 0 0 1 9.75 4 V7.5 A1.75 1.75 0 0 1 6.25 7.5 V4 ' +
       'A1.75 1.75 0 0 1 8 2.25 Z M3.75 7.25 A4.25 4.25 0 0 0 12.25 7.25 M8 11.5 V14',
   },
+  /*
+   * A dial: three quarters of a ring, open at the bottom, and a needle leaning right. The
+   * usage-limits button in the title bar.
+   *
+   * Three quarters rather than a half, because a half ring fills six of the sixteen units and sat
+   * visibly smaller than `settings` and the theme glyphs beside it.
+   */
+  gauge: { stroke: 'M3.76 12.74 A6 6 0 1 1 12.24 12.74 M8 8.5 L10.5 5.5' },
   /*
    * Three dots in a row: more actions than there is room for.
    *

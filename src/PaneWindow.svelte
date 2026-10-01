@@ -31,6 +31,7 @@
   import { initPaneWindow, putBackFromWindow } from './lib/state/pane-windows.svelte';
   import { sessions } from './lib/state/sessions.svelte';
   import { theme } from './lib/state/theme.svelte';
+  import { usage } from './lib/state/usage.svelte';
   import { workspace } from './lib/state/workspace.svelte';
   import { ownPaneId } from './lib/window-role';
 
@@ -45,6 +46,9 @@
     let gone = false;
     let offSessions: (() => void) | null = null;
     let offWindow: (() => void) | null = null;
+    // The pane's context card shows its agent's limits, and this window has its own copy of the
+    // store. Seeded from Rust's record, so it starts with what the main window already knows.
+    const offUsage = usage.init();
 
     void (async () => {
       await theme.init();
@@ -69,6 +73,7 @@
       gone = true;
       offWindow?.();
       offSessions?.();
+      void offUsage.then((off) => off());
     };
   });
 </script>

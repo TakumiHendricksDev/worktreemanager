@@ -38,6 +38,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 | ✅ | Live terminal pane for setup output and ad-hoc `[[action]]`s, with input routed back so a prompt is answerable |
 | ✅ | Live Claude Code, Codex, and Cursor Agent sessions with normalized transcripts, approvals, model controls, resumable conversations, and internal MCP handoff. New sessions start in Auto unless a repository's `[agent.<id>] mode` says otherwise |
 | ✅ | Claude's high-speed mode, from the composer's Fast pill or `/fast` — wtm drives the CLI over the Agent SDK protocol, so it declares the opt-in the SDK requires |
+| ✅ | **Usage limits** — the gauge in the title bar shows every agent account's limits side by side: Claude's 5-hour and weekly windows, which it reports with each reply; Codex's windows and free resets, asked for when the view opens; and Cursor's plan, which is all its CLI will share. A pane's context card (or `/usage`) shows its own agent's, and the **New** menu says how close each agent is to its limit |
 | ✅ | Voice dictation into the prompt composer — hold or tap the mic, audio goes to Deepgram Nova-3, transcript lands in the draft unsent. Off by default; the only feature that sends anything off your machine |
 | ✅ | Cross-model delegation from one chat: one visible child or a customizable run of up to 20 child agents, with per-child model/effort/mode and navigable session status |
 | ✅ | **Open in …** — a split button that hands the worktree to your editor, a terminal, the file manager, or a fresh Claude Code session; see [below](#open-in-) |

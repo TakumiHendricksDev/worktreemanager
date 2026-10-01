@@ -42,8 +42,8 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 use wtm_core::model::{
-    AgentAttachment, AgentEvent, AgentSkill, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
-    UserInputOption, UserInputQuestion,
+    AgentAttachment, AgentEvent, AgentSkill, ApprovalAnswer, ApprovalRequest, LimitWindow,
+    NoticeLevel, Usage, UsageLimits, UserInputOption, UserInputQuestion,
 };
 
 use crate::provider::{McpServer, Protocol, Provider, ProviderId, SessionRequest, Step};
@@ -1351,38 +1351,50 @@ impl Protocol for ClaudeProtocol {
             // [`ClaudeProtocol::steers`]; any other uuid is not this driver's and says nothing.
             "command_lifecycle" => self.on_lifecycle(&message),
             /*
-             * The CLI's own rate-limit telemetry, which is mostly reassurance.
+             * The CLI's own rate-limit telemetry: the account's figures on every turn, and now and
+             * then the news that a limit has run out.
              *
-             * Silent for the statuses that mean "fine", which is every payload anyone has on record
-             * — this arm drew nothing at all before, and for `allowed` it still must: a warning
-             * every few turns saying the limit has *not* been reached is how a session teaches its
-             * reader to ignore the row that eventually matters.
+             * The figures are in `unifiedWindows`, and they go out as `LimitsUpdated` whatever the
+             * status. That event never becomes a transcript row (see its docs), so reporting the
+             * figures on every turn costs a reader nothing. Captured from CLI 2.1.285:
              *
-             * Anything else is taken at its word. Best-effort by admission: the field names below
-             * are the ones the allowed payload uses, and a throttled one may spell them
-             * differently, in which case the `result` arm above still catches the real exhaustion.
+             * ```text
+             * {"status":"allowed","resetsAt":1790884800,"rateLimitType":"five_hour",
+             *  "overageStatus":"rejected","isUsingOverage":false,
+             *  "unifiedWindows":{"five_hour":{"utilization":0.2,"resetsAt":1790884800},
+             *                    "seven_day":{"utilization":0.4,"resetsAt":1791057600}}}
+             * ```
+             *
+             * A status other than `allowed` or `allowed_warning` is also a `LimitReached`, and
+             * that route is still best-effort. No throttled payload has been captured, so its
+             * `message` and `resetsAt` are read on the assumption that it is spelled like the
+             * allowed one. If it is not, the `result` arm above still catches the real exhaustion.
              */
             "rate_limit_event" => {
                 let info = message.get("rate_limit_info").unwrap_or(&Value::Null);
+                let mut steps = Vec::new();
+                if let Some(limits) = unified_windows(info) {
+                    steps.push(Step::Emit(AgentEvent::LimitsUpdated(limits)));
+                }
                 let status = info
                     .get("status")
                     .and_then(Value::as_str)
                     .unwrap_or("allowed");
-                if matches!(status, "allowed" | "allowed_warning") {
-                    return Vec::new();
+                if !matches!(status, "allowed" | "allowed_warning") {
+                    steps.push(Step::Emit(AgentEvent::LimitReached {
+                        message: info
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("Claude has reached its usage limit.")
+                            .to_owned(),
+                        resets_at: info
+                            .get("resetsAt")
+                            .or_else(|| info.get("resets_at"))
+                            .and_then(Value::as_u64),
+                    }));
                 }
-                vec![Step::Emit(AgentEvent::LimitReached {
-                    message: info
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("Claude has reached its usage limit.")
-                        .to_owned(),
-                    resets_at: info
-                        .get("resetsAt")
-                        .or_else(|| info.get("resets_at"))
-                        .and_then(Value::as_u64),
-                })]
+                steps
             }
             "error" => vec![Step::Emit(limit_or_failure(
                 message
@@ -1727,6 +1739,106 @@ fn limit_or_failure(reason: &str) -> AgentEvent {
         None => AgentEvent::Failed {
             message: reason.to_owned(),
         },
+    }
+}
+
+/// The account's windows out of a `rate_limit_event`'s `unifiedWindows`, or `None` without any.
+///
+/// Each key is a window's name, and the name is the only place its length is stated:
+/// `five_hour` and `seven_day`. A longer key that starts with one of those, such as
+/// `seven_day_opus`, is read as that window narrowed to whatever the rest of the key names. That
+/// spelling is what Claude's own usage endpoint uses for its per-model limits. None has been seen
+/// in this event yet, so a key that matches neither length is skipped rather than guessed at.
+///
+/// `utilization` is a fraction here (0.2 alongside `/usage` saying 19%), unlike the percentage the
+/// usage endpoint returns. A value over 1 is read as a percentage already, so a CLI that switches
+/// spelling shows the right bar rather than one a hundred times too long.
+fn unified_windows(info: &Value) -> Option<UsageLimits> {
+    const LENGTHS: &[(&str, u64)] = &[("five_hour", 300), ("seven_day", 10_080)];
+
+    let windows: Vec<LimitWindow> = info
+        .get("unifiedWindows")?
+        .as_object()?
+        .iter()
+        .filter_map(|(name, window)| {
+            let (prefix, minutes) = LENGTHS
+                .iter()
+                .find(|(prefix, _)| name.starts_with(prefix))?;
+            let rest = name[prefix.len()..].trim_start_matches('_');
+            let utilization = window.get("utilization").and_then(Value::as_f64)?;
+            Some(LimitWindow {
+                minutes: Some(*minutes),
+                scope: (!rest.is_empty()).then(|| title_case(rest)),
+                used_percent: if utilization > 1.0 {
+                    utilization
+                } else {
+                    utilization * 100.0
+                },
+                resets_at: window.get("resetsAt").and_then(Value::as_u64),
+            })
+        })
+        .collect();
+    if windows.is_empty() {
+        return None;
+    }
+
+    let mut limits = UsageLimits::empty(ID);
+    limits.absorb(
+        UsageLimits {
+            windows,
+            ..UsageLimits::empty(ID)
+        },
+        true,
+    );
+    Some(limits)
+}
+
+/// `opus` as `Opus`, and `team` as `Team`: a wire word as a reader would write it.
+fn title_case(word: &str) -> String {
+    word.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect::<String>()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The argv that asks the CLI which plan it is signed in on, without starting a session.
+///
+/// `program` is the resolved executable, so a CLI found outside `PATH` is the one asked.
+#[must_use]
+pub fn auth_status_argv(program: &str) -> Vec<String> {
+    vec![
+        program.to_owned(),
+        "auth".to_owned(),
+        "status".to_owned(),
+        "--json".to_owned(),
+    ]
+}
+
+/// The plan out of `claude auth status --json`, which says `"subscriptionType": "team"`.
+///
+/// Only the plan is read. The same reply carries the account's email address and organisation,
+/// and none of that has any business crossing into the webview for a meter.
+#[must_use]
+pub fn parse_auth_status(stdout: &str) -> UsageLimits {
+    let plan = serde_json::from_str::<Value>(stdout)
+        .ok()
+        .and_then(|reply| {
+            reply
+                .get("subscriptionType")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|plan| !plan.is_empty())
+        .map(|plan| title_case(&plan));
+    UsageLimits {
+        plan,
+        ..UsageLimits::empty(ID)
     }
 }
 

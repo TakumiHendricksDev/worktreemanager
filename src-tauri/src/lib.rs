@@ -24,6 +24,7 @@ pub mod openers;
 pub mod pane_windows;
 pub mod pty_bridge;
 pub mod update;
+pub mod usage;
 pub mod view;
 
 use std::sync::Arc;
@@ -272,6 +273,8 @@ pub fn run() {
             commands::close_terminal,
             commands::list_agents,
             commands::agent_capability,
+            usage::usage_limits,
+            usage::refresh_usage_limits,
             commands::open_agent_session,
             commands::open_agent_side_session,
             commands::send_turn,

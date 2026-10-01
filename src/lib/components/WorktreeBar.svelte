@@ -43,6 +43,7 @@
   import { browsers } from '../state/browsers.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { INSPECTOR_SHORTCUT, SHELL_SHORTCUT } from '../state/sessions.svelte';
+  import { summaryText, tightest, usage } from '../state/usage.svelte';
   import { workspace } from '../state/workspace.svelte';
   import {
     choice,
@@ -144,14 +145,21 @@
   }
 
   function newMenu(event: MouseEvent) {
+    const now = Date.now();
     const entries: MenuEntry[] = [
       // Available even when the only pane is a shell; starting an agent never has to replace it.
-      ...startable.map((option) =>
-        item(
-          option.label,
+      //
+      // Each row carries the agent's tightest usage limit when one is known, because this is the
+      // moment of choosing between them, and the agent near its limit is the one not to start a
+      // long task on. Only what Rust already holds: opening a menu does not ask anyone, and a
+      // menu row is text, so there is no bar.
+      ...startable.map((option) => {
+        const window = tightest(usage.accounts[option.id], now);
+        return item(
+          window ? `${option.label}  ·  ${summaryText(window)}` : option.label,
           () => void sessions.openAgent(projectId, worktree.id, option.id),
-        ),
-      ),
+        );
+      }),
       separator,
       // The call ⌘J makes, as the Shell button this replaced did, so the two never disagree: a
       // shortcut that focused the open shell beside a menu row that spawned another login shell per

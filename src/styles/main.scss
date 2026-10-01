@@ -86,6 +86,7 @@
 @use 'components/input';
 @use 'components/logo';
 @use 'components/markdown';
+@use 'components/meter';
 @use 'components/model-picker';
 @use 'components/new-worktree';
 @use 'components/note';
@@ -116,6 +117,7 @@
 @use 'components/transcript';
 @use 'components/trust';
 @use 'components/update';
+@use 'components/usage';
 @use 'components/worktree-bar';
 @use 'components/worktree-tab';
 

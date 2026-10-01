@@ -1,0 +1,88 @@
+/*
+ * An account's usage limits: one row and bar per window, then a quiet line saying when.
+ *
+ * Drawn by `LimitMeters.svelte` in two places, the usage dialog and a pane's context card, at two
+ * sizes. So nothing in here sets a font size: each host sets its own, and the rows take it. The
+ * dialog's section is the only part that belongs to one host.
+ *
+ * # Why a grid row and not two lines of flex
+ *
+ * Name, reset time and figure share a line the way Claude's `/usage` lays them out, and the bar
+ * spans the whole row beneath. On a grid the figures line up down the list, so 19% and 40% read as
+ * a column you can compare rather than as numbers at the ends of lines of different lengths.
+ */
+
+.c-usage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+}
+
+.c-usage + .c-usage {
+  margin-top: var(--sp-4);
+}
+
+/* The flex gap spaces the heading already; its own bottom margin would double it. */
+.c-usage > .c-section-heading {
+  margin-bottom: 0;
+}
+
+.c-usage__plan {
+  margin-left: var(--sp-2);
+  color: var(--fg-subtle);
+  font-weight: 400;
+  /* The heading is uppercased; the plan beside it is a name and should not be. */
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.c-usage__windows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.c-usage__window {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  column-gap: var(--sp-3);
+  row-gap: var(--sp-1);
+}
+
+.c-usage__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.c-usage__reset {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.c-usage__figure {
+  min-width: 4ch;
+  font-family: var(--font-mono);
+  text-align: right;
+  color: var(--fg);
+}
+
+.c-usage__bar {
+  grid-column: 1 / -1;
+}
+
+.c-usage__note,
+.c-usage__error {
+  margin: 0;
+}
+
+.c-usage__note {
+  color: var(--fg-subtle);
+}
+
+.c-usage__error {
+  color: var(--danger);
+}

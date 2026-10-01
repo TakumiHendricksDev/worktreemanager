@@ -48,7 +48,8 @@ use serde_json::json;
 use wtm_agent::codex::Codex;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
 use wtm_core::model::{
-    AgendaStatus, AgentAttachment, AgentEvent, ApprovalAnswer, ApprovalRequest, NoticeLevel, Usage,
+    AgendaStatus, AgentAttachment, AgentEvent, ApprovalAnswer, ApprovalRequest, LimitWindow,
+    NoticeLevel, Usage, UsageLimits,
 };
 
 /// The two frames a session sends before it can do anything, and the replies to them.
@@ -1015,45 +1016,131 @@ fn an_auto_review_that_did_not_approve_stays_a_warning_and_keeps_its_raw_row() {
     ));
 }
 
+fn limit_reached(steps: &[Step]) -> Option<(&String, Option<u64>)> {
+    events(steps).into_iter().find_map(|event| match event {
+        AgentEvent::LimitReached { message, resets_at } => Some((message, *resets_at)),
+        _ => None,
+    })
+}
+
 #[test]
-fn a_rate_limits_update_with_an_exhausted_window_reports_limit_reached() {
-    // `account/rateLimits/updated` used to be in the silent list outright. It still is for every
-    // payload that has room left — see the test below — but a window at 100% is the one thing this
-    // notification can say that a reader needs.
+fn a_full_window_reports_limit_reached_with_the_reset_instant_codex_states() {
+    // The 0.154 spelling, `windowDurationMins` and `resetsAt`. The driver used to read only the
+    // older `resetsInSeconds`, so against this payload the banner could never say when the limit
+    // would lift.
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":100.0,"windowDurationMins":10080,"resetsAt":1791214321},"secondary":null}}}"#,
+    );
+    let (message, resets_at) = limit_reached(&steps).expect("a LimitReached");
+    assert_eq!(message, "Codex has used its whole rate-limit window.");
+    assert_eq!(resets_at, Some(1_791_214_321));
+}
+
+#[test]
+fn an_older_app_servers_reset_duration_still_goes_into_the_sentence() {
+    // `resetsInSeconds` is a duration, and a protocol has no clock to turn it into an instant, so
+    // the wait is said in prose rather than dropped.
     let mut driver = ready_driver();
     let steps = driver.on_line(
         r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":100.0,"windowMinutes":300,"resetsInSeconds":12600},"secondary":{"usedPercent":41.2,"windowMinutes":10080,"resetsInSeconds":400000}}}}"#,
     );
-    match events(&steps).first().expect("a LimitReached") {
-        AgentEvent::LimitReached { message, resets_at } => {
-            assert!(
-                message.contains("210 minute"),
-                "the wait belongs in the sentence, got {message:?}"
-            );
-            assert_eq!(
-                *resets_at, None,
-                "Codex states a duration, and a protocol has no clock to turn it into an instant"
-            );
-        }
-        other => panic!("expected LimitReached, got {other:?}"),
-    }
+    let (message, resets_at) = limit_reached(&steps).expect("a LimitReached");
+    assert!(
+        message.contains("210 minute"),
+        "the wait belongs in the sentence, got {message:?}"
+    );
+    assert_eq!(resets_at, None);
 }
 
 #[test]
-fn a_rate_limits_update_below_the_ceiling_still_draws_nothing() {
+fn a_rate_limits_update_below_the_ceiling_reports_its_figures_and_draws_nothing() {
     // This notification fires on a schedule. A row every few minutes reporting how much quota is
-    // *left* is how a transcript teaches its reader to skip the one that eventually matters.
+    // *left* is how a transcript teaches its reader to skip the one that eventually matters, so
+    // the figures go out as `LimitsUpdated`, which the bridge files away and never draws.
+    let mut driver = ready_driver();
+    let steps = driver.on_line(
+        r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":6,"windowDurationMins":10080,"resetsAt":1791214321},"secondary":null,"planType":"self_serve_business_prolite","rateLimitReachedType":null}}}"#,
+    );
+    assert_eq!(
+        events(&steps),
+        vec![&AgentEvent::LimitsUpdated(UsageLimits {
+            provider: "codex".to_owned(),
+            plan: Some("Business".to_owned()),
+            windows: vec![LimitWindow {
+                minutes: Some(10_080),
+                scope: None,
+                used_percent: 6.0,
+                resets_at: Some(1_791_214_321),
+            }],
+            reset_credits: None,
+        })]
+    );
+}
+
+#[test]
+fn a_rate_limits_update_with_no_figures_emits_nothing_at_all() {
+    // Every payload captured from a real turn so far looks like the first of these.
     let mut driver = ready_driver();
     for quiet in [
         r#"{"method":"account/rateLimits/updated","params":{}}"#,
         r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{}}}"#,
-        r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":99.4,"resetsInSeconds":60}}}}"#,
     ] {
         assert!(
             driver.on_line(quiet).is_empty(),
-            "{quiet} should draw nothing"
+            "{quiet} should emit nothing"
         );
     }
+}
+
+#[test]
+fn a_rate_limits_read_reply_gives_the_windows_the_plan_and_the_resets_left() {
+    // Captured from `account/rateLimits/read` on codex-cli 0.154.0, trimmed: the account id, and
+    // the ids, titles and dates of the granted resets, which the parser does not read.
+    let reply: serde_json::Value = serde_json::from_str(
+        r#"{"id":3,"result":{"ordinaryUsageAllowed":true,"rateLimits":{"limitId":"codex","limitName":null,"normalModelSlug":null,"primary":{"usedPercent":6,"windowDurationMins":10080,"resetsAt":1791214321},"secondary":null,"credits":{"hasCredits":true,"unlimited":false,"balance":null},"individualLimit":null,"spendControlReached":false,"planType":"self_serve_business_prolite","rateLimitReachedType":null},"rateLimitsByLimitId":{"codex":{"limitId":"codex","limitName":null,"normalModelSlug":null,"primary":{"usedPercent":6,"windowDurationMins":10080,"resetsAt":1791214321},"secondary":null,"credits":{"hasCredits":true,"unlimited":false,"balance":null},"individualLimit":null,"spendControlReached":false,"planType":"self_serve_business_prolite","rateLimitReachedType":null}},"rateLimitResetCredits":{"availableCount":3,"credits":[]},"rateLimitUpsell":null}}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        wtm_agent::codex::parse_rate_limits(&reply),
+        Ok(UsageLimits {
+            provider: "codex".to_owned(),
+            plan: Some("Business".to_owned()),
+            windows: vec![LimitWindow {
+                minutes: Some(10_080),
+                scope: None,
+                used_percent: 6.0,
+                resets_at: Some(1_791_214_321),
+            }],
+            reset_credits: Some(3),
+        })
+    );
+}
+
+#[test]
+fn a_bucket_other_than_the_accounts_own_is_shown_as_a_narrower_limit() {
+    let reply = json!({
+        "id": 3,
+        "result": {
+            "rateLimitsByLimitId": {
+                "codex": { "limitId": "codex", "primary": { "usedPercent": 6, "windowDurationMins": 300, "resetsAt": 10 } },
+                "codex_spark": { "limitId": "codex_spark", "limitName": "Spark", "primary": { "usedPercent": 50, "windowDurationMins": 300, "resetsAt": 20 } },
+            },
+        },
+    });
+    let limits = wtm_agent::codex::parse_rate_limits(&reply).unwrap();
+    let scopes: Vec<Option<&str>> = limits.windows.iter().map(|w| w.scope.as_deref()).collect();
+    assert_eq!(scopes, vec![None, Some("Spark")]);
+}
+
+#[test]
+fn a_refused_rate_limits_read_is_an_error_with_codexs_own_reason() {
+    let reply = json!({ "id": 3, "error": { "code": -32600, "message": "rate limits are not available for API key auth" } });
+    assert_eq!(
+        wtm_agent::codex::parse_rate_limits(&reply),
+        Err("rate limits are not available for API key auth".to_owned())
+    );
 }
 
 #[test]

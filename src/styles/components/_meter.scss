@@ -1,0 +1,39 @@
+/*
+ * A thin bar for a share used: the context window, an account's usage limit.
+ *
+ * It was the context card's own track until the usage limits needed the same bar, and two copies
+ * of a five-pixel pill drift by a pixel at a time. `ui/Meter.svelte` is the only thing that draws
+ * it, which is what keeps the tone modifiers below to the three its prop allows.
+ *
+ * The tone never stands alone: every caller writes the figure beside the bar, because
+ * `settings/_semantic.scss` forbids state carried by hue alone.
+ */
+
+.c-meter {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.c-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur-fast) var(--ease);
+}
+
+.c-meter--warn > span {
+  background: var(--warn);
+}
+
+.c-meter--danger > span {
+  background: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .c-meter > span {
+    transition: none;
+  }
+}

@@ -27,7 +27,10 @@ use std::collections::BTreeMap;
 use pretty_assertions::assert_eq;
 use wtm_agent::claude::Claude;
 use wtm_agent::provider::{Protocol, Provider, SessionRequest, Step};
-use wtm_core::model::{AgentAttachment, AgentEvent, ApprovalAnswer, ApprovalRequest, ModeRisk};
+use wtm_core::model::{
+    AgentAttachment, AgentEvent, ApprovalAnswer, ApprovalRequest, LimitWindow, ModeRisk,
+    UsageLimits,
+};
 
 fn driver() -> Box<dyn Protocol> {
     Claude.protocol(&SessionRequest {
@@ -317,6 +320,72 @@ fn thinking_token_counters_draw_nothing() {
         d.on_line(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"uuid":"u","session_id":"s"}"#)
             .is_empty()
     );
+}
+
+#[test]
+fn a_rate_limit_events_windows_are_reported_as_percentages_of_the_account() {
+    // Captured from CLI 2.1.285 on a Team plan, while `/usage` said 19% and 40%. `utilization` is a
+    // fraction here, so this pins the conversion as well as the window lengths the names imply.
+    let mut d = driver();
+    let steps = d.on_line(
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1790884800,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"member_zero_credit_limit","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.2,"resetsAt":1790884800},"seven_day":{"utilization":0.4,"resetsAt":1791057600}}},"uuid":"58b5ef9d","session_id":"bf783d3b"}"#,
+    );
+    assert_eq!(
+        events(&steps),
+        vec![&AgentEvent::LimitsUpdated(UsageLimits {
+            provider: "claude".to_owned(),
+            plan: None,
+            windows: vec![
+                LimitWindow {
+                    minutes: Some(300),
+                    scope: None,
+                    used_percent: 20.0,
+                    resets_at: Some(1_790_884_800),
+                },
+                LimitWindow {
+                    minutes: Some(10_080),
+                    scope: None,
+                    used_percent: 40.0,
+                    resets_at: Some(1_791_057_600),
+                },
+            ],
+            reset_credits: None,
+        })],
+        "the figures, and no LimitReached while the status is allowed"
+    );
+}
+
+#[test]
+fn a_per_model_window_is_read_as_the_weekly_window_narrowed_to_that_model() {
+    // Not yet seen in this event; the key is how Claude's own usage endpoint spells it. A key that
+    // names no known length is skipped rather than guessed at.
+    let mut d = driver();
+    let steps = d.on_line(
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{"seven_day_opus":{"utilization":0.22,"resetsAt":1791057600},"fortnight":{"utilization":0.5}}},"uuid":"u","session_id":"s"}"#,
+    );
+    match events(&steps).as_slice() {
+        [AgentEvent::LimitsUpdated(limits)] => {
+            assert_eq!(limits.windows.len(), 1);
+            assert_eq!(limits.windows[0].minutes, Some(10_080));
+            assert_eq!(limits.windows[0].scope.as_deref(), Some("Opus"));
+        }
+        other => panic!("expected one LimitsUpdated, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_plan_comes_from_auth_status_and_nothing_else_in_its_reply_is_kept() {
+    let limits = wtm_agent::claude::parse_auth_status(
+        r#"{"loggedIn":true,"authMethod":"claude.ai","email":"someone@example.com","orgId":"o","orgName":"Example","subscriptionType":"team"}"#,
+    );
+    assert_eq!(
+        limits,
+        UsageLimits {
+            plan: Some("Team".to_owned()),
+            ..UsageLimits::empty("claude")
+        }
+    );
+    assert_eq!(wtm_agent::claude::parse_auth_status("not json").plan, None);
 }
 
 #[test]

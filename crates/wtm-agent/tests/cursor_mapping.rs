@@ -682,3 +682,21 @@ fn a_refused_prompt_stops_counting_as_running() {
     assert_eq!(echoes(&steered), vec!["try again"]);
     prompt_id(&steered);
 }
+
+#[test]
+fn the_plan_comes_from_about_and_the_signed_in_address_is_not_kept() {
+    // Captured from `cursor-agent about --format json` on CLI 2026.09.26, with the address
+    // replaced. The tier is the only account fact the CLI will share.
+    let limits = wtm_agent::cursor::parse_about(
+        r#"{"cliVersion":"2026.09.26-dd393fe","latestStatus":"update_available","latestVersion":"2026.09.28-64d2043","model":"Grok 4.7 256K High Fast","subscriptionTier":"Team","osPlatform":"darwin","osArch":"arm64","userEmail":"someone@example.com","terminalProgram":"unknown","shell":"zsh","lastRequestId":null}"#,
+    );
+    assert_eq!(
+        limits,
+        wtm_core::model::UsageLimits {
+            plan: Some("Team".to_owned()),
+            ..wtm_core::model::UsageLimits::empty("cursor")
+        }
+    );
+    assert!(limits.windows.is_empty(), "Cursor reports no figures");
+    assert_eq!(wtm_agent::cursor::parse_about("").plan, None);
+}

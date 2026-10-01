@@ -43,12 +43,14 @@
     ontogglesidebar,
     onaddproject,
     onremoveproject,
+    onusage,
     onsettings,
   }: {
     sidebarCollapsed: boolean;
     ontogglesidebar: () => void;
     onaddproject: () => void;
     onremoveproject: () => void;
+    onusage: () => void;
     onsettings: () => void;
   } = $props();
 
@@ -163,6 +165,22 @@
   </div>
 
   <div class="c-titlebar__actions">
+    <!--
+      Here rather than in the worktree bar, because the limits are the account's: the same figures
+      hold in every project and every worktree, and the title bar is the one strip that does not
+      change when either does. A pane's context card shows its own agent's limits too, for when
+      you are looking at one session rather than choosing between them.
+    -->
+    <Button
+      variant="quiet"
+      icon="md"
+      onclick={onusage}
+      title="Usage limits"
+      ariaLabel="Usage limits"
+    >
+      <Icon name="gauge" />
+    </Button>
+
     <!--
       Kept beside Settings rather than absorbed into it. Cycling light and dark is the one
       appearance change people make several times a day — chasing the sun, or a screen share

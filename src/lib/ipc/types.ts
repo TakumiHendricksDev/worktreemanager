@@ -755,6 +755,52 @@ export interface AgentUsage {
   contextWindow: number | null;
 }
 
+/**
+ * One rolling allowance on a provider account. Mirrors `wtm_core::model::LimitWindow`.
+ *
+ * Identified by its length rather than a name, because the providers' names (`primary`,
+ * `five_hour`) do not say what the window is. `limitLabel` in `usage.svelte.ts` names it.
+ */
+export interface LimitWindow {
+  /** 300 for five hours, 10080 for a week. `null` when the provider did not say. */
+  minutes: number | null;
+  /** What the window is narrowed to, such as one model, or `null` for the whole account. */
+  scope: string | null;
+  /** 0 to 100, whatever the provider sent: the conversion happens in Rust. */
+  usedPercent: number;
+  /** Unix *seconds*, as the provider stated it. */
+  resetsAt: number | null;
+}
+
+/** What one provider account has left. Mirrors `wtm_core::model::UsageLimits`. */
+export interface UsageLimits {
+  provider: string;
+  plan: string | null;
+  /** Shortest first, account-wide windows ahead of narrower ones. */
+  windows: LimitWindow[];
+  /** Free full resets granted and not yet used. Codex only. */
+  resetCredits: number | null;
+}
+
+/**
+ * One provider's record in the app's usage registry, from `usage_limits`,
+ * `refresh_usage_limits` and the `usage:limits` event. See `src-tauri/src/usage.rs`.
+ */
+export interface AccountUsage {
+  provider: string;
+  limits: UsageLimits;
+  /**
+   * Unix *milliseconds* at which the windows were last reported.
+   *
+   * Not the same as `askedAt`: asking Claude gets its plan, and only a turn gets its windows.
+   */
+  reportedAt: number | null;
+  /** Unix milliseconds at which the provider was last asked directly. */
+  askedAt: number | null;
+  /** Why the last direct ask failed, in the CLI's words. The last good figures are kept. */
+  error: string | null;
+}
+
 export interface AgentAttachment {
   name: string;
   /** Absolute local path. Pasted files are staged under the OS temporary directory. */

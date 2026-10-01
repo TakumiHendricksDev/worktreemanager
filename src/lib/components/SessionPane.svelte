@@ -28,11 +28,13 @@
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
   import { fileIndex, resolveRef, type CodeRef } from '../code-links';
   import { codeRequests } from '../state/code-request.svelte';
+  import { usage } from '../state/usage.svelte';
   import { workspace } from '../state/workspace.svelte';
   import AgentTranscript from './AgentTranscript.svelte';
   import BrowserPane from './BrowserPane.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import ComposerQueue from './ComposerQueue.svelte';
+  import LimitMeters from './LimitMeters.svelte';
   import Markdown from './Markdown.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import SideQuestion from './SideQuestion.svelte';
@@ -42,6 +44,7 @@
   import Button from './ui/Button.svelte';
   import Dialog from './ui/Dialog.svelte';
   import Icon from './ui/Icon.svelte';
+  import Meter from './ui/Meter.svelte';
   import SessionDot from './ui/SessionDot.svelte';
 
   const {
@@ -317,6 +320,21 @@
     if (window <= 0 || contextUsed <= 0) return null;
     const percent = Math.round((contextUsed / window) * 100);
     return percent > 100 ? null : percent;
+  });
+
+  /**
+   * The moment the context card last opened, for its usage limits to judge resets against.
+   *
+   * Taken on opening rather than read live, for the reason `LimitMeters` gives. Opening is also
+   * when this provider is asked for its limits, once per run, so a card on a session that has not
+   * finished a turn yet still has its plan and, for Codex, its figures.
+   */
+  let limitsNow = $state(Date.now());
+  $effect(() => {
+    if (!contextOpen || provider === null) return;
+    const id = provider;
+    limitsNow = Date.now();
+    untrack(() => usage.ensure(id));
   });
 
   /**
@@ -758,7 +776,9 @@
         contextOpen = false;
         return;
       }
-      if (command === '/context' || command === '/status') {
+      // `/usage` too: the card holds this agent's usage limits, and a headless CLI has no screen
+      // to draw its own on.
+      if (command === '/context' || command === '/status' || command === '/usage') {
         contextOpen = !contextOpen;
         draft = '';
         return;
@@ -1652,16 +1672,7 @@
                     : 'Waiting for usage'}</span
               >
             </div>
-            <div
-              class="c-context__track"
-              role="progressbar"
-              aria-label="Context window used"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow={contextPercent ?? 0}
-            >
-              <span style:width="{contextPercent ?? 0}%"></span>
-            </div>
+            <Meter percent={contextPercent} label="Context window used" />
             {#if pane.usage}
               <dl class="c-context__facts">
                 <div>
@@ -1698,6 +1709,27 @@
               <p>Input, cached and output are totals for the last turn.</p>
             {:else}
               <p>Usage appears after the provider reports its first token update.</p>
+            {/if}
+            {#if provider !== null}
+              {@const account = usage.accounts[provider]}
+              <!--
+                The account's limits under the session's own context, as Claude's `/usage` lays them
+                out. Every pane on this agent shows the same figures, and so does the title bar's
+                usage dialog, because they all read one record.
+              -->
+              <div class="c-context__limits">
+                <div class="c-context__head">
+                  <strong>Usage limits</strong>
+                  {#if account?.limits.plan}<span>{account.limits.plan}</span>{/if}
+                </div>
+                <LimitMeters
+                  {provider}
+                  label={sessions.labelOf(pane)}
+                  {account}
+                  asking={usage.asking[provider] ?? false}
+                  now={limitsNow}
+                />
+              </div>
             {/if}
           </section>
         {/if}
@@ -1858,7 +1890,7 @@
               class:is-open={contextOpen}
               type="button"
               aria-expanded={contextOpen}
-              title="Show context-window usage"
+              title="Show context-window usage and usage limits"
               onclick={() => (contextOpen = !contextOpen)}
             >
               <span class="c-composer__context-ring" style:--context={contextPercent ?? 0}

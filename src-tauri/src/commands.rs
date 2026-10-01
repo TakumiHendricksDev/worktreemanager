@@ -2303,12 +2303,8 @@ pub async fn agent_capability(app: AppState<'_>, agent_id: String) -> Reply<Capa
     .await
 }
 
-/// Drive a throwaway app server for its model catalogue.
-///
-/// Synchronous and blocking, which is why it is only reachable from inside `blocking()`. The
-/// collected lines are scanned rather than assumed to arrive in order: the server interleaves
-/// notifications — MCP startup statuses, remote-control status — with its replies.
-/// [`probe_codex`], reachable from an integration test.
+/// Drive a throwaway app server for its model catalogue: [`probe_codex`], reachable from an
+/// integration test.
 ///
 /// The probe itself stays private: it is an implementation detail of one command, and the only reason
 /// to expose it is that the property worth testing — *does a real app server answer* — cannot be
@@ -2322,92 +2318,9 @@ pub fn probe_codex_for_test(app: &Arc<App>) -> Result<wtm_core::model::AgentCapa
 }
 
 fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, String> {
-    use wtm_core::ports::pipe::{PipeHost, PipeSink};
-
-    #[derive(Default)]
-    struct Collect {
-        lines: parking_lot::Mutex<Vec<String>>,
-    }
-    impl PipeSink for Collect {
-        fn on_line(&self, _s: &wtm_core::model::SessionId, line: &str) {
-            self.lines.lock().push(line.to_owned());
-        }
-        fn on_stderr(&self, _s: &wtm_core::model::SessionId, line: &str) {
-            tracing::debug!(line, "codex capability probe stderr");
-        }
-        fn on_exit(&self, _s: &wtm_core::model::SessionId, _o: &wtm_core::model::ExitOutcome) {}
-    }
-
-    let entry = wtm_agent::entry(wtm_agent::codex::ID).ok_or("codex is not in the catalogue")?;
-    let argv = entry.provider.argv(&wtm_agent::SessionRequest::default());
-    let inv = wtm_core::ports::exec::Invocation::new(argv, std::env::temp_dir(), SHELL_TIMEOUT_MS);
-
-    let sink = Arc::new(Collect::default());
-    let spawned = app
-        .pipe
-        .spawn(&inv, None, Arc::clone(&sink) as Arc<dyn PipeSink>)
-        .map_err(|e| e.to_string())?;
-
-    let frames = wtm_agent::codex::model_list_frames();
-    let Some((initialize, after_initialize)) = frames.split_first() else {
-        let _ = app.pipe.kill(&spawned.session);
-        return Err("codex model probe had no initialization frame".to_owned());
-    };
-    app.pipe
-        .write_line(&spawned.session, initialize)
-        .map_err(|e| e.to_string())?;
-
-    // Codex 0.147 stopped accepting requests pipelined behind `initialize`. Waiting for that reply
-    // preserves the JSON-RPC handshake and keeps the picker from losing the exact ids a handoff
-    // needs when a display label differs from the provider's model name.
-    let deadline = app.clock.monotonic_ms() + CAPABILITY_TIMEOUT_MS;
-    loop {
-        let initialized = sink.lines.lock().iter().any(|line| {
-            serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|value| value.get("id").and_then(serde_json::Value::as_i64))
-                == Some(1)
-        });
-        if initialized {
-            break;
-        }
-        if app.clock.monotonic_ms() >= deadline {
-            let _ = app.pipe.kill(&spawned.session);
-            return Err(
-                "codex did not answer `initialize` — check that `codex` is logged in".to_owned(),
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-
-    for frame in after_initialize {
-        app.pipe
-            .write_line(&spawned.session, frame)
-            .map_err(|e| e.to_string())?;
-    }
-
-    let mut models = Vec::new();
-    loop {
-        let found = sink.lines.lock().iter().find_map(|line| {
-            let value: serde_json::Value = serde_json::from_str(line).ok()?;
-            (value.get("id").and_then(serde_json::Value::as_i64)
-                == Some(wtm_agent::codex::MODEL_LIST_ID))
-            .then(|| wtm_agent::codex::parse_models(&value))
-        });
-        if let Some(parsed) = found {
-            models = parsed;
-            break;
-        }
-        if app.clock.monotonic_ms() >= deadline {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-
-    // Killed either way. A probe that leaked an app server per picker open would be worse than a
-    // picker that comes back empty.
-    let _ = app.pipe.kill(&spawned.session);
-
+    let models = ask_codex(app, "model/list")
+        .map(|reply| wtm_agent::codex::parse_models(&reply))
+        .unwrap_or_default();
     if models.is_empty() {
         return Err(
             "codex did not answer `model/list` — check that `codex` is logged in".to_owned(),
@@ -2423,6 +2336,98 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
         // `turn/steer`. See `CodexProtocol::steer`.
         steers_mid_turn: true,
     })
+}
+
+/// Drive a throwaway app server through one question and return its reply.
+///
+/// Synchronous and blocking, which is why it is only reachable from inside `blocking()`. The
+/// collected lines are scanned rather than assumed to arrive in order: the server interleaves
+/// notifications — MCP startup statuses, remote-control status — with its replies. Shared by the
+/// model picker's probe and the usage view's `account/rateLimits/read`, which need the same
+/// handshake.
+///
+/// # Errors
+///
+/// If the CLI cannot be spawned, or does not answer within the deadline.
+pub(crate) fn ask_codex(app: &Arc<App>, method: &str) -> Result<serde_json::Value, String> {
+    use wtm_core::ports::pipe::{PipeHost, PipeSink};
+
+    #[derive(Default)]
+    struct Collect {
+        lines: parking_lot::Mutex<Vec<String>>,
+    }
+    impl PipeSink for Collect {
+        fn on_line(&self, _s: &wtm_core::model::SessionId, line: &str) {
+            self.lines.lock().push(line.to_owned());
+        }
+        fn on_stderr(&self, _s: &wtm_core::model::SessionId, line: &str) {
+            tracing::debug!(line, "codex probe stderr");
+        }
+        fn on_exit(&self, _s: &wtm_core::model::SessionId, _o: &wtm_core::model::ExitOutcome) {}
+    }
+
+    let entry = wtm_agent::entry(wtm_agent::codex::ID).ok_or("codex is not in the catalogue")?;
+    let argv = entry.provider.argv(&wtm_agent::SessionRequest::default());
+    let inv = wtm_core::ports::exec::Invocation::new(argv, std::env::temp_dir(), SHELL_TIMEOUT_MS);
+
+    let sink = Arc::new(Collect::default());
+    let spawned = app
+        .pipe
+        .spawn(&inv, None, Arc::clone(&sink) as Arc<dyn PipeSink>)
+        .map_err(|e| e.to_string())?;
+
+    let frames = wtm_agent::codex::probe_frames(method);
+    let Some((initialize, after_initialize)) = frames.split_first() else {
+        let _ = app.pipe.kill(&spawned.session);
+        return Err("codex probe had no initialization frame".to_owned());
+    };
+    app.pipe
+        .write_line(&spawned.session, initialize)
+        .map_err(|e| e.to_string())?;
+
+    let reply_to = |id: i64| {
+        sink.lines.lock().iter().find_map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line).ok()?;
+            (value.get("id").and_then(serde_json::Value::as_i64) == Some(id)).then_some(value)
+        })
+    };
+
+    // Codex 0.147 stopped accepting requests pipelined behind `initialize`. Waiting for that reply
+    // preserves the JSON-RPC handshake and keeps the picker from losing the exact ids a handoff
+    // needs when a display label differs from the provider's model name.
+    let deadline = app.clock.monotonic_ms() + CAPABILITY_TIMEOUT_MS;
+    while reply_to(1).is_none() {
+        if app.clock.monotonic_ms() >= deadline {
+            let _ = app.pipe.kill(&spawned.session);
+            return Err(
+                "codex did not answer `initialize` — check that `codex` is logged in".to_owned(),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    for frame in after_initialize {
+        app.pipe
+            .write_line(&spawned.session, frame)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let reply = loop {
+        if let Some(reply) = reply_to(wtm_agent::codex::PROBE_ID) {
+            break Ok(reply);
+        }
+        if app.clock.monotonic_ms() >= deadline {
+            break Err(format!(
+                "codex did not answer `{method}` — check that `codex` is logged in"
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    // Killed either way. A probe that leaked an app server per picker open would be worse than a
+    // picker that comes back empty.
+    let _ = app.pipe.kill(&spawned.session);
+    reply
 }
 
 /// Ask Cursor's ACP session configuration for its live model, thought-level and mode selectors.
