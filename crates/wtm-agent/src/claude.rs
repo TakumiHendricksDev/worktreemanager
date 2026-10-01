@@ -1748,7 +1748,8 @@ fn limit_or_failure(reason: &str) -> AgentEvent {
 /// `five_hour` and `seven_day`. A longer key that starts with one of those, such as
 /// `seven_day_opus`, is read as that window narrowed to whatever the rest of the key names. That
 /// spelling is what Claude's own usage endpoint uses for its per-model limits. None has been seen
-/// in this event yet, so a key that matches neither length is skipped rather than guessed at.
+/// in this event yet, so a key that matches neither length is skipped rather than guessed at. The
+/// per-model weeks that do exist, such as Fable's, come from [`parse_usage`] instead.
 ///
 /// `utilization` is a fraction here (0.2 alongside `/usage` saying 19%), unlike the percentage the
 /// usage endpoint returns. A value over 1 is read as a percentage already, so a CLI that switches
@@ -1818,6 +1819,175 @@ pub fn auth_status_argv(program: &str) -> Vec<String> {
         "status".to_owned(),
         "--json".to_owned(),
     ]
+}
+
+/// The request id `get_usage`'s answer is matched on.
+const USAGE_REQUEST: &str = "wtm-usage";
+
+/// A CLI started only to answer `get_usage`, the control request behind Claude Code's own `/usage`.
+///
+/// # Why a session process rather than an endpoint
+///
+/// The per-model weekly windows (Fable's, when this was written) are not in `rate_limit_event`.
+/// The one other place they appear is the usage endpoint `/usage` reads with Claude Code's OAuth
+/// token. Asking the CLI keeps that token and that endpoint the CLI's business, as every session
+/// wtm opens already does. Nothing reaches a model, because no message is sent.
+///
+/// # Why each flag
+///
+/// This is a real session start, so without these it would do what one does:
+///
+/// * `--setting-sources project` loads no settings file, run from the empty directory the usage
+///   module uses. Without it, every refresh fired the user's `SessionStart` and `SessionEnd`
+///   hooks, which was seen on a real machine.
+/// * `--strict-mcp-config` starts none of the user's MCP servers.
+/// * `--no-session-persistence` leaves no conversation in `~/.claude/projects` to be offered for
+///   resume.
+#[must_use]
+pub fn usage_argv(program: &str) -> Vec<String> {
+    [
+        program,
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "project",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// What [`usage_argv`]'s CLI is given: the handshake, then the question. Closing stdin after them
+/// is what ends the process, once both are answered.
+#[must_use]
+pub fn usage_stdin() -> String {
+    let initialize = json!({
+        "type": "control_request",
+        "request_id": "wtm-init",
+        "request": { "subtype": "initialize" },
+    });
+    // `skip_behaviors`: the answer can also carry a breakdown of where the week's usage went, which
+    // costs the CLI more to work out and which nothing here shows.
+    let usage = json!({
+        "type": "control_request",
+        "request_id": USAGE_REQUEST,
+        "request": { "subtype": "get_usage", "skip_behaviors": true },
+    });
+    format!("{initialize}\n{usage}\n")
+}
+
+/// The windows and the plan out of a `get_usage` answer, and whether that is every window.
+///
+/// `utilization` is already a percentage in this answer (94 where `/usage` says 94%), unlike the
+/// fraction `rate_limit_event` sends. So it is not run through the fraction guess in
+/// [`unified_windows`], which would read a 0.5% week as half spent.
+///
+/// Complete only when `model_scoped` is present. The CLI leaves it out when it answered from its
+/// cached reading rather than asking the endpoint. That answer still has the five-hour and weekly
+/// figures, but saying nothing about Fable's week then means "not known", not "gone", so it must
+/// not wipe the one already shown.
+///
+/// # Errors
+///
+/// When the CLI did not answer the request, or answered it with an error, which is what a CLI that
+/// predates `get_usage` does.
+pub fn parse_usage(stdout: &str) -> Result<(UsageLimits, bool), String> {
+    let response = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|message| message.get("type").and_then(Value::as_str) == Some("control_response"))
+        .filter_map(|message| message.get("response").cloned())
+        .find(|response| response.get("request_id").and_then(Value::as_str) == Some(USAGE_REQUEST))
+        .ok_or_else(|| "Claude Code did not answer the usage request".to_owned())?;
+    if response.get("subtype").and_then(Value::as_str) != Some("success") {
+        return Err(response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("Claude Code refused the usage request")
+            .to_owned());
+    }
+    let body = response.get("response").unwrap_or(&Value::Null);
+
+    let plan = body
+        .get("subscription_type")
+        .and_then(Value::as_str)
+        .filter(|plan| !plan.is_empty())
+        .map(title_case);
+    let mut windows = Vec::new();
+    let mut complete = false;
+    // Null for an API key or a third-party provider, where plan limits do not apply.
+    if let Some(limits) = body.get("rate_limits").filter(|limits| limits.is_object()) {
+        for (key, minutes, scope) in [
+            ("five_hour", 300, None),
+            ("seven_day", 10_080, None),
+            ("seven_day_opus", 10_080, Some("Opus")),
+            ("seven_day_sonnet", 10_080, Some("Sonnet")),
+        ] {
+            if let Some(window) = limits
+                .get(key)
+                .and_then(|w| usage_window(w, minutes, scope.map(str::to_owned)))
+            {
+                windows.push(window);
+            }
+        }
+        if let Some(buckets) = limits.get("model_scoped").and_then(Value::as_array) {
+            complete = true;
+            for bucket in buckets {
+                let Some(name) = bucket
+                    .get("display_name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                else {
+                    continue;
+                };
+                if let Some(window) = usage_window(bucket, 10_080, Some(name.to_owned())) {
+                    // The server's own label wins over a fixed key that names the same model.
+                    windows.retain(|existing| existing.scope.as_deref() != Some(name));
+                    windows.push(window);
+                }
+            }
+        }
+    }
+
+    // Through `absorb` for its ordering, the way `unified_windows` builds its record.
+    let mut out = UsageLimits {
+        plan,
+        ..UsageLimits::empty(ID)
+    };
+    out.absorb(
+        UsageLimits {
+            windows,
+            ..UsageLimits::empty(ID)
+        },
+        true,
+    );
+    Ok((out, complete))
+}
+
+/// One window of a `get_usage` answer. `None` when it has no figure, which is how the answer says
+/// a window does not apply to this account.
+fn usage_window(value: &Value, minutes: u64, scope: Option<String>) -> Option<LimitWindow> {
+    Some(LimitWindow {
+        minutes: Some(minutes),
+        scope,
+        used_percent: value.get("utilization").and_then(Value::as_f64)?,
+        resets_at: value
+            .get("resets_at")
+            .and_then(Value::as_str)
+            .and_then(epoch_seconds),
+    })
+}
+
+/// `2026-10-03T20:00:00.017012+00:00` as Unix seconds.
+fn epoch_seconds(stamp: &str) -> Option<u64> {
+    let parsed =
+        time::OffsetDateTime::parse(stamp, &time::format_description::well_known::Rfc3339).ok()?;
+    u64::try_from(parsed.unix_timestamp()).ok()
 }
 
 /// The plan out of `claude auth status --json`, which says `"subscriptionType": "team"`.

@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Merged into the bundle by Tauri. One key, and it is here rather than in Rust because a usage
-  description is not a platform *seam* — `src-tauri/tests/platform_seams.rs` caps `#[cfg(target_os)]`
-  at two files, and this costs nothing against that budget.
+  Merged into the bundle by Tauri. Keys live here rather than in Rust because none of them is a
+  platform *seam* — `src-tauri/tests/platform_seams.rs` caps `#[cfg(target_os)]` at two files, and
+  this costs nothing against that budget.
 
-  macOS attributes a child process's microphone access to the responsible application, so this is
-  what produces the prompt when SoX runs. Claude Code ships a whole helper .app for the same reason:
-  a bare CLI binary has no bundle to put this in. wtm already is one.
+  NSMicrophoneUsageDescription. macOS attributes a child process's microphone access to the
+  responsible application, so this is what produces the prompt when SoX runs. Claude Code ships a
+  whole helper .app for the same reason: a bare CLI binary has no bundle to put this in. wtm already
+  is one.
 
   A signed release needs one more thing: the hardened runtime denies the microphone without even
   this prompt unless the app also carries `com.apple.security.device.audio-input`, which
@@ -16,10 +17,20 @@
   Known rough edge, documented in the README rather than hidden: a local build is signed ad-hoc, so
   its TCC grant is keyed to a signature that changes on every rebuild — the prompt comes back after
   `just build`. A release's Developer ID signature does not change, so its grant survives updates.
+
+  NSUserNotificationAlertStyle. wtm notifies only while it is in the background, and only when a
+  session is waiting on you or has stopped, so the notification is the one thing that brings you
+  back. macOS's default style is a banner that slides away after a few seconds into Notification
+  Center, which means it is gone by the time you look. "alert" stays on screen until it is
+  answered. It only chooses the starting style for an app macOS has not seen before: the switch in
+  System Settings → Notifications is the user's, and an install that already exists keeps the
+  setting it has.
 -->
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>wtm records your voice only while you hold the dictation button in a prompt composer, and sends that recording to Deepgram to be turned into text.</string>
+  <key>NSUserNotificationAlertStyle</key>
+  <string>alert</string>
 </dict>
 </plist>

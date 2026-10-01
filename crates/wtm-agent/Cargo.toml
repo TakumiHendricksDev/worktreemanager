@@ -25,6 +25,8 @@ uuid       = { workspace = true }
 # `disallowed-types`, because poisoning would turn one panic into a permanent failure.
 parking_lot = { workspace = true }
 tracing    = { workspace = true }
+# RFC 3339 reset times in Claude's `get_usage` answer, which the usage record holds as Unix seconds.
+time       = { workspace = true }
 
 [dev-dependencies]
 wtm-testkit      = { workspace = true }

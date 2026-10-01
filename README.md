@@ -216,8 +216,11 @@ configured badges. The name becomes a switcher menu when the sidebar is hidden. 
 An empty worktree offers a button per agent, plus Shell and Browser. Below them it lists the
 conversations you can pick up again, the plans you have saved, and Claude's background agents.
 
-After a relaunch the panes come back where they were. Shells start again and browsers reload the first
-time you look at their worktree. Agent panes wait with a **Resume** button; none restarts on its own.
+After a relaunch the panes come back where they were, and fill themselves the first time you look at
+their worktree. Shells start again, browsers reload, and agent panes resume their conversations in
+place. Resuming starts the agent's CLI; no message is sent until you write one. An agent pane with nothing to
+resume, or whose resume fails, closes, and a banner says why. Its conversation is still under **Pick
+up where you left off**.
 
 ## Agent sessions
 
@@ -339,8 +342,10 @@ never crosses worktrees.
 The **Usage limits** button in the title bar opens every installed agent's account side by side, with
 each window's percentage used and when it resets:
 
-- **Claude** reports its 5-hour and weekly windows, and any per-model ones, with each reply. Its
-  figures appear after the first turn.
+- **Claude** is asked when the dialog opens: its 5-hour and weekly windows, and each model's own
+  weekly limit, such as Fable's. wtm asks through the CLI's own usage request in a session that is
+  sent no message, with your settings, hooks and MCP servers left out. A running session also
+  updates the 5-hour and weekly figures with each reply.
 - **Codex** is asked when the dialog opens. It reports its windows, plan, and any free resets.
 - **Cursor** shares its plan, but not its usage.
 
@@ -358,6 +363,11 @@ the dock badge counts the sessions waiting on an approval.
 - **wtm in the background:** it can post a macOS notification instead. It asks the first time one
   would have been useful, and Settings → Notifications turns them on or off. Notifications need the
   signed release; see [Troubleshooting](#troubleshooting).
+- **Making them stay on screen:** macOS shows a notification either as a banner, which slides away
+  into Notification Center after a few seconds, or as an alert, which stays until you deal with it.
+  wtm asks macOS to start new installs with alerts. To change an existing install, go to System Settings →
+  Notifications → Worktree Manager and choose **Persistent**, or **Alerts** on older macOS. A Focus
+  mode holds back both kinds unless Worktree Manager is on its allowed list.
 
 ### Dictation
 
@@ -531,9 +541,11 @@ Each position checks the tokens it allows when the config loads. For example, na
 
 > ### Trust prompt
 >
-> A `wtm.toml` or `wtm.local.toml` that declares any `run` command, or any `[database.*]` profile, is
-> not used until you approve it. The prompt lists every command's argv verbatim, and each database as
-> its engine and a credential-free target; passwords and credential-bearing URLs are never shown. The
+> A `wtm.toml` or `wtm.local.toml` is not used until you approve it if it declares any of these: a
+> `run` command, an agent MCP server, agent `extra_args`, or a `[database.*]` profile. The prompt
+> lists every command's argv verbatim (extra arguments as `claude … --flag`, since the agent's own
+> program isn't the file's to name), and each database as its engine and a credential-free target;
+> passwords and credential-bearing URLs are never shown. The
 > approval is tied to the file's exact contents, so any edit — even whitespace — asks again. Your own
 > `~/.config/wtm/config.toml` is never asked about.
 

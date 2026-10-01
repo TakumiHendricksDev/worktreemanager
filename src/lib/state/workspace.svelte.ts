@@ -47,6 +47,7 @@ import { emptyLayout, FAVORITES, toggleStar } from '../sidebar';
 import { dropCodeCaches } from './code-cache';
 
 const LAST_PROJECT_KEY = 'wtm.lastProject';
+const LAST_WORKTREE_PREFIX = 'wtm.lastWorktree.';
 const WORKTREE_CACHE_PREFIX = 'wtm.worktrees.';
 /**
  * The last known sidebar layout per project, so a cold start draws the grouped list at once rather
@@ -119,12 +120,17 @@ function writeLayoutCache(projectId: string, layout: SidebarLayout): void {
 }
 
 /**
- * Drop cached lists, layouts, last links and Code tab state for projects that are no longer
- * registered.
+ * Drop cached lists, layouts, selections, last links and Code tab state for projects that are no
+ * longer registered.
  */
 function pruneCache(keep: string[]): void {
   try {
-    const prefixes = [WORKTREE_CACHE_PREFIX, LAYOUT_CACHE_PREFIX, LAST_LINK_PREFIX];
+    const prefixes = [
+      WORKTREE_CACHE_PREFIX,
+      LAYOUT_CACHE_PREFIX,
+      LAST_WORKTREE_PREFIX,
+      LAST_LINK_PREFIX,
+    ];
     const live = new Set(keep.flatMap((id) => prefixes.map((prefix) => prefix + id)));
     const doomed = Object.keys(localStorage).filter(
       (key) => prefixes.some((prefix) => key.startsWith(prefix)) && !live.has(key),
@@ -169,6 +175,9 @@ class Workspace {
 
   activeProjectId = $state<string | null>(null);
   selectedWorktreeId = $state<string | null>(null);
+
+  /** Keep repository switches working even when storage is full or unavailable. */
+  private selectedWorktrees = new Map<string, string | null>();
 
   /**
    * How the sidebar arranges this project's worktrees. Edited only through `editLayout`.
@@ -381,9 +390,12 @@ class Workspace {
     this.layout = readLayoutCache(projectId) ?? emptyLayout();
     void this.loadLayout(projectId);
     this.stale = cached !== null;
-    this.selectedWorktreeId = cached
-      ? ((cached.find((w) => w.isMain) ?? cached[0])?.id ?? null)
-      : null;
+    // The cache can predate the remembered selection. Only a fresh listing can prove that
+    // worktree was removed; falling back here would forget it before git has answered.
+    this.selectedWorktreeId =
+      this.lastWorktree(projectId) ??
+      (cached?.find((w) => w.isMain) ?? cached?.[0])?.id ??
+      null;
 
     try {
       localStorage.setItem(LAST_PROJECT_KEY, projectId);
@@ -432,10 +444,11 @@ class Workspace {
 
       // Keep the selection if it survived the refresh; otherwise fall back to the main
       // worktree, which is the one that always exists.
-      const stillThere = list.some((w) => w.id === this.selectedWorktreeId);
-      if (!stillThere) {
-        this.selectedWorktreeId = (list.find((w) => w.isMain) ?? list[0])?.id ?? null;
-      }
+      const selected =
+        list.find((w) => w.id === this.selectedWorktreeId) ??
+        list.find((w) => w.isMain) ??
+        list[0];
+      this.select(selected?.id ?? null);
     } catch (e) {
       if (epoch !== this.listEpoch) return;
       this.error = errorMessage(e);
@@ -450,8 +463,28 @@ class Workspace {
     }
   }
 
-  select(worktreeId: string): void {
+  private lastWorktree(projectId: string): string | null {
+    if (this.selectedWorktrees.has(projectId)) {
+      return this.selectedWorktrees.get(projectId) ?? null;
+    }
+    try {
+      return localStorage.getItem(LAST_WORKTREE_PREFIX + projectId);
+    } catch {
+      return null;
+    }
+  }
+
+  select(worktreeId: string | null): void {
     this.selectedWorktreeId = worktreeId;
+    const projectId = this.activeProjectId;
+    if (!projectId) return;
+    this.selectedWorktrees.set(projectId, worktreeId);
+    try {
+      if (worktreeId === null) localStorage.removeItem(LAST_WORKTREE_PREFIX + projectId);
+      else localStorage.setItem(LAST_WORKTREE_PREFIX + projectId, worktreeId);
+    } catch {
+      /* The in-memory selection still survives a repository switch. */
+    }
   }
 
   /**
@@ -557,8 +590,13 @@ class Workspace {
     // Prune against the surviving projects rather than deleting the key for `path`, so a cache
     // entry cannot outlive the project it belongs to whatever the caller passed.
     pruneCache(this.projects.map((p) => p.id));
+    const live = new Set(this.projects.map((p) => p.id));
+    for (const projectId of this.selectedWorktrees.keys()) {
+      if (!live.has(projectId)) this.selectedWorktrees.delete(projectId);
+    }
     if (this.activeProject === null || this.activeProjectId === path) {
       this.activeProjectId = null;
+      this.selectedWorktreeId = null;
       this.worktrees = [];
       this.layout = emptyLayout();
       this.stale = false;

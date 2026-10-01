@@ -122,6 +122,8 @@
   let shown: string | null = null;
   let hasSelection = $state(false);
   let lastReveal = 0;
+  /** `show`'s pending scroll restore, which a reveal has to cancel. See the reveal effect. */
+  let restoreFrame = 0;
 
   const keyOf = (p: string) => `${worktreeId}\0${p}`;
   const text = $derived(
@@ -242,7 +244,8 @@
     view.setState(kept.state);
     hasSelection = kept.state.selection.ranges.some((range) => !range.empty);
     const scroll = kept.scroll;
-    requestAnimationFrame(() => {
+    cancelAnimationFrame(restoreFrame);
+    restoreFrame = requestAnimationFrame(() => {
       if (view && shown === key) view.scrollDOM.scrollTop = scroll;
     });
   }
@@ -367,6 +370,12 @@
       const line = doc.line(Math.min(Math.max(reveal.line, 1), doc.lines));
       const anchor = Math.min(line.from + (reveal.from ?? 0), line.to);
       const head = Math.min(line.from + (reveal.to ?? reveal.from ?? 0), line.to);
+      // A file opened for the first time was given its remembered scroll position (the top) a
+      // frame from now, by `show`. CodeMirror scrolls to the line in its measure frame, which
+      // `setState` booked earlier, so the restore landed second and put the file back at the top:
+      // Find in Files opened the file but not the match, until it was clicked again. Asking for
+      // a line is the newer instruction.
+      cancelAnimationFrame(restoreFrame);
       editor.dispatch({
         selection: { anchor, head },
         effects: [EditorView.scrollIntoView(anchor, { y: 'center' }), flash.of(line.from)],

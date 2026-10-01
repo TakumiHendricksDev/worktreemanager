@@ -324,7 +324,69 @@ fn read_optional(path: &Path) -> Result<Option<String>, ConfigError> {
 fn declared_commands_in(value: &Value) -> Vec<Vec<String>> {
     let mut out: Vec<Vec<String>> = Vec::new();
     collect_runs(value, &mut out);
+    collect_agent_processes(value, &mut out);
     out
+}
+
+/// What the `[agent.<id>]` tables would put on a process wtm starts.
+///
+/// Its own walk because neither is spelled `run`, which is how both got past this gate before:
+/// an MCP server is `command` plus `args`, and `extra_args` lengthen an argv this file does not
+/// name. Both run when a session opens, so a layer declaring nothing else still needs approving.
+///
+/// The CLI that receives `extra_args` comes from the compiled catalogue, so the prompt shows the
+/// agent's id and an ellipsis where the catalogue's own arguments go, rather than an argv nobody
+/// would run. The rest of `[agent.<id>]` (model, effort, mode) names no process, and stays outside
+/// the prompt.
+fn collect_agent_processes(value: &Value, out: &mut Vec<Vec<String>>) {
+    let Some(agents) = value.get("agent").and_then(Value::as_table) else {
+        return;
+    };
+    for (id, agent) in agents {
+        let Some(agent) = agent.as_table() else {
+            continue;
+        };
+        if let Some(servers) = agent.get("mcp").and_then(Value::as_table) {
+            for server in servers.values().filter_map(Value::as_table) {
+                let mut argv: Vec<String> =
+                    server.get("command").map(argv_word).into_iter().collect();
+                argv.extend(server.get("args").map(argv_words).unwrap_or_default());
+                push_argv(out, argv);
+            }
+        }
+        let extra = agent.get("extra_args").map(argv_words).unwrap_or_default();
+        if !extra.is_empty() {
+            push_argv(
+                out,
+                [id.clone(), "…".to_owned()]
+                    .into_iter()
+                    .chain(extra)
+                    .collect(),
+            );
+        }
+    }
+}
+
+/// One argv word from a raw value. A non-string is shown as written rather than dropped, because
+/// the prompt has to disclose a malformed config too.
+fn argv_word(value: &Value) -> String {
+    value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_owned)
+}
+
+/// The words of a raw argv: an array's items, or a lone value standing in for one.
+fn argv_words(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(items) => items.iter().map(argv_word).collect(),
+        other => vec![argv_word(other)],
+    }
+}
+
+fn push_argv(out: &mut Vec<Vec<String>>, argv: Vec<String>) {
+    if !argv.is_empty() && !out.contains(&argv) {
+        out.push(argv);
+    }
 }
 
 /// Database network capabilities in a raw config layer, with credentials omitted.
@@ -373,16 +435,7 @@ fn collect_runs(value: &Value, out: &mut Vec<Vec<String>>) {
     match value {
         Value::Table(table) => {
             if let Some(Value::Array(items)) = table.get("run") {
-                let argv: Vec<String> = items
-                    .iter()
-                    .map(|item| {
-                        item.as_str()
-                            .map_or_else(|| item.to_string(), str::to_owned)
-                    })
-                    .collect();
-                if !argv.is_empty() && !out.contains(&argv) {
-                    out.push(argv);
-                }
+                push_argv(out, items.iter().map(argv_word).collect());
             }
             for nested in table.values() {
                 collect_runs(nested, out);
@@ -667,7 +720,11 @@ mod tests {
              [field.options]\nkind = 'command'\nrun = ['./bin/envs.sh']\n\n\
              [[lookup]]\nid = 'jira'\nrun = ['acli', 'jira', 'view']\n\n\
              [setup]\nrun = ['./bin/setup.sh']\n\n\
-             [[action]]\nid = 'start'\nlabel = 'Start'\nrun = ['just', 'start']\n",
+             [[remove.pre]]\nrun = ['docker', 'compose', 'down']\n\n\
+             [remove.command]\nrun = ['./bin/teardown.sh']\n\n\
+             [[action]]\nid = 'start'\nlabel = 'Start'\nrun = ['just', 'start']\n\n\
+             [agent.claude]\nextra_args = ['--verbose']\n\n\
+             [agent.claude.mcp.docs]\ncommand = 'npx'\n",
         );
 
         match h.store.load(&h.repo).unwrap_err() {
@@ -676,7 +733,16 @@ mod tests {
                     .iter()
                     .filter_map(|c| c.first().map(String::as_str))
                     .collect();
-                for expected in ["./bin/envs.sh", "acli", "./bin/setup.sh", "just"] {
+                for expected in [
+                    "./bin/envs.sh",
+                    "acli",
+                    "./bin/setup.sh",
+                    "docker",
+                    "./bin/teardown.sh",
+                    "just",
+                    "claude",
+                    "npx",
+                ] {
                     assert!(
                         programs.contains(&expected),
                         "missing {expected} in {programs:?}"
@@ -685,6 +751,73 @@ mod tests {
             }
             other => panic!("expected Untrusted, got {other:?}"),
         }
+    }
+
+    /// An MCP server is spelled `command` and `args`, not `run`, and it starts when a session opens.
+    /// A file declaring nothing else was once loaded without a prompt, so opening an agent in a
+    /// freshly cloned repository could run a program nobody had approved.
+    #[test]
+    fn an_agent_mcp_server_is_refused_until_approved() {
+        let h = Harness::new();
+        h.write_repo_config(
+            "[agent.claude.mcp.docs]\ncommand = 'npx'\nargs = ['-y', '@example/docs-mcp']\n",
+        );
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Untrusted { commands, .. } => assert!(
+                commands.contains(&vec![
+                    "npx".to_owned(),
+                    "-y".to_owned(),
+                    "@example/docs-mcp".to_owned()
+                ]),
+                "the prompt must show the server's argv: {commands:?}"
+            ),
+            other => panic!("expected Untrusted, got {other:?}"),
+        }
+
+        h.approve("wtm.toml");
+        let project = h.store.load(&h.repo).unwrap();
+        assert!(project.agent["claude"].mcp.contains_key("docs"));
+    }
+
+    /// `extra_args` reach the agent CLI's own argv, where one flag can widen what the agent may do
+    /// or point it at another MCP config. The CLI itself comes from the compiled catalogue, so the
+    /// prompt names the agent and elides the catalogue's arguments instead of inventing them.
+    #[test]
+    fn extra_arguments_for_an_agent_are_refused_until_approved() {
+        let h = Harness::new();
+        h.write_repo_config(
+            "[agent.codex]\nextra_args = ['-c', 'sandbox_mode=danger-full-access']\n",
+        );
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Untrusted { commands, .. } => assert!(
+                commands.contains(&vec![
+                    "codex".to_owned(),
+                    "…".to_owned(),
+                    "-c".to_owned(),
+                    "sandbox_mode=danger-full-access".to_owned()
+                ]),
+                "the prompt must show the arguments and which agent gets them: {commands:?}"
+            ),
+            other => panic!("expected Untrusted, got {other:?}"),
+        }
+
+        h.approve("wtm.toml");
+        assert!(h.store.load(&h.repo).is_ok());
+    }
+
+    /// The other half of the agent rule: choosing a model or a mode starts no process of the
+    /// repository's choosing, and a prompt for it would teach people to click through prompts.
+    #[test]
+    fn agent_settings_that_start_no_process_need_no_trust_prompt() {
+        let h = Harness::new();
+        h.write_repo_config(
+            "[agent.claude]\nmodel = 'opus'\nmode = 'plan'\nfast = true\nextra_args = []\n\n\
+             [agent.cursor]\nenabled = false\n",
+        );
+        let project = h.store.load(&h.repo).unwrap();
+        assert_eq!(project.agent["claude"].model.as_deref(), Some("opus"));
     }
 
     #[test]
@@ -850,6 +983,19 @@ mod tests {
     fn declared_commands_deduplicates() {
         let value = layers::document("[a]\nrun = ['x']\n\n[b]\nrun = ['x']\n").unwrap();
         assert_eq!(declared_commands_in(&value).len(), 1);
+    }
+
+    /// Like `run`, an MCP server must be disclosed even when the file will not validate. A
+    /// mistyped `args` is still a program the repository named.
+    #[test]
+    fn declared_commands_show_an_mcp_server_whose_args_are_malformed() {
+        let value =
+            layers::document("[agent.claude.mcp.docs]\ncommand = './bin/mcp'\nargs = '--serve'\n")
+                .unwrap();
+        assert_eq!(
+            declared_commands_in(&value),
+            vec![vec!["./bin/mcp".to_owned(), "--serve".to_owned()]]
+        );
     }
 
     #[test]

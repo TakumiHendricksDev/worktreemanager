@@ -1447,6 +1447,10 @@
       <!--
       Restored from the last run with nothing behind it yet.
 
+      Seen far less than it used to be: a tiled pane resumes itself when its worktree is opened
+      (`sessions.materialise`). What still lands here is a pane refused for lack of room, and a
+      delegated child shown from the Agents rail.
+
       A card in the pane rather than a row in the surface's resume list, because the pane is the
       point: the split you built is back, and this is the one that used to hold this conversation.
       Resuming from here keeps its position; resuming from the list would open beside whatever had

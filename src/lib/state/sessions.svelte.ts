@@ -1646,9 +1646,9 @@ class Sessions {
    * *arrangement*. A split you spent a minute building is not a process, costs nothing to put back,
    * and losing it on every quit — or on an update, which is a quit — was the complaint.
    *
-   * So the tree comes back with its panes in it, and each pane offers to fill itself. A shell fills
-   * itself when the worktree is looked at, because a login shell has nothing to resume and nothing
-   * to decide; an agent waits to be asked, because resuming picks a conversation.
+   * So the tree comes back with its panes in it, and nothing is started here. Each pane fills itself
+   * when its worktree is looked at; see `materialise`, which is also where an agent pane picks its
+   * conversation back up.
    */
   private restore(): void {
     const panes: Pane[] = [];
@@ -1728,12 +1728,19 @@ class Sessions {
   }
 
   /**
-   * Fill in a restored worktree's shells and browsers, once it is the one being looked at.
+   * Fill in a restored worktree's panes, once it is the one being looked at.
    *
    * Called from the selection effect rather than from `restore`, so a launch with six remembered
-   * worktrees spawns nothing until one of them is opened. Agents are deliberately left alone: they
-   * render an offer to resume, and which conversation to resume is a choice. A browser is not — a
-   * page reload has nothing to decide, which puts it with the shells.
+   * worktrees spawns nothing until one of them is opened. That laziness is what the resume list's
+   * argument against reopening every conversation at launch was really about, so agents come back
+   * here too, after the shells and browsers.
+   *
+   * They used to wait behind a Resume button, on the grounds that resuming picks a conversation.
+   * It does not, though: a restored pane already names the one it was holding, and the button was a
+   * click on every pane after every relaunch with only one sensible answer. A pane that holds
+   * nothing to resume, or whose resume fails, closes instead of offering a choice it cannot honour.
+   * Closing loses nothing: the conversation stays in the resume list. Delegated children are left
+   * detached in the Agents rail, because a parent can have twenty and none of them has a tile.
    */
   async materialise(projectId: string, worktreeId: string): Promise<void> {
     const waiting = this.panesIn(worktreeId).filter(
@@ -1757,6 +1764,33 @@ class Sessions {
         await this.fillShell(pane, projectId, worktreeId);
       }
     }
+
+    const tiled = new Set(panesOf(this.layoutFor(worktreeId)));
+    const agents = this.panesIn(worktreeId).filter(
+      (pane) =>
+        pane.detached &&
+        pane.kind.kind === 'agent' &&
+        tiled.has(pane.id) &&
+        !this.isOut(pane.id),
+    );
+    for (const pane of agents) {
+      const label = this.labelOf(pane);
+      if (!pane.providerSession) {
+        await this.close(pane.id);
+        continue;
+      }
+      const outcome = await this.reattach(pane.id);
+      // Out of room is not a failure to resume: the pane keeps its Resume card, the way an
+      // over-cap shell stays detached, and `atCapacity` says why.
+      if (outcome === 'skipped') return;
+      if (outcome === 'failed') {
+        const reason = this.paneById(pane.id)?.error ?? 'it did not start';
+        await this.close(pane.id);
+        this.error =
+          `Couldn't reopen a ${label} conversation (${reason}), so its pane was closed. ` +
+          'It is still under “Pick up where you left off”.';
+      }
+    }
   }
 
   /**
@@ -1765,11 +1799,14 @@ class Sessions {
    * In place: the pane keeps its id and its position in the tree, which is the difference between
    * this and picking the same conversation out of the resume list, where it would open beside
    * whatever had focus.
+   *
+   * Says how it went, because `materialise` closes a pane that could not be resumed but must not
+   * close one that was merely refused for lack of room.
    */
-  async reattach(paneId: string): Promise<void> {
+  async reattach(paneId: string): Promise<'resumed' | 'failed' | 'skipped'> {
     const pane = this.paneById(paneId);
-    if (!pane?.detached || pane.kind.kind !== 'agent') return;
-    if (!this.canFill(pane.worktreeId)) return;
+    if (!pane?.detached || pane.kind.kind !== 'agent') return 'skipped';
+    if (!this.canFill(pane.worktreeId)) return 'skipped';
     pane.detached = false;
     pane.error = null;
 
@@ -1789,6 +1826,7 @@ class Sessions {
       await this.claimOrClose(pane.id, session, 'agent');
       this.error = null;
       void this.refreshResumable(pane.worktreeId);
+      return 'resumed';
     } catch (e) {
       const live = this.paneById(pane.id);
       if (live) {
@@ -1797,6 +1835,7 @@ class Sessions {
         // is neither running nor asking for anything.
         live.detached = true;
       }
+      return 'failed';
     }
   }
 
