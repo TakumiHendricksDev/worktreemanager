@@ -170,12 +170,14 @@ export function summaryText(window: LimitWindow): string {
 /**
  * What to say for a provider with no figures, by provider.
  *
- * Provider-specific because the reasons are: Claude has figures and reports them only with a
- * reply, Cursor has none it will share. Anything else gets the plain fact.
+ * Provider-specific because the reasons are. Claude answers when asked, so having nothing means
+ * an account with no plan limits (an API key) or an ask that failed; a reply in any pane still
+ * brings the five-hour and weekly figures. Cursor has none it will share. Anything else gets the
+ * plain fact.
  */
 export function noFiguresText(provider: string, label: string): string {
   if (provider === 'claude')
-    return `${label} reports its limits with each reply, so they appear after its next turn in any pane.`;
+    return `${label} didn't report any limits when asked. An account on an API key has none; otherwise they also arrive with its next reply in any pane.`;
   if (provider === 'cursor')
     return `${label}'s CLI shares its plan but not its usage. The figures are on its own dashboard.`;
   return `${label} has not reported any limits yet.`;

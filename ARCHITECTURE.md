@@ -217,6 +217,15 @@ means the form is disabled. This is the `direnv` / VS Code workspace-trust model
 rather than being deferred, because a security control added later is a security control that was absent
 for the whole interesting period.
 
+What counts as declared is worked out from the raw TOML of each file, before it is deserialized, so a
+config that fails validation still discloses what approving it would allow. That means the gate knows
+shapes, not types, and every new way to start a process has to be taught to it by name. A `run` array at
+any depth and a `[database.*]` table were its first two. `[agent.<id>]` added two more that are not
+spelled `run`: MCP servers (`command` plus `args`), and `extra_args` on the agent CLI itself. For a while
+only a typed copy of the list knew about them, and nothing called that copy, so a repository declaring
+nothing but an MCP server loaded without a prompt. `wtm-config`'s `collect_agent_processes` is the walk
+for those two now, and the typed copy is gone, so there is one list to keep current.
+
 ---
 
 ## 6b. Agent delegation: why wtm is a server
@@ -888,9 +897,15 @@ launch would fork a CLI per pane for conversations you may be done with. That ar
 doing double duty, though: it was also why the _split tree_ was thrown away, and a layout is not a
 process. So each worktree's tree, pane order and focus are remembered in `localStorage` beside
 `wtm.worktrees.*`, and a restored pane comes back **detached** — in its place, holding nothing,
-offering to fill itself. A shell fills itself when the worktree is first looked at, because a login
-shell has nothing to resume and nothing to decide; an agent waits to be asked, because resuming picks
-a conversation. Launch still spawns nothing.
+offering to fill itself. Each one fills itself when its worktree is first looked at. Launch still
+spawns nothing, which is the part of the resume-list argument that mattered.
+
+Agents waited behind a Resume button at first, on the grounds that resuming picks a conversation. A
+restored pane already names the conversation it was holding, though, so the button had one sensible
+answer and was a click on every pane after every relaunch, an update included. So a tiled agent pane
+now resumes itself with the rest of its worktree. One with nothing to resume, or whose resume fails,
+closes and says so; the conversation stays in the resume list, so closing it loses nothing. Delegated
+children stay detached, because a parent can have twenty and none of them has a tile.
 
 The related fix is that a _reload_ used to lose the transcript of sessions that were still running:
 the events had been emitted to a window that no longer existed. `App` now keeps a bounded per-session

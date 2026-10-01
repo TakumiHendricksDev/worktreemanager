@@ -6,8 +6,9 @@
 //! two ways. A running session reports them in passing (Claude on every turn, Codex on a rolling
 //! notification), and the bridge files that report here rather than in the session's stream: see
 //! `AgentEvent::LimitsUpdated` for why a replayed copy must not be able to overwrite a fresh one.
-//! Or the usage view asks a provider directly, which only Codex can fully answer. Claude and
-//! Cursor will name their plan and nothing else.
+//! Or the usage view asks a provider directly. Codex and Claude can both answer that in full, and
+//! Claude's answer is the only place its per-model weekly windows appear (Fable's, say). Cursor
+//! names its plan and nothing else.
 //!
 //! Every change is announced as [`USAGE_LIMITS_EVENT`] carrying that provider's whole record, the
 //! same shape `code:comments` uses, so a window mirrors it rather than merging changes itself.
@@ -42,6 +43,10 @@ pub const USAGE_LIMITS_EVENT: &str = "usage:limits";
 
 /// How long `claude auth status` gets. It reads a local file and answers in about a second.
 const CLAUDE_TIMEOUT_MS: u64 = 10_000;
+
+/// How long Claude's `get_usage` ask gets. The CLI starts in about a second, but the answer can
+/// mean a request to Claude's usage endpoint when the CLI's own reading is stale.
+const CLAUDE_USAGE_TIMEOUT_MS: u64 = 20_000;
 
 /// How long `cursor-agent about` gets.
 ///
@@ -159,12 +164,26 @@ fn ask(app: &Arc<App>, provider: &str) -> Result<(UsageLimits, bool), String> {
 
     match provider {
         wtm_agent::claude::ID => {
-            let out = run(
-                app,
-                wtm_agent::claude::auth_status_argv(&program),
-                CLAUDE_TIMEOUT_MS,
-            )?;
-            Ok((wtm_agent::claude::parse_auth_status(&out), false))
+            let usage = Invocation::new(
+                wtm_agent::claude::usage_argv(&program),
+                std::env::temp_dir(),
+                CLAUDE_USAGE_TIMEOUT_MS,
+            )
+            .with_stdin(wtm_agent::claude::usage_stdin());
+            match run_invocation(app, &usage).and_then(|out| wtm_agent::claude::parse_usage(&out)) {
+                Ok(answer) => Ok(answer),
+                // A CLI from before `get_usage`, or one that could not reach its endpoint, can still
+                // name the plan. That is what this view showed before it asked the fuller question.
+                Err(error) => {
+                    tracing::debug!(%error, "claude get_usage failed; asking auth status instead");
+                    let out = run(
+                        app,
+                        wtm_agent::claude::auth_status_argv(&program),
+                        CLAUDE_TIMEOUT_MS,
+                    )?;
+                    Ok((wtm_agent::claude::parse_auth_status(&out), false))
+                }
+            }
         }
         wtm_agent::codex::ID => {
             let reply = crate::commands::ask_codex(app, "account/rateLimits/read")?;
@@ -194,10 +213,17 @@ pub fn ask_for_test(app: &Arc<App>, provider: &str) -> Result<(UsageLimits, bool
 
 /// Run a one-shot CLI command and return its stdout, or the end of what it said when it failed.
 fn run(app: &App, argv: Vec<String>, timeout_ms: u64) -> Result<String, String> {
-    let inv = Invocation::new(argv, std::env::temp_dir(), timeout_ms);
+    run_invocation(
+        app,
+        &Invocation::new(argv, std::env::temp_dir(), timeout_ms),
+    )
+}
+
+/// [`run`], for an invocation that needs more than an argv: one given input on stdin.
+fn run_invocation(app: &App, inv: &Invocation) -> Result<String, String> {
     let out = app
         .runner
-        .run_allow_failure(&inv, &CancelToken::new())
+        .run_allow_failure(inv, &CancelToken::new())
         .map_err(|e| e.to_string())?;
     if out.is_success() {
         return Ok(out.stdout);

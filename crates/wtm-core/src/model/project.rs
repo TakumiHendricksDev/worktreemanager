@@ -979,11 +979,11 @@ pub struct AgentSpec {
     /// that here" without a guard.
     #[serde(default)]
     pub fast: Option<bool>,
-    /// Appended to the argv the catalogue builds.
+    /// Appended, as written, to the argv the catalogue builds.
     ///
-    /// Templated, like every other argv in this file, and subject to `[[guards.forbid]]` at spawn
-    /// time for the same reason the setup command is: this is the one place a repository can add
-    /// arbitrary arguments to a process wtm starts.
+    /// This is the one place a repository can add arbitrary arguments to a process wtm starts, and
+    /// one flag can widen what an agent may do. So a layer with any `extra_args` needs trust
+    /// approval like one with a `run` command, even if it declares nothing else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_args: Vec<String>,
     /// Environment overlaid on the session's process.
@@ -1078,57 +1078,6 @@ impl Project {
         self.actions.iter().find(|a| a.id == id)
     }
 
-    /// Every command this config could run, deduplicated, for the trust prompt.
-    ///
-    /// The user must be able to read exactly what a `wtm.toml` would execute
-    /// before approving it, so this has to cover *all* five command sites — a
-    /// prompt that missed one would be worse than no prompt at all.
-    #[must_use]
-    pub fn declared_commands(&self) -> Vec<Vec<String>> {
-        let mut out: Vec<Vec<String>> = Vec::new();
-        let mut push = |c: &CommandSpec| {
-            if !c.run.is_empty() && !out.contains(&c.run) {
-                out.push(c.run.clone());
-            }
-        };
-
-        for f in &self.fields {
-            if let Some(OptionsSource::Command { command, .. }) = &f.options {
-                push(command);
-            }
-        }
-        for l in &self.lookups {
-            push(&l.command);
-        }
-        if let Some(s) = &self.setup {
-            push(&s.command);
-        }
-        for c in &self.remove.pre {
-            push(c);
-        }
-        if let Some(c) = &self.remove.command {
-            push(c);
-        }
-        for a in &self.actions {
-            push(&a.command);
-        }
-
-        // Every MCP server an agent is handed. These are argv this repository names, and an MCP
-        // server is a child process with the same reach as any other — one pointed at a script in the
-        // repo would run on the first session. So they belong in the trust prompt, and the fact that
-        // an agent's *own* binary does not appear here is deliberate: that comes from the compiled
-        // catalogue, not from this file, which is what makes it not a thing a branch can choose.
-        for spec in self.agent.values() {
-            for server in spec.mcp.values() {
-                let argv = server.argv();
-                if !argv.is_empty() && !out.contains(&argv) {
-                    out.push(argv);
-                }
-            }
-        }
-        out
-    }
-
     /// The agent settings for `id`, merged with nothing — the file's own word, or defaults.
     #[must_use]
     pub fn agent_spec(&self, id: &str) -> AgentSpec {
@@ -1151,19 +1100,6 @@ impl Project {
 mod tests {
     use super::*;
 
-    fn cmd(run: &[&str]) -> CommandSpec {
-        CommandSpec {
-            run: run.iter().map(|s| (*s).to_owned()).collect(),
-            cwd: CwdBase::default(),
-            env: BTreeMap::new(),
-            timeout_ms: None,
-            pty: false,
-            when: None,
-            on_failure: OnFailure::default(),
-            args_when: Vec::new(),
-        }
-    }
-
     fn empty_project() -> Project {
         Project {
             id: ProjectId("/x".to_owned()),
@@ -1184,46 +1120,6 @@ mod tests {
             agent: BTreeMap::new(),
             guards: GuardSpec::default(),
         }
-    }
-
-    #[test]
-    fn an_mcp_server_an_agent_is_handed_reaches_the_trust_prompt() {
-        // An MCP server is a child process with the same reach as any other, and one pointed at a
-        // script in the repo would run on the first session. So it belongs in the list the trust
-        // prompt shows — the same list `[setup]` and `[[action]]` are in.
-        let mut p = empty_project();
-        let mut spec = AgentSpec::default();
-        spec.mcp.insert(
-            "codex".to_owned(),
-            McpServerSpec {
-                command: "codex".to_owned(),
-                args: vec!["mcp-server".to_owned()],
-                env: BTreeMap::new(),
-            },
-        );
-        p.agent.insert("claude".to_owned(), spec);
-
-        assert!(
-            p.declared_commands()
-                .contains(&vec!["codex".to_owned(), "mcp-server".to_owned()]),
-            "an MCP server's argv must be shown before it is approved"
-        );
-    }
-
-    #[test]
-    fn an_agents_own_binary_is_not_a_declared_command() {
-        // Deliberately absent, and the omission is the security property: a provider's program comes
-        // from the compiled catalogue, not from this file, so a repository cannot name it — which is
-        // what stops the word "Claude" in wtm's UI being whatever a branch says it is.
-        let mut p = empty_project();
-        p.agent.insert(
-            "claude".to_owned(),
-            AgentSpec {
-                model: Some("opus".to_owned()),
-                ..AgentSpec::default()
-            },
-        );
-        assert!(p.declared_commands().is_empty());
     }
 
     #[test]
@@ -1261,71 +1157,6 @@ mod tests {
         );
         assert!(!p.offers_agent("codex"));
         assert!(p.offers_agent("claude"));
-    }
-
-    #[test]
-    fn declared_commands_covers_every_command_site() {
-        let mut p = empty_project();
-        p.fields.push(FieldSpec {
-            key: "base".to_owned(),
-            label: "Base".to_owned(),
-            kind: FieldKind::Select,
-            required: false,
-            required_when: None,
-            default: None,
-            placeholder: None,
-            help: None,
-            normalize: None,
-            pattern: None,
-            pattern_message: None,
-            options: Some(OptionsSource::Command {
-                command: cmd(&["git", "for-each-ref"]),
-                parse: OptionsParse::Lines,
-                exclude: None,
-                cache_ttl_ms: 0,
-            }),
-            allow_custom: false,
-        });
-        p.lookups.push(LookupSpec {
-            id: "jira".to_owned(),
-            command: cmd(&["acli", "jira"]),
-            format: LookupFormat::Json,
-            on_error: LookupErrorPolicy::Warn,
-            cache_ttl_ms: 0,
-            map: BTreeMap::new(),
-        });
-        p.setup = Some(SetupSpec {
-            command: cmd(&["./bin/setup.sh"]),
-            concurrency: Concurrency::default(),
-        });
-        p.remove.pre.push(cmd(&["docker", "compose", "down"]));
-        p.remove.command = Some(cmd(&["./bin/teardown.sh"]));
-        p.actions.push(ActionSpec {
-            id: "shell".to_owned(),
-            label: "Shell".to_owned(),
-            command: cmd(&["zsh", "-l"]),
-        });
-
-        let found = p.declared_commands();
-        assert_eq!(
-            found.len(),
-            6,
-            "every command site must be surfaced: {found:?}"
-        );
-        assert!(found.contains(&vec!["git".to_owned(), "for-each-ref".to_owned()]));
-        assert!(found.contains(&vec!["zsh".to_owned(), "-l".to_owned()]));
-    }
-
-    #[test]
-    fn declared_commands_deduplicates() {
-        let mut p = empty_project();
-        p.remove.pre.push(cmd(&["docker", "compose", "down"]));
-        p.actions.push(ActionSpec {
-            id: "down".to_owned(),
-            label: "Down".to_owned(),
-            command: cmd(&["docker", "compose", "down"]),
-        });
-        assert_eq!(p.declared_commands().len(), 1);
     }
 
     #[test]

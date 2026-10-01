@@ -388,6 +388,116 @@ fn the_plan_comes_from_auth_status_and_nothing_else_in_its_reply_is_kept() {
     assert_eq!(wtm_agent::claude::parse_auth_status("not json").plan, None);
 }
 
+/// Captured from CLI 2.1.285 on a Team plan, answering `get_usage` while `/usage` showed 94% for the
+/// session, 48% for the week and 25% for Fable. Trimmed to the keys the parser reads, out of a reply
+/// that also carries spend, credits and a row of codenamed windows that were all null, and given the
+/// request id wtm sends.
+const GET_USAGE: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"wtm-usage","response":{"session":{"total_cost_usd":0},"subscription_type":"team","rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":94,"resets_at":"2026-10-01T19:59:59.925275+00:00","limit_dollars":null,"used_dollars":null,"remaining_dollars":null,"locked_reason":null},"seven_day":{"utilization":48,"resets_at":"2026-10-03T19:59:59.925299+00:00","limit_dollars":null,"used_dollars":null,"remaining_dollars":null,"locked_reason":null},"seven_day_oauth_apps":null,"seven_day_opus":null,"seven_day_sonnet":null,"seven_day_omelette":null,"limits":[{"kind":"session","group":"session","percent":94,"resets_at":"2026-10-01T19:59:59.925275+00:00","severity":"critical","is_active":true,"scope":null},{"kind":"weekly_all","group":"weekly","percent":48,"resets_at":"2026-10-03T19:59:59.925299+00:00","severity":"normal","is_active":false,"scope":null},{"kind":"weekly_scoped","group":"weekly","percent":25,"resets_at":"2026-10-03T19:59:59.925497+00:00","severity":"normal","is_active":false,"scope":{"model":{"display_name":"Fable","id":null},"surface":null}}],"model_scoped":[{"display_name":"Fable","utilization":25,"resets_at":"2026-10-03T19:59:59.925497+00:00"}]}}}}"#;
+
+#[test]
+fn get_usage_reports_the_session_the_week_and_each_models_own_week() {
+    // The reason this ask exists: Fable's week is in this answer and in no `rate_limit_event`.
+    // `utilization` is a percentage here, so 94 must stay 94 and not become 9 400.
+    let stdout = format!(
+        "{}\n{}\n",
+        r#"{"type":"control_response","response":{"subtype":"success","request_id":"wtm-init","response":{}}}"#,
+        GET_USAGE
+    );
+    let (limits, complete) = wtm_agent::claude::parse_usage(&stdout).unwrap();
+    assert!(
+        complete,
+        "an answer that lists model_scoped is every window"
+    );
+    assert_eq!(
+        limits,
+        UsageLimits {
+            plan: Some("Team".to_owned()),
+            windows: vec![
+                LimitWindow {
+                    minutes: Some(300),
+                    scope: None,
+                    used_percent: 94.0,
+                    resets_at: Some(1_790_884_799),
+                },
+                LimitWindow {
+                    minutes: Some(10_080),
+                    scope: None,
+                    used_percent: 48.0,
+                    resets_at: Some(1_791_057_599),
+                },
+                LimitWindow {
+                    minutes: Some(10_080),
+                    scope: Some("Fable".to_owned()),
+                    used_percent: 25.0,
+                    resets_at: Some(1_791_057_599),
+                },
+            ],
+            ..UsageLimits::empty("claude")
+        }
+    );
+}
+
+#[test]
+fn a_get_usage_answer_from_the_clis_cached_reading_does_not_claim_every_window() {
+    // The CLI leaves `model_scoped` out when it answered from a snapshot. Taking that as complete
+    // would wipe the Fable window the last full answer showed.
+    let cached = GET_USAGE.replace(
+        r#","model_scoped":[{"display_name":"Fable","utilization":25,"resets_at":"2026-10-03T19:59:59.925497+00:00"}]"#,
+        "",
+    );
+    assert_ne!(cached, GET_USAGE, "the fixture edit must have applied");
+    let (limits, complete) = wtm_agent::claude::parse_usage(&cached).unwrap();
+    assert!(!complete);
+    assert_eq!(limits.windows.len(), 2, "the session and the week, still");
+}
+
+#[test]
+fn a_models_server_label_wins_over_the_fixed_key_for_the_same_model() {
+    // Opus's week can arrive twice: as `seven_day_opus` and as a `model_scoped` row. One bar.
+    let both = GET_USAGE
+        .replace(
+            r#""seven_day_opus":null"#,
+            r#""seven_day_opus":{"utilization":10,"resets_at":"2026-10-03T19:59:59+00:00"}"#,
+        )
+        .replace(
+            r#""model_scoped":[{"#,
+            r#""model_scoped":[{"display_name":"Opus","utilization":12,"resets_at":"2026-10-03T19:59:59+00:00"},{"#,
+        );
+    let (limits, _) = wtm_agent::claude::parse_usage(&both).unwrap();
+    let opus: Vec<_> = limits
+        .windows
+        .iter()
+        .filter(|w| w.scope.as_deref() == Some("Opus"))
+        .collect();
+    assert_eq!(opus.len(), 1);
+    assert!((opus[0].used_percent - 12.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn without_plan_limits_get_usage_names_the_plan_and_no_windows() {
+    // An API key or a third-party provider: `rate_limits` is null, and that is not an error.
+    let (limits, complete) = wtm_agent::claude::parse_usage(
+        r#"{"type":"control_response","response":{"subtype":"success","request_id":"wtm-usage","response":{"subscription_type":null,"rate_limits_available":false,"rate_limits":null}}}"#,
+    )
+    .unwrap();
+    assert!(!complete);
+    assert_eq!(limits, UsageLimits::empty("claude"));
+}
+
+#[test]
+fn a_refused_or_unanswered_get_usage_is_an_error_carrying_the_reason() {
+    // What a CLI older than `get_usage` does, and the cue for the usage module to fall back to
+    // `auth status` for the plan.
+    let refused = wtm_agent::claude::parse_usage(
+        r#"{"type":"control_response","response":{"subtype":"error","request_id":"wtm-usage","error":"Unsupported control request subtype: get_usage"}}"#,
+    );
+    assert_eq!(
+        refused.unwrap_err(),
+        "Unsupported control request subtype: get_usage"
+    );
+    assert!(wtm_agent::claude::parse_usage("").is_err());
+}
+
 #[test]
 fn a_rate_limit_event_that_is_not_allowed_reports_the_limit_and_when_it_resets() {
     /*
