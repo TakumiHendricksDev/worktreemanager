@@ -46,13 +46,17 @@ export type IconName =
   | 'chevron-down'
   | 'chevron-left'
   | 'chevron-right'
+  | 'chevron-up'
   | 'check'
   | 'close'
+  | 'collapse'
   | 'comment'
   | 'external'
   | 'globe'
   | 'file'
+  | 'folder'
   | 'grip'
+  | 'locate'
   | 'star'
   | 'star-outline'
   | 'plus'
@@ -63,6 +67,7 @@ export type IconName =
   | 'settings'
   | 'sidebar'
   | 'split-right'
+  | 'symlink'
   | 'terminal'
   | 'theme-system'
   | 'theme-light'
@@ -70,6 +75,7 @@ export type IconName =
   | 'bolt'
   | 'mic'
   | 'more'
+  | 'more-vertical'
   | 'warn';
 
 export interface IconSpec {
@@ -94,6 +100,7 @@ export const icons: Record<IconName, IconSpec> = {
   'chevron-down': { stroke: 'M4 6.25 L8 10.25 L12 6.25' },
   'chevron-left': { stroke: 'M9.75 4 L5.75 8 L9.75 12' },
   'chevron-right': { stroke: 'M6.25 4 L10.25 8 L6.25 12' },
+  'chevron-up': { stroke: 'M4 9.75 L8 5.75 L12 9.75' },
   check: { stroke: 'M3.5 8.25 L6.5 11.25 L12.5 4.75' },
   /**
    * A lightning bolt, filled rather than stroked.
@@ -129,7 +136,17 @@ export const icons: Record<IconName, IconSpec> = {
       'M6.75 8 A1.25 1.25 0 1 0 9.25 8 A1.25 1.25 0 1 0 6.75 8 Z ' +
       'M11.25 8 A1.25 1.25 0 1 0 13.75 8 A1.25 1.25 0 1 0 11.25 8 Z',
   },
+  // The same three dots stood on end: PyCharm's ⋮ at the end of its editor tabs, which the Code
+  // tab's strip copies so the control is where a PyCharm user's hand already goes.
+  'more-vertical': {
+    fill:
+      'M8 2.25 A1.25 1.25 0 1 0 8 4.75 A1.25 1.25 0 1 0 8 2.25 Z ' +
+      'M8 6.75 A1.25 1.25 0 1 0 8 9.25 A1.25 1.25 0 1 0 8 6.75 Z ' +
+      'M8 11.25 A1.25 1.25 0 1 0 8 13.75 A1.25 1.25 0 1 0 8 11.25 Z',
+  },
   close: { stroke: 'M4.25 4.25 L11.75 11.75 M11.75 4.25 L4.25 11.75' },
+  // Two chevrons folding up: every open folder closes. The Code tab's tree header.
+  collapse: { stroke: 'M4.5 7.25 L8 3.75 L11.5 7.25 M4.5 12.25 L8 8.75 L11.5 12.25' },
   /** A speech bubble with its tail at the lower left: a comment left *on* something. */
   comment: { stroke: 'M2.5 3.25 H13.5 V10.25 H7.5 L4.5 12.75 V10.25 H2.5 Z' },
   /** A box with an arrow leaving its top-right corner — open elsewhere. */
@@ -147,6 +164,13 @@ export const icons: Record<IconName, IconSpec> = {
   /** A triangle, the same shape warnings already used as a `!` glyph in preflight lists. */
   warn: { stroke: 'M8 3 L13.25 13.25 H2.75 Z M8 6.75 V10 M8 11.5 V12.25' },
   file: { stroke: 'M4 1.75 H9.25 L12 4.5 V14.25 H4 Z M9.25 1.75 V4.5 H12' },
+  folder: { stroke: 'M2 3.75 H6.25 L7.75 5.25 H14 V12.75 H2 Z' },
+  // A crosshair, PyCharm's ⌖: find the open file in the tree.
+  locate: {
+    stroke:
+      'M8 4.75 A3.25 3.25 0 1 0 8 11.25 A3.25 3.25 0 1 0 8 4.75 ' +
+      'M8 1.75 V4.75 M8 11.25 V14.25 M1.75 8 H4.75 M11.25 8 H14.25',
+  },
   /*
    * Three bars, not six dots.
    *
@@ -209,6 +233,10 @@ export const icons: Record<IconName, IconSpec> = {
   'split-right': {
     stroke: 'M2.5 3 H13.5 V13 H2.5 Z M8 3 V13',
     fill: 'M8 3 H13.5 V13 H8 Z',
+  },
+  // A hooked arrow, ↪: this entry is a link to somewhere else.
+  symlink: {
+    stroke: 'M4 3.5 V8.25 A2.75 2.75 0 0 0 6.75 11 H12.25 M9.75 8.5 L12.25 11 L9.75 13.5',
   },
   /*
    * Sliders, not a cog, and the grammar above is the reason.

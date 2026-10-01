@@ -32,7 +32,11 @@ than a networked service. The things worth reporting:
   except through an explicit per-key reveal, and none should appear in a log line. See
   [Environment values](README.md#environment-values); `cargo test -p wtm-app --test
   env_masking` is the standing proof.
-- **Path traversal** — a config template that writes or reads outside the worktree it names.
+- **Path traversal** — a config template that writes or reads outside the worktree it names, or
+  a path the Code tab reads, lists or diffs that climbs out of its worktree. The Code tab takes only
+  relative paths of ordinary components; it follows a symlink that is *inside* the worktree, by
+  design, and says when a file resolves outside it (ARCHITECTURE §6e). A path or revision that
+  reaches `git` as a flag rather than as a path or a commit is in scope too.
 - **A guard (`[[guards.forbid]]`) that can be bypassed** by a value that renders to a
   forbidden argv after the check.
 

@@ -12,13 +12,21 @@
    * re-renders many times a second.
    */
   import { commands } from '../ipc/commands';
+  import type { CodeRef } from '../code-links';
   import { parse, type Block, type Span } from '../markdown';
   import { onDestroy } from 'svelte';
   import Button from './ui/Button.svelte';
 
+  /** How a reply's file references resolve and open. See `code-links.ts`. */
+  export interface CodeLink {
+    resolve: (text: string) => CodeRef | null;
+    open: (ref: CodeRef) => void;
+  }
+
   const {
     source,
     onrunsql,
+    codeLink,
   }: {
     source: string;
     /**
@@ -27,6 +35,12 @@
      * worktree whose database the SQL is about.
      */
     onrunsql?: (sql: string) => void;
+    /**
+     * Inline code that names a file in the worktree — `src/app.py:42` — becomes a link that opens it
+     * in the Code tab. Opt-in for the same reason as `onrunsql`: only a reply in a pane has a
+     * worktree its paths are relative to.
+     */
+    codeLink?: CodeLink;
   } = $props();
 
   /** The fence languages an agent tags SQL with. Untagged blocks get no Run: a guess would misfire. */
@@ -85,7 +99,7 @@
   below is free to breathe because those are block elements; this run is inline and is not.
 -->
 <!-- prettier-ignore -->
-{#snippet spans(list: Span[])}{#each list as span, i (i)}{#if span.kind === 'text'}{span.text}{:else if span.kind === 'code'}<code class="c-markdown__code">{span.text}</code>{:else if span.kind === 'strong'}<strong>{@render spans(span.spans)}</strong>{:else if span.kind === 'em'}<em>{@render spans(span.spans)}</em>{:else if span.kind === 'strike'}<s>{@render spans(span.spans)}</s>{:else if span.kind === 'link'}<a href={span.href} onclick={(event) => open(event, span.href)}>{@render spans(span.spans)}</a>{/if}{/each}{/snippet}
+{#snippet spans(list: Span[])}{#each list as span, i (i)}{#if span.kind === 'text'}{span.text}{:else if span.kind === 'code'}{@const ref = codeLink?.resolve(span.text)}{#if ref}<button type="button" class="c-markdown__code c-markdown__path" title="Open in the Code tab" onclick={() => codeLink?.open(ref)}>{span.text}</button>{:else}<code class="c-markdown__code">{span.text}</code>{/if}{:else if span.kind === 'strong'}<strong>{@render spans(span.spans)}</strong>{:else if span.kind === 'em'}<em>{@render spans(span.spans)}</em>{:else if span.kind === 'strike'}<s>{@render spans(span.spans)}</s>{:else if span.kind === 'link'}<a href={span.href} onclick={(event) => open(event, span.href)}>{@render spans(span.spans)}</a>{/if}{/each}{/snippet}
 
 {#snippet flow(list: Block[])}
   {#each list as block, i (i)}

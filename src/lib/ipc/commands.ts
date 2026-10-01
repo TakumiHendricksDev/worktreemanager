@@ -28,6 +28,17 @@ import type {
   BrowserView,
   ApprovalAnswer,
   Capability,
+  CodeChanges,
+  CodeComment,
+  CodeEntry,
+  CodeHunk,
+  CodeFile,
+  CodeSearch,
+  CodeSearchOptions,
+  CodeStat,
+  CodeSymbol,
+  CodeTree,
+  NewCodeComment,
   CreateOutcome,
   Doctor,
   Form,
@@ -433,6 +444,78 @@ export const commands = {
     invoke<QueryResult>('database_table_page', { session, request }),
   cancelDatabaseQuery: (session: string) =>
     invoke<void>('cancel_database_query', { session }),
+
+  // ── the Code tab ──
+  /** Every file git lists in the worktree, the ignored paths, and which ones are not plain. */
+  codeTree: (projectId: string, worktreeId: string) =>
+    invoke<CodeTree>('code_tree', { projectId, worktreeId }),
+  /** One level of a directory git did not list — ignored, a submodule, or a link. */
+  codeListDir: (projectId: string, worktreeId: string, dir: string) =>
+    invoke<CodeEntry[]>('code_list_dir', { projectId, worktreeId, dir }),
+  /** One file's text, up to five mebibytes; a binary file comes back without any. */
+  codeReadFile: (projectId: string, worktreeId: string, path: string) =>
+    invoke<CodeFile>('code_read_file', { projectId, worktreeId, path }),
+  /** Find in Files. Starting one stops the one before, which then rejects as `cancelled`. */
+  codeSearch: (
+    projectId: string,
+    worktreeId: string,
+    query: string,
+    options: CodeSearchOptions,
+  ) => invoke<CodeSearch>('code_search', { projectId, worktreeId, query, options }),
+  /** What the worktree changed, against its base branch's merge base or against `HEAD`. */
+  codeChanges: (projectId: string, worktreeId: string, scope: 'branch' | 'uncommitted') =>
+    invoke<CodeChanges>('code_changes', { projectId, worktreeId, scope }),
+  /** One file's zero-context hunks against `rev`, which must be what `codeChanges` returned. */
+  codeFileDiff: (
+    projectId: string,
+    worktreeId: string,
+    path: string,
+    rev: string,
+    from: string | null,
+  ) => invoke<CodeHunk[]>('code_file_diff', { projectId, worktreeId, path, rev, from }),
+  /** A file's content at `rev`, or null when it did not exist there. */
+  codeBaseVersion: (projectId: string, worktreeId: string, path: string, rev: string) =>
+    invoke<string | null>('code_base_version', { projectId, worktreeId, path, rev }),
+  // Comments on lines. Each answers with the worktree's whole list, and announces it as well
+  // on `code:comments`, which is what every window draws from.
+  codeListComments: (worktreeId: string) =>
+    invoke<CodeComment[]>('code_list_comments', { worktreeId }),
+  codeAddComment: (worktreeId: string, comment: NewCodeComment) =>
+    invoke<CodeComment[]>('code_add_comment', { worktreeId, comment }),
+  codeUpdateComment: (worktreeId: string, id: number, text: string) =>
+    invoke<CodeComment[]>('code_update_comment', { worktreeId, id, text }),
+  codeResolveComment: (worktreeId: string, id: number, resolved: boolean) =>
+    invoke<CodeComment[]>('code_resolve_comment', { worktreeId, id, resolved }),
+  codeRemoveComment: (worktreeId: string, id: number) =>
+    invoke<CodeComment[]>('code_remove_comment', { worktreeId, id }),
+  codeClearComments: (worktreeId: string, resolvedOnly: boolean) =>
+    invoke<CodeComment[]>('code_clear_comments', { worktreeId, resolvedOnly }),
+  codeMarkCommentsSent: (worktreeId: string, ids: number[], to: string) =>
+    invoke<CodeComment[]>('code_mark_comments_sent', { worktreeId, ids, to }),
+  /**
+   * Go to Class (`typesOnly`) or Go to Symbol. `refresh` re-reads what changed since the index was
+   * built, which the palette asks for once, when it opens.
+   */
+  codeSymbols: (
+    projectId: string,
+    worktreeId: string,
+    query: string,
+    typesOnly: boolean,
+    refresh: boolean,
+  ) =>
+    invoke<CodeSymbol[]>('code_symbols', {
+      projectId,
+      worktreeId,
+      query,
+      typesOnly,
+      refresh,
+    }),
+  /** Every definition named exactly this — what ⌘-click on a name goes to. */
+  codeDefinitions: (projectId: string, worktreeId: string, name: string) =>
+    invoke<CodeSymbol[]>('code_definitions', { projectId, worktreeId, name }),
+  /** When each open file last changed, so a refresh re-reads only what did. */
+  codeStat: (projectId: string, worktreeId: string, paths: string[]) =>
+    invoke<CodeStat[]>('code_stat', { projectId, worktreeId, paths }),
 
   /** Opens an http/https URL. The scheme is validated in Rust — see `open_url`. */
   openUrl: (url: string) => invoke<void>('open_url', { url }),

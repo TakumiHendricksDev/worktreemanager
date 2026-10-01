@@ -5838,6 +5838,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wtm-agent",
+ "wtm-code",
  "wtm-config",
  "wtm-core",
  "wtm-db",
@@ -5849,6 +5850,17 @@ dependencies = [
  "wtm-testkit",
  "wtm-update",
  "wtm-webview",
+]
+
+[[package]]
+name = "wtm-code"
+version = "2.1.1"
+dependencies = [
+ "regex",
+ "tempfile",
+ "thiserror 2.0.21",
+ "wtm-core",
+ "wtm-exec",
 ]
 
 [[package]]

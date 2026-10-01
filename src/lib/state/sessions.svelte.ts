@@ -2416,6 +2416,14 @@ class Sessions {
    * carries a request and the pane appends.
    */
   draftEpoch = $state(0);
+  /**
+   * Bumped whenever an agent in a worktree finishes a turn, by worktree.
+   *
+   * The Code tab's cue to look at the disk again: a finished turn is when an agent's edits land,
+   * and it is an event rather than a poll. A counter rather than a flag, like `draftEpoch`, so two
+   * turns finishing are two changes an effect can see.
+   */
+  turnEpoch = $state<Record<string, number>>({});
   draftTarget: { paneId: string; text: string } | null = null;
 
   /** Put text into an agent pane's composer without sending it, and bring the pane forward. */
@@ -3614,6 +3622,7 @@ class Sessions {
     } else if (event.kind === 'turn_finished') {
       pane.working = false;
       pane.lastTurnFinished = true;
+      this.turnEpoch[pane.worktreeId] = (this.turnEpoch[pane.worktreeId] ?? 0) + 1;
       if (
         pane.sideOf === null &&
         attention.announce('finished', announceable(pane, this.isOut(pane.id)))

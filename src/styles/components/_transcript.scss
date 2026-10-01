@@ -504,3 +504,16 @@
 .c-transcript__user:empty {
   display: none;
 }
+
+/* A patch's `+++ b/…` header, when the file is in the worktree: opens it in the Code tab. */
+.c-transcript__diff-file {
+  font: inherit;
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--accent);
+  }
+}

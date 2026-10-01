@@ -12,6 +12,10 @@
   import { onMount, untrack } from 'svelte';
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
+  import CodeSurface from './lib/components/CodeSurface.svelte';
+  import { chordOf } from './lib/code-shortcuts';
+  import { code } from './lib/state/code.svelte';
+  import { codeRequests } from './lib/state/code-request.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
@@ -62,7 +66,7 @@
    * terminal need the room, and a modal implies a quick decision when a setup run can take
    * minutes. Removal stays a modal — a destructive confirmation should block.
    */
-  let mainView = $state<'worktree' | 'database' | 'new'>('worktree');
+  let mainView = $state<'worktree' | 'database' | 'code' | 'new'>('worktree');
   let showAddProject = $state(false);
   let showRemove = $state(false);
   /**
@@ -136,6 +140,22 @@
       void arrive(request.projectId, request.worktreeId).then(
         () => (mainView = 'database'),
       );
+    });
+  });
+
+  /** The last file request navigated for. Same contract as `navigatedFor`. */
+  let openedFor = 0;
+
+  /*
+   * A reply's file link: to the worktree the pane is in, and its Code view. `CodeSurface` takes the
+   * same request from there and opens the file — see `code-request.svelte.ts`.
+   */
+  $effect(() => {
+    const request = codeRequests.request;
+    if (!booted || !request || request.id === openedFor) return;
+    openedFor = request.id;
+    untrack(() => {
+      void arrive(request.projectId, request.worktreeId).then(() => (mainView = 'code'));
     });
   });
 
@@ -315,10 +335,29 @@
     };
     window.addEventListener('keydown', onKey);
 
+    /*
+     * The Code tab's chords — ⇧⌘O and the rest in `code-shortcuts.ts` — from any view.
+     *
+     * Here because each one first switches the main pane to Code, and this file owns which view is
+     * showing. Capture phase, and stopped, so neither a focused terminal's xterm nor a CodeMirror
+     * keymap sees the chord first. A modal on screen keeps the keyboard; nothing opens over it.
+     */
+    const onCodeChord = (event: KeyboardEvent) => {
+      const chord = chordOf(event);
+      if (!chord || !booted || !workspace.selected) return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      mainView = 'code';
+      code.ask(chord, window.getSelection()?.toString().trim().split('\n')[0] ?? '');
+    };
+    window.addEventListener('keydown', onCodeChord, true);
+
     return () => {
       gone = true;
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onCodeChord, true);
       void unlistenSettings.then((off) => off());
       void unlistenUpdates.then((off) => off());
       void unlistenClicks.then((off) => off());
@@ -444,9 +483,7 @@
       <Sidebar
         onnew={() => (mainView = 'new')}
         onselectworktree={() => (mainView = 'worktree')}
-        detailId={mainView === 'worktree' || mainView === 'database'
-          ? 'worktree-detail'
-          : null}
+        detailId={mainView === 'new' ? null : 'worktree-detail'}
       />
     </aside>
 
@@ -603,10 +640,11 @@
         <Detail
           worktree={workspace.selected}
           projectId={workspace.activeProjectId ?? ''}
-          databaseActive={mainView === 'database'}
+          view={mainView === 'database' || mainView === 'code' ? mainView : 'sessions'}
           {sidebarCollapsed}
           onsessions={() => (mainView = 'worktree')}
           ondatabase={() => (mainView = 'database')}
+          oncode={() => (mainView = 'code')}
           onremove={() => (showRemove = true)}
           oninspect={() => (showInspector = true)}
           onfavorite={() => {
@@ -636,6 +674,10 @@
       <SessionSurface visible={booted && mainView === 'worktree'} />
       <DatabaseSurface
         visible={booted && mainView === 'database'}
+        onsessions={() => (mainView = 'worktree')}
+      />
+      <CodeSurface
+        visible={booted && mainView === 'code'}
         onsessions={() => (mainView = 'worktree')}
       />
     </main>

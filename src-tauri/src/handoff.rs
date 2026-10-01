@@ -78,6 +78,11 @@ pub const AWARENESS_ENV: &str = "WTM_SESSION_AWARENESS";
 /// live preference on every call regardless.
 pub const BROWSER_TOOLS_ENV: &str = "WTM_BROWSER_TOOLS";
 
+/// Set to `on` when the bridge should list the `code_*` tools. Every session gets it — the tools
+/// need nothing a build might lack — but it is a flag, as the browser's is, so the base tool list
+/// and the positions tests pin stay what they were for a bridge started without it.
+pub const CODE_TOOLS_ENV: &str = "WTM_CODE_TOOLS";
+
 /// The name the bridge is registered under, and therefore the prefix the model sees.
 ///
 /// A tool call shows up as `mcp__wtm__ask_agent`. Short, because it is read in a transcript.
@@ -113,6 +118,8 @@ pub enum Action {
     ListSessions,
     /// One of the `browser_*` tools. Which one, and with what, rides in [`Request::browser`].
     Browser,
+    /// One of the `code_*` tools, carried in [`Request::code`].
+    Code,
 }
 
 /// A browser tool call, carried through the socket untouched.
@@ -122,6 +129,15 @@ pub enum Action {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserCall {
+    pub tool: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// A `code_*` tool call, carried through the socket untouched, like [`BrowserCall`].
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCall {
     pub tool: String,
     #[serde(default)]
     pub args: serde_json::Value,
@@ -157,6 +173,9 @@ pub struct Request {
     /// and absent from every request an older bridge sends — which still deserializes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<BrowserCall>,
+    /// The code tool call, when `action` is [`Action::Code`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<CodeCall>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -651,6 +670,12 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
             return match &request.browser {
                 Some(call) => crate::browser_tools::run(handle, app, &request.token, call),
                 None => Response::failed("a browser request has to name a tool"),
+            };
+        }
+        Action::Code => {
+            return match &request.code {
+                Some(call) => crate::code_tools::run(handle, app, &request.token, call),
+                None => Response::failed("a code request has to name a tool"),
             };
         }
         Action::Delegate => {}

@@ -37,6 +37,7 @@ wtm-config   wtm.toml schema, four-layer merge, validation, trust store.   impl 
 wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl Git
 wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl both
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
+wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
 ```
@@ -453,6 +454,70 @@ too.
 **Closing the main window still quits.** It used to because it was the last window; a pane window
 would otherwise keep a process alive with no way back to the main window, so the main window's
 `Destroyed` now exits explicitly.
+
+## 6e. The Code tab: reading a worktree, and talking about it
+
+The Code tab is a read-only view of the selected worktree — a tree, a highlighted file, Find in
+Files, Go to File / Class / Symbol, a Changes view — whose point is the last thing it does: turning
+"look at these lines" into a message for the agent the user is talking to.
+
+**Git decides what the worktree holds; `wtm-code` reads it.** The tree is `Git::files` (the `@`
+list's listing) plus `Git::ignored` with `--directory`, so `.gitignore` is applied by the tool that
+owns it and `node_modules` arrives as one entry. What git collapsed or does not own — an ignored
+folder, a submodule, a linked directory — is listed one level at a time when opened, never walked.
+There is no watcher, for §8's reason: the tree and the open files are re-read when the tab is shown,
+on window focus, and when an agent in the worktree finishes a turn, and a file is read again only if
+its time or size moved.
+
+**Search is in-process, over git's list.** `git grep` was the obvious choice and loses on three
+counts: the runner caps a capture at 4 MiB and returns nothing until the process ends, so a
+one-letter query on a large repository is read, discarded and cut off; `--column` gives only a
+line's first match, so highlighting would need a second regex engine that disagrees with git's on
+exactly the patterns people use a regex for; and superseding a search means killing a process
+rather than setting a flag. `wtm-code` uses the workspace's `regex` (linear-time, so no pasted
+pattern can hang it) on a few threads that take files in order and stop taking them at the cap,
+which makes the reported matches the first ones in path order every time rather than whichever
+thread was fast. Ranges are UTF-16, the unit both JavaScript and CodeMirror count in.
+
+**Read-only is `EditorState.readOnly`, not a non-editable view.** The second makes the content
+unfocusable, which takes the caret, keyboard selection, copy and find with it — everything a reader
+does. Colours stay in the stylesheet: `classHighlighter` plus a second `tagHighlighter` for what the
+first folds together (a definition's name, `this`, tags), styled from `--syntax-*` roles the SQL
+editor shares. Languages are a short hand-written table of dynamic imports rather than
+`@codemirror/language-data`, which would pull in a parser for every one of a hundred languages;
+each import is a same-origin chunk, which `script-src 'self'` allows.
+
+**Symbols are syntax, not semantics.** A table of line shapes per language, with containers found
+by indentation, knows where a line says `class EventList` and not what a reference refers to. That
+is go-to-*a*-definition-*named* rather than go-to-definition, and for finding one's way around it is
+most of the value with none of a language server's cost — no interpreter, no virtualenv, nothing per
+project. Two definitions with one name are both offered. The index is kept per file by time and
+size, refreshed when a palette opens rather than per keystroke, and held for the two worktrees used
+most recently.
+
+**Changes compare with the merge base**, of `HEAD` and the base branch the sidebar already measures
+against, so the view shows what the branch did rather than what the base did since. Every git call
+with a revision passes `--end-of-options`, and a revision handed back by the frontend must be a
+commit id or `HEAD` before it reaches git at all.
+
+**Comments are Rust's, drafted rather than sent.** They live on `App` because agents read them too,
+through `code_read_comments` and `code_resolve_comment` — an MCP call arrives from another process
+with no window in the loop — and the window mirrors `code:comments`, which always carries a
+worktree's whole list. Like a browser's comments (§6c) they are in memory: a reload keeps them, a
+quit ends them. Each keeps its excerpt, so an agent reads what the user read and the card can say
+*outdated* when the file has moved on. Send and Ask put a message in an agent's composer and never
+send it, which keeps the rule that code leaves the machine only when the user presses Enter. The
+tools are scoped by the caller's token like every other on the bridge; unlike page text they are not
+fenced as untrusted, because their contents are the user's words about the user's own repository,
+which the agent can already read.
+
+**Paths are checked lexically, and links are followed.** Every path `wtm-code` takes is relative and
+made only of ordinary components. That is not the boundary that keeps a page out — nothing a page
+can reach calls these commands, and the webview can already read any file through the composer's
+attachments — but it is what stops a confused path, `../../.ssh/config` in an agent's reply, from
+becoming a file read. A symlink inside the worktree is followed, because a linked `.claude` is what a
+reviewer opens, and the viewer says when a file resolves outside the worktree. A reply's references
+become links only when they resolve to a real file in the worktree's own list.
 
 ## 5a. Two things the real repository taught us
 

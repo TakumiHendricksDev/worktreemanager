@@ -1,0 +1,300 @@
+/*
+ * CodeMirror, drawn in the app's tokens: the SQL console's editor and the Code tab's viewer.
+ *
+ * Components layer, as one block rather than a copy under each host: the two editors are the
+ * same widget, and the rules below are about CodeMirror's own elements — the gutter, the
+ * selection layer, the search panel, the token classes `classHighlighter` emits — not about
+ * where it is mounted. Size, border and focus ring stay with the host (`.c-database__editor`),
+ * because those are the only things the two places disagree on.
+ *
+ * Colours come from here and nowhere else. `code-editor.ts` holds the single rule that has to be
+ * an `EditorView.theme`, and its comment says why.
+ */
+
+.c-code-editor .cm-editor {
+  height: 100%;
+  color: var(--fg);
+  background: var(--bg-code);
+}
+
+.c-code-editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.c-code-editor .cm-scroller {
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.c-code-editor .cm-content {
+  padding: var(--sp-3) 0;
+  caret-color: var(--fg);
+}
+
+.c-code-editor .cm-line {
+  padding-inline: var(--sp-2) var(--sp-3);
+}
+
+.c-code-editor .cm-gutters {
+  border-right: 1px solid var(--border);
+  color: var(--fg-subtle);
+  background: var(--bg-elevated);
+}
+
+.c-code-editor .cm-activeLine,
+.c-code-editor .cm-activeLineGutter {
+  background: var(--bg-hover);
+}
+
+/* The active line is an opaque background on the line element, and CodeMirror draws the selection
+   in a layer *behind* the lines. So the cursor's line hid its share of any selection, and three
+   selected lines looked like two. While anything is selected the selection is the highlight. */
+.c-code-editor.has-selection .cm-activeLine,
+.c-code-editor.has-selection .cm-activeLineGutter {
+  background: transparent;
+}
+
+.c-code-editor .cm-cursor {
+  border-left-color: var(--fg);
+}
+
+/* Unfocused only. The focused selection outranks anything this file may write, so
+   `code-editor.ts` names the same token in the one theme rule it has. */
+.c-code-editor .cm-selectionBackground {
+  background: var(--selection);
+}
+
+/* CodeMirror's own match colours are fixed light-theme literals — lime and yellow — whichever
+   theme is showing. These tie its base theme's specificity and win on order. */
+.c-code-editor .cm-selectionMatch {
+  background: var(--accent-soft);
+}
+
+.c-code-editor .cm-searchMatch {
+  background: var(--warn-mark);
+}
+
+/* The match the panel is on also carries `.cm-searchMatch`, so it keeps that tint and gains a ring. */
+.c-code-editor .cm-searchMatch-selected {
+  outline: 1px solid var(--warn);
+}
+
+.c-code-editor .cm-panels,
+.c-code-editor .cm-tooltip {
+  color: var(--fg);
+  background: var(--bg-elevated);
+}
+
+.c-code-editor .cm-panels {
+  border-color: var(--border);
+}
+
+.c-code-editor .cm-tooltip {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.c-code-editor .cm-textfield,
+.c-code-editor .cm-button {
+  border: 1px solid var(--border);
+  color: var(--fg);
+  background: var(--bg-input);
+}
+
+.c-code-editor [aria-selected='true'] {
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+
+/*
+ * Token colours, from `--syntax-*` roles.
+ *
+ * `classHighlighter` gives every token one coarse class, and the viewer adds finer ones beside it
+ * (`detailHighlighter` in `code-editor.ts`). The finer rules come later in this file than the
+ * coarse ones they refine, so a `def`'s name — `tok-variableName tok-definition tok-fn-def` — takes
+ * the definition colour on order, at the same specificity.
+ */
+.c-code-editor .tok-keyword,
+.c-code-editor .tok-operator {
+  color: var(--syntax-keyword);
+}
+
+/* An operator in SQL is `AND`; in code it is `+`, which should not shout. */
+.c-code-editor--viewer .tok-operator {
+  color: inherit;
+}
+
+.c-code-editor .tok-string,
+.c-code-editor .tok-string2 {
+  color: var(--syntax-string);
+}
+
+.c-code-editor .tok-number,
+.c-code-editor .tok-bool,
+.c-code-editor .tok-atom,
+.c-code-editor .tok-literal {
+  color: var(--syntax-number);
+}
+
+.c-code-editor .tok-comment {
+  font-style: italic;
+  color: var(--syntax-comment);
+}
+
+.c-code-editor .tok-typeName,
+.c-code-editor .tok-className,
+.c-code-editor .tok-namespace,
+.c-code-editor .tok-variableName2 {
+  color: var(--syntax-type);
+}
+
+.c-code-editor .tok-propertyName,
+.c-code-editor .tok-self {
+  color: var(--syntax-member);
+}
+
+.c-code-editor .tok-meta,
+.c-code-editor .tok-macroName {
+  color: var(--syntax-meta);
+}
+
+.c-code-editor .tok-tag,
+.c-code-editor .tok-heading {
+  color: var(--syntax-tag);
+}
+
+.c-code-editor .tok-heading,
+.c-code-editor .tok-strong {
+  font-weight: 600;
+}
+
+.c-code-editor .tok-emphasis {
+  font-style: italic;
+}
+
+.c-code-editor .tok-link,
+.c-code-editor .tok-url {
+  text-decoration: underline;
+}
+
+.c-code-editor .tok-attr {
+  color: var(--fg-muted);
+}
+
+/* A call is plain, as in PyCharm — even a method, which is otherwise a property name above. */
+.c-code-editor .tok-fn {
+  color: inherit;
+}
+
+.c-code-editor .tok-fn-def,
+.c-code-editor .tok-class-def {
+  color: var(--syntax-definition);
+}
+
+.c-code-editor .tok-invalid {
+  color: var(--syntax-invalid);
+}
+
+/* Where a search result or a link just landed. Fades so it marks the spot without staying. */
+.c-code-editor__flash {
+  animation: c-code-editor-flash 1.2s ease-out;
+}
+
+@keyframes c-code-editor-flash {
+  from {
+    background: var(--warn-mark);
+  }
+
+  to {
+    background: transparent;
+  }
+}
+
+/*
+ * The change gutter: a bar beside added and edited lines, a wedge where lines were deleted.
+ *
+ * Narrow and without a border, between the line numbers and the text, as an IDE draws it. The
+ * marker is the gutter element's own background — `elementClass` puts these classes on the gutter
+ * element of the marked line — so a run of changed lines reads as one continuous bar.
+ */
+.c-code-editor .c-code-editor__changes {
+  width: 4px;
+  cursor: pointer;
+}
+
+.c-code-editor__change--added {
+  box-shadow: inset 3px 0 0 var(--change-added);
+}
+
+.c-code-editor__change--modified {
+  box-shadow: inset 3px 0 0 var(--change-modified);
+}
+
+/* A deletion happened between this line and the next: a wedge on the line's lower edge. */
+.c-code-editor__change--deleted {
+  background: linear-gradient(to bottom right, transparent 60%, var(--change-deleted) 60%);
+}
+
+/* What a marked region used to be, opened by clicking its marker. */
+.c-code-editor__old {
+  max-width: min(640px, 70vw);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--step--2);
+}
+
+.c-code-editor__old-head {
+  color: var(--fg-muted);
+}
+
+.c-code-editor__old-lines {
+  max-height: 16rem;
+  margin-top: var(--sp-1);
+  overflow: auto;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--change-deleted);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  white-space: pre;
+  color: var(--fg);
+  background: var(--danger-soft);
+}
+
+/* Lines with a comment on them, tinted so the card below is visibly about them. */
+.c-code-editor__commented {
+  &.is-open {
+    background: var(--accent-soft);
+  }
+
+  &.is-resolved {
+    background: var(--bg-hover);
+  }
+}
+
+/* The widget that holds a comment card: nothing of its own but room. */
+.c-code-editor__comment {
+  padding-left: var(--sp-2);
+}
+
+/* What to do with a selection, beside it: Comment, and Ask ‹agent›. */
+.c-code-editor .c-code-editor__actions {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-md);
+  font-family: var(--font-ui);
+}
+
+.c-code-editor__action {
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  font-size: var(--step--2);
+  color: var(--fg);
+  background: transparent;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+}

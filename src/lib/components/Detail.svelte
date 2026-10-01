@@ -20,15 +20,17 @@
    * that reason, which is the same reason `TerminalDock` was.
    */
   import type { Worktree } from '../ipc/types';
+  import type { WorktreeView } from '../worktree-view';
   import WorktreeBar from './WorktreeBar.svelte';
 
   const {
     worktree,
     projectId,
-    databaseActive,
+    view,
     sidebarCollapsed,
     onsessions,
     ondatabase,
+    oncode,
     onremove,
     onfavorite,
     oninspect,
@@ -37,10 +39,11 @@
   }: {
     worktree: Worktree;
     projectId: string;
-    databaseActive: boolean;
+    view: WorktreeView;
     sidebarCollapsed: boolean;
     onsessions: () => void;
     ondatabase: () => void;
+    oncode: () => void;
     onremove: () => void;
     onfavorite: () => void;
     oninspect: () => void;
@@ -64,10 +67,11 @@
   <WorktreeBar
     {worktree}
     {projectId}
-    {databaseActive}
+    {view}
     {sidebarCollapsed}
     {onsessions}
     {ondatabase}
+    {oncode}
     {onremove}
     {onfavorite}
     {oninspect}

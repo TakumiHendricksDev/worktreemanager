@@ -28,6 +28,7 @@ import {
 } from '../window-role';
 import { attention } from './attention.svelte';
 import { composerPrefs } from './composer.svelte';
+import { codeRequests } from './code-request.svelte';
 import { databaseConsole } from './database-console.svelte';
 import { sessions } from './sessions.svelte';
 import { theme } from './theme.svelte';
@@ -136,6 +137,10 @@ async function obeyIntent(intent: PaneIntent): Promise<void> {
     case 'openInDatabase':
       await commands.focusPaneWindow(null).catch(() => {});
       databaseConsole.open(intent.projectId, intent.worktreeId, intent.sql);
+      return;
+    case 'openInCode':
+      await commands.focusPaneWindow(null).catch(() => {});
+      codeRequests.open(intent.projectId, intent.worktreeId, intent.path, intent.line);
       return;
   }
 }

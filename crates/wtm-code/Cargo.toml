@@ -1,0 +1,22 @@
+[package]
+name        = "wtm-code"
+description = "Reading, listing and searching a worktree's files for Worktree Manager's Code tab."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wtm-core  = { workspace = true }
+regex     = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wtm-exec = { workspace = true }

@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use wtm_core::model::{BranchRef, Checkout, TrackMode};
+use wtm_core::model::{BranchRef, ChangeKind, Checkout, FileChange, TrackMode};
 use wtm_core::ports::exec::CommandRunner;
 use wtm_core::ports::git::{AddOptions, BranchFilter, Git};
 use wtm_exec::Runner;
@@ -266,6 +266,147 @@ fn status_distinguishes_staged_dirty_and_untracked() {
     fixture.git(&["add", "README.md"]);
     let status = git.status(fixture.root()).unwrap();
     assert_eq!(status.staged, 1);
+}
+
+#[test]
+fn files_lists_tracked_and_untracked_but_leaves_ignored_to_ignored() {
+    let fixture = GitFixture::new();
+    let git = git_cli();
+
+    fixture.commit(".gitignore", "node_modules/\n*.log\n", "ignore");
+    fixture.write("src/app.py", "print(1)\n");
+    fixture.write("node_modules/left-pad/index.js", "module.exports = 1;\n");
+    fixture.write("node_modules/left-pad/package.json", "{}\n");
+    fixture.write("src/debug.log", "noise\n");
+
+    let files = git.files(fixture.root()).unwrap();
+    assert!(files.paths.contains(&".gitignore".to_owned()));
+    assert!(files.paths.contains(&"README.md".to_owned()));
+    assert!(
+        files.paths.contains(&"src/app.py".to_owned()),
+        "untracked is shown"
+    );
+    assert!(
+        files.paths.iter().all(|p| !p.starts_with("node_modules")),
+        "ignored files are not in the listing: {:?}",
+        files.paths
+    );
+    assert!(!files.truncated);
+
+    // An ignored directory comes back once, as itself, however much is under it — and an ignored
+    // file inside a directory that is not ignored comes back as itself.
+    let mut ignored = git.ignored(fixture.root()).unwrap().paths;
+    ignored.sort();
+    assert_eq!(ignored, ["node_modules/", "src/debug.log"]);
+}
+
+#[test]
+fn a_branch_s_changes_since_its_merge_base_include_commits_edits_renames_and_untracked_files() {
+    let fixture = GitFixture::new();
+    let git = git_cli();
+    fixture.commit(
+        "app.py",
+        "def a():\n    return 1\n\n\ndef b():\n    pass\n",
+        "app",
+    );
+    fixture.commit("old_name.py", "x = 1\ny = 2\nz = 3\n", "to rename");
+    fixture.commit("doomed.txt", "bye\n", "to delete");
+    let base = fixture.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    fixture.git(&["checkout", "-q", "-b", "feature"]);
+
+    // One commit on the branch, then uncommitted work on top: both belong to the branch's changes.
+    fixture.commit("added.py", "new = True\n", "add a file");
+    fixture.write(
+        "app.py",
+        "def a():\n    return 2\n\n\ndef b():\n    pass\n\n\ndef c():\n    pass\n",
+    );
+    fixture.git(&["mv", "old_name.py", "new_name.py"]);
+    fixture.git(&["rm", "-q", "doomed.txt"]);
+    fixture.write("scratch.md", "notes\n");
+
+    let merge_base = git
+        .merge_base(fixture.root(), "HEAD", "main")
+        .unwrap()
+        .unwrap();
+    assert_eq!(merge_base.as_str(), base);
+
+    let mut changes = git
+        .changed_paths(fixture.root(), merge_base.as_str())
+        .unwrap();
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    assert_eq!(
+        changes,
+        [
+            FileChange {
+                path: "added.py".to_owned(),
+                kind: ChangeKind::Added
+            },
+            FileChange {
+                path: "app.py".to_owned(),
+                kind: ChangeKind::Modified
+            },
+            FileChange {
+                path: "doomed.txt".to_owned(),
+                kind: ChangeKind::Deleted
+            },
+            FileChange {
+                path: "new_name.py".to_owned(),
+                kind: ChangeKind::Renamed {
+                    from: "old_name.py".to_owned()
+                }
+            },
+        ]
+    );
+    assert_eq!(git.untracked(fixture.root()).unwrap().paths, ["scratch.md"]);
+
+    // `return 1` became `return 2`, and four lines were added at the end: two blank, then `c`.
+    let hunks = git
+        .file_hunks(fixture.root(), merge_base.as_str(), "app.py", None)
+        .unwrap();
+    assert_eq!(hunks.len(), 2);
+    assert_eq!(
+        (hunks[0].new_start, hunks[0].new_lines, hunks[0].old_lines),
+        (2, 1, 1)
+    );
+    assert_eq!(hunks[0].removed, ["    return 1"]);
+    assert_eq!(
+        (hunks[1].new_start, hunks[1].new_lines, hunks[1].old_lines),
+        (7, 4, 0)
+    );
+
+    // A rename diffed with its old path is a rename, not a file of added lines.
+    let renamed = git
+        .file_hunks(
+            fixture.root(),
+            merge_base.as_str(),
+            "new_name.py",
+            Some("old_name.py"),
+        )
+        .unwrap();
+    assert!(renamed.is_empty(), "{renamed:?}");
+
+    assert_eq!(
+        git.show_file(fixture.root(), merge_base.as_str(), "doomed.txt")
+            .unwrap()
+            .as_deref(),
+        Some("bye\n")
+    );
+    assert_eq!(
+        git.show_file(fixture.root(), merge_base.as_str(), "added.py")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn a_revision_that_looks_like_a_flag_is_not_read_as_one() {
+    let fixture = GitFixture::new();
+    let git = git_cli();
+    // Without `--end-of-options` this would be `git diff --output=…`, writing a file.
+    let target = fixture.root().join("written-by-git");
+    let rev = format!("--output={}", target.display());
+    assert!(git.changed_paths(fixture.root(), &rev).is_err());
+    assert!(!target.exists());
 }
 
 #[test]

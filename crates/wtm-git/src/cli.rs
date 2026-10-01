@@ -24,7 +24,8 @@ use std::sync::Arc;
 
 use wtm_core::error::{ExecError, GitError};
 use wtm_core::model::{
-    BranchRef, Checkout, CommitId, TrackMode, WorkingTreeStatus, Worktree, WorktreeId,
+    BranchRef, Checkout, CommitId, FileChange, Hunk, PathList, TrackMode, WorkingTreeStatus,
+    Worktree, WorktreeId,
 };
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation};
 use wtm_core::ports::git::{AddOptions, BranchFilter, Git};
@@ -244,6 +245,131 @@ impl Git for GitCli {
             QUERY_TIMEOUT,
         )?;
         Ok(porcelain::parse_status(&out))
+    }
+
+    fn files(&self, worktree_path: &Path) -> Result<PathList, GitError> {
+        let out = self.git(
+            worktree_path,
+            &[
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+            QUERY_TIMEOUT,
+        )?;
+        Ok(porcelain::parse_path_list(&out))
+    }
+
+    fn untracked(&self, worktree_path: &Path) -> Result<PathList, GitError> {
+        let out = self.git(
+            worktree_path,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+            QUERY_TIMEOUT,
+        )?;
+        Ok(porcelain::parse_path_list(&out))
+    }
+
+    fn merge_base(
+        &self,
+        worktree_path: &Path,
+        a: &str,
+        b: &str,
+    ) -> Result<Option<CommitId>, GitError> {
+        // Exit 1 with no output is git's "no common ancestor", an answer rather than a failure.
+        let out = self.run(
+            worktree_path,
+            &["merge-base", "--end-of-options", a, b],
+            QUERY_TIMEOUT,
+            true,
+        )?;
+        let sha = out.stdout.trim();
+        Ok((out.code == 0 && !sha.is_empty()).then(|| CommitId::new(sha)))
+    }
+
+    fn changed_paths(&self, worktree_path: &Path, rev: &str) -> Result<Vec<FileChange>, GitError> {
+        // `--no-ext-diff` and `--no-textconv` so a user's diff driver cannot turn this listing
+        // into something else, and `--end-of-options` so no revision is ever read as a flag.
+        let out = self.git(
+            worktree_path,
+            &[
+                "diff",
+                "--name-status",
+                "-z",
+                "-M",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--end-of-options",
+                rev,
+                "--",
+            ],
+            QUERY_TIMEOUT,
+        )?;
+        Ok(porcelain::parse_name_status(&out))
+    }
+
+    fn file_hunks(
+        &self,
+        worktree_path: &Path,
+        rev: &str,
+        path: &str,
+        from: Option<&str>,
+    ) -> Result<Vec<Hunk>, GitError> {
+        let mut args = vec![
+            "diff",
+            "-U0",
+            "-M",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--end-of-options",
+            rev,
+            "--",
+        ];
+        if let Some(from) = from {
+            args.push(from);
+        }
+        args.push(path);
+        let out = self.git(worktree_path, &args, QUERY_TIMEOUT)?;
+        Ok(porcelain::parse_hunks(&out))
+    }
+
+    fn show_file(
+        &self,
+        worktree_path: &Path,
+        rev: &str,
+        path: &str,
+    ) -> Result<Option<String>, GitError> {
+        // `rev:path` names a blob; a path that did not exist at `rev` is a non-zero exit, which is
+        // "no such file then" rather than an error.
+        let spec = format!("{rev}:{path}");
+        let out = self.run(
+            worktree_path,
+            &["show", "--no-textconv", "--end-of-options", &spec],
+            QUERY_TIMEOUT,
+            true,
+        )?;
+        Ok((out.code == 0).then_some(out.stdout))
+    }
+
+    fn ignored(&self, worktree_path: &Path) -> Result<PathList, GitError> {
+        // `--directory` is what keeps this small: an ignored directory is reported once, as
+        // itself, instead of every file under it. Without it a JavaScript project's
+        // `node_modules` alone is hundreds of thousands of paths.
+        let out = self.git(
+            worktree_path,
+            &[
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+                "-z",
+            ],
+            QUERY_TIMEOUT,
+        )?;
+        Ok(porcelain::parse_path_list(&out))
     }
 
     fn ahead_behind(

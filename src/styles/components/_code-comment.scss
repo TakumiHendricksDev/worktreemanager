@@ -1,0 +1,99 @@
+/*
+ * A comment under the lines it is about, inside the Code tab's viewer.
+ *
+ * Components layer. It sits in CodeMirror's content column, so it sets its own font back to the
+ * interface's — a note about code is prose, and reading it in the monospace around it would make it
+ * look like more code.
+ */
+
+.c-code-comment {
+  margin: 6px var(--sp-3) 8px 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+  line-height: 1.45;
+  white-space: normal;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+
+  &.is-resolved {
+    border-left-color: var(--border-strong);
+    color: var(--fg-muted);
+  }
+}
+
+.c-code-comment__input {
+  display: block;
+  width: 100%;
+  min-height: 4.5rem;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-input);
+  resize: vertical;
+
+  &:focus-visible {
+    border-color: var(--border-focus);
+    outline: none;
+  }
+}
+
+.c-code-comment__actions,
+.c-code-comment__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.c-code-comment__meta {
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+}
+
+.c-code-comment__hint {
+  font-size: var(--step--2);
+  color: var(--fg-subtle);
+}
+
+.c-code-comment__text {
+  white-space: pre-wrap;
+}
+
+.c-code-comment__tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--fg-muted);
+  background: var(--bg-hover);
+}
+
+.c-code-comment__tag--warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.c-code-comment__spacer {
+  flex: 1 1 auto;
+}
+
+.c-code-comment__note {
+  margin-top: var(--sp-2);
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--ok-line);
+  font-size: var(--step--2);
+  white-space: pre-wrap;
+  color: var(--fg-muted);
+}
+
+.c-code-comment__error {
+  margin-top: var(--sp-1);
+  font-size: var(--step--2);
+  color: var(--danger);
+}

@@ -210,6 +210,160 @@ export interface TablePageRequest {
   orderBy: string | null;
 }
 
+/** A worktree's files for the Code tab's tree. Mirrors `CodeTreeView` in `src-tauri/src/code.rs`. */
+export interface CodeTree {
+  /** Tracked files and untracked ones that are not ignored, relative to the worktree. */
+  files: string[];
+  /** Ignored paths at their shallowest ignored level. A directory ends in `/`. */
+  ignored: string[];
+  /** Listed paths that are directories on disk: submodules, and links to directories. */
+  dirs: string[];
+  symlinks: string[];
+  /** Listed, but deleted from the working tree. */
+  missing: string[];
+  /** A listing was cut short, so the tree is not the whole worktree. */
+  truncated: boolean;
+}
+
+/** One entry of a directory git did not list. Mirrors `CodeEntryView`. */
+export interface CodeEntry {
+  name: string;
+  kind: 'file' | 'dir' | 'other';
+  symlink: boolean;
+}
+
+/** A file for the viewer. Mirrors `CodeFileView`. */
+export interface CodeFile {
+  /** Null for a binary file, which is described rather than shown. */
+  text: string | null;
+  size: number;
+  /** The text stops before the file does — it is past the five-mebibyte cap. */
+  truncated: boolean;
+  mtimeMs: number | null;
+  symlink: boolean;
+  /** It resolves to somewhere outside the worktree, through a link. */
+  outside: boolean;
+}
+
+/** Whether an open file changed, without reading it. Mirrors `CodeStatView`. */
+export interface CodeStat {
+  path: string;
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number;
+}
+
+/** Find in Files' toggles. Mirrors `CodeSearchOptionsView`. */
+export interface CodeSearchOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  /** Comma-separated globs: `*.py, !*.min.js`. A glob with a `/` is a path from the root. */
+  mask: string;
+  includeIgnored: boolean;
+}
+
+/** One matching line. Mirrors `CodeHitView`. */
+export interface CodeHit {
+  path: string;
+  /** 1-based. */
+  line: number;
+  /** The line, or a window of a long one around its first match. */
+  text: string;
+  /** Where `text` starts in the line, in UTF-16 units. */
+  offset: number;
+  /** `[start, end)` in UTF-16 units into `text` — a JS string's own indexing. */
+  ranges: [number, number][];
+}
+
+/** Mirrors `CodeSearchView`. */
+export interface CodeSearch {
+  hits: CodeHit[];
+  matches: number;
+  files: number;
+  truncated: boolean;
+  ignoredStopped: boolean;
+}
+
+/** How a file differs from the Changes view's revision. */
+export type CodeChangeKind =
+  'added' | 'modified' | 'deleted' | 'renamed' | 'untracked' | 'other';
+
+/** Mirrors `CodeChangeView`. */
+export interface CodeChange {
+  path: string;
+  kind: CodeChangeKind;
+  /** Where a renamed file was. */
+  from: string | null;
+}
+
+/** Mirrors `CodeChangesView`. */
+export interface CodeChanges {
+  /** The scope actually used: a branch with no base falls back to uncommitted. */
+  scope: 'branch' | 'uncommitted';
+  /** The base branch's name, or `HEAD`. */
+  against: string;
+  /** Handed back to `codeFileDiff` and `codeBaseVersion` as given. */
+  rev: string;
+  changes: CodeChange[];
+}
+
+/** Mirrors `CodeHunkView`. A zero count means that side has no lines here. */
+export interface CodeHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  removed: string[];
+}
+
+/** A comment on lines in the Code tab. Mirrors `CodeComment` in `code_comments.rs`. */
+export interface CodeComment {
+  id: number;
+  path: string;
+  /** 1-based and inclusive. */
+  start: number;
+  end: number;
+  /** The lines as they were when the comment was written. */
+  excerpt: string;
+  text: string;
+  status: 'open' | 'resolved';
+  /** The agent it was last drafted to, by the label the user saw. */
+  sentTo: string | null;
+  /** What an agent said when it resolved it. */
+  note: string | null;
+}
+
+/** Mirrors `NewComment`. */
+export interface NewCodeComment {
+  path: string;
+  start: number;
+  end: number;
+  excerpt: string;
+  text: string;
+}
+
+export type CodeSymbolKind =
+  | 'class'
+  | 'function'
+  | 'method'
+  | 'interface'
+  | 'type'
+  | 'enum'
+  | 'struct'
+  | 'trait'
+  | 'module'
+  | 'constant';
+
+/** One definition. Mirrors `CodeSymbolView`. */
+export interface CodeSymbol {
+  name: string;
+  kind: CodeSymbolKind;
+  container: string | null;
+  path: string;
+  line: number;
+}
+
 export interface Field {
   key: string;
   label: string;

@@ -68,6 +68,11 @@
 @use 'components/browser';
 @use 'components/button';
 @use 'components/choice';
+@use 'components/code-comment';
+@use 'components/code-editor';
+@use 'components/code-review';
+@use 'components/code-tree';
+@use 'components/code-view';
 @use 'components/composer';
 @use 'components/database';
 @use 'components/detail';
@@ -75,6 +80,8 @@
 @use 'components/dot';
 @use 'components/drop';
 @use 'components/field';
+@use 'components/find';
+@use 'components/goto';
 @use 'components/icon';
 @use 'components/input';
 @use 'components/logo';

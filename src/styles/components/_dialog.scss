@@ -52,6 +52,41 @@
   }
 }
 
+/*
+ * The Code tab's popups: Go to File and Find in Files.
+ *
+ * Hung from near the top rather than centred, the way an IDE's are: the input stays where the eye
+ * already is when the list below it grows or shrinks with every keystroke, where a centred panel
+ * would move its input up and down as it resized. The arrival animation drops rather than rises,
+ * with its own keyframe, because it has a different resting `transform` to animate towards.
+ */
+.c-dialog--palette,
+.c-dialog--finder {
+  top: 10vh;
+  transform: translateX(-50%);
+  overflow: hidden;
+  animation-name: c-dialog-drop;
+}
+
+.c-dialog--palette {
+  width: min(680px, calc(100vw - 4rem));
+  max-height: min(70vh, 640px);
+}
+
+.c-dialog--finder {
+  top: 6vh;
+  width: min(1100px, calc(100vw - 4rem));
+  height: min(86vh, 900px);
+  max-height: none;
+}
+
+@keyframes c-dialog-drop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+}
+
 /* For a dialog that shows a live transcript rather than a question. */
 .c-dialog--wide {
   width: min(600px, calc(100vw - 4rem));

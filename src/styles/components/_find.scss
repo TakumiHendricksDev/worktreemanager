@@ -1,0 +1,191 @@
+/*
+ * Find in Files, inside a `c-dialog--finder`: a query, its matching lines, and a preview.
+ *
+ * Components layer. The list and the preview split the panel's height between them, the list
+ * taking a little less, because the preview is where a match is actually read — the list only has
+ * to be long enough to choose from.
+ */
+
+.c-find {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.c-find__head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) var(--sp-2);
+  font-size: var(--step--1);
+}
+
+.c-find__title {
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-find__count {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.c-find__spacer {
+  flex: 1 1 auto;
+}
+
+.c-find__mask {
+  width: 11rem;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  color: var(--fg);
+  background: var(--bg-input);
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+.c-find__query {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 0 var(--sp-4) var(--sp-2);
+  padding: 0 var(--sp-1) 0 var(--sp-3);
+  border: 1px solid var(--border-focus);
+  border-radius: var(--r-md);
+  color: var(--fg-subtle);
+  background: var(--bg-input);
+}
+
+.c-find__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  margin-left: var(--sp-1);
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
+  color: var(--fg);
+  background: transparent;
+
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+.c-find__notice {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--step--2);
+  color: var(--fg-muted);
+  background: var(--info-soft);
+}
+
+.c-find__notice--error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.c-find__results {
+  flex: 1 1 42%;
+  min-height: 6rem;
+  overflow-y: auto;
+  padding: var(--sp-1) 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.c-find__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  min-width: 0;
+  padding: 3px var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  cursor: default;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 22px;
+
+  &.is-active {
+    background: var(--accent-soft);
+  }
+}
+
+.c-find__line {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  color: var(--fg);
+}
+
+.c-find__mark {
+  border-radius: 2px;
+  color: inherit;
+  background: var(--warn-mark);
+  box-shadow: 0 0 0 1px var(--warn-line);
+}
+
+.c-find__where {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 45%;
+  font-family: var(--font-ui);
+  font-size: var(--step--2);
+  white-space: nowrap;
+}
+
+.c-find__dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  color: var(--fg-subtle);
+}
+
+.c-find__file {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+}
+
+.c-find__empty {
+  padding: var(--sp-3) var(--sp-4);
+  font-family: var(--font-ui);
+  color: var(--fg-muted);
+}
+
+.c-find__preview-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-block: 1px solid var(--border);
+  font-size: var(--step--2);
+}
+
+.c-find__hint {
+  color: var(--fg-subtle);
+}
+
+.c-find__preview {
+  flex: 1 1 58%;
+  min-height: 8rem;
+  background: var(--bg-code);
+
+  &.is-hidden {
+    visibility: hidden;
+  }
+}

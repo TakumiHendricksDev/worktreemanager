@@ -118,6 +118,23 @@
      selected lines over code looked like nothing was selected at all. */
   --selection: color-mix(in oklab, var(--brand-500) 24%, transparent);
 
+  /* Code, as an IDE's light scheme colours it. See the dark block for the reasoning. */
+  --syntax-keyword: var(--blue-500);
+  --syntax-string: var(--green-500);
+  --syntax-number: var(--orange-500);
+  --syntax-comment: var(--fg-muted);
+  --syntax-definition: var(--teal-500);
+  --syntax-type: var(--teal-500);
+  --syntax-member: var(--purple-500);
+  --syntax-meta: var(--amber-500);
+  --syntax-tag: var(--blue-500);
+  --syntax-invalid: var(--danger);
+
+  /* How a file differs from what the Code tab's Changes view compares with. See the dark block. */
+  --change-added: var(--green-500);
+  --change-modified: var(--blue-500);
+  --change-deleted: var(--red-500);
+
   /* Two levels, because the app has two elevated things: a control that has taken focus, and a
      modal over a scrim. A middle rung was defined here for a year and never used once — see the
      dark block for the argument against keeping one on spec. */
@@ -176,6 +193,41 @@
   --ok-line: color-mix(in oklab, var(--green-400) 40%, transparent);
   --warn-mark: color-mix(in oklab, var(--amber-400) 16%, transparent);
   --selection: color-mix(in oklab, var(--brand-400) 32%, transparent);
+
+  /*
+   * Code, as an IDE's dark scheme colours it: keywords warm, strings green, the names a
+   * definition introduces bright, and members — `self.x`, `this`, a property — violet. A call is
+   * deliberately plain, as it is in PyCharm; colouring every name that is followed by a
+   * parenthesis turns a page of code into a page of colour.
+   *
+   * Roles, not hues, because the SQL editor uses the same ones: a keyword is a keyword in both.
+   *
+   * A comment is `--fg-muted` rather than the `--fg-subtle` the SQL editor used to give it. Subtle
+   * measured 2.4:1 against `--bg-code` in the light themes and 3.2:1 in the dark ones, which is
+   * fine for a placeholder and not for a paragraph somebody is reading; italic still sets it apart.
+   */
+  --syntax-keyword: var(--orange-400);
+  --syntax-string: var(--green-400);
+  --syntax-number: var(--blue-400);
+  --syntax-comment: var(--fg-muted);
+  --syntax-definition: var(--yellow-400);
+  --syntax-type: var(--teal-400);
+  --syntax-member: var(--purple-400);
+  --syntax-meta: var(--amber-400);
+  --syntax-tag: var(--yellow-400);
+  --syntax-invalid: var(--danger);
+
+  /*
+   * A file's change against a revision: the tree's colours and the viewer's gutter bars.
+   *
+   * Their own roles rather than `--ok` and `--danger`, though they share the hues: "added" is not
+   * "fine" and "deleted" is not a failure, and the day a status colour is retuned for contrast the
+   * gutter should not move with it. The tree never relies on these alone — every changed row also
+   * carries its letter, A, M, D, R or U.
+   */
+  --change-added: var(--green-400);
+  --change-modified: var(--blue-400);
+  --change-deleted: var(--red-400);
 
   /*
    * `--shadow-md` was here and is deliberately gone.

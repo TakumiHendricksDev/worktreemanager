@@ -636,6 +636,9 @@ pub struct App {
     /// Browser panes. Its own struct, like `handoff`, because it is consulted from the main thread's
     /// page-load callbacks as well as from commands — see `browser.rs` for the lock discipline.
     pub browsers: crate::browser::Host,
+    /// Comments left on lines in the Code tab. Here rather than in the window because agents read
+    /// them too, over MCP — see `code_comments.rs`.
+    pub code_comments: crate::code_comments::Store,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
     /// Events from agent sessions that are not in [`Self::agents`] yet. See
     /// [`Self::record_agent_event`].
@@ -741,6 +744,7 @@ impl App {
             pane_windows: crate::pane_windows::Registry::default(),
             handoff: crate::handoff::Hub::default(),
             browsers: crate::browser::Host::default(),
+            code_comments: crate::code_comments::Store::default(),
             dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             early_replay: parking_lot::Mutex::new(BTreeMap::new()),
@@ -1045,12 +1049,13 @@ impl App {
         status
     }
 
-    /// The ref to measure divergence against.
+    /// The ref to measure divergence against, and the one the Code tab's Changes view compares
+    /// a branch with.
     ///
     /// Uses the project's configured default base when it resolves, else the main
     /// worktree's own branch. Without a base there is nothing meaningful to be "ahead of",
     /// so `None` simply means no ahead/behind is shown.
-    fn base_branch(&self, project: &Project, worktrees: &[Worktree]) -> Option<String> {
+    pub(crate) fn base_branch(&self, project: &Project, worktrees: &[Worktree]) -> Option<String> {
         let configured = project
             .field(&project.create.base_field)
             .and_then(|field| field.default.as_ref())

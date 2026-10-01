@@ -9,6 +9,7 @@
 //! - [`naming`] — which template tokens are legal at each stage.
 //! - [`plan`] — what we intend to do, and what happened.
 //! - [`agent`] — what an agent session reports, normalized across providers.
+//! - [`files`] — what git lists inside one worktree, for the Code tab.
 //!
 //! Note that [`plan`] owns the name `Plan` and has since v0.1, for the create pipeline's
 //! preview. An agent's plan is an `Agenda` while it is still moving and a `Brief` once it is a
@@ -16,6 +17,7 @@
 //! disambiguation smell `ProjectMeta` exists to avoid.
 
 pub mod agent;
+pub mod files;
 pub mod naming;
 pub mod plan;
 pub mod project;
@@ -27,6 +29,7 @@ pub use agent::{
     AgentSkill, ApprovalAnswer, ApprovalRequest, Effort, EffortOption, ModeRisk, NoticeLevel,
     Usage, UserInputOption, UserInputQuestion,
 };
+pub use files::{ChangeKind, FileChange, Hunk, PathList};
 pub use naming::{RESERVED_PREFIXES, TokenScope, TokenSet, namespace_of, shadows_reserved_prefix};
 pub use plan::{
     BranchChoice, BranchPlan, CreateOutcome, CreatePlan, ExitOutcome, PlanPreview, PlanWarning,
