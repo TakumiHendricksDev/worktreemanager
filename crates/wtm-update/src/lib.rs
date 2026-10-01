@@ -17,18 +17,15 @@
 //!
 //! # Why Homebrew does the installing
 //!
-//! wtm is neither signed nor notarized, and the cask's `postflight_steps` clears the quarantine
-//! attribute after every install *and every upgrade*. An app Homebrew upgrades therefore opens
-//! exactly as a fresh install does. An updater of wtm's own would have to re-implement that
-//! Gatekeeper bypass, and would leave Homebrew believing the old version was still installed — so
+//! An updater of wtm's own would leave Homebrew believing the old version was still installed — so
 //! the next `brew upgrade` would "update" it again. Driving `brew` means there is one installer, and
 //! it is the one the user chose.
 //!
-//! That makes the cask's quarantine step load-bearing for this crate, not only for first installs.
-//! It was a `postflight` block until Homebrew 7 deprecated those. When the deprecation becomes an
-//! error, a cask still using one stops loading, and every in-app update fails at the first `brew`
-//! step that reads the cask. That at least fails in the dialog, before quitting, rather than
-//! producing an app that will not open.
+//! The cask's `postflight_steps` clears the quarantine attribute after every install *and every
+//! upgrade*. While wtm was unsigned that step was load-bearing for this crate: without it, the app
+//! *Update and restart* reopened would have been one macOS called "damaged". Releases are signed and
+//! notarized now, so all it saves is the "downloaded from the Internet" confirmation. Dropping it
+//! from the cask would cost one click after an update, and would not break one.
 //!
 //! An install that did not come from the cask (the release zip, a local build) is only *told*: the
 //! composition root decides which kind it is running as, and nothing here assumes Homebrew exists.

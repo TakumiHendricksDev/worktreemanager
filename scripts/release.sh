@@ -5,6 +5,9 @@ set -euo pipefail
 readonly repo="TakumiHendricksDev/worktreemanager"
 readonly tap_repo="TakumiHendricksDev/homebrew-tap"
 readonly tap_cask="Casks/wtm.rb"
+# Public by nature: every app this team signs carries it. A constant here rather than read from
+# the workflow's secret, so a release signed by anyone else fails on the releasing Mac.
+readonly team_id="2RP38U2XUW"
 
 step() { printf '\033[1;34m▸\033[0m %s\n' "$1"; }
 ok() { printf '\033[1;32m✓\033[0m %s\n' "$1"; }
@@ -60,7 +63,7 @@ readonly version
 readonly tag="v$version"
 
 [ "$(uname -s)" = "Darwin" ] || die "wtm is built, verified and shipped on macOS only"
-for command in cargo git gh just ruby shasum unzip ditto plutil lipo; do
+for command in cargo git gh just ruby shasum unzip ditto plutil lipo codesign spctl xcrun; do
     require "$command"
 done
 
@@ -226,6 +229,18 @@ binary="$app_dir/Worktree Manager.app/Contents/MacOS/wtm"
     die "the macOS bundle no longer targets macOS 13"
 lipo -archs "$binary" | tr ' ' '\n' | grep -x arm64 >/dev/null || \
     die "the macOS bundle does not contain an arm64 binary"
+
+# The workflow checked the signature where it built the app. This checks the copy people will
+# download, on a Mac where Gatekeeper is on, so its verdict means something. The tap is the last
+# thing this script changes, and it must never point at an app macOS would refuse to open.
+mac_app="$app_dir/Worktree Manager.app"
+codesign --verify --strict --deep "$mac_app" || die "the macOS bundle's signature does not verify"
+[ "$(codesign -dv "$mac_app" 2>&1 | sed -n 's/^TeamIdentifier=//p')" = "$team_id" ] || \
+    die "the macOS bundle is not signed by team $team_id"
+xcrun stapler validate "$mac_app" >/dev/null || \
+    die "the macOS bundle has no notarization ticket stapled to it"
+spctl --assess --type execute --verbose=2 "$mac_app" 2>&1 | grep 'source=Notarized Developer ID' >/dev/null || \
+    die "Gatekeeper does not accept the macOS bundle as a notarized Developer ID app"
 mac_sha="$(shasum -a 256 "$mac_zip" | awk '{print $1}')"
 
 step "preparing the Homebrew tap"

@@ -572,11 +572,12 @@ default loses a convenience. An update check off by default is one nobody turns 
 about the release that fixes their bug — and what it costs to have on is that GitHub learns an
 address fetched a public JSON file.
 
-Installing goes through Homebrew rather than an updater of wtm's own. wtm is unsigned, and the cask
-already clears the quarantine attribute on every upgrade, so an app Homebrew upgrades opens like a
-fresh install. A second installer would have to re-implement that Gatekeeper bypass and would leave
-Homebrew believing the old version was still there. `wtm-update`'s module docs have the rest,
-including why the download runs *before* the app quits.
+Installing goes through Homebrew rather than an updater of wtm's own. A second installer would leave
+Homebrew believing the old version was still there, so the next `brew upgrade` would install it
+again. While wtm was unsigned there was a second reason: the cask's quarantine step was what let an
+upgraded app open at all, and a second installer would have had to re-implement that Gatekeeper
+bypass. Releases are notarized now, so only the first reason is left, and it is enough on its own.
+`wtm-update`'s module docs have the rest, including why the download runs *before* the app quits.
 
 **The egress is in Rust, and that placement is the whole design.** A `fetch` from the webview
 would have been fewer lines and would have widened `connect-src` — after which "the frontend
@@ -1002,7 +1003,6 @@ decision, and it belongs written down rather than discovered in eighteen months.
 - **`--move-changes`** (stash/pop across worktrees). The one `create` feature with genuinely nasty
   failure modes — a pop conflict in a brand-new worktree — and rarely used. Config can express it later
   as a post-create step.
-- **Code signing and notarization.** Personal tool; see the README for what it would take.
 - **A Linux build.** There was one, through v1.2.0: CI compiled the workspace against WebKitGTK and
   published an AppImage. It was removed because nothing on the far end justified it. No person ever
   launched it — CI proved it linked and bundled, which is not the same claim — and the parts a Linux

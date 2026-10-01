@@ -45,10 +45,11 @@ than a networked service. The things worth reporting:
 - **A `wtm.toml` you approved running the commands it listed.** That is the feature. wtm shows
   every command verbatim and runs nothing until you approve it, and re-asks on any edit —
   the same bargain as `direnv`. Approving a hostile config is a trust decision, not a bug.
-- **The macOS build being unsigned**, and the Homebrew cask clearing the quarantine attribute.
-  This is documented in the [README](README.md#install) and in the cask itself. It is a known,
-  deliberate tradeoff, not an oversight — a fix costs $99/yr and is welcome to be argued for
-  in a normal issue.
+- **A build you made yourself being unsigned**, and the Homebrew cask clearing the quarantine
+  attribute. Releases are signed with a Developer ID and notarized; a local build is signed ad-hoc
+  and is yours to vouch for. For a notarized release, the cask's quarantine step only skips
+  macOS's first-launch confirmation. Both are documented in the [README](README.md#install), and
+  the second in the cask itself. A release that is *not* signed by the wtm team is in scope.
 - **Anything requiring an attacker who already has local code execution as your user.** At
   that point they can edit the config, the binary, or your shell profile directly.
 - Dependency advisories with no reachable path from wtm's own code. `cargo deny` runs in CI

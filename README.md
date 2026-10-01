@@ -16,7 +16,7 @@ Built with Tauri v2 + Rust + Svelte 5.
 ![screenshot](docs/screenshot.png)
 <!-- placeholder: 1180×760 @2x, light + dark side by side -->
 
-**Status:** personal tool, not distributed. macOS 13+, Apple silicon, unsigned `.app`.
+**Status:** personal tool, not distributed. macOS 13+, Apple silicon, signed and notarized `.app`.
 
 ### What works today
 
@@ -85,17 +85,14 @@ You do not need to clone this repository to use wtm. Everything below is
 brew install --cask takumihendricksdev/tap/wtm
 ```
 
-wtm is **not code-signed or notarized**, so macOS would refuse to open it and report it
-as *"damaged and can't be opened"* — which is Gatekeeper's phrasing for *"nobody paid
-Apple to vouch for this"*, not a claim about the download. The
-[cask](https://github.com/TakumiHendricksDev/homebrew-tap) therefore clears the
-quarantine attribute after installing.
+wtm is **signed with a Developer ID and notarized by Apple**, so Gatekeeper accepts it
+like any other downloaded app.
 
-That is a deliberate Gatekeeper bypass, and it should be a thing you know is happening
-rather than a surprise. Homebrew used to expose `--no-quarantine` for exactly this case;
-as of Homebrew 6 the flag is rejected and the `HOMEBREW_CASK_OPTS` path is dead code, so
-a cask for an unsigned app has no supported opt-out left. If you would rather macOS made
-the call, take the zip below instead of the tap.
+The [cask](https://github.com/TakumiHendricksDev/homebrew-tap) also clears the quarantine
+attribute after installing. Earlier releases were unsigned, and for those that step was the
+only reason the app opened at all; macOS called them *"damaged and can't be opened"*. For a
+notarized release it only skips the one-time *"downloaded from the Internet"* confirmation.
+If you would rather see that confirmation, take the zip below instead of the tap.
 
 ### Updating an install you already have
 
@@ -105,8 +102,8 @@ brew update && brew upgrade --cask wtm
 
 `brew update` is not optional here — it is what fetches the tap's new cask. Without it
 Homebrew still holds the recipe it last saw and will report wtm as up to date whatever
-has been released. The upgrade backs up the old `.app`, swaps in the new one, and re-runs
-the quarantine bypass, so nothing about Gatekeeper needs doing a second time.
+has been released. The upgrade backs up the old `.app`, swaps in the new one, and clears
+the quarantine attribute again, so the new version opens without asking.
 
 `brew list --cask --versions wtm` says which version you actually have, which is worth
 checking against the [latest release](https://github.com/TakumiHendricksDev/worktreemanager/releases/latest)
@@ -128,9 +125,8 @@ To remove it: `brew uninstall --cask wtm`, or `brew uninstall --zap --cask wtm` 
 ### Or the raw artifacts
 
 The zip is on the [releases page](https://github.com/TakumiHendricksDev/worktreemanager/releases)
-with a SHA-256 checksum. Fetch it with `curl` or `gh` rather than a browser —
-browsers set the quarantine attribute, the CLI does not, so a CLI download of an unsigned
-app opens without any of the above applying.
+with a SHA-256 checksum. A browser download is fine: the app is notarized, so macOS asks
+once whether to open something downloaded from the Internet, and that's all.
 
 Everything from here on is about building it yourself.
 
@@ -599,14 +595,18 @@ minutes; ARCHITECTURE.md § Build performance has the measurements and what move
 CI builds the same bundle on every push, so a break in bundling is caught without anyone
 building it by hand.
 
-**The build is unsigned, by design** — this is a personal tool.
+**Releases are signed and notarized; a local build is not.** The Release workflow signs with a
+Developer ID certificate from the repository's secrets, notarizes with an App Store Connect API key,
+and refuses to publish an app that didn't come out signed. `release.yml` names each secret and says
+why it's there.
 
-- Built locally and copied locally: runs fine, no Gatekeeper prompt.
-- Sent to someone else, or downloaded through a browser: macOS quarantines it and reports
-  *"damaged and can't be opened."* Fixing that means a paid Apple Developer account ($99/yr) plus
-  `APPLE_SIGNING_IDENTITY` / `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` for signing and
-  `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` for notarization. Ad-hoc signing (identity `-`) still
-  leaves the recipient approving it under Privacy & Security.
+- A local build is signed ad-hoc by the linker. That's enough to run it on the Mac that built it,
+  but two things key on the signature and so behave differently from a release: the microphone
+  grant resets on every rebuild, and macOS won't deliver notifications at all. Both are in
+  [Troubleshooting](#troubleshooting).
+- To sign a local build with a Developer ID you hold, export `APPLE_SIGNING_IDENTITY` (the name
+  `security find-identity -v -p codesigning` prints) before `just build`. Add `APPLE_API_ISSUER`,
+  `APPLE_API_KEY` and `APPLE_API_KEY_PATH` and Tauri notarizes it too.
 - Universal binary: `rustup target add x86_64-apple-darwin && just build-universal`. Roughly doubles
   build time.
 
@@ -621,8 +621,8 @@ building it by hand.
 | Jira fields come back empty, form still works | `acli` not authenticated or offline. Lookups are `on_error = "warn"`, so fallbacks apply and creation is never blocked. | `acli jira auth login --web` |
 | `svelte-check` errors about the TypeScript version | `typescript@7` is `latest` but `svelte-check` peers `^5 \|\| ^6` | TypeScript is pinned to `~6.0.3` in `package.json` — don't bump it to `latest` |
 | `vite build` fails with "Failed to load `transformWithEsbuild`" | Vite 8 uses Rolldown/Oxc; the esbuild minifier is now a separate install | `vite.config.ts` sets `minify: 'oxc'`. Don't change it back to `'esbuild'`. |
-| The microphone prompt comes back after every `just build` | wtm is unsigned, so macOS keys the microphone grant to an ad-hoc code signature that changes on each rebuild | Expected, and only affects builds you make yourself. Approve it again; an installed copy that you stop rebuilding keeps its grant. |
-| Turning on notifications says macOS won't deliver them | wtm is unsigned. macOS's notification service turns away an app whose code signature doesn't name its bundle, and the unsigned build is signed under its binary's name (`wtm-…`) rather than `dev.takumihendricks.wtm`. It isn't listed in System Settings → Notifications for the same reason. | Expected for now. In-app cards, the sidebar's dots and the dock badge still say when a session needs you. |
+| The microphone prompt comes back after every `just build` | A local build is signed ad-hoc, and macOS keys the microphone grant to a signature that changes on each rebuild. A release's Developer ID signature stays the same across versions, so its grant survives updates. | Expected for builds you make yourself. Approve it again, or sign local builds with `APPLE_SIGNING_IDENTITY` ([Build & install](#build--install)). |
+| Turning on notifications says macOS won't deliver them | You're running a local build. macOS's notification service turns away an app whose code signature doesn't name its bundle, and an ad-hoc build is signed under its binary's name (`wtm-…`) rather than `dev.takumihendricks.wtm`. It isn't listed in System Settings → Notifications for the same reason. | Install the signed release from the tap, or sign local builds with `APPLE_SIGNING_IDENTITY`. Meanwhile in-app cards, the sidebar's dots and the dock badge still say when a session needs you. |
 | Dictation says it needs `rec` | SoX is not on the resolved PATH. `rec` is SoX's recording front-end and ships with it. | `brew install sox`, then reopen Settings so the check re-runs. See [the PATH problem](#the-path-problem) if it is installed and still not found. |
 | Dictation inserts nothing and says nothing was recorded | The microphone is muted or another application holds it. wtm records perfect silence happily and the service accepts it. | Check the input device in System Settings → Sound, and that no other app is recording. |
 | The transcription key is rejected | The key is for a different Deepgram project, or was pasted with surrounding whitespace | Re-paste it in Settings → Advanced. wtm trims it, but a key copied with a line break from a terminal can pick up more than whitespace. |

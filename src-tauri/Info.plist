@@ -9,9 +9,13 @@
   what produces the prompt when SoX runs. Claude Code ships a whole helper .app for the same reason:
   a bare CLI binary has no bundle to put this in. wtm already is one.
 
-  Known rough edge, documented in the README rather than hidden: wtm is unsigned, so the TCC grant
-  is keyed to an ad-hoc signature that changes on every rebuild — the prompt comes back after
-  `just build`.
+  A signed release needs one more thing: the hardened runtime denies the microphone without even
+  this prompt unless the app also carries `com.apple.security.device.audio-input`, which
+  Entitlements.plist supplies.
+
+  Known rough edge, documented in the README rather than hidden: a local build is signed ad-hoc, so
+  its TCC grant is keyed to a signature that changes on every rebuild — the prompt comes back after
+  `just build`. A release's Developer ID signature does not change, so its grant survives updates.
 -->
 <plist version="1.0">
 <dict>

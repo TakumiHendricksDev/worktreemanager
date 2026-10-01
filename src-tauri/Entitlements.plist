@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Applied when a release is signed, and only then: Tauri passes this to `codesign` alongside the
+  hardened runtime, which notarization requires. An unsigned local build ignores it.
+
+  One key, and it is the one the hardened runtime takes away silently. Without it macOS denies the
+  microphone with no prompt at all, and dictation records nothing. That covers SoX's `rec` too:
+  macOS charges a child process's microphone use to the responsible application, which is why
+  `NSMicrophoneUsageDescription` lives in this bundle's Info.plist and not with SoX.
+
+  Nothing else is here because nothing else is needed. wtm sends no Apple Events, loads no
+  libraries but its own, and its WKWebView compiles JavaScript in WebKit's own process, so the
+  JIT entitlements that Electron apps carry would only widen what a compromised wtm could do.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

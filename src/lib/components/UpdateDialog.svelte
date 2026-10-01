@@ -12,10 +12,9 @@
    * # Two kinds of install, two dialogs' worth of advice
    *
    * Homebrew can upgrade a copy it installed, so that copy gets a button. Any other copy gets
-   * instructions, and the instruction that matters is the one about browsers: wtm is not
-   * notarized, a browser marks what it downloads as quarantined, and macOS then calls the app
-   * "damaged". Sending someone to the release page without saying so is sending them to that
-   * error.
+   * instructions. They used to be mostly about browsers, because a browser quarantines what it
+   * downloads and macOS called an unnotarized wtm "damaged". Releases are notarized now, so the
+   * release page is safe to send someone to as it is.
    */
   import { commands } from '../ipc/commands';
   import { sessions } from '../state/sessions.svelte';
@@ -106,9 +105,8 @@
         {:else}
           <p>
             This copy wasn’t installed by Homebrew, so wtm can’t update it for you. Download
-            the new version from the release page with <code>curl</code> or <code>gh</code>
-            rather than a browser: wtm isn’t notarized, and macOS reports a browser download of
-            it as damaged.
+            the new version from the release page and move it to Applications in place of
+            this one.
           </p>
           <p>Or switch to Homebrew, and wtm can update itself from then on:</p>
           <div class="c-update__command">{SWITCH_TO_BREW}</div>

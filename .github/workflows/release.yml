@@ -51,8 +51,61 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: bun install --frozen-lockfile
 
-      - name: Build
-        run: bun x tauri build --bundles app
+      # Tauri signs, notarizes and staples in one step when these are set: it imports the
+      # certificate into a throwaway keychain, signs with the hardened runtime and
+      # `src-tauri/Entitlements.plist`, submits to Apple's notary service, waits, and
+      # staples the ticket into the .app — so the zip below carries it.
+      #
+      # The API key reaches Tauri as a file because `notarytool` will only read one from a
+      # path. `RUNNER_TEMP` is emptied at the end of every job.
+      #
+      # `APPLE_TEAM_ID` is deliberately not passed here. Tauri reads it only for the
+      # Apple-ID route to notarization, and offering both routes makes which one it took a
+      # question rather than a fact.
+      - name: Build, sign and notarize
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY_PATH"
+          unset APPLE_API_KEY_P8
+          bun x tauri build --bundles app
+
+      # Without a signing identity, or without notarization credentials, Tauri still exits 0:
+      # it prints "skipping signing" or "skipping app notarization", carries on, and hands back
+      # an app that macOS calls "damaged". So the outcome is checked here rather than trusted,
+      # before anything is published. `just release` checks the downloaded zip again, because
+      # a check that only runs where it was built proves nothing about what was uploaded.
+      #
+      # The entitlement gets its own check because losing it fails silently. Nothing breaks
+      # at launch: macOS just denies the microphone without a prompt, and dictation records
+      # silence.
+      #
+      # No `spctl` here. Gatekeeper's verdict is only worth asking for on a machine where
+      # Gatekeeper is known to be on, so `just release` asks it on the releasing Mac.
+      # `stapler validate` is what proves notarization, and it does not depend on that.
+      - name: Verify the signature and notarization
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          app="target/release/bundle/macos/Worktree Manager.app"
+          codesign --verify --strict --deep --verbose=2 "$app"
+          team="$(codesign -dv "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          if [ "$team" != "$APPLE_TEAM_ID" ]; then
+            echo "::error::the app is signed by team '$team', not the Developer ID team"
+            exit 1
+          fi
+          codesign -d --entitlements - --xml "$app" 2>/dev/null \
+            | grep -q 'com.apple.security.device.audio-input' || {
+              echo "::error::the signed app lost its microphone entitlement"
+              exit 1
+            }
+          xcrun stapler validate "$app"
 
       # `ditto`, not `zip`: a .app is a bundle with symlinks and extended attributes,
       # and plain `zip -r` quietly mangles them into something that will not launch.
@@ -75,10 +128,9 @@ jobs:
           shasum -a 256 * | tee "../checksums-macos-arm64.txt"
           mv "../checksums-macos-arm64.txt" .
 
-      # A draft, deliberately. The macOS build is unsigned, so the release notes
-      # carry install instructions that have to be right — and the Homebrew cask
-      # needs the published sha256 before anyone can install. `just release`
-      # verifies the artifact, updates the tap, and publishes.
+      # A draft, deliberately. The Homebrew cask needs the published sha256 before
+      # anyone can install, so `just release` verifies the artifact, updates the tap,
+      # and only then publishes.
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -93,12 +145,9 @@ jobs:
             echo
             echo 'Requires macOS 13+ on Apple silicon.'
             echo
-            echo 'The app is unsigned, so macOS would otherwise refuse to open it and'
-            echo 'report it as "damaged". The cask clears the quarantine attribute after'
-            echo 'installing — a deliberate Gatekeeper bypass, documented in the tap.'
-            echo
-            echo 'Or download the zip below. Fetch it with `curl`/`gh` rather than a'
-            echo 'browser: browsers set the quarantine attribute, the CLI does not.'
+            echo 'Signed with a Developer ID and notarized by Apple, so the zip below'
+            echo 'opens like any other download too: unzip it and move the app to'
+            echo 'Applications.'
             echo
             echo '### Checksums'
             echo
