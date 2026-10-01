@@ -75,6 +75,13 @@ pub struct SessionRequest {
     pub fast: Option<bool>,
     /// Appended to the argv the catalogue builds. From `[agent.<id>].extra_args`.
     pub extra_args: Vec<String>,
+    /// Overlaid on the CLI's environment, already rendered. From `[agent.<id>.env]`.
+    ///
+    /// No provider reads this; [`crate::session::AgentSession`] applies it at spawn. It lives on
+    /// the request anyway because the request is the one value both routes to a session build, and
+    /// this field's absence is how `[agent.<id>.env]` came to be parsed, documented and then dropped
+    /// on the floor: there was nowhere to put it.
+    pub env: BTreeMap<String, String>,
     /// A session to resume rather than start. The provider's own id.
     pub resume: Option<String>,
     /// A conversation to fork into a separate side session. The provider's own id.

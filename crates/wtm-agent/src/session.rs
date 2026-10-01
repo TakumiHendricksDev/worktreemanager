@@ -84,9 +84,13 @@ impl AgentSession {
         });
 
         let mut inv = Invocation::new(provider.argv(req), req.cwd.clone(), timeout_ms);
+        inv.env.extend(req.env.clone());
         // This is a JSON protocol child, never a terminal. Codex otherwise colours tracing output
         // on stderr when wtm was launched from Finder without an ambient `NO_COLOR`, and those
         // escape bytes have no meaning in a transcript.
+        //
+        // After the repository's env, so it cannot be turned off: colour on the protocol pipe is
+        // not a preference, it is a transcript full of escape codes.
         inv.env.insert("NO_COLOR".to_owned(), "1".to_owned());
         let spawned = host.spawn(&inv, worktree, relay as Arc<dyn PipeSink>)?;
 

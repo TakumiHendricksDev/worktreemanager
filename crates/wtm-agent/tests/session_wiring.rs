@@ -96,6 +96,41 @@ fn agent_protocol_children_are_explicitly_non_colored() {
 }
 
 #[test]
+fn a_repositorys_agent_environment_reaches_the_child_but_cannot_turn_colour_back_on() {
+    // `[agent.<id>.env]` was parsed and documented for a long time while nothing carried it to the
+    // spawn, so a base URL or a credential set there silently never arrived. This is the end of the
+    // path, where it either is on the invocation or is not.
+    let fake = Arc::new(FakePipe::new());
+    let sink: Arc<dyn AgentSink> = Arc::new(Recorder::default());
+    let _session = AgentSession::open(
+        &Codex,
+        &SessionRequest {
+            cwd: "/tmp/worktree".to_owned(),
+            env: [
+                ("OPENAI_BASE_URL", "http://localhost:11434/v1"),
+                ("NO_COLOR", "0"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
+            ..SessionRequest::default()
+        },
+        Arc::clone(&fake) as Arc<dyn PipeHost>,
+        &sink,
+        60_000,
+        Some("/tmp/worktree"),
+    )
+    .expect("the fake always spawns");
+
+    let env = &fake.spawned()[0].env;
+    assert_eq!(
+        env.get("OPENAI_BASE_URL").map(String::as_str),
+        Some("http://localhost:11434/v1")
+    );
+    assert_eq!(env.get("NO_COLOR").map(String::as_str), Some("1"));
+}
+
+#[test]
 fn a_line_from_the_child_drives_the_driver_and_its_frames_reach_the_pipe() {
     let (_session, fake, rec) = session();
     handshake(&fake);

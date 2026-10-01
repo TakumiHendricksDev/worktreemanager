@@ -562,6 +562,14 @@ export interface AgentOption {
    */
   offered: boolean;
   detail: string | null;
+  /**
+   * The repository's `[agent.<id>]` settings, which a new pane starts from ahead of the provider's
+   * own defaults. Null for each one the repository leaves unset, and for all three with no project
+   * in scope.
+   */
+  model: string | null;
+  effort: string | null;
+  mode: string | null;
 }
 
 /**

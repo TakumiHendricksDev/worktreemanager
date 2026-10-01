@@ -230,7 +230,7 @@ signs in and bills exactly as it does in your terminal.
 | | Claude Code | Codex | Cursor Agent |
 |---|---|---|---|
 | Driven over | `claude -p` stream-json | `codex app-server` | `cursor-agent acp` (Agent Client Protocol) |
-| Models | a list compiled into this build; any id can be typed | listed live by Codex | listed live by Cursor |
+| Models | a list compiled into this build; any other id can be set in `wtm.toml` | listed live by Codex | listed live by Cursor |
 | Effort | low → max, plus ultracode; applies on restart | per model; applies live | Cursor's thought level; applies live |
 | Modes | Manual, Accept edits, Plan, **Auto**, Don't ask, Bypass permissions | Read only, **Auto**, Full access | Agent, **Auto**, Plan, Ask |
 | Fast mode | ✅ | — | — |
@@ -389,10 +389,27 @@ fast   = false
 enabled = false            # hidden from New ▾ and from delegation
 ```
 
-What you pick in a pane beats the repository's setting. `extra_args` appends arguments to the agent's
-command line, and `[agent.<id>.mcp.<name>]` (`command`, `args`, `env`) adds an MCP server to that
-agent's sessions in this repository. The name `wtm` is reserved. The `[defaults]` table of
-`~/.config/wtm/config.toml` sets any of this for every project.
+A new pane starts on the repository's model, effort and mode, and what you pick in the pane after
+that wins. `model` goes to the CLI as written, so it can name a model the picker doesn't list; the
+picker then shows it under its own id. `extra_args` appends arguments to the agent's command line,
+`[agent.<id>.env]` sets environment variables for it, and `[agent.<id>.mcp.<name>]` (`command`,
+`args`, `env`) adds an MCP server to that agent's sessions in this repository. The name `wtm` is
+reserved. The `[defaults]` table of `~/.config/wtm/config.toml` sets any of this for every project.
+
+**A model running on your machine.** wtm talks to the agent CLI, never to a model, so a local model
+means pointing the CLI at a local server that speaks its provider's API. For Claude Code that is an
+Anthropic-compatible endpoint:
+
+```toml
+[agent.claude]
+model = "local-model-name"   # whatever the server calls it
+
+[agent.claude.env]
+ANTHROPIC_BASE_URL = "http://localhost:11434"   # plus any key variable your server asks for
+```
+
+The usage view keeps showing your Anthropic account, which a local server doesn't draw on. Like
+`extra_args`, an `env` table puts the file through the [trust prompt](#trust-prompt).
 
 ## Worktrees
 
@@ -542,9 +559,10 @@ Each position checks the tokens it allows when the config loads. For example, na
 > ### Trust prompt
 >
 > A `wtm.toml` or `wtm.local.toml` is not used until you approve it if it declares any of these: a
-> `run` command, an agent MCP server, agent `extra_args`, or a `[database.*]` profile. The prompt
-> lists every command's argv verbatim (extra arguments as `claude … --flag`, since the agent's own
-> program isn't the file's to name), and each database as its engine and a credential-free target;
+> `run` command, an agent MCP server, agent `extra_args` or `env`, or a `[database.*]` profile. The
+> prompt lists every command's argv verbatim (an agent's environment and extra arguments as
+> `KEY=value claude … --flag`, since the agent's own program isn't the file's to name), and each
+> database as its engine and a credential-free target;
 > passwords and credential-bearing URLs are never shown. The
 > approval is tied to the file's exact contents, so any edit — even whitespace — asks again. Your own
 > `~/.config/wtm/config.toml` is never asked about.

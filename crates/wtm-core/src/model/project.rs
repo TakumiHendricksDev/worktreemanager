@@ -951,9 +951,10 @@ pub struct AgentSpec {
     pub enabled: Option<bool>,
     /// The model a new session starts on, in the provider's own spelling.
     ///
-    /// A free string, validated against the capability query at session start rather than at config
-    /// load: a config outlives the CLI version it was written against, so a model this build has
-    /// never heard of must surface as a warning on the session, not as a refusal to load the file.
+    /// A free string, and never checked against the capability: a config outlives the CLI version it
+    /// was written against, and a CLI pointed at a local server has models no compiled list will
+    /// contain. A model this build has never heard of goes to the CLI as written, the picker shows it
+    /// under its own id, and if the CLI refuses it the session says so.
     #[serde(default)]
     pub model: Option<String>,
     /// The effort a new session starts on.
@@ -986,11 +987,15 @@ pub struct AgentSpec {
     /// approval like one with a `run` command, even if it declares nothing else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_args: Vec<String>,
-    /// Environment overlaid on the session's process.
+    /// Environment overlaid on the session's process. Templated.
     ///
-    /// `PATH = "{{ env.LOGIN_PATH }}"` is the load-bearing case, the same one `[setup.env]` documents:
-    /// a GUI launch does not inherit a shell's PATH, so a CLI in `~/.local/bin` is invisible without
-    /// it once the app is installed.
+    /// What it is for is pointing a CLI somewhere its own config does not, for this repository
+    /// only: `ANTHROPIC_BASE_URL` at a model server on this machine, or a credential the repository's
+    /// tooling expects. `PATH` rarely needs it — every agent already starts on the resolved login
+    /// `PATH`, and the CLI itself is found with that before this is applied.
+    ///
+    /// Covered by the trust prompt with `extra_args`, because a variable can run code as surely as
+    /// a flag can: `NODE_OPTIONS` loads a script into any CLI written in Node.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     /// MCP servers to hand the CLI, keyed by name.

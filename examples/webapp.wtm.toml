@@ -453,9 +453,17 @@ mode   = "plan"
 # fast = true
 
 [agent.claude.env]
-# The load-bearing line for an installed app, exactly as `[setup.env]` needs it: a GUI launch does
-# not inherit your shell's PATH, so a CLI in ~/.local/bin is invisible until this is set.
-PATH = "{{ env.LOGIN_PATH }}"
+# Overlaid on the CLI's environment, for this repository's sessions only. Templated. The usual reason
+# is pointing the CLI at a different server — here, a model running on this machine behind an
+# Anthropic-compatible endpoint, with `model` set to one that server serves.
+#
+# Commented out because it reroutes every Claude session in the repository, and a shared config
+# should not do that to whoever clones it. `PATH` needs no line here: every agent already starts on
+# your login shell's PATH.
+#
+# Like `extra_args`, anything in this table puts the file through the trust prompt. A variable can
+# run code as surely as a flag can — `NODE_OPTIONS` loads a script into any CLI written in Node.
+# ANTHROPIC_BASE_URL = "http://localhost:11434"
 
 # ─────────────────────── session-to-session handoff ───────────────────────
 #

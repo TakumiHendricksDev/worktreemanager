@@ -1689,6 +1689,10 @@ pub async fn list_agents(
                 let executable = app.agent_executable(entry);
                 let found = executable.is_some();
                 let offered = project.as_ref().is_none_or(|p| p.offers_agent(entry.id));
+                let spec = project
+                    .as_ref()
+                    .map(|p| p.agent_spec(entry.id))
+                    .unwrap_or_default();
                 AgentOptionView {
                     id: entry.id.to_owned(),
                     label: entry.label.to_owned(),
@@ -1711,6 +1715,9 @@ pub async fn list_agents(
                     } else {
                         None
                     },
+                    model: spec.model,
+                    effort: spec.effort,
+                    mode: spec.mode,
                 }
             })
             .collect())
@@ -2566,7 +2573,8 @@ fn probe_cursor(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Stri
 ///
 /// # Errors
 ///
-/// If a template in an MCP server's argv fails to render, or a rendered argv is forbidden by a guard.
+/// If a template in `[agent.<id>.env]` or an MCP server's argv fails to render, or a rendered argv
+/// is forbidden by a guard.
 pub fn session_request_for(
     app: &Arc<App>,
     project: &wtm_core::model::Project,
@@ -2639,6 +2647,7 @@ pub fn session_request_for(
         fork: None,
         ephemeral: false,
         extra_args: spec.extra_args.clone(),
+        env: agent_env_for(app, project, spec)?,
         // The resolved effort, not the caller's — so a session's handoff token offers the rung it is
         // actually running at. See `handoff::Caller::effort`.
         mcp: mcp_servers_for(app, project, spec, worktree, entry.id, effort.as_deref())?,
@@ -2649,6 +2658,36 @@ pub fn session_request_for(
         // into. Absent means off, and only the user or their repository can say otherwise.
         fast: fast.or(spec.fast),
     })
+}
+
+/// `[agent.<id>.env]`, rendered.
+///
+/// A failed template is an error rather than a skipped variable, unlike [`render_env`] for a
+/// command. A command's env is beside a script the user is watching run; this one is how an agent
+/// is pointed at a model server or handed a credential, and a session that silently started without
+/// it would be talking to a different endpoint than the config says.
+///
+/// `env.LOGIN_PATH` is added by hand, as `run_setup` adds it: the base context only has it when
+/// wtm's own process environment does, which a Finder launch never has.
+fn agent_env_for(
+    app: &Arc<App>,
+    project: &wtm_core::model::Project,
+    spec: &wtm_core::model::AgentSpec,
+) -> Result<BTreeMap<String, String>, ErrorView> {
+    if spec.env.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut ctx = display::base_context(project, app.os_tokens());
+    ctx.insert("env.LOGIN_PATH".to_owned(), app.runner.resolved_path());
+    spec.env
+        .iter()
+        .map(|(name, template)| {
+            app.engine
+                .render(&format!("agent.env.{name}"), template, &ctx)
+                .map(|value| (name.clone(), value))
+                .map_err(|e| ErrorView::new("render", e.to_string()))
+        })
+        .collect()
 }
 
 /// Compose the two pieces of wtm-owned context a provider may receive.

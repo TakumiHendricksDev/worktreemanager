@@ -795,10 +795,23 @@ mod tests {
             available: false,
             offered: true,
             detail: Some("not on wtm's PATH".to_owned()),
+            model: None,
+            effort: None,
+            mode: None,
         };
         assert_eq!(
             keys_of(&serde_json::to_value(&option).unwrap()),
-            ["available", "blurb", "detail", "id", "label", "offered"]
+            [
+                "available",
+                "blurb",
+                "detail",
+                "effort",
+                "id",
+                "label",
+                "mode",
+                "model",
+                "offered"
+            ]
         );
 
         let session = AgentSessionView {
@@ -999,6 +1012,17 @@ pub struct AgentOptionView {
     pub offered: bool,
     /// Why it cannot be used, for a tooltip. `None` when it can.
     pub detail: Option<String>,
+    /// The repository's `[agent.<id>]` model, effort and mode, for seeding a new pane.
+    ///
+    /// The picker's choice outranks the repository's in `session_request_for`, and a new pane used
+    /// to fill its picker from the provider's capability before spawning — so it always arrived
+    /// with a choice, and a repository's `model = "…"` never reached a pane opened by hand. The
+    /// capability cannot carry these itself: it is cached per provider, across every project.
+    ///
+    /// `None` for each the repository does not set, and for all three with no project in scope.
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub mode: Option<String>,
 }
 
 /// A live agent session, for adopting after a webview reload.

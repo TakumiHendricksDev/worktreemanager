@@ -224,7 +224,10 @@ any depth and a `[database.*]` table were its first two. `[agent.<id>]` added tw
 spelled `run`: MCP servers (`command` plus `args`), and `extra_args` on the agent CLI itself. For a while
 only a typed copy of the list knew about them, and nothing called that copy, so a repository declaring
 nothing but an MCP server loaded without a prompt. `wtm-config`'s `collect_agent_processes` is the walk
-for those two now, and the typed copy is gone, so there is one list to keep current.
+for those two now, and the typed copy is gone, so there is one list to keep current. It gained a third
+when `[agent.<id>.env]` started reaching the process — it had been parsed and never applied, which is
+the only reason it was not on the list already. An environment runs code as surely as an argument:
+`NODE_OPTIONS` loads a script into any CLI written in Node.
 
 ---
 
