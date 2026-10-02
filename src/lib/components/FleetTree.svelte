@@ -18,10 +18,11 @@
   import { heading, item, popUp, separator, under, type MenuEntry } from '../native-menu';
   import { attention } from '../state/attention.svelte';
   import { fleet } from '../state/fleet.svelte';
-  import { sessions } from '../state/sessions.svelte';
+  import { sessions, type Pane } from '../state/sessions.svelte';
   import { view } from '../state/view.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { STATUS_WORD } from '../status';
+  import CloseSessionDialog from './CloseSessionDialog.svelte';
   import FleetWires from './FleetWires.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -140,6 +141,28 @@
 
   // ─────────────────────────────── menus ───────────────────────────────
 
+  /**
+   * The session whose "Close session?" is open, and the row focus goes to once it has gone.
+   *
+   * The neighbour is chosen when the menu is used, while the row is still in the tree: by the time
+   * the close returns, it is not, and the focus it held would otherwise fall out of the tree.
+   */
+  let closing = $state<{ pane: Pane; next: string } | null>(null);
+
+  function askToClose(pane: Pane, rowKey: string) {
+    const at = rows.findIndex((row) => row.key === rowKey);
+    const level = rows[at]?.level ?? 0;
+    // Past its own delegated children, which the close takes with it.
+    const after = rows.slice(at + 1).find((row) => row.level <= level);
+    const next = after?.key ?? rows[at - 1]?.key ?? HOME_KEY;
+    closing = { pane, next };
+  }
+
+  function closed(pane: Pane, next: string) {
+    if (view.peeked === pane.id) view.peek(null);
+    focusRow(rows.some((row) => row.key === next) ? next : HOME_KEY);
+  }
+
   /** Start an agent in a worktree from Home. The pane is tiled there; Home peeks at it. */
   async function startIn(
     event: MouseEvent | null,
@@ -207,6 +230,8 @@
           ),
           separator,
           item('Stop the turn', () => void sessions.interrupt(pane.id), pane.working),
+          // Through the pane's own confirmation, which says what a close would end.
+          item('Close session…', () => askToClose(pane, row.key)),
         ],
         under(anchor),
       );
@@ -517,3 +542,13 @@
     </Button>
   </div>
 </nav>
+
+<!-- Gone by another route while it was open — Home closed it, say — and there is nothing to ask. -->
+{#if closing && sessions.paneById(closing.pane.id)}
+  {@const { pane, next } = closing}
+  <CloseSessionDialog
+    {pane}
+    onclose={() => (closing = null)}
+    onclosed={() => closed(pane, next)}
+  />
+{/if}

@@ -44,6 +44,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import Dialog from './ui/Dialog.svelte';
+  import CloseSessionDialog from './CloseSessionDialog.svelte';
   import Icon from './ui/Icon.svelte';
   import Meter from './ui/Meter.svelte';
   import SessionDot from './ui/SessionDot.svelte';
@@ -100,7 +101,6 @@
   let skillsOpen = $state(false);
   let confirmRestart = $state(false);
   let confirmClose = $state(false);
-  let closingSession = $state(false);
   let copiedReply = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
   onDestroy(() => clearTimeout(copyTimer));
@@ -533,17 +533,6 @@
     if (!inWindow) return;
     sessions.noteWindowDraft({ text: draft, attachments: $state.snapshot(attachments) });
   });
-
-  async function closeConfirmed() {
-    if (closingSession) return;
-    closingSession = true;
-    try {
-      await sessions.close(pane.id);
-      confirmClose = false;
-    } finally {
-      closingSession = false;
-    }
-  }
 
   /*
    * Follow the tail whenever the transcript changes height, for any reason.
@@ -2136,34 +2125,5 @@
 {/if}
 
 {#if confirmClose}
-  <Dialog
-    title="Close session?"
-    onclose={() => (confirmClose = false)}
-    closeDisabled={closingSession}
-  >
-    {#snippet body()}
-      <p>
-        Closing ends this {kind === 'shell'
-          ? 'shell'
-          : kind === 'browser'
-            ? 'browser'
-            : 'conversation'} and removes the pane.
-        {#if kind === 'agent'}
-          Delegated children and any side question are closed with it.
-        {/if}
-      </p>
-    {/snippet}
-    {#snippet footer()}
-      <Button
-        variant="neutral"
-        onclick={() => (confirmClose = false)}
-        disabled={closingSession}>Cancel</Button
-      >
-      <Button
-        variant="danger-solid"
-        onclick={() => void closeConfirmed()}
-        disabled={closingSession}>{closingSession ? 'Closing…' : 'Close'}</Button
-      >
-    {/snippet}
-  </Dialog>
+  <CloseSessionDialog {pane} onclose={() => (confirmClose = false)} />
 {/if}

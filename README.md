@@ -248,7 +248,10 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
   session in them, with delegated children nested under the session that started them. Each says
   what it is doing — *working…*, *needs you*, *done*, *failed* — and a folded project still shows any
   session that needs you or failed. The counts at the top filter it. **+** on a worktree starts an
-  agent there, as an ordinary pane in that worktree.
+  agent there, as an ordinary pane in that worktree. Right-click a session, or press the context-menu
+  key or ⇧F10 on it, to peek at it, open it in its worktree, stop its turn, or close it. Closing asks
+  first, as the pane's own close button does, and says if a turn would stop or a request go
+  unanswered.
 - **Needs you** lists every approval waiting in any session, oldest first, and you answer each on the
   same card the pane would have shown, without going there.
 - **Peek** shows the session you picked in the tree: its transcript, what it is waiting on, and a box
