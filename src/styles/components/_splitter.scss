@@ -1,0 +1,12 @@
+/*
+ * The line `Splitter.svelte` draws between a panel and what it sits beside: the sidebar, and Home's
+ * side panel. The look is the `splitter()` mixin's, shared with a tile's handle. The size is each
+ * call site's, for the reason that mixin gives: the shell gets the 1px from a grid track, and Home
+ * from a flex basis.
+ */
+
+@use '../tools' as t;
+
+.c-splitter {
+  @include t.splitter(vertical);
+}

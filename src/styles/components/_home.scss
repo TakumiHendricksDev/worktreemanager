@@ -5,7 +5,8 @@
  * Hidden rather than unmounted, like `.c-surface`, for the reason that block gives. Below 880px of
  * its own width the side column folds into tabs. `HomeSurface` measures that with a
  * `ResizeObserver` and owns the number, rather than a container query here, because what changes is
- * the markup — which panels exist — and not only their layout.
+ * the markup — which panels exist — and not only their layout. It owns the side column's width for
+ * the same reason it measures: the limits depend on how wide Home is.
  */
 
 .c-home {
@@ -22,6 +23,13 @@
   &.is-narrow {
     flex-direction: column;
   }
+
+  /* While the side column is dragged, for the reason `.c-shell__columns` gives. */
+  &.is-dragging {
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: col-resize;
+  }
 }
 
 .c-home__main {
@@ -36,13 +44,24 @@
   }
 }
 
+/*
+ * The width is `HomeSurface`'s, set from the splitter. `min-width: 0` is what lets it hold: a flex
+ * item will not shrink below its content's widest unbreakable line, and a peeked transcript's code
+ * block or command is often wider than the window. Without it the column grew to fit the line and
+ * squeezed the conversation beside it to a strip, whatever its basis said.
+ */
 .c-home__side {
   display: flex;
-  flex: 0 0 clamp(320px, 36%, 440px);
+  flex: 0 0 var(--home-side-w);
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
   background: var(--bg-elevated);
+}
+
+/* The line between the conversation and the side column, which is also its left border. */
+.c-home > .c-splitter {
+  flex: 0 0 1px;
 }
 
 /* Pinned above the tabs, and never allowed to push them off: past this it scrolls on its own. */

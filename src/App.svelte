@@ -37,6 +37,7 @@
   import Button from './lib/components/ui/Button.svelte';
   import Icon from './lib/components/ui/Icon.svelte';
   import Logo from './lib/components/ui/Logo.svelte';
+  import Splitter from './lib/components/ui/Splitter.svelte';
   import { commands } from './lib/ipc/commands';
   import { errorMessage, type NotificationClick, type Project } from './lib/ipc/types';
   import { attention } from './lib/state/attention.svelte';
@@ -471,46 +472,6 @@
     );
   }
 
-  function startDrag(event: PointerEvent) {
-    dragging = true;
-    const startX = event.clientX;
-    const startWidth = sidebarWidth;
-    // Pointer capture, so a fast drag that leaves the splitter keeps working.
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-
-    const onMove = (move: PointerEvent) => {
-      sidebarWidth = Math.min(
-        Math.max(startWidth + (move.clientX - startX), MIN_SIDEBAR),
-        MAX_SIDEBAR,
-      );
-    };
-
-    const onUp = () => {
-      dragging = false;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      // Persist only on release; saving on every move would write hundreds of times.
-      void commands
-        .setPref(SIDEBAR_WIDTH_PREF, String(Math.round(sidebarWidth)))
-        .catch(() => {});
-    };
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  }
-
-  function onSplitterKey(event: KeyboardEvent) {
-    const step = event.shiftKey ? 32 : 8;
-    const deltas: Record<string, number> = { ArrowLeft: -step, ArrowRight: step };
-    const delta = deltas[event.key];
-    if (delta === undefined) return;
-    event.preventDefault();
-    sidebarWidth = Math.min(Math.max(sidebarWidth + delta, MIN_SIDEBAR), MAX_SIDEBAR);
-    void commands
-      .setPref(SIDEBAR_WIDTH_PREF, String(Math.round(sidebarWidth)))
-      .catch(() => {});
-  }
-
   function toggleSidebar(): void {
     sidebarCollapsed = !sidebarCollapsed;
     dragging = false;
@@ -572,27 +533,19 @@
       {/if}
     </aside>
 
-    <!--
-      A resize handle is a real widget, not decoration: `role="separator"` with
-      aria-value* and a tabindex is the ARIA window-splitter pattern, and the keydown
-      handler is what makes the sidebar resizable without a mouse. Svelte's rule assumes
-      a separator is decorative, which a *focusable* one is not.
-    -->
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="c-shell__splitter"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize the sidebar"
-      aria-valuenow={Math.round(sidebarWidth)}
-      aria-valuemin={MIN_SIDEBAR}
-      aria-valuemax={MAX_SIDEBAR}
+    <Splitter
+      value={sidebarWidth}
+      min={MIN_SIDEBAR}
+      max={MAX_SIDEBAR}
+      label="Resize the sidebar"
+      grows="right"
+      controls="worktree-sidebar"
       hidden={sidebarCollapsed}
-      tabindex="0"
-      onpointerdown={startDrag}
-      onkeydown={onSplitterKey}
-    ></div>
+      onresize={(width) => (sidebarWidth = width)}
+      oncommit={(width) =>
+        void commands.setPref(SIDEBAR_WIDTH_PREF, String(width)).catch(() => {})}
+      ondrag={(active) => (dragging = active)}
+    />
 
     <main class="c-shell__col c-shell__col--detail">
       <!--

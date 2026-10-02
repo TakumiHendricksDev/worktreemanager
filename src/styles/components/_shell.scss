@@ -1,11 +1,10 @@
 /*
  * The window shell: title bar, then a resizable two-column body.
  *
- * Last file migrated, deliberately. Its five classes are the only ones in the app that can
- * break layout for everything else, so every regression before this one was local to a pane.
+ * Last file migrated, deliberately. Its classes are the only ones in the app that can break
+ * layout for everything else, so every regression before this one was local to a pane. The
+ * divider between the columns is `.c-splitter`, which Home's side panel uses too.
  */
-
-@use '../tools' as t;
 
 .c-shell {
   display: flex;
@@ -18,6 +17,7 @@
 .c-shell__columns {
   position: relative;
   display: grid;
+  /* The middle track is the sidebar's `.c-splitter`, which takes its 1px from here. */
   grid-template-columns: var(--sidebar-w) 1px 1fr;
   flex: 1 1 auto;
   min-height: 0;
@@ -44,12 +44,6 @@
 .c-shell__col--detail {
   display: flex;
   flex-direction: column;
-}
-
-/* Its 1px comes from the `grid-template-columns` track above, not from the mixin — see the note in
-   `tools/_splitter.scss` about why sizing stays at the call site. */
-.c-shell__splitter {
-  @include t.splitter(vertical);
 }
 
 .c-placeholder {

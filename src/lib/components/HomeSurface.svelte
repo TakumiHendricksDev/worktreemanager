@@ -19,9 +19,18 @@
    * minimum window with the tree open, the main column is about 580px, and splitting that again
    * would leave two columns too narrow to read a command in. Measured on this element rather than
    * on the window, for the reason the pane header's fold is: what matters is the room this has.
+   *
+   * # The side column's width
+   *
+   * Side by side, the line between the two columns drags, and the width is saved beside the
+   * sidebar's in `config.toml`. What is saved is the width chosen; what is drawn is that width
+   * clamped to the room Home has now. So a window made narrower squeezes the side column only as far
+   * as it must, and gets it back when it is widened again. Until it is first dragged it has no
+   * width of its own and takes the share it always had.
    */
-  import type { Snippet } from 'svelte';
+  import { onMount, type Snippet } from 'svelte';
 
+  import { commands } from '../ipc/commands';
   import { attention } from '../state/attention.svelte';
   import { fleet } from '../state/fleet.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
@@ -31,6 +40,7 @@
   import NeedsYou from './NeedsYou.svelte';
   import CreationPanel from './CreationPanel.svelte';
   import PeekPanel from './PeekPanel.svelte';
+  import Splitter from './ui/Splitter.svelte';
 
   const {
     visible,
@@ -49,21 +59,66 @@
 
   /** Below this content width the side column folds into tabs. */
   const SPLIT = 880;
+  /*
+   * The side column's limits. 320 is the floor it always had: Peek's header still fits Stop and Open
+   * in worktree beside a few words of title. The conversation keeps 440, enough for a line of prose
+   * and a composer whose Send button is not wedged against its model picker. At 880, the narrowest
+   * Home that is side by side at all, that still leaves the column 320 to 439.
+   */
+  const SIDE_MIN = 320;
+  const MAIN_MIN = 440;
+  const SIDE_WIDTH_PREF = 'ui.home_side_width';
 
   let root = $state<HTMLElement | null>(null);
   let narrow = $state(false);
+  /** Home's own width, as last measured while it was showing. */
+  let width = $state(0);
+  /** The side column's width as the user left it, or `null` until they first move it. */
+  let chosen = $state<number | null>(null);
+  let dragging = $state(false);
 
   $effect(() => {
     const el = root;
     if (!el) return;
     const observer = new ResizeObserver(([entry]) => {
-      const width = entry?.contentRect.width ?? 0;
+      const measured = entry?.contentRect.width ?? 0;
       // A hidden surface measures 0×0, which says nothing about how wide it will be.
-      if (width > 0) narrow = width < SPLIT;
+      if (measured > 0) {
+        width = measured;
+        narrow = measured < SPLIT;
+      }
     });
     observer.observe(el);
     return () => observer.disconnect();
   });
+
+  /**
+   * The `clamp(320px, 36%, 440px)` the column had before it could be dragged, so that nothing moves
+   * for somebody who never drags it.
+   */
+  const fallback = $derived(Math.min(Math.max(Math.round(width * 0.36), SIDE_MIN), 440));
+  const sideMax = $derived(Math.max(SIDE_MIN, Math.floor(width) - 1 - MAIN_MIN));
+  const sideWidth = $derived(Math.min(Math.max(chosen ?? fallback, SIDE_MIN), sideMax));
+
+  onMount(() => {
+    let gone = false;
+    void commands
+      .getPref(SIDE_WIDTH_PREF)
+      .then((stored) => {
+        const parsed = stored ? Number.parseInt(stored, 10) : NaN;
+        // A drag that beat the read to it is newer than what the read found.
+        if (!gone && chosen === null && Number.isFinite(parsed)) chosen = parsed;
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  });
+
+  function saveSide(next: number) {
+    chosen = next;
+    void commands.setPref(SIDE_WIDTH_PREF, String(next)).catch(() => {});
+  }
 
   type Tab = 'home' | 'inbox' | 'peek' | 'activity';
   /** The tab on screen when narrow. Wide, only the side column's two compete. */
@@ -146,6 +201,7 @@
   class="c-home"
   class:is-hidden={!visible}
   class:is-narrow={narrow}
+  class:is-dragging={dragging}
   bind:this={root}
   aria-label="Home"
 >
@@ -196,7 +252,23 @@
       <ActivityList />
     </div>
   {:else}
-    <aside class="c-home__side" aria-label="What Home is watching">
+    <Splitter
+      value={sideWidth}
+      min={SIDE_MIN}
+      max={sideMax}
+      label="Resize the side panel"
+      grows="left"
+      controls="home-side"
+      onresize={(next) => (chosen = next)}
+      oncommit={saveSide}
+      ondrag={(active) => (dragging = active)}
+    />
+    <aside
+      class="c-home__side"
+      id="home-side"
+      style:--home-side-w="{sideWidth}px"
+      aria-label="What Home is watching"
+    >
       <div class="c-home__inbox">
         <NeedsYou onpeek={peek} {onreveal} />
         <InFlight onpeek={peek} />

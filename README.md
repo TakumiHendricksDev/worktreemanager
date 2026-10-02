@@ -243,6 +243,9 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
   recent ones.
 - **In flight** lists the work the Home agent has handed out and not heard back about: which session
   has it, what it was asked, and since when.
+- **The side panel** holding Needs you, Peek and Activity is as wide as you drag the line beside it,
+  or focus the line and use the arrow keys. wtm remembers the width. When Home is too narrow for two
+  columns, the panels become tabs instead.
 - **The Home agent.** Start Claude, Codex or Cursor in Home's main column. It runs in a folder of
   its own, outside every repository, and has tools for the sessions everywhere else: list them, read
   one, hand one work, start one in any worktree of any project, stop a turn it started, and close
