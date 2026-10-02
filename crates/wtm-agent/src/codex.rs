@@ -241,14 +241,25 @@ struct Pending {
 enum PendingKind {
     Approval,
     UserInput,
+    /// An MCP server's `elicitation/create`, relayed. Its reply is `{action, content, _meta}`, not
+    /// a `decision`, and `session` records whether the server offered to remember an approval for
+    /// the rest of the session — the only persistence a card's "Always this session" can ask for.
+    Elicitation {
+        session: bool,
+    },
 }
 
 impl CodexProtocol {
-    /// Turn a server-initiated request into an approval card, or into a `Raw` row.
+    /// Turn a server-initiated request into an approval card, or refuse it on the spot.
     ///
-    /// Approval and user-input methods are the ones a person can act on. Everything else that
-    /// arrives as a request is surfaced as `Raw` rather than silently ignored, and it stays in
-    /// `pending` so `abandon` can still reply. A request left unanswered blocks the server forever.
+    /// Approval, user-input and approval-shaped elicitation methods are the ones a person can act
+    /// on. Anything else is refused with a JSON-RPC error the moment it arrives, and still drawn as
+    /// a `Raw` row so it is not invisible.
+    ///
+    /// Refused rather than kept, because a request left unanswered blocks the server forever — the
+    /// turn that sent it sits there until someone answers. These used to be kept in `pending` and
+    /// declined only when the pane closed, and an MCP elicitation that arrived that way held a real
+    /// turn for an hour behind a collapsed row with no buttons on it.
     fn on_server_request(&mut self, rpc_id: i64, method: &str, params: &Value) -> Vec<Step> {
         // Our own id for the card. The JSON-RPC id is unique within a session and is what the
         // reply has to carry, so using it as the key means `answer` needs no second lookup.
@@ -296,19 +307,48 @@ impl CodexProtocol {
                 },
                 PendingKind::UserInput,
             ),
+            "mcpServer/elicitation/request" => {
+                let Some((request, session)) = elicitation_card(params) else {
+                    // A form with fields, a URL to visit, an OpenAI-specific form: nothing a card
+                    // here can fill in. Declined at once and said so, which costs the tool that
+                    // asked one failed call instead of the whole turn.
+                    let server = text("serverName").unwrap_or_else(|| "An MCP server".to_owned());
+                    let asked = text("message").unwrap_or_default();
+                    let url = text("url")
+                        .map(|url| format!(" ({url})"))
+                        .unwrap_or_default();
+                    return vec![
+                        Step::Write(elicitation_reply(&json!(rpc_id), "decline", None)),
+                        Step::Emit(AgentEvent::Notice {
+                            level: NoticeLevel::Warn,
+                            message: format!(
+                                "{server} asked for input wtm cannot show yet, so wtm declined \
+                                 it: {asked}{url}"
+                            ),
+                        }),
+                    ];
+                };
+                (request, PendingKind::Elicitation { session })
+            }
             _ => {
-                self.pending.insert(
-                    id.clone(),
-                    Pending {
-                        rpc_id: json!(rpc_id),
-                        kind: PendingKind::Approval,
-                    },
-                );
-                return vec![Step::Emit(AgentEvent::Raw {
-                    provider: ID.to_owned(),
-                    event: method.to_owned(),
-                    payload: params.clone(),
-                })];
+                return vec![
+                    Step::Write(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": {
+                                "code": -32601,
+                                "message": format!("wtm does not handle `{method}`"),
+                            },
+                        })
+                        .to_string(),
+                    ),
+                    Step::Emit(AgentEvent::Raw {
+                        provider: ID.to_owned(),
+                        event: method.to_owned(),
+                        payload: params.clone(),
+                    }),
+                ];
             }
         };
 
@@ -818,8 +858,23 @@ impl CodexProtocol {
             | "mcpServer/startupStatus/updated"
             | "remoteControl/status/changed"
             | "account/updated"
-            | "serverRequest/resolved"
             | "item/autoApprovalReview/started" => return Vec::new(),
+            // The server settled one of its own requests — an interrupted turn cancels whatever it
+            // was waiting on, observed on 0.154.0 right after `turn/completed`. A card still open
+            // for it would offer buttons whose answer the server no longer wants, and keep the
+            // session reading as "waiting for the user". Nothing to do for a request this driver
+            // answered itself: `answer` already removed it.
+            "serverRequest/resolved" => {
+                let id = match params.get("requestId") {
+                    Some(Value::Number(number)) => number.to_string(),
+                    Some(Value::String(id)) => id.clone(),
+                    _ => return Vec::new(),
+                };
+                return match self.pending.remove(&id) {
+                    Some(_) => vec![Step::Emit(AgentEvent::ApprovalResolved { id })],
+                    None => Vec::new(),
+                };
+            }
             // The bracket's close, silent only for an approval, where the sentence already said
             // everything it holds. Any other verdict keeps its `Raw` row, because an approval is
             // the only sequence that has been seen on the wire.
@@ -1103,6 +1158,30 @@ impl Protocol for CodexProtocol {
             ];
         }
 
+        if let PendingKind::Elicitation { session } = pending.kind {
+            let reply = match answer {
+                ApprovalAnswer::Allow => elicitation_reply(&pending.rpc_id, "accept", None),
+                // Plain `accept` when the server offered no persistence: the card's verb is a
+                // request, and a server that cannot remember is still being said yes to.
+                ApprovalAnswer::AllowForSession => elicitation_reply(
+                    &pending.rpc_id,
+                    "accept",
+                    session.then_some(&json!({ "persist": "session" })),
+                ),
+                ApprovalAnswer::Deny { .. } => elicitation_reply(&pending.rpc_id, "decline", None),
+                ApprovalAnswer::AllowWithEdits { .. } | ApprovalAnswer::UserInput { .. } => {
+                    self.pending.insert(id.to_owned(), pending);
+                    return vec![Step::Emit(AgentEvent::Failed {
+                        message: "This request needs Allow or Deny.".to_owned(),
+                    })];
+                }
+            };
+            return vec![
+                Step::Write(reply),
+                Step::Emit(AgentEvent::ApprovalResolved { id: id.to_owned() }),
+            ];
+        }
+
         let decision = match answer {
             ApprovalAnswer::Allow => json!("accept"),
             ApprovalAnswer::AllowForSession => json!("acceptForSession"),
@@ -1144,6 +1223,16 @@ impl Protocol for CodexProtocol {
         ]
     }
 
+    /// Stop the running turn, cancelling any MCP elicitation it is waiting on first.
+    ///
+    /// The cancel goes ahead of `turn/interrupt` because that is the order Codex's own desktop
+    /// client uses, and so the order the server is exercised in. The server cancels the
+    /// elicitation itself on an interrupt — `serverRequest/resolved` follows `turn/completed` — but
+    /// a session whose Computer Use tool sat behind an unanswered one for an hour took the
+    /// interrupt, aborted the tool and then never completed the turn, and ignored every Stop after
+    /// that. That hang was not reproducible with a plain MCP server, so this cannot be shown to
+    /// prevent it; it does mean the server is never handling an interrupt while it is still owed
+    /// an answer from us.
     fn interrupt(&mut self) -> Vec<Step> {
         let Some(thread) = self.thread_id.clone() else {
             return Vec::new();
@@ -1151,11 +1240,29 @@ impl Protocol for CodexProtocol {
         let Some(turn) = self.active_turn_id.clone() else {
             return Vec::new();
         };
+        let elicitations: Vec<String> = self
+            .pending
+            .iter()
+            .filter(|(_, entry)| matches!(entry.kind, PendingKind::Elicitation { .. }))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut steps = Vec::new();
+        for id in elicitations {
+            if let Some(entry) = self.pending.remove(&id) {
+                steps.push(Step::Write(elicitation_reply(
+                    &entry.rpc_id,
+                    "cancel",
+                    None,
+                )));
+                steps.push(Step::Emit(AgentEvent::ApprovalResolved { id }));
+            }
+        }
         let (_, step) = self.request(
             "turn/interrupt",
             &json!({ "threadId": thread, "turnId": turn }),
         );
-        vec![step]
+        steps.push(step);
+        steps
     }
 
     fn abandon(&mut self) -> Vec<Step> {
@@ -1180,6 +1287,9 @@ impl Protocol for CodexProtocol {
                             "result": { "answers": {} },
                         })
                         .to_string(),
+                        PendingKind::Elicitation { .. } => {
+                            elicitation_reply(&entry.rpc_id, "decline", None)
+                        }
                     }),
                     Step::Emit(AgentEvent::ApprovalResolved { id }),
                 ]
@@ -1671,6 +1781,91 @@ fn permission_items(params: &Value) -> Vec<String> {
         items.push("network access".to_owned());
     }
     items
+}
+
+/// An MCP elicitation as an Allow/Deny card, when it is one that Allow can answer.
+///
+/// Two shapes qualify, the two Codex's own desktop client draws as a plain approval: a tool-call
+/// approval (`_meta.codex_approval_kind` is `mcp_tool_call` — Computer Use's "Allow Computer Use
+/// to use …?" is one), and a form that asks for nothing (`requestedSchema` has no properties) and
+/// claims no other kind. Accepting either sends an empty object as the content. Anything with
+/// fields to fill in is `None`, because accepting it with nothing filled in would be a lie the
+/// server then acts on; so is any other `codex_approval_kind`, such as a plugin install
+/// suggestion, which that client gives a flow of its own rather than a yes.
+///
+/// The second value is whether `_meta.persist` offers `session`, which is what lets the card's
+/// "Always this session" mean something to the server. Computer Use sends it as a list.
+fn elicitation_card(params: &Value) -> Option<(ApprovalRequest, bool)> {
+    let meta = params.get("_meta");
+    let kind = meta
+        .and_then(|meta| meta.get("codex_approval_kind"))
+        .and_then(Value::as_str);
+    let asks_nothing = params.get("mode").and_then(Value::as_str).unwrap_or("form") == "form"
+        && params
+            .pointer("/requestedSchema/properties")
+            .and_then(Value::as_object)
+            .is_none_or(serde_json::Map::is_empty);
+    match kind {
+        Some("mcp_tool_call") => {}
+        None if asks_nothing => {}
+        _ => return None,
+    }
+
+    let summary = params
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .unwrap_or("An MCP server is asking for approval.")
+        .to_owned();
+    let mut items: Vec<String> = meta
+        .and_then(|meta| meta.get("tool_params_display"))
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let name = row
+                        .get("display_name")
+                        .or_else(|| row.get("name"))
+                        .and_then(Value::as_str)?;
+                    let value = match row.get("value")? {
+                        Value::String(value) => value.clone(),
+                        other => other.to_string(),
+                    };
+                    Some(format!("{name}: {value}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if items.is_empty()
+        && let Some(server) = params.get("serverName").and_then(Value::as_str)
+    {
+        items.push(format!("MCP server: {server}"));
+    }
+    let session = match meta.and_then(|meta| meta.get("persist")) {
+        Some(Value::String(persist)) => persist == "session",
+        Some(Value::Array(modes)) => modes.iter().any(|mode| mode.as_str() == Some("session")),
+        _ => false,
+    };
+    Some((ApprovalRequest::Permissions { summary, items }, session))
+}
+
+/// The reply to an elicitation, in the shape the server mirrors to the MCP server that asked.
+///
+/// `content` is an empty object on `accept` and `null` otherwise, which is what Codex's own client
+/// sends: an accepted approval carries an answer with nothing in it, a refusal carries none.
+fn elicitation_reply(rpc_id: &Value, action: &str, meta: Option<&Value>) -> String {
+    let content = if action == "accept" {
+        json!({})
+    } else {
+        Value::Null
+    };
+    json!({
+        "jsonrpc": "2.0",
+        "id": rpc_id,
+        "result": { "action": action, "content": content, "_meta": meta },
+    })
+    .to_string()
 }
 
 /// The turn id from a `turn/*` notification.
