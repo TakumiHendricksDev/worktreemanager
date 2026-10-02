@@ -98,7 +98,19 @@ export type FleetRow =
       session: FleetSession;
       /** Null for a session with no children. */
       expanded: boolean | null;
-    };
+    }
+  | { kind: 'creation'; key: string; level: 2; projectId: string; job: FleetJob };
+
+/** A worktree Home is creating, as the tree needs it. */
+export interface FleetJob {
+  id: number;
+  projectId: string;
+  /** The directory's last segment, or the branch. */
+  title: string;
+  phase: 'running' | 'created' | 'setup_failed' | 'failed';
+  /** "Running setup · 9 of 10", or the error. */
+  detail: string;
+}
 
 /** What the tree can be narrowed to, besides a typed filter. */
 export type FleetOnly = 'attention' | 'working' | 'done';
@@ -108,6 +120,8 @@ export interface FleetInput {
   /** Each project's worktrees by project id; absent while a listing has not loaded yet. */
   worktrees: Readonly<Record<string, readonly FleetWorktree[] | undefined>>;
   sessions: readonly FleetSession[];
+  /** Worktrees Home is creating, shown under their project. */
+  jobs?: readonly FleetJob[];
 }
 
 export interface FleetOptions {
@@ -132,6 +146,7 @@ export const projectKey = (id: string) => `project:${id}`;
 export const worktreeKey = (id: string) => `worktree:${id}`;
 export const sessionKey = (paneId: string) => `session:${paneId}`;
 const idleKey = (projectId: string) => `idle:${projectId}`;
+export const jobKey = (id: number) => `creation:${id}`;
 
 /** States in which a session is doing nothing and asking nothing. */
 const SETTLED: ReadonlySet<PaneStatus> = new Set(['idle', 'ended', 'done', 'detached']);
@@ -271,9 +286,12 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
         )
       : busy;
     const shownQuiet = filtering ? quiet.filter(worktreeMatches) : quiet;
+    const jobs = filtering
+      ? []
+      : (input.jobs ?? []).filter((j) => j.projectId === project.id);
     if (filtering && shownBusy.length === 0 && shownQuiet.length === 0) continue;
 
-    const projectOpen = open(pKey, everyone.length > 0);
+    const projectOpen = open(pKey, everyone.length > 0 || jobs.length > 0);
     rows.push({
       kind: 'project',
       key: pKey,
@@ -336,6 +354,19 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
       };
       // Under a folded project there is no worktree row, so what the fold keeps sits one level up.
       for (const root of here) emit(root, projectOpen ? 3 : 2, [wKey, pKey], worktreeOpen);
+    }
+
+    // What Home is making here, between what is running and what is quiet.
+    if (projectOpen) {
+      for (const job of jobs) {
+        rows.push({
+          kind: 'creation',
+          key: jobKey(job.id),
+          level: 2,
+          projectId: project.id,
+          job,
+        });
+      }
     }
 
     if (shownQuiet.length > 0 && projectOpen) {

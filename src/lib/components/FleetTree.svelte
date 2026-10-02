@@ -81,7 +81,8 @@
   });
 
   function selected(row: FleetRow): boolean {
-    if (row.kind === 'home') return view.peeked === null;
+    if (row.kind === 'home') return view.peeked === null && fleet.jobShown === null;
+    if (row.kind === 'creation') return fleet.jobShown === row.job.id;
     return row.kind === 'session' && row.session.id === view.peeked;
   }
 
@@ -115,6 +116,7 @@
     switch (row.kind) {
       case 'home':
         view.peek(null);
+        fleet.jobShown = null;
         onhome();
         return;
       case 'project':
@@ -129,6 +131,9 @@
         return;
       case 'session':
         peek(row.session.id);
+        return;
+      case 'creation':
+        fleet.showJob(row.job.id);
         return;
     }
   }
@@ -233,7 +238,7 @@
   }
 
   function expandedOf(row: FleetRow): boolean | null {
-    if (row.kind === 'home') return null;
+    if (row.kind === 'home' || row.kind === 'creation') return null;
     return row.expanded;
   }
 
@@ -445,6 +450,27 @@
                 >
                   <Icon name="plus" size={14} />
                 </Button>
+              </span>
+            {:else if row.kind === 'creation'}
+              <SessionDot
+                status={row.job.phase === 'running'
+                  ? 'starting'
+                  : row.job.phase === 'created'
+                    ? 'done'
+                    : 'failed'}
+              />
+              <span class="c-fleet__body">
+                <span class="c-fleet__line">
+                  <span class="c-fleet__name">⌂ {row.job.title}</span>
+                  <span class="c-fleet__status">
+                    {row.job.phase === 'running'
+                      ? 'creating…'
+                      : row.job.phase === 'created'
+                        ? 'new'
+                        : 'failed'}
+                  </span>
+                </span>
+                <span class="c-fleet__meta" title={row.job.detail}>{row.job.detail}</span>
               </span>
             {:else if row.kind === 'idle'}
               <span class="c-fleet__name c-fleet__name--quiet">

@@ -737,6 +737,33 @@ pub struct AgentOverview {
     pub user_turns: u32,
 }
 
+/// A worktree creation in progress, counted against its project until dropped.
+///
+/// # Why there is a count at all
+///
+/// `[setup] concurrency = "one_globally"` exists for a setup that allocates something by scanning
+/// the other worktrees — free ports, usually — where two at once can pick the same one. Nothing
+/// enforced it, because the New Worktree dialog was the only way to start a creation and a person
+/// starts one at a time. Home can start them too, so each creation now holds one of these, and Home
+/// refuses to start a second in such a project while one is running.
+#[derive(Debug)]
+pub struct CreateGuard {
+    project: String,
+    counts: Arc<parking_lot::Mutex<BTreeMap<String, usize>>>,
+}
+
+impl Drop for CreateGuard {
+    fn drop(&mut self) {
+        let mut counts = self.counts.lock();
+        if let Some(count) = counts.get_mut(&self.project) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&self.project);
+            }
+        }
+    }
+}
+
 /// The durable provider conversation behind a live pane, used as the source of a side fork.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentForkSource {
@@ -827,6 +854,8 @@ pub struct App {
     pub messages: crate::messages::Log,
     /// Home conversations' handles and the sessions they opened. See `home.rs`.
     pub home: crate::home::Registry,
+    /// How many worktree creations are running, by project id. See [`CreateGuard`].
+    creating: Arc<parking_lot::Mutex<BTreeMap<String, usize>>>,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
     /// Events from agent sessions that are not in [`Self::agents`] yet. See
     /// [`Self::record_agent_event`].
@@ -937,6 +966,7 @@ impl App {
             turns: crate::turns::Registry::default(),
             messages: crate::messages::Log::default(),
             home: crate::home::Registry::default(),
+            creating: Arc::default(),
             dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             early_replay: parking_lot::Mutex::new(BTreeMap::new()),
@@ -1776,6 +1806,22 @@ impl App {
             .get(&id)
             .map(|entry| entry.replay.tail_turns(turns.max(1)))
             .unwrap_or_default()
+    }
+
+    /// Count a creation as running in `project` until the guard is dropped.
+    #[must_use]
+    pub fn start_creating(&self, project: &str) -> CreateGuard {
+        *self.creating.lock().entry(project.to_owned()).or_default() += 1;
+        CreateGuard {
+            project: project.to_owned(),
+            counts: Arc::clone(&self.creating),
+        }
+    }
+
+    /// How many creations are running in `project`.
+    #[must_use]
+    pub fn creating_in(&self, project: &str) -> usize {
+        self.creating.lock().get(project).copied().unwrap_or(0)
     }
 
     /// Count a turn the user sent from a composer. See [`AgentEntry::user_turns`].

@@ -770,7 +770,12 @@
         onsessions={() => view.show('worktree')}
       />
       {#if view.homeMounted}
-        <HomeSurface visible={booted && view.home} onreveal={(pane) => void reveal(pane)}>
+        <HomeSurface
+          visible={booted && view.home}
+          onreveal={(pane) => void reveal(pane)}
+          onopenworktree={(projectId, worktreeId) =>
+            void openWorktree(projectId, worktreeId)}
+        >
           {#snippet main()}
             <HomeAgent visible={booted && view.home} />
           {/snippet}

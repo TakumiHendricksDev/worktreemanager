@@ -586,6 +586,17 @@ children — and a pane tiled in a worktree is the user's work. It is announced 
 `parentSession` and an `openedBy`, so the window tiles it like a hand-opened pane and marks it ⌂;
 closing the Home conversation leaves it running.
 
+**Home creates worktrees with the dialog's pipeline, not a copy.** `preview_worktree` is stages 1–6
+— nothing happens — and `create_worktree` previews again before it executes, with no
+acknowledgements: every Error preflight, even one the form would let the user tick past, stops it,
+and the reasons go back to the agent to pass on. Three things the dialog never needed did have to be
+added. Progress goes on `home:worktree` with a job id, because `wtm:progress` carries none and a New
+Worktree form open at the same time would take Home's steps for its own. The setup's output is
+recorded like a dock shell's, so Home's view can attach to its terminal late and answer a prompt in
+it. And `[setup] concurrency = "one_globally"` — parsed, documented, and enforced nowhere, because a
+person starts one creation at a time — is now a count each creation holds, the dialog's included, and
+Home refuses to start a second in such a project while one runs.
+
 ## 5a. Two things the real repository taught us
 
 Both were found by running against a real repository rather than by reasoning, and both are the kind of

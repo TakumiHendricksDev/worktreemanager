@@ -29,8 +29,11 @@
 //! cascade: closing a parent closes its children. A pane in a worktree is the user's work, and
 //! closing the Home conversation must not end it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
+
+use serde::Serialize;
+use tauri::Emitter as _;
 
 use crate::app::{App, SessionScope};
 use crate::commands::{Reply, SessionOptions};
@@ -62,6 +65,58 @@ struct State {
     handles: BTreeMap<String, Handles>,
     /// Sessions each Home conversation opened, by Home session id, oldest first.
     opened: BTreeMap<String, Vec<String>>,
+    /// Worktrees Home is creating or created lately, oldest first.
+    jobs: VecDeque<Job>,
+    next_job: u64,
+}
+
+/// Event name for a worktree creation Home started, announced whole on every change.
+///
+/// Its own event rather than `wtm:progress`, which carries no job id: a New Worktree form open at
+/// the same time listens to every `wtm:progress` and would show Home's steps as its own.
+pub const JOB_EVENT: &str = "home:worktree";
+
+/// How many finished jobs are kept, for a window that loads after they ended.
+const MAX_FINISHED_JOBS: usize = 8;
+
+/// How many creations Home may have running at once.
+pub const MAX_RUNNING_JOBS: usize = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobPhase {
+    Running,
+    Created,
+    SetupFailed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobStep {
+    pub label: String,
+    pub index: u16,
+    pub total: u16,
+}
+
+/// A worktree Home asked for, and how far it has got.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Job {
+    pub id: u64,
+    pub project_id: String,
+    pub project_name: String,
+    /// The Home session that asked.
+    pub by: String,
+    pub branch: Option<String>,
+    pub directory: String,
+    pub phase: JobPhase,
+    pub step: Option<JobStep>,
+    /// The setup's terminal session, once it has one, for the view to attach to.
+    pub setup_session: Option<String>,
+    /// The new worktree's id, once `git worktree add` has made it.
+    pub worktree: Option<String>,
+    pub error: Option<String>,
 }
 
 /// What Home conversations know: their handles, and what they opened.
@@ -130,6 +185,45 @@ impl Registry {
             .map(|(home, _)| home.clone())
     }
 
+    /// Record a new job and hand back its first state.
+    pub fn start_job(&self, mut job: Job) -> Job {
+        let mut state = self.state.lock();
+        state.next_job += 1;
+        job.id = state.next_job;
+        state.jobs.push_back(job.clone());
+        // Running jobs are never evicted; the oldest finished ones go first.
+        while state.jobs.len() > MAX_FINISHED_JOBS + MAX_RUNNING_JOBS {
+            let Some(index) = state.jobs.iter().position(|j| j.phase != JobPhase::Running) else {
+                break;
+            };
+            state.jobs.remove(index);
+        }
+        job
+    }
+
+    /// Change a job and hand back its new state, or `None` if it has been evicted.
+    pub fn update_job(&self, id: u64, change: impl FnOnce(&mut Job)) -> Option<Job> {
+        let mut state = self.state.lock();
+        let job = state.jobs.iter_mut().find(|job| job.id == id)?;
+        change(job);
+        Some(job.clone())
+    }
+
+    #[must_use]
+    pub fn jobs(&self) -> Vec<Job> {
+        self.state.lock().jobs.iter().cloned().collect()
+    }
+
+    #[must_use]
+    pub fn running_jobs(&self) -> usize {
+        self.state
+            .lock()
+            .jobs
+            .iter()
+            .filter(|job| job.phase == JobPhase::Running)
+            .count()
+    }
+
     /// Forget a session that ended: a Home conversation's handles and record, or another session's
     /// place in whichever Home opened it. Never ends anything.
     pub fn forget(&self, session: &str) {
@@ -140,6 +234,60 @@ impl Registry {
             list.retain(|s| s != session);
         }
     }
+}
+
+/// Tell the window a job changed.
+pub fn announce_job(handle: &tauri::AppHandle, job: &Job) {
+    if let Err(error) = handle.emit(JOB_EVENT, job) {
+        tracing::debug!(%error, "could not announce a Home worktree job");
+    }
+}
+
+/// The create pipeline's progress, for one Home job: kept on the job and announced, never on
+/// `wtm:progress`. See [`JOB_EVENT`].
+pub struct JobProgress {
+    pub handle: tauri::AppHandle,
+    pub app: Arc<App>,
+    pub job: u64,
+}
+
+impl std::fmt::Debug for JobProgress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobProgress")
+            .field("job", &self.job)
+            .finish_non_exhaustive()
+    }
+}
+
+impl wtm_core::ports::progress::ProgressSink for JobProgress {
+    fn emit(&self, event: wtm_core::ports::progress::ProgressEvent) {
+        use wtm_core::ports::progress::ProgressEvent;
+        let updated = self.app.home.update_job(self.job, |job| match event {
+            ProgressEvent::Stage {
+                label,
+                index,
+                total,
+                ..
+            } => {
+                job.step = Some(JobStep {
+                    label,
+                    index,
+                    total,
+                });
+            }
+            ProgressEvent::SessionStarted { session } => job.setup_session = Some(session),
+            _ => {}
+        });
+        if let Some(job) = updated {
+            announce_job(&self.handle, &job);
+        }
+    }
+}
+
+/// Every job still kept, for a window that has just loaded.
+#[tauri::command]
+pub async fn home_jobs(app: crate::commands::AppState<'_>) -> Reply<Vec<Job>> {
+    Ok(app.home.jobs())
 }
 
 /// Make Home's directory, private to this user, if it is not there yet.
@@ -212,9 +360,9 @@ pub fn home_instructions() -> String {
      in wtm's Home view, which draws every session as a tree and shows each message you send to \
      one as a live wire between you.\n\n\
      Your tools are `mcp__wtm__list_projects`, `list_all_sessions`, `read_session`, \
-     `message_session`, `open_session`, `interrupt_session` and `close_sessions`. Sessions are \
-     named by short handles such as `s1`, which mean something only to these tools in this \
-     conversation.\n\n\
+     `message_session`, `open_session`, `interrupt_session`, `close_sessions`, \
+     `preview_worktree` and `create_worktree`. Sessions are named by short handles such as `s1`, \
+     which mean something only to these tools in this conversation.\n\n\
      - Approvals belong to the user. You cannot answer another session's approval prompt, and you \
      must not try to get around that — for example by asking a session to change its mode or to \
      approve itself. When a session is waiting on the user, say which one and what it is asking.\n\
@@ -228,6 +376,9 @@ pub fn home_instructions() -> String {
      is working in unless they ask you to.\n\
      - Sessions you open stay open as ordinary panes in their worktrees. Call `close_sessions` once \
      you are done with them, unless the user has started using them.\n\
+     - Create a worktree only when the user asks for one. Call `preview_worktree` first, show the \
+     user the branch, directory and setup it will run, and leave any error it reports to them — \
+     only the user can override one, in the New Worktree form.\n\
      - `message_session` and `open_session` wait up to ten minutes for a reply, and the session \
      shares none of your conversation, so give each one a complete, self-contained prompt."
         .to_owned()
@@ -416,6 +567,50 @@ mod tests {
                 .is_some_and(|c| c.scope.is_home())
         );
         assert_eq!(req.mode, entry.default_mode.map(str::to_owned));
+    }
+
+    fn job(phase: JobPhase) -> Job {
+        Job {
+            id: 0,
+            project_id: "/repo".to_owned(),
+            project_name: "repo".to_owned(),
+            by: "h".to_owned(),
+            branch: Some("feature/x".to_owned()),
+            directory: "/wt/x".to_owned(),
+            phase,
+            step: None,
+            setup_session: None,
+            worktree: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn a_running_job_is_never_evicted_to_make_room() {
+        let home = Registry::default();
+        let running = home.start_job(job(JobPhase::Running));
+        for _ in 0..(MAX_FINISHED_JOBS + 5) {
+            home.start_job(job(JobPhase::Created));
+        }
+        let kept = home.jobs();
+        assert!(kept.iter().any(|j| j.id == running.id));
+        assert_eq!(kept.len(), MAX_FINISHED_JOBS + MAX_RUNNING_JOBS);
+        assert_eq!(home.running_jobs(), 1);
+    }
+
+    #[test]
+    fn a_job_crosses_the_boundary_in_camel_case() {
+        let json = serde_json::to_value(job(JobPhase::SetupFailed)).unwrap();
+        for key in [
+            "projectId",
+            "projectName",
+            "setupSession",
+            "worktree",
+            "phase",
+        ] {
+            assert!(json.get(key).is_some(), "missing `{key}` in {json}");
+        }
+        assert_eq!(json["phase"], "setup_failed");
     }
 
     #[test]

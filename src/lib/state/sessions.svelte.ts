@@ -3646,10 +3646,28 @@ class Sessions {
    *
    * Returns early when nothing moved, because the caller is an effect that reads `panes`.
    */
+  /**
+   * A worktree Home just created, which a listing taken before it existed will not include.
+   *
+   * `reconcile` ends every pane whose worktree its listing lacks, and the surface re-runs it when
+   * panes change — so a session Home opened in a worktree it had just made, in the active project,
+   * would be reconciled away against the listing from a moment before. Kept until a listing
+   * includes it. Not `$state`: nothing renders it.
+   */
+  private readonly expected = new Set<string>();
+
+  expectWorktree(worktreeId: string): void {
+    this.expected.add(worktreeId);
+  }
+
   reconcile(projectId: string, ids: string[]): void {
     const alive = new Set(ids);
+    for (const id of ids) this.expected.delete(id);
     const doomed = this.panes.filter(
-      (p) => p.projectId === projectId && !alive.has(p.worktreeId),
+      (p) =>
+        p.projectId === projectId &&
+        !alive.has(p.worktreeId) &&
+        !this.expected.has(p.worktreeId),
     );
     if (doomed.length === 0) return;
 

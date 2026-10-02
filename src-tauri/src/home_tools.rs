@@ -38,7 +38,7 @@ pub const FENCE: &str = "wtm_session_content";
 
 /// Every Home tool, in the order the bridge lists them. The bridge refuses any other name before
 /// it reaches the socket.
-pub const TOOLS: [&str; 7] = [
+pub const TOOLS: [&str; 9] = [
     "list_projects",
     "list_all_sessions",
     "read_session",
@@ -46,6 +46,8 @@ pub const TOOLS: [&str; 7] = [
     "open_session",
     "interrupt_session",
     "close_sessions",
+    "preview_worktree",
+    "create_worktree",
 ];
 
 /// What a Home session sends is labelled, so the receiving session — and the user reading its
@@ -143,6 +145,32 @@ pub fn definitions(agents: &[(String, String)]) -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "preview_worktree",
+            "description": "Show a project's New Worktree form — its fields, their kinds and defaults — and, given values, exactly what creating one would do: the branch, the directory, the `git` and setup commands, and any problems found. Changes nothing. Call it before `create_worktree`, and show the user the plan.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "The project's name or root path, from `list_projects`." },
+                    "values": { "type": "object", "description": "Field values by key, as the form takes them.", "additionalProperties": true },
+                    "adopt_branch": { "type": "string", "description": "An existing branch to check out instead of making one, from the preview's choices." }
+                },
+                "required": ["project"]
+            }
+        }),
+        json!({
+            "name": "create_worktree",
+            "description": "Create a worktree in a project with the given form values, and run its setup. Waits up to ten minutes; a longer setup carries on and is shown in Home. Refused if the preview reports an error — only the user can override one, in the New Worktree form.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "The project's name or root path." },
+                    "values": { "type": "object", "description": "Field values by key, as `preview_worktree` showed them.", "additionalProperties": true },
+                    "adopt_branch": { "type": "string" }
+                },
+                "required": ["project", "values"]
+            }
+        }),
     ]
 }
 
@@ -202,6 +230,8 @@ pub fn run(handle: &AppHandle, app: &Arc<App>, token: &str, call: &HomeCall) -> 
         "open_session" => open_session(handle, app, &home, args),
         "interrupt_session" => interrupt_session(app, &home, args),
         "close_sessions" => Ok(close_sessions(handle, app, &home, args)),
+        "preview_worktree" => preview_worktree(app, args),
+        "create_worktree" => create_worktree(handle, app, &home, args),
         other => Err(format!("no Home tool named `{other}`")),
     };
     match outcome {
@@ -906,6 +936,350 @@ fn close_sessions(handle: &AppHandle, app: &Arc<App>, home: &HomeCaller, args: &
     text
 }
 
+// ─────────────────────────────── worktree creation ───────────────────────────────
+
+/// The form's values as the pipeline takes them: every one a string, the way the form sends them.
+///
+/// # Errors
+///
+/// When `values` is not an object, or a value is not a string, number, boolean or list of them.
+pub fn form_values(args: &Value) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let Some(values) = args.get("values") else {
+        return Ok(std::collections::BTreeMap::new());
+    };
+    let object = values
+        .as_object()
+        .ok_or("`values` has to be an object of field values by key")?;
+    object
+        .iter()
+        .map(|(key, value)| {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                Value::Bool(flag) => flag.to_string(),
+                Value::Number(number) => number.to_string(),
+                Value::Null => String::new(),
+                Value::Array(items) => items
+                    .iter()
+                    .map(|item| {
+                        item.as_str()
+                            .map_or_else(|| item.to_string(), str::to_owned)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(","),
+                Value::Object(_) => return Err(format!("`{key}` cannot be an object")),
+            };
+            Ok((key.clone(), text))
+        })
+        .collect()
+}
+
+fn describe_form(project: &wtm_core::model::Project) -> String {
+    use wtm_core::model::OptionsSource;
+    if project.fields.is_empty() {
+        return "The form has no fields: a branch name is derived without any.".to_owned();
+    }
+    let mut text = String::from("The form's fields:\n");
+    for field in &project.fields {
+        let kind = format!("{:?}", field.kind).to_ascii_lowercase();
+        let _ = write!(
+            text,
+            "- `{}` — {} ({kind}, {})",
+            field.key,
+            inert(&field.label),
+            if field.required {
+                "required"
+            } else {
+                "optional"
+            }
+        );
+        if let Some(default) = &field.default {
+            let _ = write!(text, "; default `{}`", default.as_string());
+        }
+        match &field.options {
+            Some(OptionsSource::Static { values }) => {
+                let _ = write!(text, "; one of {}", values.join(", "));
+            }
+            Some(OptionsSource::Command { .. }) => {
+                text.push_str(
+                    "; its choices come from a command the user's form runs — ask the user",
+                );
+            }
+            None => {}
+        }
+        if let Some(pattern) = &field.pattern {
+            let _ = write!(text, "; must match `{pattern}`");
+        }
+        if let Some(help) = &field.help {
+            let _ = write!(text, " — {}", inert(help));
+        }
+        text.push('\n');
+    }
+    text
+}
+
+fn describe_plan(view: &crate::view::PreviewView) -> String {
+    let mut text = String::new();
+    let _ = writeln!(
+        text,
+        "Branch: {}",
+        view.branch
+            .as_deref()
+            .map_or("(detached)".to_owned(), |b| format!("`{b}`"))
+    );
+    let _ = writeln!(text, "Directory: {}", view.directory);
+    let _ = writeln!(text, "Base: {}", view.base_ref);
+    let _ = writeln!(text, "Runs: `{}`", view.git_argv.join(" "));
+    if let Some(setup) = &view.setup_argv {
+        let _ = writeln!(
+            text,
+            "Then setup: `{}` in {}",
+            setup.join(" "),
+            view.setup_cwd.as_deref().unwrap_or("the new worktree")
+        );
+    }
+    for item in &view.preflight {
+        let severity = format!("{:?}", item.severity).to_ascii_lowercase();
+        let _ = write!(text, "- {severity}: {}", inert(&item.message));
+        if let Some(hint) = &item.hint {
+            let _ = write!(text, " ({})", inert(hint));
+        }
+        text.push('\n');
+    }
+    for warning in &view.warnings {
+        let _ = writeln!(text, "- note: {}", inert(warning));
+    }
+    if !view.branch_choices.is_empty() {
+        let _ = writeln!(
+            text,
+            "Existing branches that could be checked out instead (`adopt_branch`): {}",
+            view.branch_choices
+                .iter()
+                .map(|c| format!("`{}`", c.branch))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    text.push_str(if view.can_create {
+        "Nothing stops this from being created."
+    } else {
+        "An error stops this from being created. Only the user can override it, in the New \
+         Worktree form."
+    });
+    text
+}
+
+fn preview_worktree(app: &App, args: &Value) -> Result<String, String> {
+    let project = resolve_project(app, required(args, "project")?)?;
+    let form = describe_form(&project);
+    if args.get("values").is_none() {
+        return Ok(format!(
+            "{} › New Worktree\n\n{form}\nPass `values` to see what would be created.",
+            inert(project.display_name())
+        ));
+    }
+    let values = form_values(args)?;
+    let adopt = args
+        .get("adopt_branch")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let req = crate::commands::create_request(
+        app,
+        project.id.as_str(),
+        &values,
+        adopt,
+        Vec::new(),
+        24,
+        100,
+    )
+    .map_err(|e| e.message)?;
+    let preview = app
+        .create_pipeline()
+        .preview(
+            &req,
+            &wtm_core::ports::progress::NullProgress,
+            &wtm_core::ports::exec::CancelToken::new(),
+        )
+        .map_err(|e| format!("those values do not make a worktree: {e}"))?;
+    let view = crate::view::preview_view(&preview, &req.values);
+    Ok(format!(
+        "{} › New Worktree\n\n{form}\n{}",
+        inert(project.display_name()),
+        describe_plan(&view)
+    ))
+}
+
+/// What a finished creation tells the Home agent.
+fn outcome_text(
+    project: &str,
+    result: &Result<wtm_core::model::CreateOutcome, wtm_core::error::WtmError>,
+) -> Result<String, String> {
+    use wtm_core::model::CreateOutcome;
+    match result {
+        Ok(CreateOutcome::Created { worktree, .. }) => Ok(format!(
+            "Created {} in {project}, and its setup finished. `open_session` with worktree `{}` \
+             starts a session there.",
+            worktree.path.display(),
+            worktree.dirname()
+        )),
+        Ok(CreateOutcome::SetupFailed {
+            worktree, outcome, ..
+        }) => Ok(format!(
+            "Created {} in {project}, but its setup failed: {}. It was kept, because setup may \
+             have allocated things; the user can retry the setup or remove it.",
+            worktree.path.display(),
+            outcome.describe()
+        )),
+        Ok(CreateOutcome::Cancelled { .. }) => Err("the creation was cancelled".to_owned()),
+        Err(wtm_core::error::WtmError::Preflight(items)) => Err(format!(
+            "not created — {}. Only the user can override that, in the New Worktree form.",
+            items
+                .iter()
+                .map(|item| inert(&item.message))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )),
+        Err(error) => Err(format!("not created: {error}")),
+    }
+}
+
+fn create_worktree(
+    handle: &AppHandle,
+    app: &Arc<App>,
+    home: &HomeCaller,
+    args: &Value,
+) -> Result<String, String> {
+    use crate::home::{Job, JobPhase};
+
+    let project = resolve_project(app, required(args, "project")?)?;
+    let values = form_values(args)?;
+    let adopt = args
+        .get("adopt_branch")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let project_id = project.id.as_str().to_owned();
+    let name = project.display_name().to_owned();
+
+    let one_at_a_time = project
+        .setup
+        .as_ref()
+        .is_some_and(|s| s.concurrency == wtm_core::model::Concurrency::OneGlobally);
+    if one_at_a_time && app.creating_in(&project_id) > 0 {
+        return Err(format!(
+            "another worktree is being created in {name}, whose setup allows one at a time; wait \
+             for it to finish"
+        ));
+    }
+    if app.home.running_jobs() >= crate::home::MAX_RUNNING_JOBS {
+        return Err("two worktrees are already being created from Home; wait for one".to_owned());
+    }
+
+    let req =
+        crate::commands::create_request(app, &project_id, &values, adopt, Vec::new(), 24, 100)
+            .map_err(|e| e.message)?;
+    // Previewed first, so an error stops it here with the reasons — and so the job knows what it is
+    // making before anything is made.
+    let preview = app
+        .create_pipeline()
+        .preview(
+            &req,
+            &wtm_core::ports::progress::NullProgress,
+            &wtm_core::ports::exec::CancelToken::new(),
+        )
+        .map_err(|e| format!("those values do not make a worktree: {e}"))?;
+    let view = crate::view::preview_view(&preview, &req.values);
+    if !view.can_create || !preview.is_clear() {
+        return Err(format!("not created.\n\n{}", describe_plan(&view)));
+    }
+
+    let job = app.home.start_job(Job {
+        id: 0,
+        project_id: project_id.clone(),
+        project_name: name.clone(),
+        by: home.session.clone(),
+        branch: view.branch.clone(),
+        directory: view.directory.clone(),
+        phase: JobPhase::Running,
+        step: None,
+        setup_session: None,
+        worktree: None,
+        error: None,
+    });
+    crate::home::announce_job(handle, &job);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let handle = handle.clone();
+        let app = Arc::clone(app);
+        let name = name.clone();
+        std::thread::spawn(move || {
+            let _creating = app.start_creating(&project_id);
+            let progress = crate::home::JobProgress {
+                handle: handle.clone(),
+                app: Arc::clone(&app),
+                job: job.id,
+            };
+            // Recorded, so the view can attach to the setup's terminal after it started.
+            let sink = crate::pty_bridge::EventSink::recording(handle.clone(), Arc::clone(&app));
+            let result = app.create_pipeline().execute(
+                &req,
+                &progress,
+                sink,
+                &wtm_core::ports::exec::CancelToken::new(),
+            );
+            let updated = app.home.update_job(job.id, |job| {
+                use wtm_core::model::CreateOutcome;
+                match &result {
+                    Ok(CreateOutcome::Created { worktree, .. }) => {
+                        job.phase = JobPhase::Created;
+                        job.worktree = Some(worktree.id.as_str().to_owned());
+                    }
+                    Ok(CreateOutcome::SetupFailed {
+                        worktree, outcome, ..
+                    }) => {
+                        job.phase = JobPhase::SetupFailed;
+                        job.worktree = Some(worktree.id.as_str().to_owned());
+                        job.error = Some(outcome.describe());
+                    }
+                    Ok(CreateOutcome::Cancelled { worktree, .. }) => {
+                        job.phase = JobPhase::Failed;
+                        job.worktree = worktree.as_ref().map(|w| w.id.as_str().to_owned());
+                        job.error = Some("cancelled".to_owned());
+                    }
+                    Err(error) => {
+                        job.phase = JobPhase::Failed;
+                        job.error = Some(error.to_string());
+                    }
+                }
+            });
+            if let Some(job) = updated {
+                crate::home::announce_job(&handle, &job);
+            }
+            let _ = tx.send(outcome_text(&name, &result));
+        });
+    }
+
+    // Waited on against the clock port, like a turn. A longer setup carries on; the view shows it.
+    let deadline = app.clock.monotonic_ms() + crate::turns::TURN_TIMEOUT_MS;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(result) => return result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if app.clock.monotonic_ms() >= deadline {
+                    return Ok(format!(
+                        "The worktree {} in {name} is made and its setup is still running after \
+                         ten minutes; it is shown in Home. Wait for it before opening sessions \
+                         there.",
+                        view.directory
+                    ));
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("the creation stopped without saying how it ended".to_owned());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! The Home tools reach across worktrees, so these pin the edges of that: who may call them,
@@ -1010,6 +1384,37 @@ mod tests {
         assert!(text.contains("User: the latest question"));
         assert!(!text.contains("first question"));
         assert!(text.starts_with("[…earlier text cut]"));
+    }
+
+    #[test]
+    fn form_values_cross_as_the_strings_the_form_sends() {
+        let args = json!({ "values": { "ticket": "ACME-1", "fresh": true, "count": 3, "tags": ["a", "b"], "empty": null } });
+        let values = form_values(&args).unwrap();
+        assert_eq!(values["ticket"], "ACME-1");
+        assert_eq!(values["fresh"], "true");
+        assert_eq!(values["count"], "3");
+        assert_eq!(values["tags"], "a,b");
+        assert_eq!(values["empty"], "");
+        assert!(form_values(&json!({ "values": { "x": { "nested": 1 } } })).is_err());
+        assert!(form_values(&json!({ "values": "no" })).is_err());
+    }
+
+    #[test]
+    fn create_refuses_every_error_preflight_including_overridable_ones() {
+        // Home never acknowledges anything, so even an error the user could tick past in the form
+        // stops it — and the reason reaches the agent to pass on.
+        let blocked = Err(wtm_core::error::WtmError::Preflight(vec![
+            wtm_core::model::PreflightItem {
+                id: "dirty-base".to_owned(),
+                severity: wtm_core::model::PreflightSeverity::Error,
+                message: "The base branch has uncommitted changes".to_owned(),
+                overridable: true,
+                hint: None,
+            },
+        ]));
+        let text = outcome_text("webapp", &blocked).unwrap_err();
+        assert!(text.contains("uncommitted changes"), "{text}");
+        assert!(text.contains("Only the user can override"), "{text}");
     }
 
     #[test]

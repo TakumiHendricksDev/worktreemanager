@@ -1,0 +1,40 @@
+/*
+ * A worktree the Home agent is creating, in Home's peek slot: its header is the peek panel's
+ * (`c-peek__head`), then the step it is on and the setup's own terminal.
+ *
+ * The progress bar is the global `.c-progress` the New Worktree form uses, so the two read as one
+ * thing done from two places.
+ */
+
+.c-creation {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.c-creation__step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+}
+
+.c-creation__label {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-creation__error {
+  padding: var(--sp-3);
+  color: var(--danger);
+  font-size: var(--step--1);
+}
+
+.c-creation__terminal {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 160px;
+  padding: 0 var(--sp-3) var(--sp-3);
+}

@@ -1063,7 +1063,7 @@ fn decode_field_value(
 }
 
 /// Build the pipeline's request from what the frontend sent.
-fn create_request(
+pub(crate) fn create_request(
     app: &App,
     project_id: &str,
     values: &std::collections::BTreeMap<String, String>,
@@ -1168,6 +1168,8 @@ pub async fn create_worktree(
         )?;
         let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
         let sink = crate::pty_bridge::EventSink::new(handle);
+        // Counted while it runs, so Home can honour `one_globally` against a dialog's run too.
+        let _creating = app.start_creating(&project_id);
 
         app.create_pipeline()
             .execute(

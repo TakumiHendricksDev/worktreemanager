@@ -304,6 +304,7 @@ pub fn run() {
             commands::list_worktree_files,
             messages::agent_messages,
             home::open_home_session,
+            home::home_jobs,
             code::code_tree,
             code::code_list_dir,
             code::code_read_file,

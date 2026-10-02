@@ -28,16 +28,20 @@
   import { view } from '../state/view.svelte';
   import ActivityList from './ActivityList.svelte';
   import NeedsYou from './NeedsYou.svelte';
+  import CreationPanel from './CreationPanel.svelte';
   import PeekPanel from './PeekPanel.svelte';
 
   const {
     visible,
     onreveal,
+    onopenworktree,
     main,
   }: {
     visible: boolean;
     /** Go to a pane in its own worktree. */
     onreveal: (pane: Pane) => void;
+    /** Go to a worktree, with nothing in particular to focus. */
+    onopenworktree: (projectId: string, worktreeId: string) => void;
     /** Home's own conversation, the main column. */
     main: Snippet;
   } = $props();
@@ -71,9 +75,18 @@
   // when the choice changes: a new approval never switches tabs by itself.
   $effect(() => {
     if (view.peeked === null) return;
+    // A session chosen over a job: the slot shows one thing at a time.
+    fleet.jobShown = null;
     side = 'peek';
     if (narrow) tab = 'peek';
   });
+  $effect(() => {
+    if (fleet.jobShown === null) return;
+    side = 'peek';
+    if (narrow) tab = 'peek';
+  });
+
+  const job = $derived(fleet.jobs.find((j) => j.id === fleet.jobShown) ?? null);
 
   // A pane that goes away stops being peeked at, rather than leaving an empty panel.
   $effect(() => {
@@ -116,7 +129,9 @@
 </script>
 
 {#snippet peekOrHint()}
-  {#if peeked}
+  {#if job}
+    <CreationPanel {job} {onopenworktree} />
+  {:else if peeked}
     <PeekPanel pane={peeked} {onreveal} />
   {:else}
     <p class="c-home__hint">

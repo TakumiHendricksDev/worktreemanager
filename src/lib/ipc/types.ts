@@ -1028,6 +1028,29 @@ export interface AgentExchange {
 }
 
 /**
+ * A worktree the Home agent is creating, or created lately. Mirrors `home::Job`.
+ *
+ * Announced whole on `home:worktree` at every step, and never on `wtm:progress`, which a New
+ * Worktree form open at the same time would take for its own.
+ */
+export interface HomeJob {
+  id: number;
+  projectId: string;
+  projectName: string;
+  /** The Home session that asked for it. */
+  by: string;
+  branch: string | null;
+  directory: string;
+  phase: 'running' | 'created' | 'setup_failed' | 'failed';
+  step: { label: string; index: number; total: number } | null;
+  /** The setup's terminal, once it has one. */
+  setupSession: string | null;
+  /** The new worktree's id, once git has made it. */
+  worktree: string | null;
+  error: string | null;
+}
+
+/**
  * One browser pane, as Rust sees it.
  *
  * The reply to `openBrowser`, a row of `listBrowsers`, and the payload of both `browser:state` and

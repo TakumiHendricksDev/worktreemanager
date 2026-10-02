@@ -244,7 +244,10 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
 - **The Home agent.** Start Claude, Codex or Cursor in Home's main column. It runs in a folder of its
   own, outside every repository, and has tools for the sessions everywhere else: list them, read one,
   message one and wait for the answer, start one in any worktree of any project, stop a turn it
-  started, and close sessions it opened that you haven't used. It cannot answer approvals; those come
+  started, close sessions it opened that you haven't used, and create a worktree when you ask — it
+  previews the form's plan first, and anything the preview calls an error stops it, since only you
+  can override one. Its setup runs in Home, in a terminal you can type into. It cannot answer
+  approvals; those come
   to you under Needs you. Messages it sends arrive labelled *From Home (wtm)*. **History** picks up a
   past Home conversation.
 
@@ -360,7 +363,7 @@ Every session gets an MCP server called `wtm`:
 
 The [Home agent](#home) gets a different set instead, because it has no worktree for these to act on:
 `list_projects`, `list_all_sessions`, `read_session`, `message_session`, `open_session`,
-`interrupt_session` and `close_sessions`. Sessions are named by short handles such as `s2`, and
+`interrupt_session`, `close_sessions`, `preview_worktree` and `create_worktree`. Sessions are named by short handles such as `s2`, and
 what one session said reaches Home marked as untrusted content.
 
 **Session awareness** is a beta, off by default (Settings → General). When other sessions share the

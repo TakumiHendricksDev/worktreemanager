@@ -20,10 +20,10 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 import { anchorOf, arrangeFleet, HOME_KEY, sessionKey, type FleetOnly } from '../fleet';
-import type { FleetSession } from '../fleet';
+import type { FleetJob, FleetSession } from '../fleet';
 import { isHome } from '../home';
 import { commands } from '../ipc/commands';
-import type { AgentExchange, AgentOption, Worktree } from '../ipc/types';
+import type { AgentExchange, AgentOption, HomeJob, Worktree } from '../ipc/types';
 import { sessions, type Pane, type PendingApproval } from './sessions.svelte';
 import { view } from './view.svelte';
 import { cachedWorktrees, cacheWorktrees, workspace } from './workspace.svelte';
@@ -78,15 +78,36 @@ class Fleet {
   folds = $state<Record<string, boolean>>(readFolds());
   query = $state('');
   only = $state<FleetOnly | null>(null);
+  /** Worktrees Home is creating or created lately. */
+  jobs = $state<HomeJob[]>([]);
+  /** Jobs the user has dismissed from the tree. */
+  private dismissed = $state<number[]>([]);
+  /** The job shown in the peek slot, instead of a session. */
+  jobShown = $state<number | null>(null);
 
   /** One refresh at a time; a second request while one runs waits for it rather than racing. */
   private refreshing: Promise<void> | null = null;
 
   /** Subscribe to the message log and read what it already holds. Returns teardown. */
   async init(): Promise<UnlistenFn> {
-    const off = await listen<AgentExchange>('agent:message', (event) => {
+    const offMessages = await listen<AgentExchange>('agent:message', (event) => {
       this.upsert(event.payload);
     });
+    const offJobs = await listen<HomeJob>('home:worktree', (event) => {
+      this.upsertJob(event.payload);
+    });
+    const off = () => {
+      offMessages();
+      offJobs();
+    };
+    void commands
+      .homeJobs()
+      .then((jobs) => {
+        for (const job of jobs) {
+          if (!this.jobs.some((j) => j.id === job.id)) this.upsertJob(job);
+        }
+      })
+      .catch(() => {});
     try {
       const kept = await commands.agentMessages();
       // Merged rather than assigned: an exchange can have been announced between subscribing and
@@ -114,6 +135,51 @@ class Fleet {
     }
   }
 
+  private upsertJob(job: HomeJob): void {
+    const known = this.jobs.some((j) => j.id === job.id);
+    this.jobs = known
+      ? this.jobs.map((j) => (j.id === job.id ? job : j))
+      : [...this.jobs, job];
+    // The listing does not know this worktree yet; a session Home opens there must survive the
+    // reconcile that runs against it in the meantime.
+    if (job.worktree) sessions.expectWorktree(job.worktree);
+    if (job.phase === 'created' || job.phase === 'setup_failed') {
+      if (job.projectId === workspace.activeProjectId) void workspace.refreshWorktrees();
+      else void this.fetchOne(job.projectId);
+    }
+  }
+
+  /** Show a job in the peek slot. */
+  showJob(id: number): void {
+    view.peek(null);
+    this.jobShown = id;
+  }
+
+  dismissJob(id: number): void {
+    if (!this.dismissed.includes(id)) this.dismissed = [...this.dismissed, id];
+    if (this.jobShown === id) this.jobShown = null;
+  }
+
+  /** Jobs the tree shows: everything not dismissed. */
+  shownJobs = $derived.by((): FleetJob[] =>
+    this.jobs
+      .filter((job) => !this.dismissed.includes(job.id))
+      .map((job) => ({
+        id: job.id,
+        projectId: job.projectId,
+        title: job.directory.split('/').filter(Boolean).pop() ?? job.branch ?? 'worktree',
+        phase: job.phase,
+        detail:
+          job.phase === 'running'
+            ? job.step
+              ? `${job.step.label} · ${job.step.index} of ${job.step.total}`
+              : 'Starting…'
+            : job.phase === 'created'
+              ? 'created'
+              : (job.error ?? 'failed'),
+      })),
+  );
+
   /** The wire's fade finished. */
   dropTrace(id: number): void {
     if (this.traces.includes(id)) this.traces = this.traces.filter((t) => t !== id);
@@ -130,21 +196,25 @@ class Fleet {
   private async fetchAll(): Promise<void> {
     for (const project of workspace.projects) {
       if (!project.usable || project.id === workspace.activeProjectId) continue;
-      if (!(project.id in this.listings)) {
-        const cached = cachedWorktrees(project.id);
-        if (cached) this.listings = { ...this.listings, [project.id]: cached };
+      await this.fetchOne(project.id);
+    }
+  }
+
+  private async fetchOne(projectId: string): Promise<void> {
+    if (!(projectId in this.listings)) {
+      const cached = cachedWorktrees(projectId);
+      if (cached) this.listings = { ...this.listings, [projectId]: cached };
+    }
+    try {
+      const list = await commands.listWorktrees(projectId);
+      // Assigned only when it changed, so a refresh that found nothing new signals no reader —
+      // the same rule `patch` in the sessions store explains.
+      if (JSON.stringify(this.listings[projectId]) !== JSON.stringify(list)) {
+        this.listings = { ...this.listings, [projectId]: list };
+        cacheWorktrees(projectId, list);
       }
-      try {
-        const list = await commands.listWorktrees(project.id);
-        // Assigned only when it changed, so a refresh that found nothing new signals no reader —
-        // the same rule `patch` in the sessions store explains.
-        if (JSON.stringify(this.listings[project.id]) !== JSON.stringify(list)) {
-          this.listings = { ...this.listings, [project.id]: list };
-          cacheWorktrees(project.id, list);
-        }
-      } catch {
-        /* The cached list stands; the project's own view will say what went wrong. */
-      }
+    } catch {
+      /* The cached list stands; the project's own view will say what went wrong. */
     }
   }
 
@@ -200,6 +270,7 @@ class Fleet {
         })),
         worktrees,
         sessions: this.sessions,
+        jobs: this.shownJobs,
       },
       { folds: this.folds, peeked: view.peeked, query: this.query, only: this.only },
     );

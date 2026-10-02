@@ -44,6 +44,7 @@ import type {
   CreateOutcome,
   Doctor,
   Form,
+  HomeJob,
   Openers,
   Palette,
   Preflight,
@@ -240,6 +241,9 @@ export const commands = {
       resume?: string | null;
     };
   }) => invoke<string>('open_home_session', { options: {}, ...args }),
+
+  /** Worktrees the Home agent is creating or created lately, oldest first. */
+  homeJobs: () => invoke<HomeJob[]>('home_jobs'),
 
   /** Fork a live conversation for one ephemeral `/btw` question. */
   openAgentSideSession: (args: {
