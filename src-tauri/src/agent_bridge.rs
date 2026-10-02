@@ -228,7 +228,8 @@ impl AgentEventSink {
         else {
             return;
         };
-        if facts.ephemeral {
+        // wtm's news for Home is not something anyone said to it, so it names nothing.
+        if facts.ephemeral || text.starts_with(crate::home::FROM_WTM) {
             return;
         }
         // A session Home opened hears its first prompt behind Home's label, and the label is not
@@ -284,6 +285,13 @@ impl AgentSink for AgentEventSink {
         if let Some(app) = &self.app {
             let settled = app.turns.observe(session.as_str(), event);
             crate::messages::settle_turns(&self.handle, app, &settled);
+            // After the turns have settled, never before: a Home tool call waiting in person for
+            // this reply is handed it by `observe`, and that is what tells Home's record the
+            // reply needs no notice. See `home::Registry::release`.
+            crate::home::settled(app, &settled);
+            if matches!(event, AgentEvent::ApprovalRequested { .. }) {
+                crate::home::approval_requested(app, session.as_str());
+            }
         }
     }
 
@@ -293,6 +301,7 @@ impl AgentSink for AgentEventSink {
         if let Some(app) = &self.app {
             let settled = app.turns.gone(session.as_str(), &outcome.describe());
             crate::messages::settle_turns(&self.handle, app, &settled);
+            crate::home::settled(app, &settled);
         }
         let payload = AgentExitPayload {
             session: session.as_str().to_owned(),

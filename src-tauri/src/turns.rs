@@ -130,7 +130,25 @@ impl Watch {
 pub struct Waiter {
     session: String,
     id: u64,
+    exchange: Option<u64>,
     rx: mpsc::Receiver<(Outcome, String)>,
+}
+
+impl Waiter {
+    /// The message-log exchange this watch will settle, if one was recorded.
+    #[must_use]
+    pub const fn exchange(&self) -> Option<u64> {
+        self.exchange
+    }
+
+    /// How the turn ended, if it already has and nothing has read it yet.
+    ///
+    /// For a waiter that stopped waiting at the same moment the turn ended: the ending was sent
+    /// before anyone outside this module could learn the watch was gone, so it is already here.
+    #[must_use]
+    pub fn take(&self) -> Option<(Outcome, String)> {
+        self.rx.try_recv().ok()
+    }
 }
 
 /// Every armed watch, by session id.
@@ -178,6 +196,7 @@ impl Registry {
         Ok(Waiter {
             session: session.to_owned(),
             id,
+            exchange,
             rx,
         })
     }
@@ -238,42 +257,74 @@ impl Registry {
     }
 }
 
-/// Block until the watched turn ends or the deadline passes. The reply text, or why there is none.
+/// How a [`wait_until`] ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wait {
+    /// The turn ended, with its text.
+    Ended(Outcome, String),
+    /// The deadline passed first. The watch is still armed, and settles when the turn ends.
+    TimedOut,
+    /// The caller's own condition said to stop waiting. The watch is still armed, as above.
+    Stopped,
+    /// The watch went without settling, which only `cancel` does. Nothing more is coming.
+    Lost,
+}
+
+/// Block until the watched turn ends, the deadline passes, or `stop` says to give up.
 ///
 /// Polls the channel with a timeout rather than blocking on `recv` outright, because the deadline
 /// has to be measured against the [`Clock`] port — `Instant::now` is banned outside the clock
-/// adapter, and `recv_timeout`'s own deadline would smuggle the system clock back in.
-///
-/// # Errors
-///
-/// The far side's failure message, the session's death, or the deadline — each phrased for the
-/// model that will read it.
-pub fn wait(clock: &dyn Clock, waiter: &Waiter, timeout_ms: u64) -> Result<String, String> {
+/// adapter, and `recv_timeout`'s own deadline would smuggle the system clock back in. `stop` is
+/// asked on the same beat, which is what lets Home's `wait: true` come back the moment the session
+/// it asked starts waiting on the user, rather than holding Home's turn shut while it does.
+pub fn wait_until(
+    clock: &dyn Clock,
+    waiter: &Waiter,
+    timeout_ms: u64,
+    mut stop: impl FnMut() -> bool,
+) -> Wait {
     let deadline = clock.monotonic_ms() + timeout_ms;
     loop {
         match waiter
             .rx
             .recv_timeout(std::time::Duration::from_millis(POLL_MS))
         {
-            Ok((Outcome::Finished, text)) => return Ok(text),
-            Ok((Outcome::Failed(message), _)) => return Err(message),
-            Ok((Outcome::Gone(summary), _)) => {
-                return Err(format!("that session ended before it answered — {summary}"));
-            }
+            Ok((outcome, text)) => return Wait::Ended(outcome, text),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if clock.monotonic_ms() >= deadline {
-                    return Err(
-                        "that session did not finish in ten minutes; its pane is still open"
-                            .to_owned(),
-                    );
+                    return Wait::TimedOut;
+                }
+                if stop() {
+                    return Wait::Stopped;
                 }
             }
-            // The watch went without settling, which only `cancel` does. Nothing more is coming.
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err("that session went away without answering".to_owned());
-            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Wait::Lost,
         }
     }
+}
+
+/// Block until the watched turn ends or the deadline passes. The reply text, or why there is none.
+///
+/// # Errors
+///
+/// The far side's failure message, the session's death, or the deadline — each phrased for the
+/// model that will read it.
+pub fn wait(clock: &dyn Clock, waiter: &Waiter, timeout_ms: u64) -> Result<String, String> {
+    match wait_until(clock, waiter, timeout_ms, || false) {
+        Wait::Ended(Outcome::Finished, text) => Ok(text),
+        Wait::Ended(Outcome::Failed(message), _) => Err(message),
+        Wait::Ended(Outcome::Gone(summary), _) => Err(ended_before_answering(&summary)),
+        Wait::TimedOut | Wait::Stopped => {
+            Err("that session did not finish in ten minutes; its pane is still open".to_owned())
+        }
+        Wait::Lost => Err("that session went away without answering".to_owned()),
+    }
+}
+
+/// What a caller is told about a session that died mid-turn.
+#[must_use]
+pub fn ended_before_answering(summary: &str) -> String {
+    format!("that session ended before it answered — {summary}")
 }
 
 /// Why a tracked turn produced no reply.
@@ -301,6 +352,27 @@ pub fn send(
     begin: &crate::messages::Begin<'_>,
     text: &str,
 ) -> Result<Waiter, SendFailure> {
+    send_tracked(handle, app, begin, text, |_| {})
+}
+
+/// [`send`], handing the new exchange to `armed` after the watch is set and before the turn is
+/// sent.
+///
+/// That moment is the only safe one for a caller that keeps its own record of the exchange — Home's
+/// delegations. Any later and a turn that fails at once can settle before the record exists, and
+/// the record would then wait for an ending that has already happened. A refused send settles the
+/// exchange as failed, so whatever `armed` recorded must be dropped by the caller on `Err`.
+///
+/// # Errors
+///
+/// As [`send`].
+pub fn send_tracked(
+    handle: &tauri::AppHandle,
+    app: &crate::app::App,
+    begin: &crate::messages::Begin<'_>,
+    text: &str,
+    armed: impl FnOnce(&crate::messages::Exchange),
+) -> Result<Waiter, SendFailure> {
     let exchange = crate::messages::begin(handle, app, begin);
     let waiter = match app.turns.watch(begin.to, Some(exchange.id)) {
         Ok(waiter) => waiter,
@@ -309,6 +381,7 @@ pub fn send(
             return Err(SendFailure::Refused(error));
         }
     };
+    armed(&exchange);
     if let Err(error) = app.send_agent_turn(begin.to, text, &[]) {
         app.turns.cancel(&waiter);
         let error = error.to_string();
@@ -484,6 +557,43 @@ mod tests {
         assert!(turns.watch("s", None).is_err());
         assert!(turns.watch("other", None).is_ok());
         drop(waiters);
+    }
+
+    #[test]
+    fn a_wait_told_to_stop_leaves_the_watch_armed_so_the_turn_still_settles_its_exchange() {
+        // Home's `wait: true` stops waiting when its session starts waiting on the user. The
+        // delegation is still running, and its end has to reach the exchange — and Home — later.
+        let clock = wtm_testkit::FakeClock::new();
+        let turns = Registry::default();
+        let waiter = turns.watch("s", Some(5)).expect("armed");
+        assert_eq!(waiter.exchange(), Some(5));
+
+        assert_eq!(
+            wait_until(&clock, &waiter, TURN_TIMEOUT_MS, || true),
+            Wait::Stopped
+        );
+        assert!(turns.in_flight("s"));
+
+        turns.observe("s", &delta("done"));
+        let settled = turns.observe("s", &finished());
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].exchange, Some(5));
+    }
+
+    #[test]
+    fn a_turn_that_ends_as_its_waiter_gives_up_can_still_be_taken() {
+        // The ending is sent before the watch can be seen to be gone, so a waiter that stopped at
+        // that same moment finds it waiting rather than losing the reply between the two.
+        let clock = wtm_testkit::FakeClock::new();
+        let turns = Registry::default();
+        let waiter = turns.watch("s", None).expect("armed");
+        assert_eq!(wait_until(&clock, &waiter, 0, || false), Wait::TimedOut);
+
+        turns.observe("s", &delta("late"));
+        turns.observe("s", &finished());
+
+        assert_eq!(waiter.take(), Some((Outcome::Finished, "late".to_owned())));
+        assert_eq!(waiter.take(), None);
     }
 
     #[test]

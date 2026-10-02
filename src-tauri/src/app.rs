@@ -1797,6 +1797,19 @@ impl App {
         self.overview().into_iter().find(|o| o.session == session)
     }
 
+    /// What a session's unanswered approvals ask, oldest id first. Empty when it is not waiting.
+    ///
+    /// The cheap half of [`Self::overview_of`]: Home's `wait: true` asks it ten times a second.
+    #[must_use]
+    pub fn approvals_of(&self, session: &str) -> Vec<String> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents
+            .lock()
+            .get(&id)
+            .map(|entry| entry.pending_approvals.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// A session's last few turns, from its replay buffer. Empty for a session that is not live.
     #[must_use]
     pub fn recent_turns(&self, session: &str, turns: usize) -> Vec<AgentEvent> {

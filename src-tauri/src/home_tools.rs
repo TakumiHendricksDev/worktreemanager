@@ -16,6 +16,9 @@
 //!   `open_pane` a delegation does.
 //! - **It cannot decide for the user.** No tool answers an approval, changes a session's mode,
 //!   steers a running turn, or messages a session that is busy or waiting on the user.
+//! - **It does not wait unless asked.** A message is delivered and the tool returns; how it ends
+//!   comes back to Home as a notice (`home.rs`), so Home's turn — and the user's composer — is not
+//!   held shut for the length of somebody else's.
 //! - **What the GUI would ask, Home refuses.** Worktrees are created and removed through the
 //!   dialogs' own request builders and pipelines, and anything either dialog would warn about or
 //!   ask the user to confirm stops Home and leaves the decision there — so Home can do what a
@@ -97,7 +100,7 @@ pub fn definitions(agents: &[(String, String)]) -> Vec<Value> {
         }),
         json!({
             "name": "list_all_sessions",
-            "description": "List every agent session in every project and worktree: its handle, agent, model, what it is doing (working, idle, needs the user, failed), its first prompt, and who opened it. Handles name sessions for the other Home tools.",
+            "description": "List every agent session in every project and worktree: its handle, agent, model, what it is doing (working, idle, needs the user, failed), its first prompt, and who opened it. Opens with what you have in flight: each message you sent that has not been answered yet, to whom, what you asked and when. Handles name sessions for the other Home tools.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -120,20 +123,20 @@ pub fn definitions(agents: &[(String, String)]) -> Vec<Value> {
         }),
         json!({
             "name": "message_session",
-            "description": "Send a message to an existing session and, by default, wait up to ten minutes for its reply. Refused while the session is working or waiting on the user; it is never interrupted. The session shares none of your conversation, so make the message self-contained.",
+            "description": "Send a message to an existing session. Returns as soon as the session has it: wtm tells you in a new message when the session finishes (with the start of its reply), stops to wait on the user, fails or is closed — so do not poll for the answer. Refused while the session is working or waiting on the user; it is never interrupted. The session shares none of your conversation, so make the message self-contained.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "session": session,
                     "prompt": { "type": "string", "description": "What to say. It arrives labelled as coming from Home." },
-                    "wait": { "type": "boolean", "description": "Wait for the reply. Default true." }
+                    "wait": { "type": "boolean", "description": "Wait for the reply in this call instead, for a quick question: up to ten minutes, or until the session stops to wait on the user. Your turn stays busy meanwhile. Default false." }
                 },
                 "required": ["session", "prompt"]
             }
         }),
         json!({
             "name": "open_session",
-            "description": "Start a new agent session in a worktree of any project, as an ordinary pane there, and send it a first prompt. By default waits up to ten minutes for its reply. The repository's own settings and refusals apply.",
+            "description": "Start a new agent session in a worktree of any project, as an ordinary pane there, and send it a first prompt. Returns once the prompt is delivered; the reply comes later as a notice from wtm, as with `message_session`. The repository's own settings and refusals apply.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -145,14 +148,14 @@ pub fn definitions(agents: &[(String, String)]) -> Vec<Value> {
                     "model": { "type": "string" },
                     "effort": { "type": "string" },
                     "mode": { "type": "string" },
-                    "wait": { "type": "boolean", "description": "Wait for the reply. Default true." }
+                    "wait": { "type": "boolean", "description": "Wait for the reply in this call instead: up to ten minutes, or until the session stops to wait on the user. Default false." }
                 },
                 "required": ["project", "worktree", "agent", "prompt"]
             }
         }),
         json!({
             "name": "interrupt_session",
-            "description": "Stop a turn you started in a session with `message_session` or `open_session`. A turn the user started is not yours to stop.",
+            "description": "Stop a turn you started in a session with `message_session` or `open_session`. No notice follows for a turn you stopped. A turn the user started is not yours to stop.",
             "inputSchema": { "type": "object", "properties": { "session": session }, "required": ["session"] }
         }),
         json!({
@@ -781,9 +784,12 @@ fn list_all_sessions(app: &App, home: &HomeCaller, args: &Value) -> String {
         .into_iter()
         .filter(|s| !s.scope.is_home())
         .collect();
+    let mut text = in_flight(app, home);
     if sessions.is_empty() {
-        return "There are no agent sessions running in any worktree. `open_session` starts one."
-            .to_owned();
+        text.push_str(
+            "There are no agent sessions running in any worktree. `open_session` starts one.",
+        );
+        return text;
     }
     let names: std::collections::BTreeMap<String, String> = app
         .projects()
@@ -804,7 +810,6 @@ fn list_all_sessions(app: &App, home: &HomeCaller, args: &Value) -> String {
         }
     }
 
-    let mut text = String::new();
     for ((project, worktree), list) in grouped {
         let name = names.get(&project).map_or(project.as_str(), String::as_str);
         let dir = std::path::Path::new(&worktree)
@@ -820,6 +825,9 @@ fn list_all_sessions(app: &App, home: &HomeCaller, args: &Value) -> String {
             let _ = write!(line, " · {}", status_text(session));
             if let Some(title) = &session.title {
                 let _ = write!(line, " · “{}”", cut(title, 90));
+            }
+            if app.home.delegated_to(&home.session, &session.session) {
+                line.push_str(" · on your task");
             }
             if app.home.opener_of(&session.session).as_deref() == Some(home.session.as_str()) {
                 line.push_str(" · opened by you");
@@ -847,6 +855,71 @@ fn list_all_sessions(app: &App, home: &HomeCaller, args: &Value) -> String {
          belong to the user: you cannot answer them.",
     );
     text
+}
+
+/// The messages this Home conversation sent that have not been answered, as `list_all_sessions`
+/// opens with. Empty when there are none.
+fn in_flight(app: &App, home: &HomeCaller) -> String {
+    let now = app.clock.now_unix_ms();
+    let lines: Vec<String> = app
+        .home
+        .delegations(&home.session)
+        .iter()
+        .map(|delegation| {
+            let handle = app
+                .home
+                .handle_for(&home.session, &delegation.target.session);
+            let state = app
+                .overview_of(&delegation.target.session)
+                .map_or_else(|| "closing".to_owned(), |o| status_text(&o));
+            in_flight_line(&handle, delegation, &state, now)
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "## In flight — work you sent that has not been answered\nwtm tells you in a new message \
+         as each one finishes, waits on the user, fails or is closed. Tell the user what is \
+         pending; do not poll.\n{}\n\n",
+        lines.join("\n")
+    )
+}
+
+/// One delegation as `list_all_sessions` lists it. Pure, for the wording.
+#[must_use]
+pub fn in_flight_line(
+    handle: &str,
+    delegation: &crate::home::Delegation,
+    state: &str,
+    now_ms: u64,
+) -> String {
+    format!(
+        "- {handle} ({}) · {state} · asked {}: “{}”",
+        delegation.target.about,
+        ago(now_ms.saturating_sub(delegation.sent_at)),
+        cut(&inert(&delegation.prompt), 120)
+    )
+}
+
+/// A duration as a person says how long ago something was.
+#[must_use]
+pub fn ago(ms: u64) -> String {
+    let minutes = ms / 60_000;
+    match minutes {
+        0 => "just now".to_owned(),
+        1 => "a minute ago".to_owned(),
+        2..=59 => format!("{minutes} minutes ago"),
+        _ => {
+            let hours = minutes / 60;
+            let rest = minutes % 60;
+            match (hours, rest) {
+                (1, 0) => "an hour ago".to_owned(),
+                (h, 0) => format!("{h} hours ago"),
+                (h, m) => format!("{h} h {m} min ago"),
+            }
+        }
+    }
 }
 
 fn read_session(app: &App, home: &HomeCaller, args: &Value) -> Result<String, String> {
@@ -892,22 +965,61 @@ fn place_of(app: &App, scope: &SessionScope) -> String {
     format!("{} › {dir}", inert(&name))
 }
 
+/// Whether a tool call should wait for the reply itself. Not by default: see `home.rs`.
 fn wants_wait(args: &Value) -> bool {
-    args.get("wait").and_then(Value::as_bool).unwrap_or(true)
+    args.get("wait").and_then(Value::as_bool).unwrap_or(false)
 }
 
-/// Send a labelled message as an exchange, then wait for the reply if asked.
+/// What Home is told when a message is on its way and the reply will come as a notice.
+fn sent_text(who: &str) -> String {
+    format!(
+        "Sent to {who}, which is working on it now. wtm will tell you in a new message when it \
+         finishes, stops to wait on the user, fails or is closed. Do not poll for it with \
+         `read_session` or `list_all_sessions`; carry on with anything else, or tell the user it \
+         is in flight."
+    )
+}
+
+/// The agent and place a notice names a session by.
+fn about(app: &App, provider: &str, scope: &SessionScope) -> String {
+    format!("{} in {}", agent_label(provider), place_of(app, scope))
+}
+
+/// How a turn Home waited for in person ended, as the tool's result.
+fn reply_text(who: &str, outcome: crate::turns::Outcome, reply: &str) -> Result<String, String> {
+    match outcome {
+        crate::turns::Outcome::Finished if reply.trim().is_empty() => Ok(format!(
+            "{who} finished without a written reply. `read_session` shows what it did."
+        )),
+        crate::turns::Outcome::Finished => {
+            Ok(format!("{who} replied:\n\n{}", fenced(who, reply.trim())))
+        }
+        crate::turns::Outcome::Failed(message) => Err(message),
+        crate::turns::Outcome::Gone(summary) => Err(crate::turns::ended_before_answering(&summary)),
+    }
+}
+
+/// Send a labelled message as an exchange, recorded as one of Home's delegations, and wait for the
+/// reply only if asked.
+///
+/// Waiting gives up early, as well as at the deadline, when the session starts waiting on the user:
+/// Home cannot answer it, and a tool call that sat on through it would keep Home's turn — and the
+/// user's next message — shut behind a question only the user can see. Either way the delegation
+/// carries on, and its end comes as a notice.
 #[allow(clippy::too_many_arguments)]
 fn deliver(
     handle: &AppHandle,
     app: &App,
     home: &HomeCaller,
-    to: &str,
+    target: crate::home::Target,
     who: &str,
     via: Via,
     prompt: &str,
     wait: bool,
 ) -> Result<String, String> {
+    // Kept apart from `target`, which goes into Home's record.
+    let session = target.session.clone();
+    let to = session.as_str();
     let text = format!("{FROM_HOME}\n\n{prompt}");
     let begin = Begin {
         run: None,
@@ -916,24 +1028,63 @@ fn deliver(
         via,
         prompt,
     };
-    let waiter =
-        crate::turns::send(handle, app, &begin, &text).map_err(|failure| match failure {
-            crate::turns::SendFailure::Refused(error) | crate::turns::SendFailure::Ended(error) => {
-                format!("{who} would not take the message: {error}")
+    let mut tracked = None;
+    let sent = crate::turns::send_tracked(handle, app, &begin, &text, |exchange| {
+        app.home.track(crate::home::Delegation::new(
+            exchange,
+            &home.session,
+            target,
+            wait,
+        ));
+        tracked = Some(exchange.id);
+    });
+    let waiter = match sent {
+        Ok(waiter) => waiter,
+        Err(
+            crate::turns::SendFailure::Refused(error) | crate::turns::SendFailure::Ended(error),
+        ) => {
+            if let Some(exchange) = tracked {
+                app.home.untrack(exchange);
             }
-        })?;
-    if !wait {
+            return Err(format!("{who} would not take the message: {error}"));
+        }
+    };
+    let (Some(exchange), true) = (tracked, wait) else {
+        return Ok(sent_text(who));
+    };
+
+    let ended = crate::turns::wait_until(
+        app.clock.as_ref(),
+        &waiter,
+        crate::turns::TURN_TIMEOUT_MS,
+        || !app.approvals_of(to).is_empty(),
+    );
+    let waiting_on_user = match ended {
+        crate::turns::Wait::Ended(outcome, reply) => return reply_text(who, outcome, &reply),
+        crate::turns::Wait::Lost => return Err(format!("{who} went away without answering")),
+        crate::turns::Wait::Stopped => true,
+        crate::turns::Wait::TimedOut => false,
+    };
+    // The turn may have ended in the same instant; if so its reply is already here to take.
+    if !app.home.release(exchange, waiting_on_user) {
+        return match waiter.take() {
+            Some((outcome, reply)) => reply_text(who, outcome, &reply),
+            None => Err(format!("{who} went away without answering")),
+        };
+    }
+    if waiting_on_user {
+        let asks = app.approvals_of(to);
         return Ok(format!(
-            "Sent to {who}. Its reply will appear in its pane, and in Home's activity."
+            "{who} is waiting on the user, and is still on your task. It asks for:\n{}\nYou \
+             cannot answer it. Tell the user it is under Needs you. wtm will tell you in a new \
+             message when it finishes.",
+            fenced(who, &asks.join("\n"))
         ));
     }
-    let reply = crate::turns::wait(app.clock.as_ref(), &waiter, crate::turns::TURN_TIMEOUT_MS)?;
-    if reply.trim().is_empty() {
-        return Ok(format!(
-            "{who} finished without a written reply. `read_session` shows what it did."
-        ));
-    }
-    Ok(format!("{who} replied:\n\n{}", fenced(who, reply.trim())))
+    Ok(format!(
+        "{who} is still working after ten minutes; its pane is open. wtm will tell you in a new \
+         message when it finishes, so do not poll for it."
+    ))
 }
 
 fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -953,11 +1104,15 @@ fn message_session(
     let (who, overview) = target(app, home, args)?;
     let prompt = required(args, "prompt")?;
     admit(&who, &overview, &home.session)?;
+    let target = crate::home::Target {
+        session: overview.session.clone(),
+        about: about(app, &overview.provider, &overview.scope),
+    };
     deliver(
         handle,
         app,
         home,
-        &overview.session,
+        target,
         &who,
         Via::MessageSession,
         prompt,
@@ -1114,11 +1269,19 @@ fn open_session(
         inert(project.display_name()),
         worktree.dirname()
     );
+    let target = crate::home::Target {
+        session: session.as_str().to_owned(),
+        about: about(
+            app,
+            agent,
+            &SessionScope::worktree(project.id.as_str(), &worktree_id),
+        ),
+    };
     let reply = deliver(
         handle,
         app,
         home,
-        session.as_str(),
+        target,
         &who,
         Via::OpenSession,
         prompt,
@@ -1130,19 +1293,19 @@ fn open_session(
 fn interrupt_session(app: &App, home: &HomeCaller, args: &Value) -> Result<String, String> {
     let (who, overview) = target(app, home, args)?;
     // Only a turn this Home started: the user's own turn in their own pane is not Home's to stop.
-    let mine = app.messages.snapshot().iter().any(|exchange| {
-        exchange.from.as_deref() == Some(home.session.as_str())
-            && exchange.to == overview.session
-            && exchange.state == crate::messages::ExchangeState::InFlight
-    });
-    if !mine {
+    if !app.home.delegated_to(&home.session, &overview.session) {
         return Err(format!(
             "{who} is not running a turn you started, so it is not yours to stop"
         ));
     }
+    // Before the interrupt, so the turn's end — which the interrupt causes — is not reported back
+    // to Home as news about something it did itself.
+    app.home.quiet(&home.session, &overview.session);
     app.with_agent(&overview.session, wtm_agent::AgentSession::interrupt)
         .map_err(|e| e.to_string())?;
-    Ok(format!("Asked {who} to stop its turn."))
+    Ok(format!(
+        "Asked {who} to stop its turn. No notice will follow; `read_session` shows where it stopped."
+    ))
 }
 
 /// Why a session Home opened may not be closed, or `None` if it may.
@@ -2756,6 +2919,71 @@ mod tests {
         let text = outcome_text("webapp", &blocked).unwrap_err();
         assert!(text.contains("uncommitted changes"), "{text}");
         assert!(text.contains("Only the user can override"), "{text}");
+    }
+
+    #[test]
+    fn home_waits_for_a_reply_only_when_it_asks_to() {
+        assert!(!wants_wait(&json!({ "session": "s1", "prompt": "p" })));
+        assert!(wants_wait(&json!({ "wait": true })));
+        assert!(!wants_wait(&json!({ "wait": false })));
+    }
+
+    #[test]
+    fn the_delegating_tools_say_the_reply_comes_later_and_not_to_poll() {
+        let tools = definitions(&[]);
+        for name in ["message_session", "open_session"] {
+            let tool = tools.iter().find(|t| t["name"] == name).unwrap();
+            let description = tool["description"].as_str().unwrap();
+            assert!(description.contains("Returns"), "{name}: {description}");
+            assert!(!description.contains("By default waits"), "{name}");
+            let wait = tool["inputSchema"]["properties"]["wait"]["description"]
+                .as_str()
+                .unwrap();
+            assert!(wait.contains("Default false"), "{name}: {wait}");
+        }
+        let sent = sent_text("s2");
+        assert!(sent.contains("wtm will tell you") && sent.contains("Do not poll"));
+    }
+
+    #[test]
+    fn a_duration_reads_the_way_a_person_says_how_long_ago() {
+        assert_eq!(ago(59_000), "just now");
+        assert_eq!(ago(60_000), "a minute ago");
+        assert_eq!(ago(4 * 60_000 + 30_000), "4 minutes ago");
+        assert_eq!(ago(60 * 60_000), "an hour ago");
+        assert_eq!(ago(3 * 60 * 60_000), "3 hours ago");
+        assert_eq!(ago(75 * 60_000), "1 h 15 min ago");
+    }
+
+    #[test]
+    fn an_in_flight_line_says_whom_what_was_asked_and_when() {
+        let exchange = crate::messages::Exchange {
+            id: 1,
+            run: None,
+            from: Some("home".to_owned()),
+            to: "target".to_owned(),
+            via: Via::MessageSession,
+            prompt: "Run the <suite>\nand report".to_owned(),
+            reply: None,
+            error: None,
+            state: crate::messages::ExchangeState::InFlight,
+            sent_at: 1_000,
+            settled_at: None,
+        };
+        let delegation = crate::home::Delegation::new(
+            &exchange,
+            "home",
+            crate::home::Target {
+                session: "target".to_owned(),
+                about: "Codex in webapp › fix-login".to_owned(),
+            },
+            false,
+        );
+        let line = in_flight_line("s2", &delegation, "working", 1_000 + 5 * 60_000);
+        assert_eq!(
+            line,
+            "- s2 (Codex in webapp › fix-login) · working · asked 5 minutes ago: “Run the ‹suite› and report”"
+        );
     }
 
     #[test]
