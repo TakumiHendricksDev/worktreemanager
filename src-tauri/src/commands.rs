@@ -3053,11 +3053,13 @@ pub async fn browser_navigate(
 
 #[tauri::command]
 pub async fn browser_history(
+    app: AppState<'_>,
     handle: tauri::AppHandle,
     id: String,
     action: crate::browser::HistoryAction,
 ) -> Reply<()> {
-    blocking(move || crate::browser::history(&handle, &id, action)).await
+    let app = Arc::clone(&app);
+    blocking(move || crate::browser::history(&handle, &app, &id, action)).await
 }
 
 /// Where the pane's tile is, in the app webview's CSS pixels — or `None` to hide the browser.

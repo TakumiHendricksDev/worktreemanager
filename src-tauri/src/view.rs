@@ -1057,6 +1057,9 @@ pub struct BrowserView {
     pub url: String,
     pub title: String,
     pub loading: bool,
+    /// Why the last navigation showed no page — WebKit's own sentence — until the next one starts.
+    /// While it is set, `url` is the address that failed and the pane hides the page behind it.
+    pub load_error: Option<String>,
     pub can_go_back: bool,
     pub can_go_forward: bool,
     /// Whether agents may drive this pane. The per-pane toggle, on by default.

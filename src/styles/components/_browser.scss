@@ -114,6 +114,44 @@
   object-position: top left;
 }
 
+/*
+ * Why the page is not there, in the page's place. The native view is hidden while this shows —
+ * nothing in this document could be seen over it otherwise — so it is a plain block filling the
+ * box the view vacated.
+ */
+.c-browser__failed {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  overflow: auto;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.c-browser__failed-title {
+  margin: 0;
+  font-size: var(--step-0);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.c-browser__failed-why {
+  margin: 0;
+  max-width: 36rem;
+  font-size: var(--step--1);
+}
+
+.c-browser__failed-url {
+  max-width: min(100%, 36rem);
+  margin-bottom: var(--sp-2);
+  overflow-wrap: anywhere;
+  font-size: var(--step--2);
+}
+
 .c-browser__comment-toggle {
   display: flex;
   flex: 0 0 auto;

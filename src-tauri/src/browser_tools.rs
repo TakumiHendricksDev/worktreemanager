@@ -501,7 +501,7 @@ fn act(
                     ));
                 }
             };
-            browser::history(handle, id, action).map_err(|e| e.message)?;
+            browser::history(handle, app, id, action).map_err(|e| e.message)?;
             settle(app, id);
             Ok(Response::ok(snapshot_text(
                 handle,
@@ -774,10 +774,16 @@ fn open(
         browser::wait_for_load(app, &view.id, LOAD_TIMEOUT);
     }
     let snapshot = if url.is_some() {
-        format!(
-            "\n\n{}",
-            snapshot_text(handle, app, &view.id, None, SNAPSHOT_CHARS)?
-        )
+        // A first page that failed still leaves the pane open, and an agent told only "failed"
+        // would open another one for every retry until it met the cap.
+        let text = snapshot_text(handle, app, &view.id, None, SNAPSHOT_CHARS).or_else(|error| {
+            if load_failed(app, &view.id) {
+                Ok(error)
+            } else {
+                Err(error)
+            }
+        })?;
+        format!("\n\n{text}")
     } else {
         format!(
             "\n\n{}\n\nThe pane is empty; `browser_navigate` loads a page into it.",
@@ -871,6 +877,17 @@ fn runtime(
     args: &Value,
     timeout: Duration,
 ) -> Result<Value, String> {
+    // Refused here rather than asked of the page, because there is no page: after a failed first
+    // load the document is the blank one the browser was born on, which has no runtime, so every
+    // ask used to wait out its whole timeout and come back as "the page did not answer". That was
+    // most of the time an agent spent on a dev server that was not running.
+    if load_failed(app, id) {
+        return Err(format!(
+            "{}\n\nThere is no page to read or act on. If it depends on something that is not \
+             running yet, start it, then navigate again or reload.",
+            header(app, id)
+        ));
+    }
     browser::call(handle, app, id, method, args, timeout)
 }
 
@@ -941,6 +958,12 @@ fn snapshot_text(
 
 /// What Rust knows about the page, from the webview rather than the page: the address is the
 /// webview's own, and the title, though authored by the page, is marked as such.
+fn load_failed(app: &App, id: &str) -> bool {
+    app.browsers
+        .view_of(id)
+        .is_some_and(|view| view.load_error.is_some())
+}
+
 fn header(app: &App, id: &str) -> String {
     match app.browsers.view_of(id) {
         Some(view) => format!(
@@ -948,10 +971,10 @@ fn header(app: &App, id: &str) -> String {
             view.id,
             neutralised(&view.url),
             neutralised(view.title.trim()),
-            if view.loading {
-                "\n(still loading)"
-            } else {
-                ""
+            match (&view.load_error, view.loading) {
+                (Some(error), _) => format!("\nThe page did not load: {}", neutralised(error)),
+                (None, true) => "\n(still loading)".to_owned(),
+                (None, false) => String::new(),
             }
         ),
         None => format!("Browser: {id} (closed)"),

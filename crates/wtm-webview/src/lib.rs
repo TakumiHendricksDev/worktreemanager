@@ -10,7 +10,8 @@
 //! JavaScript scope that shares the DOM but nothing else, with its own `webkit.messageHandlers`
 //! that CSP does not govern. Reaching it needs four calls wry does not make — add a user script in
 //! a world, add a message handler in a world, evaluate in a world, and take a snapshot — and this
-//! crate is those four calls.
+//! crate is those four calls, plus one more for a gap of a different kind: wry reports a load that
+//! commits and a load that finishes, and never one that fails. See [`Navigation`].
 //!
 //! # The shape: a borrowed handle, and a receiver that leaves
 //!
@@ -84,6 +85,43 @@ pub enum Error {
 
 /// The callback a message lands on. Boxed once at the facade so both arms share a spelling.
 pub(crate) type OnMessage = Box<dyn Fn(Message) + Send + Sync>;
+
+/// Something a navigation did that wry does not report.
+///
+/// wry tells Tauri when a main-frame load commits and when it finishes, and nothing else. So a load
+/// that *fails* — a dev server that is not running, a DNS miss, a timeout, a Stop — arrives as no
+/// event at all, and a pane that was told "loading" stays loading for good; and a page whose web
+/// content process quits goes blank in silence. These are those two.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Navigation {
+    /// A main-frame navigation ended without finishing.
+    Failed(LoadFailure),
+    /// The page's web content process ended — it crashed, or the system reclaimed it — and the
+    /// view is blank until something loads again.
+    ContentProcessTerminated,
+}
+
+/// WebKit's account of a navigation that failed, carried as data so the caller decides what is
+/// a failure worth showing. A cancellation looks exactly like one from here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadFailure {
+    /// `NSError`'s domain and code: `NSURLErrorDomain` for the network, `WebKitErrorDomain` for
+    /// WebKit's own refusals.
+    pub domain: String,
+    pub code: i64,
+    /// WebKit's sentence for it, localised, e.g. "Could not connect to the server."
+    pub description: String,
+    /// The address that failed, when WebKit says — which it does for network failures.
+    pub url: Option<String>,
+    /// Whether the page had already committed. False means nothing replaced what was on screen.
+    pub committed: bool,
+    /// Whether the view was still loading when this arrived — a newer navigation that cancelled
+    /// this one and is now under way.
+    pub loading: bool,
+}
+
+/// The callback navigation events land on.
+pub(crate) type OnNavigation = Box<dyn Fn(Navigation) + Send + Sync>;
 
 /// The answer to an evaluation or a snapshot, delivered later.
 ///
@@ -163,6 +201,15 @@ impl Handle {
     #[must_use]
     pub fn history(&self) -> (bool, bool) {
         self.0.history()
+    }
+
+    /// Hear about the navigations that fail and the content processes that quit.
+    ///
+    /// Installed in front of the delegate the platform already set — wry's, which owns the load
+    /// and policy callbacks Tauri is built on — and forwards everything to it, so nothing that
+    /// worked before stops working. Call it once, after the webview is built.
+    pub fn observe_navigation(&self, on: impl Fn(Navigation) + Send + Sync + 'static) {
+        self.0.observe_navigation(Box::new(on));
     }
 }
 

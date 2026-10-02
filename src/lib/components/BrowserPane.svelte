@@ -25,8 +25,8 @@
    * `frame` and `lastSent` are plain variables on purpose. An effect that read `visible` and wrote a
    * `$state` it also read would be the read-write loop `layout.svelte.ts` documents; this one reads
    * its inputs, schedules a frame, and the frame does the writing — to Rust, not to state. The one
-   * `$state` the frame writes, `frozen`, is written after an `await` and read by nothing the effect
-   * tracks.
+   * `$state` the frame writes, `frozen`, is written inside the frame, never in the effect body, and
+   * read by nothing the effect tracks.
    *
    * # Why the comments live beside the page and the pins live in it
    *
@@ -60,6 +60,12 @@
   const view = $derived(browsers.viewOf(pane.session));
   const blank = $derived(id === null);
   const loading = $derived(view?.loading ?? false);
+  /**
+   * Why the page is not there, while it is not. The native view is hidden for as long as this is
+   * set and the explanation drawn in its box, because what the view would show instead is the page
+   * before the one that failed — or, for a new pane, nothing at all.
+   */
+  const failure = $derived(view?.loadError ?? null);
   const commenting = $derived(view?.commentMode ?? false);
   const comments = $derived(browsers.commentsOf(pane.session));
   const openComments = $derived(comments.filter((comment) => comment.status === 'open'));
@@ -348,10 +354,12 @@
     const browser = id;
     if (browser === null) return;
     const rect = box?.getBoundingClientRect();
+    const failed = failure !== null;
     const show =
       visible &&
       !overlay.covering &&
       !pane.detached &&
+      !failed &&
       rect !== undefined &&
       rect.width >= 1 &&
       rect.height >= 1;
@@ -361,7 +369,10 @@
     if (key === lastSent) return;
     const wasShown = lastSent !== null && !lastSent.endsWith(':null');
     lastSent = key;
-    if (!show && wasShown && browsers.runtimeUnavailable === null) {
+    // No picture for a failure: the explanation takes the page's place, and a frozen frame of the
+    // page before it would sit underneath saying the opposite.
+    if (failed) frozen = null;
+    if (!show && wasShown && !failed && browsers.runtimeUnavailable === null) {
       // The picture has to be taken while the view is still painting, so the hide waits on it —
       // one round trip, during which a dialog's scrim sits under the page. Then the intent is
       // re-checked: a show that landed while this waited must not be followed by a stale hide.
@@ -391,6 +402,7 @@
     void visible;
     void overlay.covering;
     void pane.detached;
+    void failure;
     void sessions.layouts[pane.worktreeId];
     schedule();
   });
@@ -644,7 +656,30 @@
       </div>
     {:else}
       <div class="c-browser__view" bind:this={box}>
-        {#if frozen}
+        {#if failure !== null}
+          <div class="c-browser__failed" role="alert">
+            <p class="c-browser__failed-title">This page can’t be shown</p>
+            <p class="c-browser__failed-why">{failure}</p>
+            {#if shownAddress(view?.url ?? null) !== ''}
+              <code class="c-browser__failed-url">{view?.url}</code>
+            {/if}
+            <div class="c-browser__links">
+              <!-- The same command as the toolbar's Reload, which retries the address that failed
+                   rather than reloading the page before it. See `browser::history`. -->
+              <Button variant="accent" size="sm" onclick={() => history('reload')}>
+                <Icon name="restart" size={12} /> Try again
+              </Button>
+              <Button
+                variant="neutral"
+                size="sm"
+                title="Open this address in your browser"
+                onclick={openExternally}
+              >
+                <Icon name="external" size={13} /> Open in your browser
+              </Button>
+            </div>
+          </div>
+        {:else if frozen}
           <img class="c-browser__frozen" src={frozen} alt="" />
         {/if}
       </div>

@@ -66,7 +66,7 @@ use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBui
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Position, Rect, Size, Url, WebviewUrl,
 };
-use wtm_webview::{Handle, Message, World};
+use wtm_webview::{Handle, LoadFailure, Message, Navigation, World};
 
 use crate::app::App;
 use crate::browser_bridge;
@@ -110,6 +110,10 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The console ring's two bounds. Both, because one long line is as much of a leak as many short.
 const MAX_CONSOLE_ENTRIES: usize = 200;
 const MAX_CONSOLE_BYTES: usize = 64 * 1024;
+
+/// What a pane says when its page's web content process has gone. WebKit gives no reason.
+const CONTENT_PROCESS_GONE: &str =
+    "The page stopped responding and was closed. Try again to reload it.";
 
 /// Where the child sits, in the app webview's CSS pixels with the window's content origin.
 ///
@@ -229,6 +233,13 @@ struct Entry {
     /// "the page finished loading", wake a caller waiting for the real page, and hand it a document
     /// with no runtime in it — which is exactly the failure the first end-to-end run produced.
     awaiting: bool,
+    /// Why the last navigation did not show a page, until the next one starts.
+    ///
+    /// Without it a failed load had no state at all: wry reports a load that commits and a load
+    /// that finishes and nothing else, so `loading` stayed true for good, the toolbar kept offering
+    /// Stop instead of Reload, and every agent waiting on the page waited out its timeout. `url`
+    /// holds the address that failed while this is set, which is what Reload retries.
+    load_error: Option<String>,
     can_go_back: bool,
     can_go_forward: bool,
     /// The per-pane toggle. On by default: an agent that can already run `curl` here is not newly
@@ -282,6 +293,7 @@ impl Host {
             url: entry.url.clone(),
             title: entry.title.clone(),
             loading: entry.loading,
+            load_error: entry.load_error.clone(),
             can_go_back: entry.can_go_back,
             can_go_forward: entry.can_go_forward,
             agent_access: entry.agent_access,
@@ -379,6 +391,7 @@ impl Host {
                 title: String::new(),
                 loading: false,
                 awaiting: false,
+                load_error: None,
                 can_go_back: false,
                 can_go_forward: false,
                 agent_access: true,
@@ -458,6 +471,63 @@ impl Host {
     fn resolve(&self, request: u64, answer: Result<Value, String>) {
         if let Some((_, sender)) = self.pending.lock().remove(&request) {
             let _ = sender.send(answer);
+        }
+    }
+
+    /// End a load that failed, and say why when it is a failure worth showing.
+    ///
+    /// `None` — nothing changed, nobody woken — when the view is still loading: a newer navigation
+    /// cancelled this one and is under way, and its own events will say how it went.
+    fn navigation_failed(&self, id: &str, failure: LoadFailure) -> Option<BrowserView> {
+        if failure.loading {
+            return None;
+        }
+        // A committed page is on screen, partial or not, and is what Safari leaves showing too;
+        // only a navigation that replaced nothing gets the explanation.
+        let message = (!failure.committed)
+            .then(|| failure_message(&failure))
+            .flatten();
+        let view = self.update(id, |entry| {
+            entry.loading = false;
+            entry.awaiting = false;
+            if let Some(message) = message {
+                // The failing address, so the address bar names what failed — a link the page
+                // followed never went through `navigate` — and Reload retries it.
+                if let Some(url) = failure.url {
+                    entry.url = url;
+                }
+                entry.load_error = Some(message);
+            }
+        });
+        self.loaded(id);
+        view
+    }
+
+    /// The page's process is gone: whatever was loading has stopped, and nothing it owed is coming.
+    fn content_process_gone(&self, id: &str) -> Option<BrowserView> {
+        let view = self.update(id, |entry| {
+            entry.loading = false;
+            entry.awaiting = false;
+            entry.load_error = Some(CONTENT_PROCESS_GONE.to_owned());
+        });
+        self.loaded(id);
+        self.fail_pending(id, CONTENT_PROCESS_GONE);
+        view
+    }
+
+    /// Answer every request a browser still owes with `reason`, for a page that can no longer
+    /// answer any of them. Each caller hears why now, rather than a timeout ten seconds later.
+    fn fail_pending(&self, id: &str, reason: &str) {
+        let mut pending = self.pending.lock();
+        let owed: Vec<u64> = pending
+            .iter()
+            .filter(|(_, (owner, _))| owner == id)
+            .map(|(request, _)| *request)
+            .collect();
+        for request in owed {
+            if let Some((_, sender)) = pending.remove(&request) {
+                let _ = sender.send(Err(reason.to_owned()));
+            }
         }
     }
 
@@ -626,6 +696,7 @@ pub fn open(
                 PageLoadEvent::Started => app.browsers.update(webview.label(), |entry| {
                     entry.loading = true;
                     entry.awaiting = false;
+                    entry.load_error = None;
                     entry.url = url;
                 }),
                 PageLoadEvent::Finished => {
@@ -742,6 +813,7 @@ fn install(handle: &AppHandle, app: &Arc<App>, webview: &tauri::Webview) {
     let (runtime_handle, runtime_app, runtime_label) =
         (handle.clone(), Arc::clone(app), label.clone());
     let (page_handle, page_app, page_label) = (handle.clone(), Arc::clone(app), label.clone());
+    let (nav_handle, nav_app, nav_label) = (handle.clone(), Arc::clone(app), label.clone());
     let queued = webview.with_webview(move |platform| {
         let Some(native) = native_handle(&platform) else {
             tracing::debug!(%label, "no native webview to install the browser runtime into");
@@ -755,6 +827,9 @@ fn install(handle: &AppHandle, app: &Arc<App>, webview: &tauri::Webview) {
         });
         native.add_message_handler(&World::Page, PAGE_HANDLER, move |message| {
             on_page_message(&page_handle, &page_app, &page_label, &message);
+        });
+        native.observe_navigation(move |event| {
+            on_navigation(&nav_handle, &nav_app, &nav_label, event);
         });
     });
     if let Err(error) = queued {
@@ -798,6 +873,59 @@ fn refresh_history(webview: &tauri::Webview) {
     });
     if let Err(error) = queued {
         tracing::debug!(%error, "could not read a browser's history state");
+    }
+}
+
+/// A navigation that failed, or a page whose process went, as WebKit reported it. Main thread.
+///
+/// Both end the load as far as anyone waiting is concerned, so both clear `loading` and wake the
+/// waiters; that alone is what lets the toolbar offer Reload again. Only a failure the user should
+/// hear about sets `load_error`, which hides the page behind an explanation — see
+/// [`failure_message`] for what counts.
+fn on_navigation(handle: &AppHandle, app: &Arc<App>, id: &str, event: Navigation) {
+    let view = match event {
+        Navigation::Failed(failure) => {
+            tracing::debug!(
+                id,
+                domain = failure.domain,
+                code = failure.code,
+                committed = failure.committed,
+                loading = failure.loading,
+                "browser navigation failed"
+            );
+            app.browsers.navigation_failed(id, failure)
+        }
+        Navigation::ContentProcessTerminated => {
+            tracing::debug!(id, "a browser's web content process ended");
+            app.browsers.content_process_gone(id)
+        }
+    };
+    if let Some(view) = view {
+        browser_bridge::announce_state(handle, &view);
+    }
+}
+
+/// What to tell the user about a failed navigation, or `None` for one that merely stopped.
+///
+/// Three stops are deliberate rather than failures, and showing an error for them would be wrong:
+/// `NSURLErrorCancelled` (−999) is a Stop, or a load replaced by another; WebKit's 102, "frame load
+/// interrupted", is a navigation that became a download — handed to the system browser — or one
+/// the allowlist refused; and 204 is a load a plug-in took over. Everything else is WebKit's own
+/// sentence, which is already written for a person.
+fn failure_message(failure: &LoadFailure) -> Option<String> {
+    match (failure.domain.as_str(), failure.code) {
+        ("NSURLErrorDomain", -999) | ("WebKitErrorDomain", 102 | 204) => None,
+        _ => {
+            let said = failure.description.trim();
+            Some(if said.is_empty() {
+                format!(
+                    "The page could not be loaded ({} {}).",
+                    failure.domain, failure.code
+                )
+            } else {
+                said.to_owned()
+            })
+        }
     }
 }
 
@@ -1066,6 +1194,14 @@ pub fn snapshot_png(
     rect: Option<Bounds>,
 ) -> Result<Vec<u8>, ErrorView> {
     debug_assert!(!wtm_webview::on_main_thread());
+    // Ahead of the hidden check, because a failed pane is hidden *because* it failed, and "show it
+    // first" would send an agent looking for a page that is not there.
+    if let Some(error) = app.browsers.view_of(id).and_then(|view| view.load_error) {
+        return Err(ErrorView::new(
+            "browserLoadFailed",
+            format!("the page did not load, so there is nothing to capture: {error}"),
+        ));
+    }
     if !app.browsers.shown(id).ok_or_else(gone)? {
         return Err(ErrorView::new(
             "browserHidden",
@@ -1112,6 +1248,7 @@ pub fn navigate(
         .update(id, |entry| {
             entry.loading = true;
             entry.awaiting = true;
+            entry.load_error = None;
             entry.url = url.to_string();
         })
         .ok_or_else(gone)?;
@@ -1119,10 +1256,27 @@ pub fn navigate(
     Ok(view)
 }
 
-pub fn history(handle: &AppHandle, id: &str, action: HistoryAction) -> Result<(), ErrorView> {
+pub fn history(
+    handle: &AppHandle,
+    app: &Arc<App>,
+    id: &str,
+    action: HistoryAction,
+) -> Result<(), ErrorView> {
     let webview = webview_of(handle, id)?;
     match action {
-        HistoryAction::Reload => webview.reload().map_err(|e| webview_error("reload", &e)),
+        // After a failure, the address that failed rather than WebKit's reload. WKWebView reloads
+        // the last page that *committed*, and after a failed load that is the page before it —
+        // for a new pane, the `about:blank` it was born on, whose load events `on_page_load`
+        // deliberately ignores. That pair is why Reload used to do nothing at all after a failed
+        // load. A process that quit is the same story with a blank view.
+        HistoryAction::Reload => match app
+            .browsers
+            .view_of(id)
+            .filter(|view| view.load_error.is_some() && view.url != BLANK)
+        {
+            Some(failed) => navigate(handle, app, id, &failed.url).map(drop),
+            None => webview.reload().map_err(|e| webview_error("reload", &e)),
+        },
         // Page-world JS is fine for these three: they are the page's own history and its own load,
         // and there is nothing for a hostile page to gain by intercepting a request to stop itself.
         HistoryAction::Back => webview
@@ -1666,6 +1820,148 @@ mod tests {
         assert!(RUNTIME_JS.contains("globalThis.__wtm = Object.freeze({ dispatch"));
         assert!(RUNTIME_JS.contains(&format!("const HANDLER = '{RUNTIME_HANDLER}'")));
         assert!(PAGE_HOOK_JS.contains(&format!("messageHandlers.{PAGE_HANDLER}")));
+    }
+
+    fn failure(domain: &str, code: i64) -> LoadFailure {
+        LoadFailure {
+            domain: domain.to_owned(),
+            code,
+            description: "Could not connect to the server.".to_owned(),
+            url: Some("http://localhost:5173/".to_owned()),
+            committed: false,
+            loading: false,
+        }
+    }
+
+    /// A browser mid-navigation with somebody waiting on the load, as `navigate` leaves one.
+    fn loading_with_a_waiter(host: &Host) -> (String, mpsc::Receiver<()>) {
+        let id = host.register("p", "wt", BLANK, None).unwrap();
+        host.update(&id, |entry| {
+            entry.loading = true;
+            entry.awaiting = true;
+            entry.url = "http://localhost:5173/".to_owned();
+        });
+        let (tx, rx) = mpsc::channel();
+        host.load_waiters
+            .lock()
+            .entry(id.clone())
+            .or_default()
+            .push(tx);
+        (id, rx)
+    }
+
+    #[test]
+    fn a_load_that_fails_stops_loading_says_why_and_wakes_whoever_was_waiting() {
+        // The bug in one test: wry reports no failure, so before the observer this browser stayed
+        // `loading` for good, the toolbar offered Stop instead of Reload, and the waiter below sat
+        // out its whole timeout.
+        let host = Host::default();
+        let (id, waiter) = loading_with_a_waiter(&host);
+
+        let view = host
+            .navigation_failed(&id, failure("NSURLErrorDomain", -1004))
+            .unwrap();
+        assert!(!view.loading);
+        assert_eq!(
+            view.load_error.as_deref(),
+            Some("Could not connect to the server.")
+        );
+        assert_eq!(view.url, "http://localhost:5173/");
+        assert!(waiter.try_recv().is_ok(), "the waiter must be woken");
+    }
+
+    #[test]
+    fn a_failure_names_the_address_that_failed_even_when_the_page_followed_a_link_to_it() {
+        // A link click never goes through `navigate`, so `url` is still the page being left. The
+        // failing address is what the bar should show and what Reload should retry.
+        let host = Host::default();
+        let id = host.register("p", "wt", BLANK, None).unwrap();
+        host.update(&id, |entry| entry.url = "https://example.com/".to_owned());
+        let mut away = failure("NSURLErrorDomain", -1003);
+        away.url = Some("https://unreachable.example/".to_owned());
+
+        let view = host.navigation_failed(&id, away).unwrap();
+        assert_eq!(view.url, "https://unreachable.example/");
+    }
+
+    #[test]
+    fn a_stop_or_a_replaced_load_ends_loading_without_an_error() {
+        // A Stop before anything arrived used to leave `loading` stuck as well; it is a stop, not
+        // a failure, so the page stays visible and no explanation covers it.
+        for (domain, code) in [
+            ("NSURLErrorDomain", -999),
+            ("WebKitErrorDomain", 102),
+            ("WebKitErrorDomain", 204),
+        ] {
+            let host = Host::default();
+            let (id, waiter) = loading_with_a_waiter(&host);
+            let view = host.navigation_failed(&id, failure(domain, code)).unwrap();
+            assert!(!view.loading, "{domain} {code} must end the load");
+            assert_eq!(view.load_error, None, "{domain} {code} is not a failure");
+            assert!(waiter.try_recv().is_ok());
+        }
+    }
+
+    #[test]
+    fn a_failure_for_a_load_a_newer_one_replaced_changes_nothing() {
+        // WebKit still loading means another navigation cancelled this one and is under way.
+        // Ending "the" load here would wake its waiter before its page exists.
+        let host = Host::default();
+        let (id, waiter) = loading_with_a_waiter(&host);
+        let mut cancelled = failure("NSURLErrorDomain", -999);
+        cancelled.loading = true;
+
+        assert!(host.navigation_failed(&id, cancelled).is_none());
+        assert!(host.view_of(&id).unwrap().loading);
+        assert!(waiter.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_page_that_committed_before_failing_is_left_on_screen() {
+        let host = Host::default();
+        let (id, _waiter) = loading_with_a_waiter(&host);
+        let mut partial = failure("NSURLErrorDomain", -1005);
+        partial.committed = true;
+
+        let view = host.navigation_failed(&id, partial).unwrap();
+        assert!(!view.loading);
+        assert_eq!(view.load_error, None);
+    }
+
+    #[test]
+    fn a_page_whose_process_quit_says_so_and_fails_what_it_owed_at_once() {
+        let host = Host::default();
+        let (id, waiter) = loading_with_a_waiter(&host);
+        let (tx, owed) = mpsc::channel();
+        host.pending.lock().insert(9, (id.clone(), tx));
+        let (other_tx, other) = mpsc::channel();
+        host.pending
+            .lock()
+            .insert(10, ("another".to_owned(), other_tx));
+
+        let view = host.content_process_gone(&id).unwrap();
+        assert!(!view.loading);
+        assert_eq!(view.load_error.as_deref(), Some(CONTENT_PROCESS_GONE));
+        assert!(waiter.try_recv().is_ok());
+        assert_eq!(
+            owed.try_recv().unwrap().unwrap_err(),
+            CONTENT_PROCESS_GONE,
+            "a caller waiting on the page hears why now, not at its timeout"
+        );
+        assert!(
+            other.try_recv().is_err(),
+            "another browser's request is not this page's to fail"
+        );
+    }
+
+    #[test]
+    fn a_failure_with_no_sentence_still_says_something() {
+        let mut silent = failure("WebKitErrorDomain", 101);
+        silent.description = "  ".to_owned();
+        assert_eq!(
+            failure_message(&silent).as_deref(),
+            Some("The page could not be loaded (WebKitErrorDomain 101).")
+        );
     }
 
     #[test]

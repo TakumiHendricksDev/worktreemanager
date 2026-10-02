@@ -98,6 +98,7 @@ objc2-foundation         = { version = "0.3", default-features = false, features
   "NSGeometry",
   "NSObject",
   "NSString",
+  "NSURL",
 ] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = [
   "std",
@@ -124,6 +125,7 @@ objc2-web-kit            = { version = "0.3", default-features = false, features
   "WKContentWorld",
   "WKFrameInfo",
   "WKNavigation",
+  "WKNavigationDelegate",
   "WKScriptMessage",
   "WKScriptMessageHandler",
   "WKSnapshotConfiguration",

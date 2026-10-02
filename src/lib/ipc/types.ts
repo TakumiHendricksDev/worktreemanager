@@ -1012,6 +1012,11 @@ export interface BrowserView {
   url: string;
   title: string;
   loading: boolean;
+  /**
+   * Why the last navigation showed no page — WebKit's own sentence — until the next one starts.
+   * While set, `url` is the address that failed.
+   */
+  loadError: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
   /** Whether agents may drive this pane. The per-pane toggle, on by default. */

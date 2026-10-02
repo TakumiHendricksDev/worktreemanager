@@ -7,7 +7,7 @@
 
 use std::ffi::c_void;
 
-use crate::{OnMessage, Reply, World};
+use crate::{OnMessage, OnNavigation, Reply, World};
 
 pub(crate) enum Handle {}
 
@@ -41,6 +41,10 @@ impl Handle {
     }
 
     pub(crate) fn history(&self) -> (bool, bool) {
+        match *self {}
+    }
+
+    pub(crate) fn observe_navigation(&self, _on: OnNavigation) {
         match *self {}
     }
 }
