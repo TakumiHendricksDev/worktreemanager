@@ -246,9 +246,10 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
 - **The side panel** holding Needs you, Peek and Activity is as wide as you drag the line beside it,
   or focus the line and use the arrow keys. wtm remembers the width. When Home is too narrow for two
   columns, the panels become tabs instead.
-- **The Home agent.** Start Claude, Codex or Cursor in Home's main column. It runs in a folder of
-  its own, outside every repository, and has tools for the sessions everywhere else: list them, read
-  one, hand one work, start one in any worktree of any project, stop a turn it started, and close
+- **The Home agent.** Start Claude, Codex or Cursor in Home's main column. Its pane is titled *Home
+  agent*, with the CLI running it beside the name. It runs in a folder of its own, outside every
+  repository, and has tools for the sessions everywhere else: list them, read one, hand one work,
+  start one in any worktree of any project, stop a turn it started, and close
   sessions it opened that you haven't used. Handing out work doesn't wait for the answer. The Home
   agent can keep several sessions busy at once, and keep talking to you while they work. When one
   finishes, stops to ask you something, fails or is closed, wtm tells the Home agent in a message

@@ -120,6 +120,12 @@
   white-space: nowrap;
 }
 
+/* Home's pane is titled "Home agent", and this says which CLI is running it. Lighter than the name,
+   in the same colour: it is part of the title, not a status. */
+.c-pane__cli {
+  font-weight: 400;
+}
+
 /* Takes the slack so the actions stay pinned right however long a status is. Monospace because it
    reports process facts — exit codes, signal names — which sit directly above monospace output. */
 .c-pane__note {

@@ -30,7 +30,7 @@
 
 import { commands } from '../ipc/commands';
 import { isWtmError } from '../ipc/types';
-import { isHome } from '../home';
+import { HOME_AGENT, isHome } from '../home';
 import { inPaneWindow } from '../window-role';
 import { view } from './view.svelte';
 import { workspace } from './workspace.svelte';
@@ -376,13 +376,16 @@ class Attention {
    * The agent is named by its **raw provider id** — `claude`, `codex` — rather than its display
    * label. Not laziness: the label lives on `sessions.options`, and reading it here would make this
    * store depend on the one that depends on it. Those ids are already what the resume list shows, so
-   * they are a word the user has seen.
+   * they are a word the user has seen. Home's own agent is the Home agent, whichever CLI runs it,
+   * as its pane is titled.
    */
   private words(what: Announcement, pane: Announceable): { title: string; detail: string } {
     const where = isHome(pane.worktreeId)
       ? 'Home'
       : (workspace.worktrees.find((w) => w.id === pane.worktreeId)?.title ?? 'A worktree');
-    const who = pane.provider ?? 'A shell';
+    const who = isHome(pane.worktreeId)
+      ? `The ${HOME_AGENT}`
+      : (pane.provider ?? 'A shell');
     if (what === 'approval') {
       return { title: `${where} needs you`, detail: `${who} is waiting on an approval.` };
     }

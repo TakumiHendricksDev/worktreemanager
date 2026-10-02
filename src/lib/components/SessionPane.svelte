@@ -19,6 +19,7 @@
   import { commands } from '../ipc/commands';
   import { errorMessage, type AgentAttachment } from '../ipc/types';
   import { commandsFor } from '../agent-commands';
+  import { HOME_AGENT } from '../home';
   import { composerPrefs } from '../state/composer.svelte';
   import { databaseConsole } from '../state/database-console.svelte';
   import { DESTINATION, dictation } from '../state/dictate.svelte';
@@ -144,6 +145,11 @@
     if (provider === null) return sessions.labelOf(pane);
     return sessions.options.find((o) => o.id === provider)?.label ?? provider;
   });
+  /**
+   * Who the composer talks to, in a sentence. Home's pane is the Home agent; `label` stays the CLI's
+   * name for what is about the CLI itself — its skills, its limits, the session a restored pane held.
+   */
+  const addressee = $derived(atHome ? `the ${HOME_AGENT}` : label);
 
   const isFocused = $derived(sessions.focused[pane.worktreeId] === pane.id);
 
@@ -1273,7 +1279,7 @@
   class="c-pane"
   class:is-focused={isFocused}
   bind:this={section}
-  aria-label="{label} session"
+  aria-label="{atHome ? HOME_AGENT : label} session"
   onfocusin={() => sessions.noteFocus(pane.worktreeId, pane.id)}
   onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
 >
@@ -1302,7 +1308,13 @@
         </button>
       {/if}
 
-      <h2 class="c-pane__title">{label}</h2>
+      <h2 class="c-pane__title">
+        {#if atHome}
+          {HOME_AGENT} <span class="c-pane__cli">· {label}</span>
+        {:else}
+          {label}
+        {/if}
+      </h2>
 
       <!--
       One branch instead of four, and a dot beside the word.
@@ -1786,7 +1798,7 @@
 
         {#if pane.queue.length > 0}
           <!-- Last before the card, so what is waiting sits directly on top of what wrote it. -->
-          <ComposerQueue {pane} {label} {steersMidTurn} />
+          <ComposerQueue {pane} label={addressee} {steersMidTurn} />
         {/if}
 
         <form class="c-composer" bind:this={form} onsubmit={(event) => void submit(event)}>
@@ -1846,11 +1858,11 @@
             class="c-composer__input"
             bind:this={composer}
             placeholder={steersByDefault
-              ? `Tell ${label} more — it reads this at its next step…`
+              ? `Tell ${addressee} more — it reads this at its next step…`
               : busy
-                ? `Queue a message for ${label}…`
-                : `Ask ${label}… — paste or @ files, / for commands`}
-            aria-label="Message {label}"
+                ? `Queue a message for ${addressee}…`
+                : `Ask ${addressee}… — paste or @ files, / for commands`}
+            aria-label="Message {addressee}"
             bind:value={draft}
             oninput={noteCaret}
             onclick={noteCaret}
@@ -1999,9 +2011,9 @@
                 size="sm"
                 type="submit"
                 title={steersByDefault
-                  ? `Send now — ${label} reads it at its next step, without stopping. ⇧⌘↵ queues it for after this turn.`
+                  ? `Send now — ${addressee} reads it at its next step, without stopping. ⇧⌘↵ queues it for after this turn.`
                   : busy
-                    ? `Queue — sends when ${label} is free. ⇧⌘↵ sends it now.`
+                    ? `Queue — sends when ${addressee} is free. ⇧⌘↵ sends it now.`
                     : undefined}
                 disabled={(draft.trim().length === 0 && attachments.length === 0) ||
                   pane.ended !== null ||

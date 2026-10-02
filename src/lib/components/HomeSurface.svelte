@@ -30,6 +30,7 @@
    */
   import { onMount, type Snippet } from 'svelte';
 
+  import { HOME_AGENT } from '../home';
   import { commands } from '../ipc/commands';
   import { attention } from '../state/attention.svelte';
   import { fleet } from '../state/fleet.svelte';
@@ -177,7 +178,7 @@
   }
 
   const tabs = $derived<{ id: Tab; label: string; count?: number }[]>([
-    { id: 'home', label: 'Home' },
+    { id: 'home', label: HOME_AGENT },
     { id: 'inbox', label: 'Needs you', count: fleet.needsYou.length },
     { id: 'peek', label: 'Peek' },
     { id: 'activity', label: 'Activity' },

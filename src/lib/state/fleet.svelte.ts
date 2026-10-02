@@ -21,7 +21,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 import { anchorOf, arrangeFleet, HOME_KEY, sessionKey, type FleetOnly } from '../fleet';
 import type { FleetJob, FleetSession } from '../fleet';
-import { isHome } from '../home';
+import { HOME_AGENT, isHome } from '../home';
 import { commands } from '../ipc/commands';
 import type { AgentExchange, AgentOption, HomeJob, Worktree } from '../ipc/types';
 import { sessions, type Pane, type PendingApproval } from './sessions.svelte';
@@ -355,7 +355,7 @@ class Fleet {
   nameOf(session: string | null): string {
     const pane = sessions.paneBySession(session);
     if (!pane) return session === null ? 'An agent' : 'A closed session';
-    if (isHome(pane.worktreeId)) return 'Home';
+    if (isHome(pane.worktreeId)) return HOME_AGENT;
     return pane.agentTitle ?? sessions.labelOf(pane);
   }
 
