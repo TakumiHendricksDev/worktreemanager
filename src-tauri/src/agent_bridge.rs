@@ -231,6 +231,11 @@ impl AgentEventSink {
         if facts.ephemeral {
             return;
         }
+        // A session Home opened hears its first prompt behind Home's label, and the label is not
+        // what the conversation is about.
+        let text = text
+            .strip_prefix(crate::home_tools::FROM_HOME)
+            .map_or(text.as_str(), str::trim_start);
         let mut label: String = text.chars().take(72).collect();
         if text.chars().count() > 72 {
             label.push('…');

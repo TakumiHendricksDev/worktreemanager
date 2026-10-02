@@ -52,7 +52,7 @@ pub const TOOLS: [&str; 9] = [
 
 /// What a Home session sends is labelled, so the receiving session — and the user reading its
 /// transcript — can tell it from the user's own words.
-const FROM_HOME: &str = "From Home (wtm):";
+pub const FROM_HOME: &str = "From Home (wtm):";
 
 /// The tool definitions, with the installed agents as `open_session`'s choices.
 #[must_use]

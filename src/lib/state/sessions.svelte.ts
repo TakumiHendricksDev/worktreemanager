@@ -3889,7 +3889,9 @@ class Sessions {
     }
 
     if (event.kind === 'user_echo' && pane.firstPrompt === null) {
-      const line = event.text.trim().split('\n')[0] ?? '';
+      // Past Home's label on a message Home sent, which says who asked rather than what.
+      const text = event.text.replace(/^From Home \(wtm\):\s*/, '');
+      const line = text.trim().split('\n')[0] ?? '';
       pane.firstPrompt = line.length > 120 ? `${line.slice(0, 120)}…` : line || null;
     }
 
