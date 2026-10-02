@@ -19,10 +19,12 @@ pub mod commands;
 pub mod dictate;
 pub mod display;
 pub mod handoff;
+pub mod messages;
 pub mod notifier;
 pub mod openers;
 pub mod pane_windows;
 pub mod pty_bridge;
+pub mod turns;
 pub mod update;
 pub mod usage;
 pub mod view;
@@ -78,6 +80,13 @@ pub const SETTINGS_EVENT: &str = "wtm:settings";
 /// A menu item rather than only the automatic check, because the automatic one can be turned off
 /// and stays quiet when it fails. This is the route that always runs and always answers.
 pub const CHECK_UPDATES_EVENT: &str = "wtm:check-updates";
+
+/// The event the Go › Home menu item fires. `App.svelte` listens for it and toggles Home.
+///
+/// ⇧⌘H for the reason ⌘, is bound here and not in the webview: `AppKit` takes a menu's
+/// accelerator before the keystroke reaches the page. It is Finder's own Go › Home chord, which is
+/// the convention for "go to the place everything else hangs off". ⌘H stays Hide.
+pub const HOME_EVENT: &str = "wtm:home";
 
 /// The application menu.
 ///
@@ -143,6 +152,14 @@ fn build_menu<R: tauri::Runtime>(
         .select_all()
         .build()?;
 
+    // A menu of its own rather than an item under the app menu, because it is navigation — and Go
+    // is where macOS puts navigation, and where somebody looking for ⇧⌘H would look.
+    let home = MenuItemBuilder::new("Home")
+        .id(HOME_EVENT)
+        .accelerator("CmdOrCtrl+Shift+H")
+        .build(handle)?;
+    let go_menu = SubmenuBuilder::new(handle, "Go").item(&home).build()?;
+
     let window_menu = SubmenuBuilder::new(handle, "Window")
         .minimize()
         .separator()
@@ -150,7 +167,7 @@ fn build_menu<R: tauri::Runtime>(
         .build()?;
 
     MenuBuilder::new(handle)
-        .items(&[&app_menu, &edit_menu, &window_menu])
+        .items(&[&app_menu, &edit_menu, &go_menu, &window_menu])
         .build()
 }
 
@@ -219,7 +236,7 @@ pub fn run() {
             // A failed emit means the webview is gone, which is not something a menu
             // handler can do anything about.
             let id = event.id().as_ref();
-            if id == SETTINGS_EVENT || id == CHECK_UPDATES_EVENT {
+            if id == SETTINGS_EVENT || id == CHECK_UPDATES_EVENT || id == HOME_EVENT {
                 let _ = pane_windows::focus(handle, None);
                 let _ = handle.emit_to(pane_windows::MAIN_WINDOW, id, ());
             }
@@ -283,6 +300,7 @@ pub fn run() {
             commands::stage_agent_attachment,
             commands::configure_session,
             commands::list_worktree_files,
+            messages::agent_messages,
             code::code_tree,
             code::code_list_dir,
             code::code_read_file,

@@ -196,7 +196,7 @@ impl AgentEventSink {
         }
         app.remember_session(wtm_config::SessionRecord {
             provider: facts.provider,
-            worktree: facts.worktree,
+            worktree: facts.scope.resume_key().to_owned(),
             provider_session: provider_session_id.clone(),
             // The first turn can be submitted before the handshake. The live entry caches its
             // label so SessionReady does not turn that ordinary race into “Untitled session”.
@@ -269,9 +269,22 @@ impl AgentSink for AgentEventSink {
         if let Err(err) = self.handle.emit(AGENT_EVENT, payload) {
             tracing::debug!(error = %err, "could not emit an agent event");
         }
+
+        // After the emit, so the turn's last event is on screen before its wire settles. Here
+        // rather than in `App` because settling announces, and only the sink holds a handle.
+        if let Some(app) = &self.app {
+            let settled = app.turns.observe(session.as_str(), event);
+            crate::messages::settle_turns(&self.handle, app, &settled);
+        }
     }
 
     fn on_exit(&self, session: &SessionId, outcome: &ExitOutcome) {
+        // Before the emit, so a caller waiting on this session is released even if the window has
+        // gone and the emit fails.
+        if let Some(app) = &self.app {
+            let settled = app.turns.gone(session.as_str(), &outcome.describe());
+            crate::messages::settle_turns(&self.handle, app, &settled);
+        }
         let payload = AgentExitPayload {
             session: session.as_str().to_owned(),
             outcome: outcome.clone(),

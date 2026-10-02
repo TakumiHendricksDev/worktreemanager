@@ -1781,14 +1781,20 @@ pub async fn open_agent_side_session(
                 "the parent conversation is still starting, so it cannot be forked yet",
             )
         })?;
+        let Some((project, worktree)) = source.scope.place() else {
+            return Err(ErrorView::new(
+                "exec",
+                "only a worktree's conversations can be forked for a side question",
+            ));
+        };
         open_agent_process(
             handle,
             &app,
-            &source.project,
-            &source.worktree,
+            project,
+            worktree,
             &source.provider,
             options,
-            Some(source.provider_session),
+            Some(source.provider_session.clone()),
         )
     })
     .await
@@ -1877,7 +1883,8 @@ fn open_agent_process(
 
     let sink: Arc<dyn wtm_agent::session::AgentSink> =
         crate::agent_bridge::AgentEventSink::new(handle);
-    let session = match app.open_agent(entry, &req, &worktree, project_id, &sink) {
+    let scope = crate::app::SessionScope::worktree(project_id, worktree.id.as_str());
+    let session = match app.open_agent(entry, &req, scope, &sink) {
         Ok(session) => session,
         Err(error) => {
             if let Some(token) = req
@@ -2197,8 +2204,9 @@ pub async fn list_agent_sessions(app: AppState<'_>) -> Reply<Vec<AgentSessionVie
             .filter(|facts| !facts.ephemeral)
             .map(|facts| AgentSessionView {
                 session: facts.session,
-                worktree: facts.worktree,
-                project: facts.project,
+                // Home's sentinel for both, which is what the window files a Home pane under.
+                worktree: facts.scope.resume_key().to_owned(),
+                project: facts.scope.project_key().to_owned(),
                 provider: facts.provider,
                 provider_session: facts.provider_session,
             })
@@ -2970,8 +2978,7 @@ fn handoff_server(
         .join(",");
 
     let token = app.handoff.issue(handoff::Caller {
-        project: project.id.as_str().to_owned(),
-        worktree: worktree.id.as_str().to_owned(),
+        scope: crate::app::SessionScope::worktree(project.id.as_str(), worktree.id.as_str()),
         provider: provider.to_owned(),
         effort: effort.map(str::to_owned),
         session: None,

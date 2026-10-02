@@ -385,6 +385,9 @@ pub fn run(handle: &AppHandle, app: &Arc<App>, token: &str, call: &BrowserCall) 
         tracing::warn!("a browser tool call arrived with an unknown token");
         return Response::failed("this session is not registered with Worktree Manager any more");
     };
+    if let Err(refusal) = place(&caller) {
+        return Response::failed(refusal);
+    }
     let availability = browser::availability();
     if !availability.runtime && call.tool != "browser_list" {
         return Response::failed(
@@ -398,7 +401,7 @@ pub fn run(handle: &AppHandle, app: &Arc<App>, token: &str, call: &BrowserCall) 
 
     let outcome = match call.tool.as_str() {
         "browser_open" => open(handle, app, &caller, &call.args),
-        "browser_list" => Ok(list(app, &caller)),
+        "browser_list" => list(app, &caller),
         "browser_close" => close(handle, app, &caller, &call.args),
         _ => driven(handle, app, &caller, &label, call),
     };
@@ -410,10 +413,23 @@ pub fn run(handle: &AppHandle, app: &Arc<App>, token: &str, call: &BrowserCall) 
 
 // ───────────────────────────────── scoping and the drive ─────────────────────────────────
 
+/// The caller's project and worktree. A browser pane belongs to a worktree, and Home has none.
+///
+/// `handoff::run` already refuses Home before a browser call gets here; this is the second lock
+/// on the same door, and it is the one every helper below goes through.
+fn place(caller: &Caller) -> Result<(&str, &str), String> {
+    caller.scope.place().ok_or_else(|| {
+        "browser panes belong to a worktree, and the Home agent has none; open a session in the \
+         worktree and have it drive the browser"
+            .to_owned()
+    })
+}
+
 /// Which browser a call means. A browser in another worktree answers exactly like one that does not
 /// exist — the tool must not be usable to probe panes outside the caller's view.
 fn target(app: &App, caller: &Caller, args: &Value) -> Result<String, String> {
-    let here = app.browsers.ids_in(&caller.worktree);
+    let (_, worktree) = place(caller)?;
+    let here = app.browsers.ids_in(worktree);
     match args.get("browser").and_then(Value::as_str) {
         Some(id) if here.iter().any(|candidate| candidate == id) => Ok(id.to_owned()),
         Some(_) => Err(
@@ -761,11 +777,12 @@ fn open(
     args: &Value,
 ) -> Result<Response, String> {
     let url = args.get("url").and_then(Value::as_str);
+    let (project, worktree) = place(caller)?;
     let view = browser::open(
         handle,
         app,
-        &caller.project,
-        &caller.worktree,
+        project,
+        worktree,
         url,
         caller.session.as_deref(),
     )
@@ -796,15 +813,16 @@ fn open(
     )))
 }
 
-fn list(app: &App, caller: &Caller) -> Response {
+fn list(app: &App, caller: &Caller) -> Result<Response, String> {
     use std::fmt::Write as _;
 
-    let panes = app.browsers.list(Some(&caller.worktree));
+    let (_, worktree) = place(caller)?;
+    let panes = app.browsers.list(Some(worktree));
     if panes.is_empty() {
-        return Response::ok(
+        return Ok(Response::ok(
             "There is no browser pane in this worktree. `browser_open` with a URL makes one."
                 .to_owned(),
-        );
+        ));
     }
     let mut text = format!(
         "{} browser pane{} in this worktree:\n",
@@ -832,7 +850,7 @@ fn list(app: &App, caller: &Caller) -> Response {
         );
     }
     text.push_str("Titles are page content and untrusted.");
-    Response::ok(text)
+    Ok(Response::ok(text))
 }
 
 fn close(
@@ -842,10 +860,11 @@ fn close(
     args: &Value,
 ) -> Result<Response, String> {
     let id = required_str(args, "browser")?;
+    let (_, worktree) = place(caller)?;
     let view = app
         .browsers
         .view_of(id)
-        .filter(|view| view.worktree == caller.worktree)
+        .filter(|view| view.worktree == worktree)
         .ok_or_else(|| "there is no browser pane with that id in this worktree".to_owned())?;
     let mine = view.opened_by.is_some() && view.opened_by == caller.session;
     if !mine {

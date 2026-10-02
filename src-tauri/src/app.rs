@@ -103,10 +103,75 @@ pub struct ShellFacts {
     pub worktree: String,
 }
 
+/// The key a Home conversation is remembered under, where a worktree session uses its worktree.
+///
+/// Also the sentinel the frontend uses as both project and worktree id for the Home pane. A word no
+/// git worktree path can be — every real key is absolute — so the resume list and the window can
+/// tell the two apart without a second field.
+pub const HOME_KEY: &str = "@home";
+
+/// Where an agent session lives: in one worktree of one project, or in Home, outside them all.
+///
+/// # Why a type and not two strings
+///
+/// Every session used to carry a project and a worktree, and every tool on the delegation bridge
+/// scoped itself by them. Home has neither, and the tempting encoding — empty strings — would have
+/// made each scoped handler answer "there is nothing here" instead of "this is not allowed": a
+/// browser lookup for worktree `""` finds no panes and says so, which is a refusal by accident.
+/// An enum makes the compiler list every place that has to decide, and each one does it on purpose.
+///
+/// Lives in the composition root rather than in `wtm-core` for the same reason [`App::agents`]
+/// does: which sessions belong where is a concern of this app, not of the domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionScope {
+    Worktree { project: String, worktree: String },
+    Home,
+}
+
+impl SessionScope {
+    #[must_use]
+    pub fn worktree(project: &str, worktree: &str) -> Self {
+        Self::Worktree {
+            project: project.to_owned(),
+            worktree: worktree.to_owned(),
+        }
+    }
+
+    /// The project and worktree, or `None` for Home.
+    #[must_use]
+    pub fn place(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Worktree { project, worktree } => Some((project, worktree)),
+            Self::Home => None,
+        }
+    }
+
+    #[must_use]
+    pub fn worktree_id(&self) -> Option<&str> {
+        self.place().map(|(_, worktree)| worktree)
+    }
+
+    #[must_use]
+    pub fn is_home(&self) -> bool {
+        matches!(self, Self::Home)
+    }
+
+    /// What the resume list files this session's conversations under.
+    #[must_use]
+    pub fn resume_key(&self) -> &str {
+        self.worktree_id().unwrap_or(HOME_KEY)
+    }
+
+    /// The project id the window files this session under — [`HOME_KEY`] for Home.
+    #[must_use]
+    pub fn project_key(&self) -> &str {
+        self.place().map_or(HOME_KEY, |(project, _)| project)
+    }
+}
+
 /// One live agent session and what it belongs to.
 struct AgentEntry {
-    project: String,
-    worktree: String,
+    scope: SessionScope,
     provider: String,
     /// The id the *provider* knows this conversation by, once it has said.
     ///
@@ -513,8 +578,7 @@ impl TerminalRing {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSessionFacts {
     pub session: String,
-    pub project: String,
-    pub worktree: String,
+    pub scope: SessionScope,
     pub provider: String,
     /// The provider's own id for this conversation, empty until it has said.
     ///
@@ -560,8 +624,7 @@ pub struct AgentPeerFacts {
 /// The durable provider conversation behind a live pane, used as the source of a side fork.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentForkSource {
-    pub project: String,
-    pub worktree: String,
+    pub scope: SessionScope,
     pub provider: String,
     pub provider_session: String,
 }
@@ -642,6 +705,10 @@ pub struct App {
     /// What each provider account has left. Here rather than in a window because sessions report
     /// it from their reader threads, and every window shows the same record — see `usage.rs`.
     pub usage: crate::usage::Registry,
+    /// Whoever is waiting on a session's turn to end. See `turns.rs`.
+    pub turns: crate::turns::Registry,
+    /// What agents have recently said to each other, for Home's wires. See `messages.rs`.
+    pub messages: crate::messages::Log,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
     /// Events from agent sessions that are not in [`Self::agents`] yet. See
     /// [`Self::record_agent_event`].
@@ -749,6 +816,8 @@ impl App {
             browsers: crate::browser::Host::default(),
             code_comments: crate::code_comments::Store::default(),
             usage: crate::usage::Registry::default(),
+            turns: crate::turns::Registry::default(),
+            messages: crate::messages::Log::default(),
             dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             early_replay: parking_lot::Mutex::new(BTreeMap::new()),
@@ -1441,8 +1510,7 @@ impl App {
         &self,
         entry: &'static wtm_agent::ProviderEntry,
         req: &wtm_agent::SessionRequest,
-        worktree: &Worktree,
-        project_id: &str,
+        scope: SessionScope,
         events: &Arc<dyn wtm_agent::session::AgentSink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
         // Before the spawn, so descriptors a finished session still holds are released before a
@@ -1466,7 +1534,7 @@ impl App {
             // The same inert one-week deadline the dock's shell uses. `PipeHost` has no `wait`,
             // so nothing enforces it — see the port's docs.
             crate::commands::SHELL_TIMEOUT_MS,
-            Some(worktree.id.as_str()),
+            scope.worktree_id(),
         )?;
 
         let id = session.id().clone();
@@ -1488,8 +1556,7 @@ impl App {
         };
 
         let mut agent = AgentEntry {
-            project: project_id.to_owned(),
-            worktree: worktree.id.as_str().to_owned(),
+            scope,
             provider: entry.id.to_owned(),
             provider_session: String::new(),
             title: None,
@@ -1532,8 +1599,7 @@ impl App {
             .filter(|(session, _)| running.contains(session.as_str()))
             .map(|(session, entry)| AgentSessionFacts {
                 session: session.as_str().to_owned(),
-                project: entry.project.clone(),
-                worktree: entry.worktree.clone(),
+                scope: entry.scope.clone(),
                 provider: entry.provider.clone(),
                 provider_session: entry.provider_session.clone(),
                 ephemeral: entry.ephemeral,
@@ -1574,7 +1640,7 @@ impl App {
             .iter()
             .filter(|(session, entry)| {
                 running.contains(session.as_str())
-                    && entry.worktree == worktree
+                    && entry.scope.worktree_id() == Some(worktree)
                     && !entry.ephemeral
                     && excluding != Some(session.as_str())
             })
@@ -1631,7 +1697,12 @@ impl App {
             if entry.ephemeral {
                 return None;
             }
-            (entry.worktree.clone(), entry.peer_snapshot.clone())
+            // Home has no worktree and so no peers: it sees every session through its own tools,
+            // and is nobody's neighbour.
+            (
+                entry.scope.worktree_id()?.to_owned(),
+                entry.peer_snapshot.clone(),
+            )
         };
         let peers = self.peer_sessions(&worktree, Some(session));
         let snapshot = peer_snapshot(&peers);
@@ -1804,7 +1875,7 @@ impl App {
         self.agents
             .lock()
             .iter()
-            .filter(|(_, entry)| entry.worktree == worktree_id)
+            .filter(|(_, entry)| entry.scope.worktree_id() == Some(worktree_id))
             .map(|(session, _)| session.as_str().to_owned())
             .collect()
     }
@@ -1974,8 +2045,7 @@ impl App {
                 return None;
             }
             Some(AgentForkSource {
-                project: entry.project.clone(),
-                worktree: entry.worktree.clone(),
+                scope: entry.scope.clone(),
                 provider: entry.provider.clone(),
                 provider_session: entry.provider_session.clone(),
             })

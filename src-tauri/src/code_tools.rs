@@ -81,7 +81,11 @@ pub fn run(handle: &AppHandle, app: &Arc<App>, token: &str, call: &CodeCall) -> 
         tracing::warn!("a code tool call arrived with an unknown token");
         return Response::failed("this session is not registered with Worktree Manager any more");
     };
-    let worktree = caller.worktree;
+    // A comment is on a line of a worktree's file, and Home has no worktree. `handoff::run`
+    // refuses Home first; this keeps the refusal true if that ever moves.
+    let Some(worktree) = caller.scope.worktree_id().map(str::to_owned) else {
+        return Response::failed("code comments belong to a worktree, and the Home agent has none");
+    };
     match call.tool.as_str() {
         "code_read_comments" => {
             let include_resolved = call.args["include_resolved"].as_bool().unwrap_or(false);

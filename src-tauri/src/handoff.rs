@@ -42,12 +42,11 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
-use wtm_core::model::{AgentEvent, ExitOutcome, SessionId};
+use wtm_core::model::SessionId;
 
-use crate::app::App;
+use crate::app::{App, SessionScope};
 
 /// The environment variable carrying a session's token.
 pub const TOKEN_ENV: &str = "WTM_HANDOFF_TOKEN";
@@ -87,19 +86,6 @@ pub const CODE_TOOLS_ENV: &str = "WTM_CODE_TOOLS";
 ///
 /// A tool call shows up as `mcp__wtm__ask_agent`. Short, because it is read in a transcript.
 pub const SERVER_NAME: &str = "wtm";
-
-/// How long a handoff waits for the other agent to finish, in milliseconds.
-///
-/// Ten minutes. A plan review is not a fast operation — the far side reads files, and may stop to
-/// ask an approval that a human has to notice and click. The timeout exists only so a caller cannot
-/// be wedged forever by a session that died without saying so; it is not a latency budget.
-///
-/// Measured against `Clock::monotonic_ms`, because `Instant::now` is banned outside the clock
-/// adapter and the wall clock can step backwards.
-const HANDOFF_TIMEOUT_MS: u64 = 600_000;
-
-/// How long to wait between checks while a handoff runs, in milliseconds.
-const HANDOFF_POLL_MS: u64 = 100;
 
 /// Which of the socket's jobs a request is.
 ///
@@ -254,10 +240,12 @@ impl Response {
 /// the target worktree is not a parameter the model gets to choose — it is a property of who is
 /// calling. Letting the model name a worktree would be a way to run an agent somewhere the user was
 /// not looking.
+///
+/// A Home caller has no worktree at all, and every worktree-scoped action refuses it — see
+/// [`scope_refusal`]. What Home may do instead is decided per call by its own tools.
 #[derive(Debug, Clone)]
 pub struct Caller {
-    pub project: String,
-    pub worktree: String,
+    pub scope: SessionScope,
     /// The provider that was issued this token, for the log line and to label the pane.
     pub provider: String,
     /// The effort the calling session is running at.
@@ -496,10 +484,10 @@ impl Hub {
             let mut tokens = self.tokens.lock();
             let dropped = tokens
                 .iter()
-                .filter(|(_, caller)| caller.worktree == worktree)
+                .filter(|(_, caller)| caller.scope.worktree_id() == Some(worktree))
                 .map(|(token, _)| token.clone())
                 .collect();
-            tokens.retain(|_, caller| caller.worktree != worktree);
+            tokens.retain(|_, caller| caller.scope.worktree_id() != Some(worktree));
             dropped
         };
         {
@@ -560,97 +548,6 @@ fn collect_all(children: &BTreeMap<String, Vec<Child>>, parent: &str) -> Vec<Chi
     out
 }
 
-/// Collects one turn's assistant text and reports when the turn is over.
-///
-/// Wraps the ordinary sink rather than replacing it, and that ordering is the feature: every event
-/// still reaches the webview, so the pane streams exactly as a hand-opened one does, and this only
-/// *also* remembers the final message. A sink that swallowed events to collect them would produce a
-/// pane that sat there looking hung.
-struct Capture {
-    inner: Arc<dyn wtm_agent::session::AgentSink>,
-    /// Assistant text seen so far, including streaming-only providers such as Cursor ACP.
-    text: parking_lot::Mutex<String>,
-    /// Fires once, when the turn finishes or the session dies.
-    done: parking_lot::Mutex<Option<mpsc::Sender<Outcome>>>,
-}
-
-/// How a handoff ended.
-enum Outcome {
-    /// The turn completed. Carries whatever the far side said.
-    Finished,
-    /// The session's process is gone.
-    Gone(String),
-    /// The far side reported a failure.
-    Failed(String),
-}
-
-impl Capture {
-    /// Signal completion, exactly once.
-    ///
-    /// Taking the sender out of the slot is what enforces the "once": a session emits `TurnFinished`
-    /// and *then* exits when it is closed, and a second send on a dropped receiver is an error that
-    /// would be logged as if something had gone wrong.
-    fn finish(&self, outcome: Outcome) {
-        if let Some(tx) = self.done.lock().take() {
-            // A failed send means the waiter gave up — a timeout, or the app is quitting. Nothing to
-            // do about it, and it must not disturb the reader thread this runs on.
-            let _ = tx.send(outcome);
-        }
-    }
-
-    /// Whether the handoff's own turn is still running.
-    ///
-    /// The empty sender slot doubles as "we are done", which is what stops this sink collecting for
-    /// the rest of the pane's life. That is not a micro-optimisation: the pane is deliberately **left
-    /// open** after the handoff answers, so without this guard every message of every later turn the
-    /// user typed would be appended to a `Vec` nothing will ever read again.
-    fn awaiting(&self) -> bool {
-        self.done.lock().is_some()
-    }
-
-    fn collected(&self) -> String {
-        self.text.lock().clone()
-    }
-}
-
-impl wtm_agent::session::AgentSink for Capture {
-    fn on_event(&self, session: &SessionId, event: &AgentEvent) {
-        // Only while this sink's own turn is in flight. Afterwards it is a pass-through, because the
-        // session outlives the handoff by design — see `awaiting`.
-        if self.awaiting() {
-            match event {
-                AgentEvent::MessageDelta { text } => self.text.lock().push_str(text),
-                AgentEvent::Message { text } => {
-                    let mut collected = self.text.lock();
-                    // Codex can report the complete item after streaming the same text as deltas.
-                    // A whole-message-only provider still lands here with an empty accumulator.
-                    if collected.is_empty() {
-                        collected.push_str(text);
-                    } else if collected.as_str() != text && !collected.ends_with(text) {
-                        collected.push_str("\n\n");
-                        collected.push_str(text);
-                    }
-                }
-                AgentEvent::TurnFinished { .. } => self.finish(Outcome::Finished),
-                AgentEvent::Failed { message } => self.finish(Outcome::Failed(message.clone())),
-                _ => {}
-            }
-        }
-        self.inner.on_event(session, event);
-    }
-
-    fn on_exit(&self, session: &SessionId, outcome: &ExitOutcome) {
-        // Before the inner call, so a caller waiting on this is released even if the emit below
-        // fails because the window has gone.
-        self.finish(Outcome::Gone(outcome.describe()));
-        self.inner.on_exit(session, outcome);
-    }
-
-    fn on_ready(&self, session: &SessionId) {
-        self.inner.on_ready(session);
-    }
-}
-
 /// Run one handoff: open a pane, send the prompt, wait, and report what came back.
 ///
 /// Blocking, and called from the listener thread rather than from a Tauri command — which is the
@@ -663,6 +560,13 @@ impl wtm_agent::session::AgentSink for Capture {
 /// caller got its answer would destroy the transcript they wanted to read.
 pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Response {
     const MAX_TASKS: usize = 20;
+    // An unknown token falls through to each handler's own message, so no refusal text changes
+    // for the callers that existed before scopes did.
+    if let Some(caller) = app.handoff.resolve(&request.token)
+        && let Some(refusal) = scope_refusal(&caller.scope, request.action)
+    {
+        return refusal;
+    }
     match request.action {
         Action::CloseChildren => return close_children(handle, app, &request.token),
         Action::ListSessions => return list_sessions(app, &request.token),
@@ -703,7 +607,14 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
 
     let run_id = uuid::Uuid::new_v4().to_string();
     if tasks.len() == 1 {
-        return run_task(handle, app, &request.token, &tasks[0], &run_id);
+        return run_task(
+            handle,
+            app,
+            &request.token,
+            &tasks[0],
+            &run_id,
+            crate::messages::Via::AskAgent,
+        );
     }
 
     let concurrency = request.concurrency.unwrap_or(4).clamp(1, MAX_TASKS);
@@ -716,7 +627,14 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
             let token = request.token.clone();
             let run_id = run_id.clone();
             workers.push(std::thread::spawn(move || {
-                let response = run_task(&handle, &app, &token, &task, &run_id);
+                let response = run_task(
+                    &handle,
+                    &app,
+                    &token,
+                    &task,
+                    &run_id,
+                    crate::messages::Via::SpawnAgents,
+                );
                 (task, response)
             }));
         }
@@ -755,6 +673,28 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
     Response::ok(text)
 }
 
+/// Why a caller of this scope may not take this action, or `None` if it may.
+///
+/// Checked once, at the top of [`run`], before any handler resolves the token for itself. Every
+/// action that exists today is about the caller's own worktree — its children open there, its peers
+/// are there, its browsers and comments are there — so a Home caller, which has no worktree, is
+/// refused all of them. Pure so the rule can be tested without a socket or a window.
+fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Response> {
+    if !scope.is_home() {
+        return None;
+    }
+    let what = match action {
+        Action::Delegate => "`ask_agent` and `spawn_agents` open a child beside the caller",
+        Action::CloseChildren => "`close_agents` closes children delegated from a worktree",
+        Action::ListSessions => "`list_sessions` lists the caller's worktree neighbours",
+        Action::Browser => "browser panes belong to a worktree",
+        Action::Code => "code comments belong to a worktree",
+    };
+    Some(Response::failed(format!(
+        "{what}, and the Home agent has none. Use the Home tools instead."
+    )))
+}
+
 /// Describe peers without giving the caller an address it could use to control one.
 ///
 /// The token supplies both scope and identity. There is intentionally no worktree or session
@@ -776,7 +716,10 @@ fn list_sessions(app: &Arc<App>, token: &str) -> Response {
         return Response::failed("this session is still starting; try again after it is ready");
     };
 
-    let peers = app.peer_sessions(&caller.worktree, Some(session));
+    let Some(worktree) = caller.scope.worktree_id() else {
+        return Response::failed("the Home agent has no worktree neighbours");
+    };
+    let peers = app.peer_sessions(worktree, Some(session));
     if peers.is_empty() {
         return Response::ok(
             "There are no other active coding-agent sessions in this worktree.".to_owned(),
@@ -802,6 +745,7 @@ fn run_task(
     token: &str,
     task: &Task,
     run_id: &str,
+    via: crate::messages::Via,
 ) -> Response {
     let Some(caller) = app.handoff.resolve(token) else {
         // Deliberately vague to the caller and specific in the log. A token that does not resolve is
@@ -819,13 +763,12 @@ fn run_task(
     tracing::info!(
         from = %caller.provider,
         to = %target,
-        worktree = %caller.worktree,
+        worktree = caller.scope.resume_key(),
         "starting a handoff"
     );
 
-    let opened = open_pane(handle, app, token, &caller, target, task, run_id);
-    let (session, capture, rx) = match opened {
-        Ok(parts) => parts,
+    let session = match open_pane(handle, app, token, &caller, target, task, run_id) {
+        Ok(session) => session,
         Err(error) => return Response::failed(error),
     };
 
@@ -834,24 +777,33 @@ fn run_task(
     // reported as "still working" forever.
     let settle = || app.handoff.settle_child(session.as_str());
 
-    if let Err(error) = app.send_agent_turn(session.as_str(), &task.prompt, &[]) {
-        // The pane is left on screen rather than torn down. It carries the stderr notice explaining
-        // why the CLI would not take a turn, which is the only useful artefact of a failure here.
-        settle();
-        return Response::failed(format!(
-            "the {target} session would not take the prompt: {error}"
-        ));
-    }
-
-    // Whatever `wait` returns, the work this child was opened for is over — a timeout and a death
-    // leave it just as closable as a clean answer, and a child that stayed unsettled because its
-    // turn failed would be one `close_agents` could never reach.
-    let outcome = wait(app, &rx);
+    let outcome = crate::turns::send_and_wait(
+        handle,
+        app,
+        &crate::messages::Begin {
+            run: Some(run_id),
+            from: caller.session.as_deref(),
+            to: session.as_str(),
+            via,
+            prompt: &task.prompt,
+        },
+        &task.prompt,
+    );
+    // Whatever came back, the work this child was opened for is over — a refusal, a timeout and a
+    // death leave it just as closable as a clean answer, and a child that stayed unsettled because
+    // its turn failed would be one `close_agents` could never reach.
     settle();
 
     match outcome {
-        Ok(()) => {
-            let text = capture.collected();
+        Err(crate::turns::SendFailure::Refused(error)) => {
+            // The pane is left on screen rather than torn down. It carries the stderr notice
+            // explaining why the CLI would not take a turn, which is the only useful artefact here.
+            Response::failed(format!(
+                "the {target} session would not take the prompt: {error}"
+            ))
+        }
+        Err(crate::turns::SendFailure::Ended(error)) => Response::failed(error),
+        Ok(text) => {
             if text.trim().is_empty() {
                 // A completed turn with no assistant text is a real outcome, not an error — an agent
                 // can finish by editing files and saying nothing. Saying so beats returning an empty
@@ -864,14 +816,10 @@ fn run_task(
                 Response::ok(text)
             }
         }
-        Err(error) => Response::failed(error),
     }
 }
 
 /// Open the pane a handoff runs in, and tell the frontend to adopt it.
-///
-/// Returns the capture sink alongside the session id because the caller needs both: one to send the
-/// turn through, the other to read the answer off.
 fn open_pane(
     handle: &tauri::AppHandle,
     app: &Arc<App>,
@@ -880,12 +828,16 @@ fn open_pane(
     target: &str,
     task: &Task,
     run_id: &str,
-) -> Result<(SessionId, Arc<Capture>, mpsc::Receiver<Outcome>), String> {
+) -> Result<SessionId, String> {
+    let (project_id, worktree_id) = caller
+        .scope
+        .place()
+        .ok_or("a delegated agent opens beside its caller, and the Home agent has no worktree")?;
     let project = app
-        .project(&caller.project)
+        .project(project_id)
         .map_err(|e| format!("that worktree's project is no longer registered: {e}"))?;
     let worktree = app
-        .worktree(&project, &caller.worktree)
+        .worktree(&project, worktree_id)
         .map_err(|e| format!("that worktree is no longer available: {e}"))?;
 
     let entry = wtm_agent::entry(target).ok_or_else(|| {
@@ -956,15 +908,10 @@ fn open_pane(
     )
     .map_err(|e| e.message)?;
 
-    let (tx, rx) = mpsc::channel();
-    let capture = Arc::new(Capture {
-        inner: crate::agent_bridge::AgentEventSink::new(handle.clone()),
-        text: parking_lot::Mutex::new(String::new()),
-        done: parking_lot::Mutex::new(Some(tx)),
-    });
-
-    let sink: Arc<dyn wtm_agent::session::AgentSink> = Arc::clone(&capture) as _;
-    let session = match app.open_agent(entry, &req, &worktree, &caller.project, &sink) {
+    let sink: Arc<dyn wtm_agent::session::AgentSink> =
+        crate::agent_bridge::AgentEventSink::new(handle.clone());
+    let scope = SessionScope::worktree(project_id, worktree_id);
+    let session = match app.open_agent(entry, &req, scope, &sink) {
         Ok(session) => session,
         Err(error) => {
             if let Some(issued) = req
@@ -982,8 +929,8 @@ fn open_pane(
         handle,
         &crate::agent_bridge::SpawnedSession {
             session: session.as_str().to_owned(),
-            project: caller.project.clone(),
-            worktree: caller.worktree.clone(),
+            project: project_id.to_owned(),
+            worktree: worktree_id.to_owned(),
             provider: target.to_owned(),
             model: req.model.clone(),
             effort: req.effort.clone(),
@@ -1001,12 +948,12 @@ fn open_pane(
         token,
         Child {
             session: session.as_str().to_owned(),
-            worktree: caller.worktree.clone(),
+            worktree: worktree_id.to_owned(),
             settled: false,
         },
     );
 
-    Ok((session, capture, rx))
+    Ok(session)
 }
 
 /// End the caller's own finished children.
@@ -1075,45 +1022,13 @@ fn close_children(handle: &tauri::AppHandle, app: &Arc<App>, token: &str) -> Res
     Response::ok(text)
 }
 
-/// Block until the turn is done, the session dies, or the deadline passes.
-///
-/// Polls a channel with a timeout rather than blocking on `recv` outright, because the deadline has
-/// to be measured against the [`Clock`](wtm_core::ports::clock::Clock) port — `Instant::now` is
-/// banned outside the clock adapter, and `recv_timeout` would smuggle the system clock back in.
-fn wait(app: &Arc<App>, rx: &mpsc::Receiver<Outcome>) -> Result<(), String> {
-    let deadline = app.clock.monotonic_ms() + HANDOFF_TIMEOUT_MS;
-    loop {
-        match rx.recv_timeout(std::time::Duration::from_millis(HANDOFF_POLL_MS)) {
-            Ok(Outcome::Finished) => return Ok(()),
-            Ok(Outcome::Failed(message)) => return Err(message),
-            Ok(Outcome::Gone(summary)) => {
-                return Err(format!("that session ended before it answered — {summary}"));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if app.clock.monotonic_ms() >= deadline {
-                    return Err(
-                        "that session did not finish in ten minutes; its pane is still open"
-                            .to_owned(),
-                    );
-                }
-            }
-            // The sender was dropped without firing, which means the session object went away
-            // without an exit event. Nothing more is coming.
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err("that session went away without answering".to_owned());
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn caller(worktree: &str) -> Caller {
         Caller {
-            project: "/repo".to_owned(),
-            worktree: worktree.to_owned(),
+            scope: SessionScope::worktree("/repo", worktree),
             provider: "claude".to_owned(),
             effort: Some("max".to_owned()),
             session: None,
@@ -1153,8 +1068,69 @@ mod tests {
         let token = hub.issue(caller("wt-a"));
 
         let resolved = hub.resolve(&token).expect("a fresh token should resolve");
-        assert_eq!(resolved.worktree, "wt-a");
+        assert_eq!(resolved.scope.worktree_id(), Some("wt-a"));
         assert_eq!(resolved.provider, "claude");
+    }
+
+    #[test]
+    fn a_home_token_is_refused_every_worktree_scoped_action() {
+        // Every action that existed before Home is about the caller's own worktree. A Home caller
+        // that reached one would be scoped by whatever an empty place happened to match, so each
+        // is refused outright, and by name, before any handler runs.
+        for action in [
+            Action::Delegate,
+            Action::CloseChildren,
+            Action::ListSessions,
+            Action::Browser,
+            Action::Code,
+        ] {
+            let refusal = scope_refusal(&SessionScope::Home, action)
+                .unwrap_or_else(|| panic!("{action:?} should refuse a Home caller"));
+            assert!(!refusal.ok);
+            assert!(
+                refusal
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("Home agent has none")),
+                "{action:?} should say why: {refusal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_worktree_token_is_never_refused_by_its_scope() {
+        let scope = SessionScope::worktree("/repo", "wt-a");
+        for action in [
+            Action::Delegate,
+            Action::CloseChildren,
+            Action::ListSessions,
+            Action::Browser,
+            Action::Code,
+        ] {
+            assert!(scope_refusal(&scope, action).is_none(), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn removing_a_worktree_never_forgets_a_home_token() {
+        // Home belongs to no worktree, so no worktree's removal may take its token with it — or
+        // the Home agent's next call would be told it is no longer registered.
+        let hub = Hub::default();
+        let home = hub.issue(Caller {
+            scope: SessionScope::Home,
+            provider: "claude".to_owned(),
+            effort: None,
+            session: None,
+        });
+        let worktree = hub.issue(caller("wt-a"));
+
+        hub.forget_worktree("wt-a");
+
+        assert!(hub.resolve(&worktree).is_none());
+        assert!(
+            hub.resolve(&home)
+                .is_some_and(|caller| caller.scope.is_home())
+        );
     }
 
     #[test]
@@ -1192,99 +1168,6 @@ mod tests {
             hub.resolve(&survivor).is_some(),
             "another worktree's token must survive"
         );
-    }
-
-    /// A sink that does nothing, counting what it was handed.
-    #[derive(Default)]
-    struct Silent {
-        events: parking_lot::Mutex<usize>,
-    }
-
-    impl wtm_agent::session::AgentSink for Silent {
-        fn on_event(&self, _session: &SessionId, _event: &AgentEvent) {
-            *self.events.lock() += 1;
-        }
-        fn on_exit(&self, _session: &SessionId, _outcome: &ExitOutcome) {}
-        fn on_ready(&self, _session: &SessionId) {}
-    }
-
-    fn message(text: &str) -> AgentEvent {
-        AgentEvent::Message {
-            text: text.to_owned(),
-        }
-    }
-
-    #[test]
-    fn a_capture_collects_its_own_turn_and_then_stops_growing() {
-        // The bug this pins: the pane is deliberately left open after a handoff answers, so this sink
-        // stays attached for the rest of the session's life. Without the `awaiting` guard, every
-        // message of every later turn the user typed was appended to a `Vec` nothing would ever read
-        // — an unbounded leak that would only show up in a long-lived pane.
-        use wtm_agent::session::AgentSink;
-
-        let inner = Arc::new(Silent::default());
-        let (tx, rx) = mpsc::channel();
-        let capture = Capture {
-            inner: Arc::clone(&inner) as Arc<dyn AgentSink>,
-            text: parking_lot::Mutex::new(String::new()),
-            done: parking_lot::Mutex::new(Some(tx)),
-        };
-        let session = SessionId::new("s-1");
-
-        capture.on_event(&session, &message("the review"));
-        capture.on_event(
-            &session,
-            &AgentEvent::TurnFinished {
-                turn: "t-1".to_owned(),
-                usage: wtm_core::model::Usage::default(),
-                cost_usd: None,
-            },
-        );
-        // A later turn, in the pane the user is now chatting in.
-        capture.on_event(&session, &message("something said much later"));
-
-        assert!(matches!(rx.try_recv(), Ok(Outcome::Finished)));
-        assert_eq!(
-            capture.collected(),
-            "the review",
-            "only the handoff's own turn should be collected"
-        );
-        // Still a pass-through, though: the pane must keep streaming or it would appear to freeze the
-        // moment its handoff finished.
-        assert_eq!(
-            *inner.events.lock(),
-            3,
-            "every event must still reach the UI"
-        );
-    }
-
-    #[test]
-    fn a_capture_collects_streaming_deltas_without_duplicating_the_completed_message() {
-        use wtm_agent::session::AgentSink;
-
-        let inner = Arc::new(Silent::default());
-        let (tx, _rx) = mpsc::channel();
-        let capture = Capture {
-            inner: Arc::clone(&inner) as Arc<dyn AgentSink>,
-            text: parking_lot::Mutex::new(String::new()),
-            done: parking_lot::Mutex::new(Some(tx)),
-        };
-        let session = SessionId::new("s-1");
-        capture.on_event(
-            &session,
-            &AgentEvent::MessageDelta {
-                text: "streamed ".to_owned(),
-            },
-        );
-        capture.on_event(
-            &session,
-            &AgentEvent::MessageDelta {
-                text: "answer".to_owned(),
-            },
-        );
-        capture.on_event(&session, &message("streamed answer"));
-
-        assert_eq!(capture.collected(), "streamed answer");
     }
 
     fn child(session: &str, worktree: &str) -> Child {
@@ -1496,8 +1379,7 @@ mod tests {
         // first delegation of a run unclosable.
         let hub = Hub::default();
         let token = hub.issue(Caller {
-            project: "p".to_owned(),
-            worktree: "wt-a".to_owned(),
+            scope: SessionScope::worktree("p", "wt-a"),
             provider: "claude".to_owned(),
             effort: None,
             session: None,
@@ -1516,8 +1398,7 @@ mod tests {
     fn forget_unbound_drops_a_token_that_never_got_a_session() {
         let hub = Hub::default();
         let token = hub.issue(Caller {
-            project: "p".to_owned(),
-            worktree: "wt-a".to_owned(),
+            scope: SessionScope::worktree("p", "wt-a"),
             provider: "claude".to_owned(),
             effort: None,
             session: None,
