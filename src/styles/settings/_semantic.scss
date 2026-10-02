@@ -45,12 +45,10 @@
  * Settings shows several palettes at once, so inheriting the active theme's already-computed
  * neutral tokens would make every swatch promise the same colours. Keeping the formula in the
  * semantic layer lets the component obey the no-literals/no-primitives boundary while each
- * swatch still resolves against its own local hue, chroma and depth.
+ * swatch still resolves against its own local hue and chroma.
  *
- * The lightness comes from the swatch's own `--gray-l-*` rather than being written here. It
- * used to be written here, as a copy of two primitives, which was fine while there was one
- * ramp. With two it would show every soft palette's chip at the deep palettes' near-black,
- * which is exactly the difference the chip exists to show.
+ * The lightness comes from `--gray-l-*` rather than being written here, so a chip cannot
+ * drift from the ramp it is previewing.
  */
 [data-palette] {
   --palette-swatch-bg: oklch(
@@ -158,13 +156,13 @@
   --fg-muted: var(--gray-400);
   --fg-subtle: var(--gray-500);
   /*
-   * Near-black, where light mode uses white — because in dark mode every fill this sits on
-   * is a light one. All three users are button faces: the accent button, the solid danger
+   * The darkest step, where light mode uses white — because in dark mode every fill this sits
+   * on is a light one. All three users are button faces: the accent button, the solid danger
    * button, and danger-outline on hover.
    *
-   * White on the dark accent measured 2.67:1 and on solid danger 3.21:1; both fail, and the
+   * White on Pine's dark accent measures 2.52:1 and on solid danger 2.85:1; both fail, and the
    * first was already failing at 3.12:1 before the brand changed. Inverting the label takes
-   * them to 7.33:1 and 6.10:1. A pale button with dark text is a deliberate look, not an
+   * them to 6.88:1 and 6.09:1. A pale button with dark text is a deliberate look, not an
    * oversight — if a dark fill ever needs this role, it needs a role of its own instead.
    */
   --fg-on-accent: var(--gray-950);

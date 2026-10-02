@@ -68,8 +68,7 @@ impl Theme {
 /// ```
 ///
 /// `hue` and `chroma` drive the neutral ramp, which the stylesheet derives in oklch — so a
-/// custom palette gets the same thirteen greys as a built-in one, at the lightness of the
-/// original six. The three soft built-ins sit on a lifted ramp a custom palette cannot name.
+/// custom palette gets the same thirteen greys as a built-in one, at the same lightness.
 /// `brand` is the accent ramp at 300/400/500/600; dark mode uses the first two and light
 /// mode the last two, which is the constraint to check when picking them.
 ///
