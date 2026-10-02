@@ -106,6 +106,8 @@ pub enum Action {
     Browser,
     /// One of the `code_*` tools, carried in [`Request::code`].
     Code,
+    /// One of the Home tools, carried in [`Request::home`]. Only a Home caller may take it.
+    Home,
 }
 
 /// A browser tool call, carried through the socket untouched.
@@ -124,6 +126,15 @@ pub struct BrowserCall {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeCall {
+    pub tool: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// A Home tool call, carried through the socket untouched, like [`BrowserCall`].
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeCall {
     pub tool: String,
     #[serde(default)]
     pub args: serde_json::Value,
@@ -162,6 +173,9 @@ pub struct Request {
     /// The code tool call, when `action` is [`Action::Code`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<CodeCall>,
+    /// The Home tool call, when `action` is [`Action::Home`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<HomeCall>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -393,6 +407,16 @@ impl Hub {
         }
     }
 
+    /// The session that delegated to `session`, if one did.
+    #[must_use]
+    pub fn parent_of(&self, session: &str) -> Option<String> {
+        self.children
+            .lock()
+            .iter()
+            .find(|(_, kids)| kids.iter().any(|child| child.session == session))
+            .map(|(parent, _)| parent.clone())
+    }
+
     /// Every descendant of `parent`, deepest first.
     #[must_use]
     pub fn descendants(&self, parent: &str) -> Vec<Child> {
@@ -582,6 +606,12 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
                 None => Response::failed("a code request has to name a tool"),
             };
         }
+        Action::Home => {
+            return match &request.home {
+                Some(call) => crate::home_tools::run(handle, app, &request.token, call),
+                None => Response::failed("a Home request has to name a tool"),
+            };
+        }
         Action::Delegate => {}
     }
     let tasks = if request.tasks.is_empty() {
@@ -680,6 +710,15 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
 /// are there, its browsers and comments are there — so a Home caller, which has no worktree, is
 /// refused all of them. Pure so the rule can be tested without a socket or a window.
 fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Response> {
+    // The other direction, and the one that matters most: Home's tools reach across worktrees,
+    // so a worktree session must never get them by sending the action its bridge does not list.
+    if action == Action::Home {
+        return (!scope.is_home()).then(|| {
+            Response::failed(
+                "the Home tools are only for the Home agent; this session has a worktree",
+            )
+        });
+    }
     if !scope.is_home() {
         return None;
     }
@@ -689,6 +728,7 @@ fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Response> {
         Action::ListSessions => "`list_sessions` lists the caller's worktree neighbours",
         Action::Browser => "browser panes belong to a worktree",
         Action::Code => "code comments belong to a worktree",
+        Action::Home => unreachable!("handled above"),
     };
     Some(Response::failed(format!(
         "{what}, and the Home agent has none. Use the Home tools instead."
@@ -767,10 +807,35 @@ fn run_task(
         "starting a handoff"
     );
 
-    let session = match open_pane(handle, app, token, &caller, target, task, run_id) {
+    let Some((project, worktree)) = caller.scope.place() else {
+        return Response::failed(
+            "a delegated agent opens beside its caller, and the Home agent has no worktree",
+        );
+    };
+    let placement = Placement {
+        project,
+        worktree,
+        parent_session: caller.session.as_deref(),
+        opened_by: None,
+        caller_provider: &caller.provider,
+        caller_effort: caller.effort.as_deref(),
+        run: Some(run_id),
+    };
+    let session = match open_pane(handle, app, &placement, target, task) {
         Ok(session) => session,
         Err(error) => return Response::failed(error),
     };
+    // After the announcement, because both need the same two ids and the frontend is the one that
+    // cannot wait. Unsettled until the turn returns; see `Hub::settled_children`. Keyed on the
+    // parent token so a child whose first MCP call races `bind_session` is still parented.
+    app.handoff.record_child_for(
+        token,
+        Child {
+            session: session.as_str().to_owned(),
+            worktree: worktree.to_owned(),
+            settled: false,
+        },
+    );
 
     // One closure so a send that never starts is just as closable as a timeout. The first version
     // settled only after `wait`, and a CLI that refused the prompt left a pane `close_agents`
@@ -819,26 +884,47 @@ fn run_task(
     }
 }
 
-/// Open the pane a handoff runs in, and tell the frontend to adopt it.
-fn open_pane(
+/// Where a session is opened and on whose behalf.
+///
+/// One shape for both openers: a delegation, whose child sits behind its parent's rail, and Home,
+/// whose sessions are ordinary panes in their worktree. Every refusal `open_pane` makes applies to
+/// both, which is the point of their sharing it.
+pub(crate) struct Placement<'a> {
+    pub project: &'a str,
+    pub worktree: &'a str,
+    /// The delegating session. Set, the pane is a child behind that session's rail.
+    pub parent_session: Option<&'a str>,
+    /// The Home session that opened it. Set, the pane is tiled in its worktree.
+    pub opened_by: Option<&'a str>,
+    /// Who is asking, for carrying their effort across.
+    pub caller_provider: &'a str,
+    pub caller_effort: Option<&'a str>,
+    pub run: Option<&'a str>,
+}
+
+/// Open a session for a handoff or for Home, and tell the frontend to adopt it.
+pub(crate) fn open_pane(
     handle: &tauri::AppHandle,
     app: &Arc<App>,
-    token: &str,
-    caller: &Caller,
+    placement: &Placement<'_>,
     target: &str,
     task: &Task,
-    run_id: &str,
 ) -> Result<SessionId, String> {
-    let (project_id, worktree_id) = caller
-        .scope
-        .place()
-        .ok_or("a delegated agent opens beside its caller, and the Home agent has no worktree")?;
+    let (project_id, worktree_id) = (placement.project, placement.worktree);
     let project = app
         .project(project_id)
         .map_err(|e| format!("that worktree's project is no longer registered: {e}"))?;
     let worktree = app
         .worktree(&project, worktree_id)
         .map_err(|e| format!("that worktree is no longer available: {e}"))?;
+    // The check `open_agent_session` makes, and for its reason: a worktree removed by hand is
+    // prunable rather than absent, so it is still found above.
+    if !app.files.exists(&worktree.path) {
+        return Err(format!(
+            "`{}` no longer exists on disk — the worktree may need pruning",
+            worktree.path.display()
+        ));
+    }
 
     let entry = wtm_agent::entry(target).ok_or_else(|| {
         format!("`{target}` is not an agent this build of wtm knows how to drive")
@@ -869,15 +955,14 @@ fn open_pane(
      * returns `None` when nothing sensible carries, which falls through to the layers
      * `session_request_for` already had.
      */
-    let inherited = caller
-        .effort
-        .as_deref()
-        .and_then(|effort| wtm_agent::carried_effort(&caller.provider, target, effort));
+    let inherited = placement
+        .caller_effort
+        .and_then(|effort| wtm_agent::carried_effort(placement.caller_provider, target, effort));
     if let Some(rung) = inherited.as_deref() {
         tracing::debug!(
-            from = %caller.provider,
+            from = %placement.caller_provider,
             to = target,
-            caller_effort = ?caller.effort,
+            caller_effort = ?placement.caller_effort,
             carried = rung,
             "handoff carrying the caller's effort"
         );
@@ -935,21 +1020,10 @@ fn open_pane(
             model: req.model.clone(),
             effort: req.effort.clone(),
             mode: req.mode.clone(),
-            parent_session: caller.session.clone(),
-            run: Some(run_id.to_owned()),
+            parent_session: placement.parent_session.map(str::to_owned),
+            run: placement.run.map(str::to_owned),
             title: task.title.clone(),
-        },
-    );
-
-    // After the announcement, because both need the same two ids and the frontend is the one that
-    // cannot wait. Unsettled until the turn returns; see `Hub::settled_children`. Keyed on the
-    // parent token so a child whose first MCP call races `bind_session` is still parented.
-    app.handoff.record_child_for(
-        token,
-        Child {
-            session: session.as_str().to_owned(),
-            worktree: worktree_id.to_owned(),
-            settled: false,
+            opened_by: placement.opened_by.map(str::to_owned),
         },
     );
 
@@ -1109,6 +1183,30 @@ mod tests {
         ] {
             assert!(scope_refusal(&scope, action).is_none(), "{action:?}");
         }
+    }
+
+    #[test]
+    fn a_worktree_token_is_refused_a_home_action_even_when_it_names_one_itself() {
+        // A worktree bridge does not list the Home tools, but a bridge is a child process and its
+        // listing is no defence: this is the refusal that holds whatever it sends.
+        let refusal = scope_refusal(&SessionScope::worktree("/repo", "wt-a"), Action::Home)
+            .expect("a worktree caller must not reach the Home tools");
+        assert!(!refusal.ok);
+        assert!(scope_refusal(&SessionScope::Home, Action::Home).is_none());
+    }
+
+    #[test]
+    fn a_request_from_an_older_bridge_still_has_no_home_call() {
+        let request: Request =
+            serde_json::from_str(r#"{"token":"t","agent":"codex","prompt":"p"}"#).unwrap();
+        assert_eq!(request.action, Action::Delegate);
+        assert!(request.home.is_none());
+        let round: Request = serde_json::from_str(
+            r#"{"token":"t","action":"home","home":{"tool":"read_session","args":{"session":"s1"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(round.action, Action::Home);
+        assert_eq!(round.home.unwrap().args["session"], "s1");
     }
 
     #[test]

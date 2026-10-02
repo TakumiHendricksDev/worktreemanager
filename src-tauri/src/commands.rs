@@ -869,6 +869,50 @@ pub async fn list_actions(app: AppState<'_>, project_id: String) -> Reply<Vec<Ac
 mod tests {
     use super::*;
 
+    #[test]
+    fn both_routes_to_a_session_layer_model_effort_and_mode_identically() {
+        // Home has no repository and passes an empty spec; a worktree passes its `[agent.<id>]`.
+        // The layering itself is one function, so the two can differ only in what they pass in.
+        let entry = wtm_agent::entry("claude").expect("claude is in the catalogue");
+        let empty = wtm_core::model::AgentSpec::default();
+
+        let defaults = session_choices(&empty, entry, None, None);
+        assert_eq!(defaults.effort, entry.default_effort.map(str::to_owned));
+        assert_eq!(defaults.mode, entry.default_mode.map(str::to_owned));
+        assert_eq!(defaults.model, None);
+
+        let picked = session_choices(
+            &empty,
+            entry,
+            Some(SessionOptions {
+                model: Some("haiku".to_owned()),
+                effort: Some("low".to_owned()),
+                mode: Some("plan".to_owned()),
+                resume: None,
+                fast: None,
+            }),
+            Some("max"),
+        );
+        assert_eq!(picked.model.as_deref(), Some("haiku"));
+        assert_eq!(
+            picked.effort.as_deref(),
+            Some("low"),
+            "the picker outranks what was inherited"
+        );
+        assert_eq!(picked.mode.as_deref(), Some("plan"));
+
+        let repo = wtm_core::model::AgentSpec {
+            effort: Some("medium".to_owned()),
+            ..wtm_core::model::AgentSpec::default()
+        };
+        let layered = session_choices(&repo, entry, None, Some("max"));
+        assert_eq!(
+            layered.effort.as_deref(),
+            Some("medium"),
+            "the repository outranks a caller"
+        );
+    }
+
     /// A stale `$SHELL` must not be the reason a terminal refuses to open.
     ///
     /// The candidate and the predicate are injected because a test cannot set `$SHELL`:
@@ -1781,11 +1825,15 @@ pub async fn open_agent_side_session(
                 "the parent conversation is still starting, so it cannot be forked yet",
             )
         })?;
+        // Home's own `/btw` forks into Home, with Home's request rather than a repository's.
         let Some((project, worktree)) = source.scope.place() else {
-            return Err(ErrorView::new(
-                "exec",
-                "only a worktree's conversations can be forked for a side question",
-            ));
+            return crate::home::open(
+                handle,
+                &app,
+                &source.provider,
+                options,
+                Some(source.provider_session.clone()),
+            );
         };
         open_agent_process(
             handle,
@@ -1798,6 +1846,34 @@ pub async fn open_agent_side_session(
         )
     })
     .await
+}
+
+/// Shape a request into a side question: one answer, from the conversation alone, with no tools.
+///
+/// Shared by a worktree's `/btw` and Home's, which differ only in where the fork came from.
+pub(crate) fn make_ephemeral(app: &App, req: &mut wtm_agent::SessionRequest) {
+    const SIDE_INSTRUCTIONS: &str = "This is an ephemeral side question. Answer only from the \
+        conversation context already available, in a single reply. You have no tools and \
+        cannot change anything, and the user cannot reply here, so do not offer to do \
+        anything or ask whether they want something done.";
+
+    // No servers at all, the handoff bridge included. `--tools ""` empties Claude's built-in
+    // set and nothing else, so every server here stayed callable in a card that has nowhere to
+    // show an approval: a call that needed one would wait forever under "Thinking…". A side
+    // question has no business opening a pane or driving a browser either.
+    if let Some(token) = req
+        .mcp
+        .get(handoff::SERVER_NAME)
+        .and_then(|server| server.env.get(handoff::TOKEN_ENV))
+    {
+        app.handoff.forget_unbound(token);
+    }
+    req.mcp.clear();
+    // Replaced rather than appended to. Everything `session_instructions` says is about the
+    // bridge's tools or the peer notes, and this session gets neither (`peer_note_for` skips
+    // ephemeral entries) — and a paragraph urging the model to delegate and open panes is the
+    // opposite of what a one-answer card wants to read.
+    req.instructions = Some(SIDE_INSTRUCTIONS.to_owned());
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1857,28 +1933,7 @@ fn open_agent_process(
     req.fork = fork;
     req.ephemeral = req.fork.is_some();
     if req.ephemeral {
-        const SIDE_INSTRUCTIONS: &str = "This is an ephemeral side question. Answer only from the \
-            conversation context already available, in a single reply. You have no tools and \
-            cannot change anything, and the user cannot reply here, so do not offer to do \
-            anything or ask whether they want something done.";
-
-        // No servers at all, the handoff bridge included. `--tools ""` empties Claude's built-in
-        // set and nothing else, so every server here stayed callable in a card that has nowhere to
-        // show an approval: a call that needed one would wait forever under "Thinking…". A side
-        // question has no business opening a pane or driving a browser either.
-        if let Some(token) = req
-            .mcp
-            .get(handoff::SERVER_NAME)
-            .and_then(|server| server.env.get(handoff::TOKEN_ENV))
-        {
-            app.handoff.forget_unbound(token);
-        }
-        req.mcp.clear();
-        // Replaced rather than appended to. Everything `session_instructions` says is about the
-        // bridge's tools or the peer notes, and this session gets neither (`peer_note_for` skips
-        // ephemeral entries) — and a paragraph urging the model to delegate and open panes is the
-        // opposite of what a one-answer card wants to read.
-        req.instructions = Some(SIDE_INSTRUCTIONS.to_owned());
+        make_ephemeral(app, &mut req);
     }
 
     let sink: Arc<dyn wtm_agent::session::AgentSink> =
@@ -1918,6 +1973,10 @@ pub async fn send_turn(
         app.send_agent_turn(&session, &text, &attachments)
             .map_err(|e| ErrorView::new("exec", e.to_string()))?;
         app.remember_staged_attachments(&session, &attachments);
+        // Only this route counts: it is the composer's. A delegation and Home send through
+        // `send_agent_turn` directly, and a session they opened stays theirs to close until the
+        // user has written to it themselves.
+        app.note_user_turn(&session);
         Ok(())
     })
     .await
@@ -1940,6 +1999,7 @@ pub async fn steer_turn(
         app.with_agent(&session, |agent| agent.steer(&text, &attachments))
             .map_err(|e| ErrorView::new("exec", e.to_string()))?;
         app.remember_staged_attachments(&session, &attachments);
+        app.note_user_turn(&session);
         Ok(())
     })
     .await
@@ -2592,6 +2652,58 @@ pub fn session_request_for(
     options: Option<SessionOptions>,
     inherited: Option<&str>,
 ) -> Result<wtm_agent::SessionRequest, ErrorView> {
+    let SessionChoices {
+        model,
+        effort,
+        mode,
+        resume,
+        fast,
+    } = session_choices(spec, entry, options, inherited);
+
+    Ok(wtm_agent::SessionRequest {
+        cwd: worktree.path.to_string_lossy().into_owned(),
+        // Machine discovery belongs to `App::open_agent`, immediately before spawn, so a CLI
+        // installed while this picker was open is usable without rebuilding this request.
+        executable: None,
+        model,
+        mode,
+        resume,
+        fork: None,
+        ephemeral: false,
+        extra_args: spec.extra_args.clone(),
+        env: agent_env_for(app, project, spec)?,
+        // The resolved effort, not the caller's — so a session's handoff token offers the rung it is
+        // actually running at. See `handoff::Caller::effort`.
+        mcp: mcp_servers_for(app, project, spec, worktree, entry.id, effort.as_deref())?,
+        instructions: session_instructions(app, project, entry.id),
+        effort,
+        fast,
+    })
+}
+
+/// What a new session runs on: its model, effort, mode and speed, and what it resumes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SessionChoices {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub mode: Option<String>,
+    pub resume: Option<String>,
+    pub fast: Option<bool>,
+}
+
+/// Layer a session's settings: the picker, then the repository, then what a caller passed down,
+/// then the compiled defaults.
+///
+/// Its own function because there are two routes into a session now — a worktree's, through
+/// [`session_request_for`], and Home's, which has no repository — and the layering is the part
+/// that must not differ between them. Home passes an empty `AgentSpec`, and everything below then
+/// falls through to the same compiled defaults a hand-opened pane gets.
+pub(crate) fn session_choices(
+    spec: &wtm_core::model::AgentSpec,
+    entry: &'static wtm_agent::ProviderEntry,
+    options: Option<SessionOptions>,
+    inherited: Option<&str>,
+) -> SessionChoices {
     let SessionOptions {
         model,
         effort,
@@ -2635,11 +2747,7 @@ pub fn session_request_for(
         None
     };
 
-    Ok(wtm_agent::SessionRequest {
-        cwd: worktree.path.to_string_lossy().into_owned(),
-        // Machine discovery belongs to `App::open_agent`, immediately before spawn, so a CLI
-        // installed while this picker was open is usable without rebuilding this request.
-        executable: None,
+    SessionChoices {
         model,
         // Auto, unless something asked for otherwise. This used to be "ask before running
         // anything", on the grounds that a permissive default is a decision to make deliberately
@@ -2652,20 +2760,12 @@ pub fn session_request_for(
             .or(implied)
             .or_else(|| entry.default_mode.map(str::to_owned)),
         resume,
-        fork: None,
-        ephemeral: false,
-        extra_args: spec.extra_args.clone(),
-        env: agent_env_for(app, project, spec)?,
-        // The resolved effort, not the caller's — so a session's handoff token offers the rung it is
-        // actually running at. See `handoff::Caller::effort`.
-        mcp: mcp_servers_for(app, project, spec, worktree, entry.id, effort.as_deref())?,
-        instructions: session_instructions(app, project, entry.id),
         effort,
         // Two layers rather than the model's three: there is no compiled default to fall back to,
         // because a mode that spends usage credits faster is not one this build gets to opt anybody
         // into. Absent means off, and only the user or their repository can say otherwise.
         fast: fast.or(spec.fast),
-    })
+    }
 }
 
 /// `[agent.<id>.env]`, rendered.

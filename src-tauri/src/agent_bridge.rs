@@ -69,6 +69,10 @@ pub struct SpawnedSession {
     pub parent_session: Option<String>,
     pub run: Option<String>,
     pub title: Option<String>,
+    /// The Home session that opened it into its worktree, where it is tiled like a hand-opened
+    /// pane. `parent_session` is then `None`: a Home-opened pane is not a delegation child, and
+    /// the frontend's close cascade and rail must not treat it as one.
+    pub opened_by: Option<String>,
 }
 
 /// Event name for sessions Rust closed on its own initiative.

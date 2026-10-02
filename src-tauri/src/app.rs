@@ -186,8 +186,21 @@ struct AgentEntry {
     ready: bool,
     /// Whether the provider is currently handling a turn.
     working: bool,
-    /// Approval ids that still need an answer.
-    pending_approvals: BTreeSet<String>,
+    /// Approvals that still need an answer, by id, each with a few words saying what it asks.
+    ///
+    /// The words are for Home's session list, which has to say *what* a session is waiting on.
+    /// Awareness reads only whether this is empty — see [`AgentPeerActivity`] for why it must not
+    /// learn more.
+    pending_approvals: BTreeMap<String, String>,
+    /// The model the provider says it is running, once it has said.
+    model: Option<String>,
+    /// Why the last turn failed, until the next one starts.
+    failed: Option<String>,
+    /// How many turns the *user* has sent, from a composer — not a delegation, not Home.
+    ///
+    /// Home may close a session it opened only while this is zero: one the user has started
+    /// talking to has become theirs, and ending it would end their conversation.
+    user_turns: u32,
     /// The peer note most recently delivered to this session.
     ///
     /// The empty string is a real baseline meaning "no peers". Keeping the rendered snapshot
@@ -338,18 +351,55 @@ const MAX_EARLY_REPLAY_SESSIONS: usize = 32;
 /// with an event. What session awareness and `live_agents` report is read from these.
 fn note_activity(entry: &mut AgentEntry, event: &AgentEvent) {
     match event {
-        AgentEvent::SessionReady { .. } => entry.ready = true,
-        AgentEvent::TurnStarted { .. } => entry.working = true,
-        AgentEvent::TurnFinished { .. }
-        | AgentEvent::Failed { .. }
-        | AgentEvent::LimitReached { .. } => entry.working = false,
-        AgentEvent::ApprovalRequested { id, .. } => {
-            entry.pending_approvals.insert(id.clone());
+        AgentEvent::SessionReady { model, .. } => {
+            entry.ready = true;
+            if model.is_some() {
+                entry.model.clone_from(model);
+            }
+        }
+        AgentEvent::TurnStarted { .. } => {
+            entry.working = true;
+            entry.failed = None;
+        }
+        AgentEvent::TurnFinished { .. } => entry.working = false,
+        AgentEvent::Failed { message } | AgentEvent::LimitReached { message, .. } => {
+            entry.working = false;
+            entry.failed = Some(message.clone());
+        }
+        AgentEvent::ApprovalRequested { id, request, .. } => {
+            entry
+                .pending_approvals
+                .insert(id.clone(), approval_summary(request));
         }
         AgentEvent::ApprovalResolved { id } => {
             entry.pending_approvals.remove(id);
         }
         _ => {}
+    }
+}
+
+/// What an approval asks, in a few words: the kind, and for a command the command itself.
+///
+/// For Home's session list, which says what a session is waiting on. Cut short, because a command
+/// can be a heredoc and a plan a document.
+#[must_use]
+pub fn approval_summary(request: &wtm_core::model::ApprovalRequest) -> String {
+    use wtm_core::model::ApprovalRequest as R;
+    fn cut(text: &str) -> String {
+        let line = text.trim().lines().next().unwrap_or("");
+        let mut out: String = line.chars().take(100).collect();
+        if line.chars().nth(100).is_some() {
+            out.push('…');
+        }
+        out
+    }
+    match request {
+        R::Command { command, .. } => format!("approval to run `{}`", cut(command)),
+        R::FileChange { .. } => "approval to apply a file change".to_owned(),
+        R::Permissions { summary, .. } => format!("a permissions grant: {}", cut(summary)),
+        R::PlanReview { .. } => "a plan to review".to_owned(),
+        R::ToolInput { tool, .. } => format!("input for the `{}` tool", cut(tool)),
+        R::UserInput { .. } => "an answer to a question".to_owned(),
     }
 }
 
@@ -436,6 +486,29 @@ impl ReplayBuffer {
     /// The buffered events, oldest first, without their numbers.
     fn iter(&self) -> impl Iterator<Item = &AgentEvent> {
         self.events.iter().map(|entry| &entry.seq_event.event)
+    }
+
+    /// The last `turns` turns, from the user message that started the earliest of them.
+    ///
+    /// A turn is counted from its `UserEcho`, which is the one event every provider emits at the
+    /// start of each. Fewer than `turns` in the buffer means all of it.
+    fn tail_turns(&self, turns: usize) -> Vec<AgentEvent> {
+        let mut seen = 0;
+        let mut from = 0;
+        for (index, entry) in self.events.iter().enumerate().rev() {
+            if matches!(entry.seq_event.event, AgentEvent::UserEcho { .. }) {
+                seen += 1;
+                from = index;
+                if seen == turns {
+                    break;
+                }
+            }
+        }
+        self.events
+            .iter()
+            .skip(from)
+            .map(|entry| entry.seq_event.event.clone())
+            .collect()
     }
 }
 
@@ -621,6 +694,49 @@ pub struct AgentPeerFacts {
     pub title: Option<String>,
 }
 
+/// Where a session stands, in the words Home's tools use.
+///
+/// Its own enum rather than a widening of [`AgentPeerActivity`], whose doc explains why that one must
+/// stay small: it is what session awareness tells *every* session about its neighbours. Home asks
+/// on the user's behalf, about sessions it can already message, and is allowed to hear more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentStatus {
+    Starting,
+    Working,
+    NeedsYou,
+    Idle,
+    Failed,
+}
+
+impl AgentStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Working => "working",
+            Self::NeedsYou => "needs the user",
+            Self::Idle => "idle",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// One live session, as Home's tools describe it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentOverview {
+    pub session: String,
+    pub scope: SessionScope,
+    pub provider: String,
+    pub model: Option<String>,
+    /// The first prompt, made inert — see [`normalized_peer_title`].
+    pub title: Option<String>,
+    pub status: AgentStatus,
+    /// What each pending approval asks.
+    pub approvals: Vec<String>,
+    pub failed: Option<String>,
+    pub user_turns: u32,
+}
+
 /// The durable provider conversation behind a live pane, used as the source of a side fork.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentForkSource {
@@ -709,6 +825,8 @@ pub struct App {
     pub turns: crate::turns::Registry,
     /// What agents have recently said to each other, for Home's wires. See `messages.rs`.
     pub messages: crate::messages::Log,
+    /// Home conversations' handles and the sessions they opened. See `home.rs`.
+    pub home: crate::home::Registry,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
     /// Events from agent sessions that are not in [`Self::agents`] yet. See
     /// [`Self::record_agent_event`].
@@ -818,6 +936,7 @@ impl App {
             usage: crate::usage::Registry::default(),
             turns: crate::turns::Registry::default(),
             messages: crate::messages::Log::default(),
+            home: crate::home::Registry::default(),
             dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             early_replay: parking_lot::Mutex::new(BTreeMap::new()),
@@ -1563,7 +1682,10 @@ impl App {
             ephemeral: req.ephemeral,
             ready: false,
             working: false,
-            pending_approvals: BTreeSet::new(),
+            pending_approvals: BTreeMap::new(),
+            model: req.model.clone(),
+            failed: None,
+            user_turns: 0,
             peer_snapshot: String::new(),
             session: Arc::new(session),
             staged_attachments: BTreeSet::new(),
@@ -1605,6 +1727,63 @@ impl App {
                 ephemeral: entry.ephemeral,
             })
             .collect()
+    }
+
+    /// Every live, non-ephemeral session, for Home's tools. Every scope, Home's own included.
+    #[must_use]
+    pub fn overview(&self) -> Vec<AgentOverview> {
+        let running = self.running_agents();
+        self.agents
+            .lock()
+            .iter()
+            .filter(|(session, entry)| running.contains(session.as_str()) && !entry.ephemeral)
+            .map(|(session, entry)| AgentOverview {
+                session: session.as_str().to_owned(),
+                scope: entry.scope.clone(),
+                provider: entry.provider.clone(),
+                model: entry.model.clone(),
+                title: entry.title.as_deref().and_then(normalized_peer_title),
+                status: if !entry.pending_approvals.is_empty() {
+                    AgentStatus::NeedsYou
+                } else if entry.working {
+                    AgentStatus::Working
+                } else if entry.failed.is_some() {
+                    AgentStatus::Failed
+                } else if entry.ready {
+                    AgentStatus::Idle
+                } else {
+                    AgentStatus::Starting
+                },
+                approvals: entry.pending_approvals.values().cloned().collect(),
+                failed: entry.failed.clone(),
+                user_turns: entry.user_turns,
+            })
+            .collect()
+    }
+
+    /// One live session's overview, or `None` if it is not running.
+    #[must_use]
+    pub fn overview_of(&self, session: &str) -> Option<AgentOverview> {
+        self.overview().into_iter().find(|o| o.session == session)
+    }
+
+    /// A session's last few turns, from its replay buffer. Empty for a session that is not live.
+    #[must_use]
+    pub fn recent_turns(&self, session: &str, turns: usize) -> Vec<AgentEvent> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents
+            .lock()
+            .get(&id)
+            .map(|entry| entry.replay.tail_turns(turns.max(1)))
+            .unwrap_or_default()
+    }
+
+    /// Count a turn the user sent from a composer. See [`AgentEntry::user_turns`].
+    pub fn note_user_turn(&self, session: &str) {
+        let id = wtm_core::model::SessionId::new(session);
+        if let Some(entry) = self.agents.lock().get_mut(&id) {
+            entry.user_turns = entry.user_turns.saturating_add(1);
+        }
     }
 
     /// Whether the beta session-awareness channel is enabled for this user.
@@ -1812,6 +1991,8 @@ impl App {
         }
         let closed = self.end_agent_process(session);
         self.handoff.forget_session(session);
+        // Never a cascade: a Home conversation's record goes, the panes it opened stay.
+        self.home.forget(session);
         self.pipe.reap_finished(KEEP_FINISHED_SESSIONS);
         closed
     }
@@ -1860,6 +2041,7 @@ impl App {
             for session in &agents {
                 map.remove(session);
                 self.handoff.forget_session(session.as_str());
+                self.home.forget(session.as_str());
             }
         }
         self.reap_hosts();

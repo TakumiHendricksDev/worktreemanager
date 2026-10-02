@@ -76,23 +76,53 @@ impl Bridge {
         Self::spawn_with(agents, wiring, awareness, false)
     }
 
+    /// Start a Home bridge — the one a Home session gets — for listing.
+    fn home(agents: &str) -> Self {
+        Self::spawn_flags(agents, None, false, false, true)
+    }
+
+    /// Start a Home bridge wired to a fake app.
+    fn wired_home(agents: &str, socket: &std::path::Path, token: &str) -> Self {
+        let mut bridge = Self::spawn_flags(agents, Some((socket, token)), false, false, true);
+        bridge.call(1, "initialize", &serde_json::json!({}));
+        bridge
+    }
+
     fn spawn_with(
         agents: &str,
         wiring: Option<(&std::path::Path, &str)>,
         awareness: bool,
         browser: bool,
     ) -> Self {
+        Self::spawn_flags(agents, wiring, awareness, browser, false)
+    }
+
+    fn spawn_flags(
+        agents: &str,
+        wiring: Option<(&std::path::Path, &str)>,
+        awareness: bool,
+        browser: bool,
+        home: bool,
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_wtm"));
+        // Every flag cleared first, then the ones this bridge asked for. The runner's own
+        // environment is inherited otherwise, and a test run from inside a wtm pane — a Home
+        // pane above all — would start every bridge with that pane's tools listed.
         command
             .arg("--mcp-bridge")
             .env(handoff::AGENTS_ENV, agents)
             .env_remove(handoff::AWARENESS_ENV)
-            .env_remove(handoff::BROWSER_TOOLS_ENV);
+            .env_remove(handoff::BROWSER_TOOLS_ENV)
+            .env_remove(handoff::CODE_TOOLS_ENV)
+            .env_remove(wtm_app_lib::home::HOME_TOOLS_ENV);
         if awareness {
             command.env(handoff::AWARENESS_ENV, "on");
         }
         if browser {
             command.env(handoff::BROWSER_TOOLS_ENV, "on");
+        }
+        if home {
+            command.env(wtm_app_lib::home::HOME_TOOLS_ENV, "on");
         }
 
         match wiring {
@@ -763,4 +793,92 @@ fn a_screenshot_reaches_the_cli_as_an_image_block_beside_the_text() {
     assert_eq!(content[1]["type"], "image");
     assert_eq!(content[1]["data"], "iVBORw0KGgo=");
     assert_eq!(content[1]["mimeType"], "image/png");
+}
+
+#[test]
+fn a_home_bridge_lists_only_the_home_tools() {
+    // Home has no worktree, so the worktree tools would only be refused; a bridge that listed them
+    // would teach the model they are broken rather than absent.
+    let mut bridge = Bridge::home("claude:Claude Code,codex:Codex");
+    bridge.call(1, "initialize", &serde_json::json!({}));
+    let listed = bridge.call(2, "tools/list", &serde_json::json!({}));
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, wtm_app_lib::home_tools::TOOLS);
+    let open = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "open_session")
+        .unwrap();
+    assert_eq!(
+        open["inputSchema"]["properties"]["agent"]["enum"],
+        serde_json::json!(["claude", "codex"])
+    );
+}
+
+#[test]
+fn a_bridge_started_without_the_home_flag_does_not_know_the_home_tools() {
+    let mut bridge = Bridge::start("codex:Codex");
+    bridge.call(1, "initialize", &serde_json::json!({}));
+    let listed = bridge.call(2, "tools/list", &serde_json::json!({}));
+    let text = listed.to_string();
+    assert!(!text.contains("list_all_sessions"), "{text}");
+    let reply = bridge.call(
+        3,
+        "tools/call",
+        &serde_json::json!({ "name": "list_all_sessions", "arguments": {} }),
+    );
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+}
+
+#[test]
+fn a_home_tool_call_reaches_the_app_as_a_home_action_carrying_its_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("h.sock");
+    let app = fake_app(&socket, handoff::Response::ok("s2 replied.".to_owned()));
+    let mut bridge = Bridge::wired_home("codex:Codex", &socket, "home-token");
+
+    let reply = bridge.call(
+        2,
+        "tools/call",
+        &serde_json::json!({
+            "name": "message_session",
+            "arguments": { "session": "s2", "prompt": "Did the tests pass?" },
+        }),
+    );
+
+    let sent = app.join().expect("the fake app should not panic");
+    assert_eq!(sent.token, "home-token");
+    assert_eq!(sent.action, handoff::Action::Home);
+    let call = sent.home.expect("the call rides in `home`");
+    assert_eq!(call.tool, "message_session");
+    assert_eq!(call.args["session"], "s2");
+    assert_eq!(call.args["prompt"], "Did the tests pass?");
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+}
+
+#[test]
+fn a_home_bridge_refuses_a_worktree_tool_without_reaching_the_app() {
+    // No fake app is listening: a bridge that forwarded this would fail on the socket instead.
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("nobody.sock");
+    let mut bridge = Bridge::wired_home("codex:Codex", &socket, "home-token");
+    let reply = bridge.call(
+        2,
+        "tools/call",
+        &serde_json::json!({ "name": "ask_agent", "arguments": { "agent": "codex", "prompt": "hi" } }),
+    );
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    assert!(
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("no tool named"),
+        "{reply}"
+    );
 }

@@ -210,6 +210,9 @@ pub fn serve_stdio() {
     let awareness = std::env::var(handoff::AWARENESS_ENV).as_deref() == Ok("on");
     let browser = std::env::var(handoff::BROWSER_TOOLS_ENV).as_deref() == Ok("on");
     let code = std::env::var(handoff::CODE_TOOLS_ENV).as_deref() == Ok("on");
+    // A Home bridge lists Home's tools *instead of* the worktree ones: Home has no worktree for
+    // those to act on, and offering them would only teach the model they are broken.
+    let home = std::env::var(crate::home::HOME_TOOLS_ENV).as_deref() == Ok("on");
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -230,6 +233,11 @@ pub fn serve_stdio() {
 
         let reply = match method {
             "initialize" => Some(result(&id, &initialize(&params))),
+            "tools/list" if home => Some(result(
+                &id,
+                &json!({ "tools": crate::home_tools::definitions(&agents) }),
+            )),
+            "tools/call" if home => Some(result(&id, &call_home(&params))),
             "tools/list" => Some(result(&id, &tools(&agents, awareness, browser, code))),
             "tools/call" => Some(result(&id, &call(&params, browser, code))),
             // `ping` is in the spec and costs one line. Everything else gets the standard
@@ -571,6 +579,7 @@ fn call(params: &Value, browser: bool, code: bool) -> Value {
             concurrency,
             browser: None,
             code: None,
+            home: None,
         },
     ) {
         Ok(response) if response.ok => json!({
@@ -578,6 +587,39 @@ fn call(params: &Value, browser: bool, code: bool) -> Value {
             "isError": false,
         }),
         Ok(response) => tool_error(response.error.as_deref().unwrap_or("the handoff failed")),
+        Err(error) => tool_error(&error),
+    }
+}
+
+/// Forward one Home tool call. A name not in the Home list is refused here, before the socket.
+fn call_home(params: &Value) -> Value {
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    if !crate::home_tools::TOOLS.contains(&name) {
+        return tool_error(&format!("no tool named `{name}`"));
+    }
+    let Ok(token) = std::env::var(handoff::TOKEN_ENV) else {
+        return tool_error("this bridge was started without a session token");
+    };
+    let socket = std::env::var(handoff::SOCKET_ENV)
+        .map_or_else(|_| socket_path().unwrap_or_default(), PathBuf::from);
+    let request = Request {
+        token,
+        action: handoff::Action::Home,
+        home: Some(handoff::HomeCall {
+            tool: name.to_owned(),
+            args: params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        }),
+        ..Request::default()
+    };
+    match ask(&socket, &request) {
+        Ok(response) if response.ok => json!({
+            "content": [{ "type": "text", "text": response.text.unwrap_or_default() }],
+            "isError": false,
+        }),
+        Ok(response) => tool_error(response.error.as_deref().unwrap_or("the Home tool failed")),
         Err(error) => tool_error(&error),
     }
 }

@@ -19,6 +19,8 @@ pub mod commands;
 pub mod dictate;
 pub mod display;
 pub mod handoff;
+pub mod home;
+pub mod home_tools;
 pub mod messages;
 pub mod notifier;
 pub mod openers;
@@ -301,6 +303,7 @@ pub fn run() {
             commands::configure_session,
             commands::list_worktree_files,
             messages::agent_messages,
+            home::open_home_session,
             code::code_tree,
             code::code_list_dir,
             code::code_read_file,

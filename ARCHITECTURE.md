@@ -333,6 +333,8 @@ per provider — a JSON document for Claude, `-c mcp_servers.…` overrides for 
 `mcpServers` on Cursor's ACP `session/new` — is what a provider module is _for_, and the provider
 mapping tests are the regression boundary.
 
+Home is the one caller these rules are relaxed for, narrowly and on purpose; §6f says how.
+
 ---
 
 ## 6c. The embedded browser: a second webview, and what it may not do
@@ -534,6 +536,55 @@ attachments — but it is what stops a confused path, `../../.ssh/config` in an 
 becoming a file read. A symlink inside the worktree is followed, because a linked `.claude` is what a
 reviewer opens, and the viewer says when a file resolves outside the worktree. A reply's references
 become links only when they resolve to a real file in the worktree's own list.
+
+## 6f. Home: an agent outside every worktree
+
+Every session in §6b belongs to a worktree, and that is what scopes its tools. Home is the one that
+does not: an agent the user talks to from Home, in a folder of its own, whose job is the sessions in
+everybody else's worktrees — read what one did, ask one something and wait for the answer, start one
+in another project. It does that work *through* those sessions, so it happens in panes the user can
+see, rather than in Home's own shell.
+
+**A session's place is a type.** `AgentEntry` and the bridge's `Caller` carry a `SessionScope`,
+`Worktree { project, worktree }` or `Home`. The encoding that suggested itself — empty strings — would
+have made each worktree-scoped handler answer "nothing here" rather than "not allowed": a browser
+lookup for worktree `""` finds no panes and says so, a refusal by accident. With an enum the compiler
+listed every site that had to decide, and each refuses Home on purpose, once in `handoff::run` and
+again where it resolves its place. Home's directory is under the XDG data root, not `~/.config/wtm`:
+that one is often a dotfiles checkout, and a CLI started inside it would adopt it as Home's
+repository and read its `CLAUDE.md` as instructions. It is a stable path because Claude resumes a
+conversation by its working directory. Home gets no repository layers — no `extra_args`, no
+environment, no repository MCP servers — so there is nothing for the trust prompt to cover.
+
+**§6b's rule is relaxed for one caller, narrowly.** Home's job is addressing other sessions, so its
+tools take targets, which none of §6b's do. What keeps it narrow:
+
+- The tools are *listed* only by a bridge started with `WTM_HOME_TOOLS=on`, and that flag decides
+  nothing else. Authorisation is the token's scope, checked at the socket on every call, so a worktree
+  bridge that sent the Home action anyway is refused.
+- Targets are per-conversation handles — `s1`, `s2` — minted in the order Home first saw each
+  session, never reused, meaningless to any other caller, and re-checked against the live registry on
+  every use. A session id still never appears in a tool result.
+- Every gate a click passes, Home passes. Opening a session goes through the same `open_pane` a
+  delegation does: the repository's trust, `offers_agent`, the guards on a rendered MCP argv, and the
+  worktree existing on disk.
+- It cannot decide for the user. No tool answers an approval, changes a session's mode, or steers a
+  running turn, and a session that is busy or waiting on the user is refused rather than queued into.
+  Closing is limited to sessions Home opened that are idle and that the user has never written to —
+  one the user has started talking to has become theirs.
+- It is visible. A session Home opens is a pane in its worktree; what Home sends arrives labelled
+  `From Home (wtm):`; every exchange is a wire in Home's tree.
+
+**What Home reads is fenced**, as page content is (§6c): another session may have read a web page, a
+file or a tool's output that somebody else wrote, so its transcript reaches Home inside a
+`<wtm_session_content>` fence that its own text cannot close, in any case. That a transcript goes to
+Home's provider is the same exposure as any agent reading a file, and asking Home is the user's act.
+
+**Parentage without a cascade.** A session Home opens is recorded in `home.rs`, not in the `Hub`'s
+parentage map, because that map drives `close_agent`'s cascade — closing a parent closes its
+children — and a pane tiled in a worktree is the user's work. It is announced with no
+`parentSession` and an `openedBy`, so the window tiles it like a hand-opened pane and marks it ⌂;
+closing the Home conversation leaves it running.
 
 ## 5a. Two things the real repository taught us
 
