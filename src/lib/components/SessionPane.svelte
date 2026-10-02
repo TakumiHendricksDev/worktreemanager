@@ -187,7 +187,9 @@
     const record = (sessions.resumable[pane.worktreeId] ?? []).find(
       (r) => r.providerSession === pane.providerSession,
     );
-    return record?.title?.trim() ? record.title : `A ${label} conversation was open here.`;
+    return (
+      record?.title?.trim() || pane.firstPrompt || `A ${label} conversation was open here.`
+    );
   });
 
   /**
@@ -1503,9 +1505,10 @@
       <!--
       Restored from the last run with nothing behind it yet.
 
-      Seen far less than it used to be: a tiled pane resumes itself when its worktree is opened
-      (`sessions.materialise`). What still lands here is a pane refused for lack of room, and a
-      delegated child shown from the Agents rail.
+      Usually for a second or two: every agent pane is resumed at launch (`restoreAtLaunch`), and
+      this says so while it waits its turn. What stays here is a conversation that could not be
+      picked up, which says why and offers a fresh one in its place; a pane refused for lack of
+      room; and, with the launch restore turned off, a pane whose worktree has not been opened.
 
       A card in the pane rather than a row in the surface's resume list, because the pane is the
       point: the split you built is back, and this is the one that used to hold this conversation.
@@ -1515,26 +1518,66 @@
       <div class="c-pane__body c-pane__body--offer">
         <div class="o-stack">
           <p class="c-pane__empty">{offer}</p>
-          <div class="o-row">
-            <Button
-              variant="accent"
-              size="sm"
-              title="Resume this conversation in this pane"
-              onclick={() => void sessions.reattach(pane.id)}
-            >
-              {pane.providerSession ? 'Resume' : `New ${label} session`}
-            </Button>
-            <Button
-              variant="quiet"
-              size="sm"
-              title="Close this pane without resuming"
-              onclick={() => void sessions.close(pane.id)}
-            >
-              Close
-            </Button>
-          </div>
-          {#if pane.error}
-            <Banner variant="error">{pane.error}</Banner>
+          {#if pane.restoring}
+            <p class="c-pane__empty c-status--muted" aria-live="polite">
+              Picking this conversation up again…
+            </p>
+          {:else if pane.error}
+            <Banner variant="error">
+              Couldn't pick this conversation up again: {pane.error}
+            </Banner>
+            <div class="o-row">
+              <Button
+                variant="accent"
+                size="sm"
+                title="Start a new {label} conversation in this pane"
+                onclick={() => void sessions.startFresh(pane.id)}
+              >
+                Start fresh
+              </Button>
+              <Button
+                variant="neutral"
+                size="sm"
+                title="Try to pick the conversation up again"
+                onclick={() => void sessions.reattach(pane.id)}
+              >
+                Try again
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
+                title="Close this pane"
+                onclick={() => void sessions.close(pane.id)}
+              >
+                Close
+              </Button>
+            </div>
+          {:else}
+            <div class="o-row">
+              <Button
+                variant="accent"
+                size="sm"
+                title="Resume this conversation in this pane"
+                onclick={() => void sessions.reattach(pane.id)}
+              >
+                {pane.providerSession ? 'Resume' : `New ${label} session`}
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
+                title="Close this pane without resuming"
+                onclick={() => void sessions.close(pane.id)}
+              >
+                Close
+              </Button>
+            </div>
+          {/if}
+          {#if pane.queue.length > 0}
+            <p class="c-pane__empty c-status--muted">
+              {pane.queue.length === 1
+                ? 'One queued message is kept, paused, for when it is back.'
+                : `${pane.queue.length} queued messages are kept, paused, for when it is back.`}
+            </p>
           {/if}
         </div>
       </div>

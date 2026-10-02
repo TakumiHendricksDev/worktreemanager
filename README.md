@@ -218,11 +218,26 @@ configured badges. The name becomes a switcher menu when the sidebar is hidden. 
 An empty worktree offers a button per agent, plus Shell and Browser. Below them it lists the
 conversations you can pick up again, the plans you have saved, and Claude's background agents.
 
-After a relaunch the panes come back where they were, and fill themselves the first time you look at
-their worktree. Shells start again, browsers reload, and agent panes resume their conversations in
-place. Resuming starts the agent's CLI; no message is sent until you write one. An agent pane with nothing to
-resume, or whose resume fails, closes, and a banner says why. Its conversation is still under **Pick
-up where you left off**.
+After a relaunch the panes come back where they were. Agent panes, in every worktree and in Home,
+resume their conversations in the background as wtm opens, two at a time, the worktree on screen
+first. Each comes back with its transcript and is idle, ready for a message that carries the same
+conversation on. Shells start again and browsers reload the first time you look at their worktree.
+
+Nothing is run again. Resuming starts the agent's CLI, and no message is sent until you write one:
+
+- A turn that was running when wtm quit ends with a note saying so, and a tool call it cut off is
+  marked as stopped.
+- An approval that was waiting died with its process. The note says it was never answered, and no
+  card comes back for it.
+- Messages that were queued are still in the queue, paused, until you send one.
+- A pane that was never asked anything comes back as a fresh, empty session.
+- A pane whose worktree is gone, or whose repository is no longer registered, is dropped.
+- A conversation that can't be picked up keeps its pane, with the reason: its CLI no longer has the
+  history, say, or the CLI isn't installed. **Start fresh** opens a new conversation there.
+
+To turn this off, clear **Restore agent sessions when wtm opens** in Settings, or set
+`ui.restore_sessions = "off"`. Agent panes then resume the first time you open their worktree,
+and Home's when you open Home.
 
 ## Home
 
@@ -266,6 +281,11 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
   Setup and removal run in Home, where you can watch them, and you can type into the setup's
   terminal. It cannot answer approvals; those come to you under Needs you. Messages it sends arrive
   labelled *From Home (wtm)*. **History** picks up a past Home conversation.
+- **After a relaunch** the Home agent comes back first, as the same conversation, and its tools see
+  every restored session. It can still close the sessions it opened, unless you have written to them
+  since. If it had work out when wtm quit, wtm tells it once, in a *From wtm* note, which sessions
+  that work was interrupted in and whether they came back. The note asks it to check with you before
+  sending the work again.
 
 ## Agent sessions
 
@@ -895,7 +915,7 @@ the transcription key.
 | Section | What is in it |
 | --- | --- |
 | Appearance | Colour palette, and light / dark / follow the system |
-| General | Whether ⌘↵ or ↵ sends a message. Which tool **Open in …** defaults to. The automatic update check. **Agent coordination**: whether agents may use browser panes, and session awareness (beta). **Dictation**: on or off, hold-to-talk or tap, and words to listen for |
+| General | Whether ⌘↵ or ↵ sends a message. Which tool **Open in …** defaults to. Whether agent sessions are restored when wtm opens. The automatic update check. **Agent coordination**: whether agents may use browser panes, and session awareness (beta). **Dictation**: on or off, hold-to-talk or tap, and words to listen for |
 | Notifications | Whether wtm notifies you when a session needs attention, and what macOS says about it |
 | Advanced | The `PATH` override, and the Deepgram key, kept in the macOS Keychain. Plus read-only diagnostics: the PATH wtm actually resolved and where it came from, the config directory, and which of the common tools it can find |
 

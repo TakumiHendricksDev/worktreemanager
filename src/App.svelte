@@ -47,6 +47,7 @@
   import { sessions } from './lib/state/sessions.svelte';
   import { sessionAwareness } from './lib/state/session-awareness.svelte';
   import { browserTools } from './lib/state/browser-tools.svelte';
+  import { restoreSessions } from './lib/state/restore-sessions.svelte';
   import { browsers } from './lib/state/browsers.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { updates } from './lib/state/update.svelte';
@@ -209,6 +210,8 @@
       await sessionAwareness.init();
       await browsers.init();
       await browserTools.init();
+      // Before `sessions.init`, which reads it once to decide whether to restore the last run.
+      await restoreSessions.init();
       await dictation.init();
       if (gone) return;
 

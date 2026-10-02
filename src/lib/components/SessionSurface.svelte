@@ -144,11 +144,13 @@
   });
 
   /*
-   * Fill in a restored worktree's shells the first time it is looked at.
+   * Fill in a restored worktree's shells and browsers the first time it is looked at, and take its
+   * agent panes ahead of the launch restore's line.
    *
-   * Here rather than in `sessions.init` so a launch with six remembered worktrees spawns nothing
-   * until one of them is opened — the same judgement `sessions.rs` makes about not forking a CLI
-   * per remembered conversation, applied to the one session kind that has nothing to resume.
+   * Here rather than in `sessions.init` so a launch with six remembered worktrees starts no shells
+   * until one of them is opened: a shell has nothing to resume, and a login shell per remembered
+   * worktree at launch would be processes for nothing. Agent panes are resumed at launch anyway
+   * (`sessions.restoreAtLaunch`); this only makes the ones on screen first.
    *
    * `untrack` for the reason the effect above gives: the body reads and writes `panes`, and it is
    * synchronous, which is what makes the wrapper work here and not at the async call sites.
@@ -357,9 +359,9 @@
         </div>
         {#if resumable.length > 0}
           <!--
-            Offered rather than resumed automatically. Re-establishing every conversation on launch
-            would fork a CLI per pane for sessions the user may be finished with — the same judgement
-            the terminal dock made in deciding its open state must not persist.
+            Offered rather than resumed automatically. These are conversations that were *not* open
+            when wtm quit (those come back by themselves, in their panes), and re-establishing all of
+            them would fork a CLI for every conversation the user ever finished with.
           -->
           <h2 class="c-section-heading">Pick up where you left off</h2>
           <ul class="o-plain-list c-surface__resume">

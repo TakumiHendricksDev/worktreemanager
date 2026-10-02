@@ -42,8 +42,10 @@ export interface StatusFacts {
   working: boolean;
   /** Something finished while this pane's worktree was not on screen. */
   unseen: boolean;
-  /** Restored from the last run with no process behind it, and offering to fill itself. */
+  /** Restored from the last run with no process behind it: waiting, refused, or not picked up. */
   detached: boolean;
+  /** Restored from the last run and on its way back: queued for, or in, its resume. */
+  restoring: boolean;
 }
 
 /**
@@ -60,6 +62,8 @@ export function statusOf(p: StatusFacts): PaneStatus {
   if (p.error !== null) return 'failed';
   if (p.ended !== null) return 'ended';
   if (p.approvals.length > 0) return 'attention';
+  // A restored pane in line to be resumed is starting, not stopped: something is on its way.
+  if (p.restoring) return 'starting';
   // Before `starting`, which is what a detached pane would otherwise report forever: it is an agent
   // pane that is not ready, and nothing is on its way to make it ready.
   if (p.detached) return 'detached';

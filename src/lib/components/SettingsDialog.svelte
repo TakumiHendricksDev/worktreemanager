@@ -34,6 +34,7 @@
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { updates } from '../state/update.svelte';
   import { browserTools } from '../state/browser-tools.svelte';
+  import { restoreSessions } from '../state/restore-sessions.svelte';
   import { sessionAwareness } from '../state/session-awareness.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Banner from './ui/Banner.svelte';
@@ -383,6 +384,24 @@
             {/each}
           </select>
         </Field>
+
+        <div class="o-stack">
+          <h3 class="c-section-heading">Sessions</h3>
+          <Choice
+            type="checkbox"
+            checked={restoreSessions.enabled}
+            onchange={(enabled) => void restoreSessions.setEnabled(enabled)}
+          >
+            Restore agent sessions when wtm opens
+          </Choice>
+          <p class="c-field__help">
+            Every agent pane, Home's included, picks its conversation up again in the
+            background as wtm opens, a couple at a time. Nothing is sent to them: a turn the
+            quit stopped says so, and queued messages wait for you. Turned off, panes come
+            back in place and each worktree's agents resume when you first open it. Applies
+            from the next launch.
+          </p>
+        </div>
 
         <div class="o-stack">
           <h3 class="c-section-heading">Updates</h3>

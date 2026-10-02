@@ -605,6 +605,15 @@ The race between a waiter giving up and the turn ending is settled with the regi
 sink hands the reply to the waiter before it settles the delegation, so a waiter that finds its
 delegation gone (`Registry::release`) knows the reply is already in its channel.
 
+**A quit ends every delegation with nobody to settle it.** The registry and the message log are
+memory only. The window keeps which sessions Home's in-flight exchanges went to, and after the next
+launch's restore it files them as `Update::Interrupted` notices, on the same path and under the same
+label. That is a fourth source of notices besides a delegation's end, and it cannot feed itself
+either: it fires once per launch, for work the last run sent. A session that did not come back has
+no handle to name, so its notice names the agent and place instead. Each notice asks Home to check
+with the user before sending the work again, because restoring a session must not quietly
+restart it. How the sessions themselves come back is in §8, under the arrangement persisting.
+
 **Home's composer steers into the turn.** A worktree pane queues what is written mid-turn, because
 there the turn *is* the work. Home's turns are mostly coordination: it hands work out, hears back,
 and is told the next thing while it is still on the last one. Where the provider reads a mid-turn
@@ -1022,21 +1031,59 @@ capability: several shells side by side already tile, drag, resize and keep thei
 backend re-keying above is the part that had to happen either way, so a stack node stays available as
 a purely-frontend follow-up.
 
-**The arrangement persists across a quit; the sessions do not.** `sessions.toml` calls itself a
-resume list rather than a session list, and the reason holds — re-establishing every conversation on
-launch would fork a CLI per pane for conversations you may be done with. That argument was quietly
-doing double duty, though: it was also why the _split tree_ was thrown away, and a layout is not a
-process. So each worktree's tree, pane order and focus are remembered in `localStorage` beside
-`wtm.worktrees.*`, and a restored pane comes back **detached** — in its place, holding nothing,
-offering to fill itself. Each one fills itself when its worktree is first looked at. Launch still
-spawns nothing, which is the part of the resume-list argument that mattered.
+**The arrangement persists across a quit, and so do the agent sessions in it.** `sessions.toml`
+calls itself a resume list rather than a session list, and it still is one: it is what History and
+**Pick up where you left off** read. Each worktree's split tree, pane order and focus are remembered
+in `localStorage` beside `wtm.worktrees.*`, and a restored pane comes back **detached**, in its
+place with no process behind it. Shells and browsers fill themselves when their worktree is first
+looked at, since they have nothing to resume.
 
-Agents waited behind a Resume button at first, on the grounds that resuming picks a conversation. A
-restored pane already names the conversation it was holding, though, so the button had one sensible
-answer and was a click on every pane after every relaunch, an update included. So a tiled agent pane
-now resumes itself with the rest of its worktree. One with nothing to resume, or whose resume fails,
-closes and says so; the conversation stays in the resume list, so closing it loses nothing. Delegated
-children stay detached, because a parent can have twenty and none of them has a tile.
+Agent panes used to do the same, and launch spawned nothing at all. That kept the resume list's
+original argument, that re-establishing every conversation on launch forks a CLI per pane, but it
+meant a restored session was not one. It had no transcript, said *not running* in Home's tree, and
+was invisible to Home's tools, which only see running sessions. Home could no longer close a pane it
+had opened, because which Home opened what was memory keyed by session ids a quit retires. So every
+agent pane is now resumed at launch (`sessions.restoreAtLaunch`), in the background, two at a time:
+Home first and alone, so the panes it opened can be handed back to it, then tiles with the worktree on
+screen first, then delegated children. The window never waits for them. The CLIs that come back are
+the set that was running when wtm quit, and `ui.restore_sessions = "off"` restores the old
+behaviour, where a worktree's agents resume when it is opened and Home's when Home is shown.
+
+The lazier design was considered and rejected: a pane that looks live and starts its CLI on the first
+message. It needs a transcript with no process. Claude keeps one wtm already reads
+(`~/.claude/projects/*/<id>.jsonl`), but Codex returns its history only to a client opening the thread
+(or a `thread/read` on a server of its own), and Cursor's only route is ACP `session/load`, which is
+the resume. wtm keeps no transcripts of its own, by the rule above. A session with no process would
+also be a second kind of session for every check that defines liveness as "the pipe host is running
+it" (`live_agents`, `overview`, `peer_sessions`). And the pipe host mints the session id at spawn,
+so waking one would re-point the pane, Home's handles and any turn watch at a new id.
+
+A restore never re-runs anything. Resuming sends no message. The window remembers per pane whether a
+turn was running or waiting on the user, and once the session is back `mark_interrupted_by_quit`
+says so in its transcript: through the session's own sink, so the note is numbered into its replay,
+and with any tool row the quit cut off closed as failed. Claude's durable transcript keeps a
+`tool_use` whose result never came. Approvals are not restored, because their requests died with the
+process. Queued messages come back paused. A pane never asked anything starts fresh, because there
+is no conversation to resume: Claude writes nothing before the first message, and Codex keeps no
+rollout for a thread with no turns.
+
+A conversation that cannot be picked up keeps its pane, detached, with the reason and **Start
+fresh**. Two ways of failing have to be told apart from a session that came back. Claude declares
+itself ready before it reads `--resume`, then prints "No conversation found" and exits. So
+`Provider::resume_problem` refuses before the spawn when the transcript file is gone, as
+`ExecError::Refused`. Codex's app server stays up and answers `thread/resume` with an error, which
+arrives as a failure before ready, and `reattach` waits for ready, failure or exit to decide. A pane
+whose worktree is gone, or whose project is no longer registered, is dropped first.
+
+What Home knew is carried with the panes. Each remembers which Home conversation opened it, by that
+conversation's provider id, and whether the user had written to it. Both go back with the resume
+(`SessionOptions.openedBy`/`typed`, applied by `App::restore_marks`), and the claim is honoured only
+for a Home session that is running. Home's in-flight delegations live in its registry and the message
+log, both memory only, so the window keeps which sessions they went to (`wtm.home.inFlight`). After
+the restore, `home_interrupted` files one `Update::Interrupted` notice per delegation on the ordinary
+notice path, saying whether the session came back. `claim_launch_restore` makes all of this once per
+run of the app. After a reload the sessions are still running and are adopted, and restoring them as
+well would put two CLIs on one conversation.
 
 The related fix is that a _reload_ used to lose the transcript of sessions that were still running:
 the events had been emitted to a window that no longer existed. `App` now keeps a bounded per-session

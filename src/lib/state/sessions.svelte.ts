@@ -51,6 +51,7 @@ import { statusOf, worse, type PaneStatus } from '../status';
 import { transferPrompt } from '../transfer';
 import { attention, type Announceable, type Announcement } from './attention.svelte';
 import { asShortcut, browsers } from './browsers.svelte';
+import { restoreSessions } from './restore-sessions.svelte';
 import { workspace } from './workspace.svelte';
 import {
   inPaneWindow,
@@ -143,6 +144,24 @@ export const INSPECTOR_SHORTCUT =
  */
 const SESSION_WAIT_TRIES = 100;
 const SESSION_WAIT_STEP_MS = 50;
+
+/**
+ * How many restored conversations are resumed at once, at launch.
+ *
+ * Two, so a launch with a dozen remembered panes never forks a dozen CLIs, each starting its MCP
+ * servers, in the same second, and the window stays responsive while they come up. Each resume is
+ * a second or two, so a typical set is back before anyone has looked at most of them; the
+ * worktree on screen does not wait in this line at all (see `materialise`).
+ */
+const RESTORE_CONCURRENCY = 2;
+
+/**
+ * How long a resume may take to say whether it worked before its slot goes to the next one.
+ *
+ * Not a failure when it runs out: the session goes on starting and says so in its pane. It bounds
+ * how long one CLI that never answers can hold up the rest of the line.
+ */
+const RESTORE_SETTLE_MS = 30_000;
 
 /**
  * How many events are held for a session no pane has claimed yet.
@@ -391,6 +410,35 @@ export interface Pane {
    */
   openedFromHome: boolean;
   /**
+   * The Home conversation that opened this pane, by the id its provider knows it by.
+   *
+   * What lets Home keep its claim across a quit. Home's record of what it opened is keyed by wtm's
+   * session ids, which a quit makes meaningless, so the pane remembers the one id that survives:
+   * the conversation's. When that same conversation is restored, the claim goes back with the
+   * resume (`openedBy`). A different Home conversation has no claim, as it had none before.
+   */
+  openedByHome: string | null;
+  /**
+   * The user has sent this session a message from a composer.
+   *
+   * The window's copy of Rust's `user_turns`, kept so it survives a quit: Home may close a pane it
+   * opened only until the user has written to it, and a restored session would otherwise look
+   * untouched.
+   */
+  typed: boolean;
+  /**
+   * Waiting in line to be resumed at launch. See `restoreAtLaunch`.
+   *
+   * Read as "starting", which is what it is: the pane is on its way to a process, and saying "not
+   * running" about it would be the complaint this exists to fix.
+   */
+  restoring: boolean;
+  /**
+   * What the last run's quit stopped in this session, to be said in its transcript once it is back:
+   * a running turn, or one that was waiting on the user. See `markInterruptedByQuit`.
+   */
+  quitMidTurn: 'turn' | 'approval' | null;
+  /**
    * The provider says this session is out of usage, and the offer to continue elsewhere is standing.
    *
    * A register outside the transcript, like `usage` and `pendingProvider`: the banner needs the
@@ -428,8 +476,9 @@ export interface Pane {
    *
    * A pane rather than a row in a list, because the whole point is that the *arrangement* comes
    * back: a detached pane holds its place in the split tree so the surface looks the way it was
-   * left, and offers to fill itself. Nothing spawns until the user asks or, for a shell, until the
-   * worktree is looked at — see `materialise`.
+   * left. An agent pane is resumed at launch (`restoreAtLaunch`) or, with that turned off, when its
+   * worktree is looked at; a shell or a browser when its worktree is looked at (`materialise`).
+   * One that stays detached with an `error` is a conversation that could not be picked up.
    */
   detached: boolean;
 }
@@ -481,6 +530,7 @@ const CARRIED = [
   'agentTitle',
   'limit',
   'providerSession',
+  'typed',
 ] as const satisfies readonly (keyof Pane)[];
 
 type CarriedPane = Pick<Pane, (typeof CARRIED)[number]>;
@@ -507,6 +557,8 @@ const SYNCED = [
   'agentTitle',
   'limit',
   'providerSession',
+  // A pane in a window of its own is written to from there, and this window persists it.
+  'typed',
 ] as const satisfies readonly (keyof CarriedPane)[];
 
 function carry(pane: Pane): CarriedPane {
@@ -599,6 +651,104 @@ interface StoredPane {
   run?: string | null;
   agentTitle?: string | null;
   openedFromHome?: boolean;
+  /*
+   * Everything below was added so a restored session is the session that was left, not only its
+   * place. Optional, because a surface written by an earlier build has none of them, and each
+   * reads as "not known" rather than as a value: a missing `firstPrompt` is not "never asked".
+   */
+  /** The mode and fast setting it was in, so it resumes in them. */
+  mode?: string | null;
+  fast?: boolean;
+  /**
+   * The start of the first thing it was asked, or null for a pane that was never asked anything,
+   * which comes back as a fresh, empty session rather than resuming a conversation that does not
+   * exist: Claude writes nothing until the first message, and Codex keeps no rollout for a thread
+   * with no turns.
+   */
+  firstPrompt?: string | null;
+  /**
+   * Messages written while it was busy and not yet sent. The user's own words, kept on the same
+   * terms as the surface beside them; they come back paused and are never sent by the restore.
+   */
+  queue?: { id: string; text: string; attachments: AgentAttachment[] }[];
+  /** A turn was running, or waiting on the user, when this was last written. */
+  working?: boolean;
+  waiting?: boolean;
+  /** See `Pane.typed`. */
+  typed?: boolean;
+  /** See `Pane.openedByHome`. */
+  openedByHome?: string | null;
+  /**
+   * A delegated child's parent, by pane id. `parentSession` is wtm's session id, which a quit
+   * makes meaningless, so this is how a restored child finds its parent's new one.
+   */
+  parentPane?: string | null;
+}
+
+/**
+ * What Home had sent out and not heard back about, as it survives a quit.
+ *
+ * The message log and Home's record of its delegations are memory only, so without this a quit
+ * left the restored Home conversation waiting for notices that could never come. The pane is how a
+ * restored session is found again, and the rest is what to call it when it was not restored.
+ */
+interface InFlightRecord {
+  /** The Home conversation that sent it, by its provider's id. */
+  home: string;
+  pane: string;
+  provider: string;
+  project: string;
+  worktree: string;
+}
+
+const IN_FLIGHT_KEY = 'wtm.home.inFlight';
+
+function readInFlight(): InFlightRecord[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(IN_FLIGHT_KEY) ?? '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (r): r is InFlightRecord =>
+            typeof r === 'object' &&
+            r !== null &&
+            typeof (r as InFlightRecord).home === 'string' &&
+            typeof (r as InFlightRecord).pane === 'string',
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeInFlight(records: InFlightRecord[]): void {
+  try {
+    if (records.length === 0) localStorage.removeItem(IN_FLIGHT_KEY);
+    else localStorage.setItem(IN_FLIGHT_KEY, JSON.stringify(records));
+  } catch {
+    /* Quota or private mode. Home is then not told, as before this existed. */
+  }
+}
+
+/**
+ * Run `work` over `items`, at most `size` at a time, in order.
+ *
+ * Each failure is the item's own business: `work` reports it on the pane, and one bad item must
+ * not stop the rest from being tried.
+ */
+async function inLanes<T>(
+  items: readonly T[],
+  size: number,
+  work: (item: T) => Promise<unknown>,
+): Promise<void> {
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      if (item !== undefined) await work(item).catch(() => {});
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, lane));
 }
 
 /** A worktree's whole surface: the tree, what filled it, and where focus was. */
@@ -790,6 +940,30 @@ class Sessions {
    * Not `$state`: nothing renders them, and a reactive read here would make `record` — the hottest
    * path in the app — a dependency of whatever effect happened to be running.
    */
+
+  /**
+   * Restores waiting to hear whether their session came back, by pane id: ready, or failed or
+   * ended first. See `restorePane`.
+   */
+  private readonly settling = new Map<string, (failure: string | null) => void>();
+  /** The last run's undelivered news for Home, until it is told. See `InFlightRecord`. */
+  private untold: InFlightRecord[] = [];
+  /** What Home has out now, as `fleet` last reported it. */
+  private inFlight: InFlightRecord[] = [];
+  /** The launch restore is still going, so a Home pane that came back waits to be told. */
+  private restoringAtLaunch = false;
+  /**
+   * Restored agent panes the last run knew were never asked anything, so they start fresh rather
+   * than resuming a conversation their CLI never wrote down.
+   */
+  private readonly unprompted = new Set<string>();
+  /** Restored delegated children and their parent's pane, until the parent has a session. */
+  private readonly orphans = new Map<string, string>();
+  /**
+   * A transcript is being repainted from a replay, so `record` should not write the surface on
+   * every turn it passes; `claimSession` writes it once at the end.
+   */
+  private replaying = false;
 
   /** Sessions that reported ready before their pane knew its id. */
   private readonly readyAhead = new Set<string>();
@@ -991,8 +1165,10 @@ class Sessions {
     });
     const offReady = await listen<AgentReady>('agent:ready', (e) => {
       const pane = this.paneBySession(e.payload.session);
-      if (pane) pane.ready = true;
-      else this.readyAhead.add(e.payload.session);
+      if (pane) {
+        pane.ready = true;
+        this.settling.get(pane.id)?.(null);
+      } else this.readyAhead.add(e.payload.session);
     });
     const offPtyExit = await listen<PtyExit>('pty:exit', (e) => {
       this.noteExit(e.payload.session, e.payload.summary);
@@ -1090,6 +1266,10 @@ class Sessions {
       browsers.apply(view);
       await this.adopt({ kind: 'browser' }, view.project, view.worktree, view.id);
     }
+
+    // After the adopt, so a reload's live sessions are back in their panes first; and not awaited,
+    // so the window is up while the last run's conversations come back behind it.
+    void this.restoreAtLaunch();
 
     return off;
   }
@@ -1193,6 +1373,8 @@ class Sessions {
     pane.agentTitle = spawned.title;
     // Tiled, below, like a hand-opened pane — `parentSession` is null for these. See the field.
     pane.openedFromHome = spawned.openedBy !== null && spawned.openedBy !== undefined;
+    pane.openedByHome =
+      this.paneBySession(spawned.openedBy ?? null)?.providerSession ?? null;
     this.numberRun(pane.run);
     this.panes = [...this.panes, pane];
 
@@ -1337,6 +1519,8 @@ class Sessions {
     pane.effort = next.effort;
     pane.mode = mode;
     if (fastChanged) pane.fast = next.fast;
+    // So a restored pane resumes on what it was set to, not on what it was opened with.
+    this.remember(pane.worktreeId);
 
     // Nothing to say to a session that does not exist yet — `openAgentSession` will carry these
     // as spawn arguments instead.
@@ -1385,6 +1569,7 @@ class Sessions {
     if (pane.fast === fast) return true;
 
     pane.fast = fast;
+    this.remember(pane.worktreeId);
     // Nothing to tell a session that does not exist yet — the spawn carries `pane.fast` instead.
     if (pane.session === null) return true;
     void commands
@@ -1678,17 +1863,15 @@ class Sessions {
   /**
    * Put every remembered surface back, as panes with nothing behind them yet.
    *
-   * # Why the arrangement is restored and the sessions are not
+   * Nothing is started here, and the window renders straight away with every pane in its place.
+   * What fills them comes after: agent panes are resumed in the background (`restoreAtLaunch`), and
+   * shells and browsers start when their worktree is looked at (`materialise`).
    *
-   * `wtm_config::sessions` calls its file a resume list rather than a session list, and the reason
-   * still holds: re-establishing every conversation on launch would fork a CLI per pane for
-   * conversations the user may be finished with. What that argument never covered is the
-   * *arrangement*. A split you spent a minute building is not a process, costs nothing to put back,
-   * and losing it on every quit — or on an update, which is a quit — was the complaint.
-   *
-   * So the tree comes back with its panes in it, and nothing is started here. Each pane fills itself
-   * when its worktree is looked at; see `materialise`, which is also where an agent pane picks its
-   * conversation back up.
+   * Each pane brings back more than its place: the mode it was in, the first thing it was asked, the
+   * messages still queued in it, whether a turn was running, whether the user had written to it, and
+   * which Home conversation opened it. Without those a restored session was the right conversation
+   * in the wrong state — Home could not close a pane it opened, and an interrupted turn looked
+   * finished.
    */
   private restore(): void {
     const panes: Pane[] = [];
@@ -1738,9 +1921,31 @@ class Sessions {
         pane.run = stored.run ?? null;
         pane.agentTitle = stored.agentTitle ?? null;
         pane.openedFromHome = stored.openedFromHome ?? false;
+        pane.openedByHome = stored.openedByHome ?? null;
+        pane.typed = stored.typed ?? false;
+        pane.mode = stored.mode ?? null;
+        pane.fast = stored.fast ?? false;
+        // Undefined, from an earlier build, stays null here; `restorePane` reads the stored value
+        // to tell "never asked" from "not known".
+        pane.firstPrompt = stored.firstPrompt ?? null;
+        pane.queue = (stored.queue ?? []).map((entry) => ({
+          ...entry,
+          steered: false,
+          editing: false,
+        }));
+        // Paused, visibly: these were written for a turn the quit ended, and sending them by
+        // themselves on launch is exactly what a restore must never do.
+        pane.queueHeld = pane.queue.length > 0;
+        if (stored.kind.kind === 'agent') {
+          pane.quitMidTurn = stored.waiting ? 'approval' : stored.working ? 'turn' : null;
+        }
+        if (stored.parentPane) this.orphans.set(pane.id, stored.parentPane);
         // Re-numbered in stored order, which is the order they were announced in — so a restored
         // rail reads the same as the one that was written, without the ordinals being persisted.
         this.numberRun(pane.run);
+        if (stored.kind.kind === 'agent' && stored.firstPrompt === null) {
+          this.unprompted.add(pane.id);
+        }
         // A browser remembered with no address has nothing to fill, so it comes back as the empty
         // pane it was rather than as a detached one waiting on `materialise`.
         pane.detached = !(stored.kind.kind === 'browser' && !stored.url);
@@ -1771,17 +1976,16 @@ class Sessions {
   /**
    * Fill in a restored worktree's panes, once it is the one being looked at.
    *
-   * Called from the selection effect rather than from `restore`, so a launch with six remembered
-   * worktrees spawns nothing until one of them is opened. That laziness is what the resume list's
-   * argument against reopening every conversation at launch was really about, so agents come back
-   * here too, after the shells and browsers.
+   * Called from the selection effect rather than from `restore`. Shells and browsers have nothing
+   * to resume, so this is where they start, the first time their worktree is opened. Agent panes
+   * are resumed at launch (`restoreAtLaunch`), but the tiles of the worktree on screen are taken
+   * here first, in order, rather than waiting their turn behind the others. With the launch restore
+   * turned off, this is where every agent pane comes back.
    *
-   * They used to wait behind a Resume button, on the grounds that resuming picks a conversation.
-   * It does not, though: a restored pane already names the one it was holding, and the button was a
-   * click on every pane after every relaunch with only one sensible answer. A pane that holds
-   * nothing to resume, or whose resume fails, closes instead of offering a choice it cannot honour.
-   * Closing loses nothing: the conversation stays in the resume list. Delegated children are left
-   * detached in the Agents rail, because a parent can have twenty and none of them has a tile.
+   * A pane whose conversation could not be picked up keeps its card and is not tried again by
+   * looking at it: the card says why, and what to do is the user's choice. Delegated children are
+   * left to the launch restore or to their card, because a parent can have twenty and none has a
+   * tile.
    */
   async materialise(projectId: string, worktreeId: string): Promise<void> {
     const waiting = this.panesIn(worktreeId).filter(
@@ -1806,73 +2010,311 @@ class Sessions {
       }
     }
 
-    const tiled = new Set(panesOf(this.layoutFor(worktreeId)));
-    const agents = this.panesIn(worktreeId).filter(
-      (pane) =>
-        pane.detached &&
-        pane.kind.kind === 'agent' &&
-        tiled.has(pane.id) &&
-        !this.isOut(pane.id),
-    );
+    const agents = panesOf(this.layoutFor(worktreeId))
+      .map((id) => this.paneById(id))
+      .filter(
+        (pane): pane is Pane =>
+          pane !== null &&
+          pane.detached &&
+          pane.kind.kind === 'agent' &&
+          pane.error === null &&
+          !this.isOut(pane.id),
+      );
     for (const pane of agents) {
-      const label = this.labelOf(pane);
-      if (!pane.providerSession) {
-        await this.close(pane.id);
-        continue;
-      }
-      const outcome = await this.reattach(pane.id);
-      // Out of room is not a failure to resume: the pane keeps its Resume card, the way an
-      // over-cap shell stays detached, and `atCapacity` says why.
-      if (outcome === 'skipped') return;
-      if (outcome === 'failed') {
-        const reason = this.paneById(pane.id)?.error ?? 'it did not start';
-        await this.close(pane.id);
-        this.error =
-          `Couldn't reopen a ${label} conversation (${reason}), so its pane was closed. ` +
-          'It is still under “Pick up where you left off”.';
-      }
+      // Out of room is not a failure to resume: the rest keep their cards, the way an over-cap
+      // shell stays detached, and `atCapacity` says why.
+      if ((await this.reattach(pane.id)) === 'full') return;
     }
   }
 
   /**
-   * Resume the conversation a restored agent pane was left holding.
+   * Bring the last run's agent sessions back, once per launch, behind a window that is already up.
+   *
+   * # Why every pane, and why now rather than on first use
+   *
+   * Because a restored pane that is not running is not restored. Its transcript is not there, Home's
+   * tools cannot see it, and Home could not close what it had opened, which was the complaint. The
+   * lazier design — a pane that looks live and starts its CLI on the first message — needs a
+   * transcript with no process behind it. Only Claude keeps one wtm can read; Codex returns its
+   * history only to a client resuming the thread, and Cursor's only route to it is ACP
+   * `session/load`, which is the resume. wtm keeps no transcripts of its own (see `app.rs`), and a
+   * session with no process would be a second kind of session that every one of Home's tools, the
+   * peer notes and the resume list would have to special-case. Resuming is the existing path, the
+   * same one History takes, and costs no tokens: nothing is sent until someone writes.
+   *
+   * What it does cost is a CLI per pane — the set that was running when wtm quit — so they come
+   * back two at a time and the launch never waits for them. Home first and alone, so the panes it
+   * opened can be handed back to it as they arrive; then tiles, the worktree on screen first; then
+   * delegated children. `ui.restore_sessions = "off"` keeps the old behaviour instead.
+   */
+  private async restoreAtLaunch(): Promise<void> {
+    if (inPaneWindow) return;
+    // Once per run of the app: after a reload these sessions are still running and were adopted.
+    if (!(await commands.claimLaunchRestore().catch(() => false))) return;
+    // Here and not in `restore`, which a reload runs too: after a reload, what is written down is
+    // this run's work still in flight, not the last run's interrupted work. Read with the restore
+    // turned off as well, for Home to hear when its pane comes back (`materialiseHome`).
+    this.untold = readInFlight();
+    if (!restoreSessions.enabled) return;
+    const waiting = () =>
+      this.panes.filter(
+        (pane) =>
+          pane.kind.kind === 'agent' &&
+          pane.detached &&
+          pane.sideOf === null &&
+          pane.error === null &&
+          !this.isOut(pane.id),
+      );
+    if (waiting().length === 0) return;
+
+    this.restoringAtLaunch = true;
+    try {
+      for (const pane of waiting()) pane.restoring = true;
+      await this.dropGone();
+
+      const home = this.homePane;
+      if (home?.detached) await this.reattach(home.id);
+
+      const selected = workspace.selectedWorktreeId;
+      const rank = (pane: Pane) =>
+        pane.parentSession !== null ? 2 : pane.worktreeId === selected ? 0 : 1;
+      const rest = waiting()
+        .filter((pane) => pane.restoring)
+        .sort((a, b) => rank(a) - rank(b));
+      await inLanes(rest, RESTORE_CONCURRENCY, (pane) => this.reattach(pane.id));
+    } finally {
+      this.restoringAtLaunch = false;
+      // What is left was refused for room, or its worktree vanished mid-way: it keeps its card.
+      for (const pane of this.panes) if (pane.restoring) pane.restoring = false;
+    }
+    await this.tellHome();
+  }
+
+  /**
+   * Let go of restored panes whose repository or worktree has gone since the last run, before
+   * anything is spawned for them.
+   *
+   * A project no longer registered is closed, as removing it would have; a worktree no longer
+   * listed goes the way `reconcile` sends one removed in a terminal. Anything that is still listed
+   * is tried, and a directory that has vanished from under a listed worktree fails its resume with
+   * the reason, which the pane then shows.
+   */
+  private async dropGone(): Promise<void> {
+    const projects = await commands.listProjects().catch(() => null);
+    if (projects === null) return;
+    const restored = new Set(
+      this.panes
+        .filter((pane) => pane.detached && !isHome(pane.projectId))
+        .map((p) => p.projectId),
+    );
+    for (const projectId of restored) {
+      if (!projects.some((project) => project.id === projectId)) {
+        this.closeProject(projectId);
+        continue;
+      }
+      const listed = await commands.listWorktrees(projectId).catch(() => null);
+      if (listed !== null)
+        this.reconcile(
+          projectId,
+          listed.map((worktree) => worktree.id),
+        );
+    }
+  }
+
+  /**
+   * Resume the conversation a restored agent pane was left holding, in place, and say how it went.
    *
    * In place: the pane keeps its id and its position in the tree, which is the difference between
    * this and picking the same conversation out of the resume list, where it would open beside
-   * whatever had focus.
+   * whatever had focus. Through `spawnAgent`, which is the route every resume takes.
    *
-   * Says how it went, because `materialise` closes a pane that could not be resumed but must not
-   * close one that was merely refused for lack of room.
+   * "Resumed" means the session came back, not only that a process started. Claude is ready the
+   * moment it is spawned, so its missing conversations are refused before the spawn (Rust's
+   * `resume_problem`); Codex refuses a missing thread after it is up, as a failure before it is
+   * ready. Either way the pane stays, with the reason and the card's Start fresh, rather than
+   * closing or looking alive with nothing behind it.
+   *
+   * A pane the last run never asked anything starts a new session instead, which is the empty pane
+   * it was. Nothing is sent: an interrupted turn is said to be one, and queued messages stay paused.
    */
-  async reattach(paneId: string): Promise<'resumed' | 'failed' | 'skipped'> {
+  async reattach(
+    paneId: string,
+  ): Promise<'resumed' | 'fresh' | 'failed' | 'full' | 'skipped'> {
     const pane = this.paneById(paneId);
     if (!pane?.detached || pane.kind.kind !== 'agent') return 'skipped';
-    if (!this.canFill(pane.worktreeId)) return 'skipped';
+    if (!this.canFill(pane.worktreeId)) {
+      pane.restoring = false;
+      return 'full';
+    }
+    const fresh = !pane.providerSession || this.unprompted.has(pane.id);
+    this.unprompted.delete(pane.id);
+    // The last run's handle, kept only so a reload could match a live session to this pane. One
+    // that is still detached was not matched, so it names a process that is gone.
+    pane.session = null;
     pane.detached = false;
+    pane.restoring = true;
     pane.error = null;
+    if (fresh) {
+      pane.providerSession = null;
+      pane.quitMidTurn = null;
+    }
+    // Home's claim goes back only to the conversation that made it, and only once it is running.
+    const home = this.homePane;
+    const openedBy =
+      pane.openedByHome !== null &&
+      home?.session &&
+      !home.detached &&
+      home.providerSession === pane.openedByHome
+        ? home.session
+        : null;
 
+    // Armed before the spawn, because Codex can fail while the replay is still being fetched.
+    const settled = new Promise<string | null>((resolve) => {
+      this.settling.set(pane.id, resolve);
+      // Not a failure when it runs out; see `RESTORE_SETTLE_MS`.
+      setTimeout(() => resolve(null), RESTORE_SETTLE_MS);
+    });
+    let failure: string | null;
     try {
       const session = await this.spawnAgent(pane, {
         model: pane.model,
         effort: pane.effort,
         mode: pane.mode,
         fast: pane.fast,
-        resume: pane.providerSession,
+        resume: fresh ? null : pane.providerSession,
+        openedBy,
+        typed: pane.typed,
       });
       await this.claimOrClose(pane.id, session, 'agent');
-      this.error = null;
-      void this.refreshResumable(pane.worktreeId);
-      return 'resumed';
+      const claimed = this.paneById(pane.id);
+      // Closed or restarted while it opened; that pane's own path has the rest.
+      if (claimed?.session !== session) return 'skipped';
+      failure = claimed.ready ? null : await settled;
     } catch (e) {
-      const live = this.paneById(pane.id);
-      if (live) {
-        live.error = errorMessage(e);
-        // Back to offering, so a failed resume can be tried again rather than leaving a pane that
-        // is neither running nor asking for anything.
-        live.detached = true;
-      }
+      failure = errorMessage(e);
+    } finally {
+      this.settling.delete(pane.id);
+    }
+
+    const live = this.paneById(pane.id);
+    if (!live) return 'skipped';
+    live.restoring = false;
+    if (failure !== null) {
+      this.unrestored(live, failure);
       return 'failed';
     }
+    this.error = null;
+    if (live.quitMidTurn !== null && live.session) {
+      const waitingOnYou = live.quitMidTurn === 'approval';
+      live.quitMidTurn = null;
+      await commands.markInterruptedByQuit(live.session, waitingOnYou).catch(() => {});
+    }
+    this.remember(live.worktreeId);
+    void this.refreshResumable(live.worktreeId);
+    if (isHome(live.worktreeId) && !this.restoringAtLaunch) void this.tellHome();
+    return fresh ? 'fresh' : 'resumed';
+  }
+
+  /**
+   * A restored conversation that did not come back.
+   *
+   * The pane stays where it was, detached, with the reason as its error, and its card offers Start
+   * fresh, Try again and Close. Never closed for the user, and never left looking alive: a Codex app
+   * server that refused the thread is still running, and is ended here.
+   */
+  private unrestored(pane: Pane, reason: string): void {
+    const session = pane.session;
+    // Before the close, so the exit it causes finds no pane to mark as ended.
+    pane.session = null;
+    pane.detached = true;
+    pane.ready = false;
+    pane.working = false;
+    pane.events = [];
+    pane.eventBytes = 0;
+    pane.replayedThrough = null;
+    pane.approvals = [];
+    pane.skills = [];
+    pane.error = reason;
+    if (session) void commands.closeAgentSession(session).catch(() => {});
+    this.remember(pane.worktreeId);
+  }
+
+  /**
+   * Give a pane whose conversation could not be picked up a new one, in the same place.
+   *
+   * The same agent, model and mode. Nothing of the old conversation comes with it — it was not
+   * there to come — and no claim of Home's, since Home did not open this one. Queued messages stay
+   * where they are, paused, as `restart` leaves them.
+   */
+  async startFresh(paneId: string): Promise<void> {
+    const pane = this.paneById(paneId);
+    if (!pane?.detached || pane.kind.kind !== 'agent') return;
+    pane.providerSession = null;
+    pane.firstPrompt = null;
+    pane.openedFromHome = false;
+    pane.openedByHome = null;
+    pane.typed = false;
+    pane.quitMidTurn = null;
+    pane.error = null;
+    await this.reattach(paneId);
+  }
+
+  /**
+   * What Home has out now, by session, as `fleet`'s message log says.
+   *
+   * Written down beside the surfaces, so the next launch can tell the restored Home conversation
+   * which of it the quit interrupted (`tellHome`). Only which session and where: the prompt itself
+   * stays in the two transcripts, like everything else agents say to each other.
+   */
+  noteHomeInFlight(sessionIds: readonly string[]): void {
+    if (inPaneWindow) return;
+    const home = this.homePane?.providerSession ?? null;
+    this.inFlight =
+      home === null
+        ? []
+        : sessionIds.flatMap((session) => {
+            const pane = this.paneBySession(session);
+            if (!pane || pane.kind.kind !== 'agent') return [];
+            return [
+              {
+                home,
+                pane: pane.id,
+                provider: pane.kind.provider,
+                project: pane.projectId,
+                worktree: pane.worktreeId,
+              },
+            ];
+          });
+    writeInFlight([...this.untold, ...this.inFlight]);
+  }
+
+  /**
+   * Tell the restored Home conversation, once, which of the work it had out the quit interrupted.
+   *
+   * After the restore, so each session it names has had its chance to come back and can be given a
+   * handle. Only the conversation that sent the work hears of it: news for any other has nobody
+   * left to go to, and is dropped with it.
+   */
+  private async tellHome(): Promise<void> {
+    if (this.untold.length === 0) return;
+    const home = this.homePane;
+    if (!home?.session || home.detached || home.providerSession === null) return;
+    const told = this.untold.filter((record) => record.home === home.providerSession);
+    this.untold = [];
+    writeInFlight(this.inFlight);
+    if (told.length === 0) return;
+    const targets = told.map((record) => {
+      const pane = this.paneById(record.pane);
+      const live =
+        pane && !pane.detached && pane.ended === null && pane.session ? pane.session : null;
+      return {
+        session: live,
+        provider: record.provider,
+        project: record.project,
+        worktree: record.worktree,
+      };
+    });
+    await commands.homeInterrupted(home.session, targets).catch(() => {});
   }
 
   /**
@@ -1953,7 +2395,12 @@ class Sessions {
     // arrived while the fetch was in flight — and those must land *after* the snapshot, not
     // before it. `claimSession` runs below, once `replayedThrough` can tell the two apart.
     live.session = session;
-    for (const { seq, event } of buffered) this.record(session, event, seq);
+    this.replaying = true;
+    try {
+      for (const { seq, event } of buffered) this.record(session, event, seq);
+    } finally {
+      this.replaying = false;
+    }
     live.replayedThrough = buffered.at(-1)?.seq ?? null;
 
     this.claimSession(live, session);
@@ -1997,6 +2444,10 @@ class Sessions {
       agentTitle: null,
       firstPrompt: null,
       openedFromHome: false,
+      openedByHome: null,
+      typed: false,
+      restoring: false,
+      quitMidTurn: null,
       limit: null,
       replayedThrough: null,
       providerSession: null,
@@ -2374,11 +2825,15 @@ class Sessions {
       mode: string | null;
       fast: boolean;
       resume?: string | null;
+      openedBy?: string | null;
+      typed?: boolean;
     },
   ): Promise<string> {
     const provider = pane.kind.kind === 'agent' ? pane.kind.provider : '';
     if (isHome(pane.worktreeId)) {
-      return commands.openHomeSession({ agentId: provider, options });
+      // Home's own marks mean nothing for Home: it opened nothing that opened it.
+      const { openedBy: _openedBy, typed: _typed, ...own } = options;
+      return commands.openHomeSession({ agentId: provider, options: own });
     }
     return commands.openAgentSession({
       projectId: pane.projectId,
@@ -2446,23 +2901,14 @@ class Sessions {
   }
 
   /**
-   * Fill a Home pane restored from the last run, the first time Home is shown — what `materialise`
-   * does for a worktree's panes. One with nothing to resume, or whose resume fails, closes, and the
-   * conversation stays under History.
+   * Fill a Home pane restored from the last run, the first time Home is shown, if the launch has
+   * not already — what `materialise` does for a worktree's panes. One that could not be picked up
+   * keeps its card, with the reason; its conversation is under History either way.
    */
   async materialiseHome(): Promise<void> {
     const pane = this.homePane;
-    if (!pane?.detached) return;
-    if (!pane.providerSession) {
-      await this.close(pane.id);
-      return;
-    }
-    const outcome = await this.reattach(pane.id);
-    if (outcome === 'failed') {
-      const reason = this.paneById(pane.id)?.error ?? 'it could not be resumed';
-      await this.close(pane.id);
-      this.error = `Home's last conversation did not come back: ${reason}. It is still under History.`;
-    }
+    if (!pane?.detached || pane.error !== null) return;
+    await this.reattach(pane.id);
   }
 
   /**
@@ -2809,11 +3255,19 @@ class Sessions {
     }
     try {
       await commands.sendTurn(pane.session, text, attachments);
+      this.noteTyped(pane);
       return true;
     } catch (e) {
       this.error = errorMessage(e);
       return false;
     }
+  }
+
+  /** The user has written to this session; see `Pane.typed`. Written down once. */
+  private noteTyped(pane: Pane): void {
+    if (pane.typed) return;
+    pane.typed = true;
+    this.remember(pane.worktreeId);
   }
 
   /**
@@ -2846,6 +3300,8 @@ class Sessions {
     const id = crypto.randomUUID();
     pane.queue = [...pane.queue, { id, text, attachments, steered: false, editing: false }];
     pane.queueHeld = false;
+    // Written down, so a quit before it is sent keeps it. See `StoredPane.queue`.
+    this.remember(pane.worktreeId);
     void this.drain(paneId);
     return id;
   }
@@ -2874,6 +3330,7 @@ class Sessions {
     item.steered = true;
     try {
       await commands.steerTurn(pane.session, item.text, item.attachments);
+      this.noteTyped(pane);
     } catch (e) {
       this.error = errorMessage(e);
       const live = this.paneById(paneId)?.queue.find((entry) => entry.id === itemId);
@@ -2888,6 +3345,7 @@ class Sessions {
     pane.queue = pane.queue.filter((entry) => entry.id !== itemId || entry.steered);
     // A pause with nothing left to pause is a label with nothing under it.
     if (pane.queue.every((entry) => entry.steered)) pane.queueHeld = false;
+    this.remember(pane.worktreeId);
     // It may have been the edit the queue was waiting on.
     void this.drain(paneId);
   }
@@ -2915,6 +3373,8 @@ class Sessions {
       return;
     }
     item.text = trimmed;
+    const pane = this.paneById(paneId);
+    if (pane) this.remember(pane.worktreeId);
     this.editQueued(paneId, itemId, false);
   }
 
@@ -3089,6 +3549,8 @@ class Sessions {
     }
     if (moved && carried.session !== null) await this.attach(live.id, carried.session);
     if (moved && live.kind.kind === 'agent') void this.refreshResumable(live.worktreeId);
+    // Its queue, model and the rest change over there, and are kept from here.
+    this.remember(live.worktreeId);
   }
 
   /**
@@ -3329,6 +3791,7 @@ class Sessions {
       if (sent) live.queue = live.queue.filter((entry) => entry.id !== next.id);
       // Kept, and paused, so a refusal is not retried into a loop and the words survive it.
       else live.queueHeld = true;
+      this.remember(live.worktreeId);
     } finally {
       this.draining.delete(paneId);
     }
@@ -3567,6 +4030,17 @@ class Sessions {
     // Re-announced by the new session, and a stale list is worse than none — a restarted pane may
     // be a different provider's, and skills are worktree-scoped.
     pane.skills = [];
+    // A new conversation: nobody has asked it anything or written to it, and Home's claim was on
+    // the session this ended. Left in place, a relaunch would hand the claim back and try to resume
+    // a conversation that was never asked anything.
+    pane.firstPrompt = null;
+    pane.typed = false;
+    pane.openedByHome = null;
+    pane.quitMidTurn = null;
+    // It has a process again below, whatever it was restored as.
+    pane.detached = false;
+    pane.restoring = false;
+    this.unprompted.delete(pane.id);
 
     /*
      * The one place a pane's provider changes, and it is here because this is the only moment it
@@ -3672,7 +4146,8 @@ class Sessions {
     if (doomed.length === 0) return;
 
     for (const pane of doomed) {
-      if (!pane.session) continue;
+      // A detached pane's id is the last run's, for a process that is not there to end.
+      if (!pane.session || pane.detached) continue;
       if (pane.kind.kind === 'shell') {
         void commands.closeTerminal(pane.session).catch(() => {});
       } else if (pane.kind.kind === 'browser') {
@@ -3736,6 +4211,31 @@ class Sessions {
         run: pane.run,
         agentTitle: pane.agentTitle,
         openedFromHome: pane.openedFromHome,
+        mode: pane.mode,
+        fast: pane.fast,
+        // Null only when it is known: a pane restored from an earlier build that has not been
+        // resumed yet does not know, and writing null for it would start it fresh next time.
+        firstPrompt:
+          pane.firstPrompt ??
+          (pane.detached && !this.unprompted.has(pane.id) ? undefined : null),
+        queue: pane.queue
+          .filter((entry) => !entry.steered)
+          .map(({ id, text, attachments }) => ({ id, text, attachments })),
+        // A pane still waiting to be restored has not run yet in this launch, so what it carries is
+        // still the last run's, and a second quit must not lose it.
+        working: pane.restoring || pane.detached ? pane.quitMidTurn !== null : pane.working,
+        waiting:
+          pane.restoring || pane.detached
+            ? pane.quitMidTurn === 'approval'
+            : pane.approvals.length > 0,
+        typed: pane.typed,
+        openedByHome: pane.openedByHome,
+        parentPane:
+          pane.parentSession === null
+            ? null
+            : (this.paneBySession(pane.parentSession)?.id ??
+              this.orphans.get(pane.id) ??
+              null),
       })),
     });
   }
@@ -3782,6 +4282,14 @@ class Sessions {
    */
   private claimSession(pane: Pane, session: string): void {
     pane.session = session;
+
+    // Restored delegated children name their parent by a session id the quit retired. This is it.
+    for (const [child, parent] of this.orphans) {
+      if (parent !== pane.id) continue;
+      const restored = this.paneById(child);
+      if (restored) restored.parentSession = session;
+      this.orphans.delete(child);
+    }
 
     if (this.readyAhead.delete(session)) pane.ready = true;
 
@@ -3835,7 +4343,12 @@ class Sessions {
      * `patch` and `SessionSurface` both document the trap: this is a `listen()` callback, not an
      * effect body, so a read cannot make an effect depend on a write.
      */
+    // What the surface keeps changed: whether a turn is running or waiting on the user, the first
+    // prompt, the queue, the mode. Written once, below, and not during a replay's repaint.
+    let persist = false;
+
     if (event.kind === 'turn_started') {
+      persist = true;
       pane.working = true;
       pane.lastTurnFinished = false;
       // A turn that starts is the only trustworthy evidence a limit has lifted, and it costs nothing
@@ -3843,6 +4356,7 @@ class Sessions {
       // and would clear the offer while the provider was still refusing.
       pane.limit = null;
     } else if (event.kind === 'turn_finished') {
+      persist = true;
       pane.working = false;
       pane.lastTurnFinished = true;
       this.turnEpoch[pane.worktreeId] = (this.turnEpoch[pane.worktreeId] ?? 0) + 1;
@@ -3866,15 +4380,22 @@ class Sessions {
         void this.drain(pane.id);
       }
     } else if (event.kind === 'failed') {
+      persist = true;
       pane.working = false;
       this.holdQueue(pane);
+      // A restore refused before the session was ready: its conversation did not come back. The
+      // pane's card says so, so it is not news for a notification as well. See `reattach`.
+      const restoring = pane.restoring && !pane.ready;
+      if (restoring) this.settling.get(pane.id)?.(event.message);
       if (
+        !restoring &&
         pane.sideOf === null &&
         attention.announce('failed', announceable(pane, this.isOut(pane.id)))
       ) {
         pane.unseen = true;
       }
     } else if (event.kind === 'limit_reached') {
+      persist = true;
       pane.working = false;
       // The next message would meet the same limit, and a queue that emptied itself into one would
       // throw away everything in it for a single refusal.
@@ -3898,9 +4419,11 @@ class Sessions {
       const text = event.text.replace(/^From Home \(wtm\):\s*/, '');
       const line = text.trim().split('\n')[0] ?? '';
       pane.firstPrompt = line.length > 120 ? `${line.slice(0, 120)}…` : line || null;
+      persist = true;
     }
 
     if (event.kind === 'approval_requested') {
+      persist = true;
       approvalOrder += 1;
       pane.approvals = [
         ...pane.approvals,
@@ -3916,6 +4439,7 @@ class Sessions {
         pane.unseen = true;
       }
     } else if (event.kind === 'approval_resolved') {
+      persist = true;
       pane.approvals = pane.approvals.filter((a) => a.id !== event.id);
     } else if (event.kind === 'user_echo' && pane.queue.length > 0) {
       // A steer is echoed when the provider takes it, so this is the moment it leaves the queue
@@ -3924,7 +4448,10 @@ class Sessions {
       const taken = pane.queue.findIndex(
         (entry) => entry.steered && entry.text === event.text,
       );
-      if (taken >= 0) pane.queue = pane.queue.filter((_, index) => index !== taken);
+      if (taken >= 0) {
+        pane.queue = pane.queue.filter((_, index) => index !== taken);
+        persist = true;
+      }
     } else if (event.kind === 'skills_listed') {
       // Replaced, not merged: a provider that answers twice is correcting itself, and a skill
       // deleted from disk should leave the list rather than linger because it was once there.
@@ -3941,6 +4468,7 @@ class Sessions {
       // After `session_ready`, so it wins: Claude's `init` goes on naming the mode it was asked
       // for, and this is the line that says it could not keep it.
       pane.mode = event.mode;
+      persist = true;
     } else if (event.kind === 'usage') {
       pane.usage = {
         tokensIn: event.tokensIn,
@@ -3996,11 +4524,15 @@ class Sessions {
       pane.events.splice(0, remove);
       pane.eventBytes = Math.max(0, bytes);
     }
+
+    if (persist && !this.replaying) this.remember(pane.worktreeId);
   }
 
   private noteExit(session: string, summary: string): void {
     const pane = this.paneBySession(session);
     if (!pane) return;
+    // A restore whose CLI exited before it came back did not come back.
+    this.settling.get(pane.id)?.(summary);
     pane.ended = summary;
     pane.ready = false;
     pane.working = false;
@@ -4024,6 +4556,7 @@ class Sessions {
     // A steer the process never took is unsent again, for a Restart to deliver. See `restart`.
     for (const entry of pane.queue) entry.steered = false;
     this.holdQueue(pane);
+    this.remember(pane.worktreeId);
   }
 }
 
@@ -4039,6 +4572,7 @@ function facts(pane: Pane): Parameters<typeof statusOf>[0] {
   return {
     agent: pane.kind.kind === 'agent',
     detached: pane.detached,
+    restoring: pane.restoring,
     ready: pane.ready,
     ended: pane.ended,
     error: pane.error,

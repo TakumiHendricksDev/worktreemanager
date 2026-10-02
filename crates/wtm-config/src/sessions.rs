@@ -7,15 +7,15 @@
 //! and effort it was on. With those, a session is re-openable; without them it is gone, because both
 //! CLIs store the transcript themselves and neither will hand it back without an id.
 //!
-//! So this is a resume list, not a session list. The distinction matters at launch: wtm shows what
-//! *can* be resumed and re-establishes on demand rather than respawning a fleet of CLIs nobody asked
-//! for.
+//! So this is a resume list, not a session list: everything that *can* be resumed, which History and
+//! "Pick up where you left off" read. It is not what decides what comes back at launch.
 //!
-//! What that argument never covered is the *arrangement*. The frontend does remember which panes a
-//! worktree had and how they were split, because a layout is not a process: it costs nothing to put
-//! back, and losing it on every quit was a real complaint. A restored agent pane comes back holding
-//! a place and offering to resume — it does not resume itself, which is this file's rule intact.
-//! See `sessions.svelte.ts`'s `restore`.
+//! That is the frontend's, because what was *open* is a window's arrangement, not this list. It
+//! remembers which panes a worktree had and how they were split, and resumes each agent pane in its
+//! place when wtm opens, in the background, a couple at a time (`sessions.svelte.ts`'s
+//! `restoreAtLaunch`; `ui.restore_sessions = "off"` turns that off). Only the conversations that were
+//! on screen come back, never every entry here, so a long resume list does not become a fleet of
+//! CLIs nobody asked for.
 //!
 //! # Why a separate file
 //!

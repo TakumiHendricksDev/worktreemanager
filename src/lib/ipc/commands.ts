@@ -224,6 +224,13 @@ export const commands = {
       /** Claude's high-speed mode. Ignored by a provider that has none. */
       fast?: boolean | null;
       resume?: string | null;
+      /**
+       * For a pane restored from the last run: the Home session that opened it, as that Home
+       * conversation is running now, so Home may still close it. Ignored unless it names one.
+       */
+      openedBy?: string | null;
+      /** For a pane restored from the last run: the user had written to it, so Home may not. */
+      typed?: boolean | null;
     };
   }) => invoke<string>('open_agent_session', { options: {}, ...args }),
 
@@ -244,6 +251,20 @@ export const commands = {
 
   /** Worktrees the Home agent is creating or created lately, oldest first. */
   homeJobs: () => invoke<HomeJob[]>('home_jobs'),
+
+  /**
+   * Tell a restored Home conversation, once, that the quit interrupted the work it had out. Each
+   * target is a session it had sent work to, with `session` null when that one is not running.
+   */
+  homeInterrupted: (
+    home: string,
+    targets: {
+      session: string | null;
+      provider: string;
+      project: string;
+      worktree: string;
+    }[],
+  ) => invoke<void>('home_interrupted', { home, targets }),
 
   /** Fork a live conversation for one ephemeral `/btw` question. */
   openAgentSideSession: (args: {
@@ -436,6 +457,19 @@ export const commands = {
 
   /** Everything a live session has already said, so a re-attached pane is not blank. */
   agentReplay: (session: string) => invoke<SeqEvent[]>('agent_replay', { session }),
+
+  /**
+   * Whether this window should bring the last run's sessions back. True once per run of the app,
+   * so a reload, whose sessions are still running, answers false.
+   */
+  claimLaunchRestore: () => invoke<boolean>('claim_launch_restore'),
+
+  /**
+   * Say in a restored session's transcript that the quit stopped its turn: the tool rows it left
+   * open are closed, and a notice follows. `waiting` when it was waiting on the user.
+   */
+  markInterruptedByQuit: (session: string, waiting: boolean) =>
+    invoke<void>('mark_interrupted_by_quit', { session, waiting }),
 
   /** What agents have recently said to each other, oldest first. Home draws its wires from it. */
   agentMessages: () => invoke<AgentExchange[]>('agent_messages'),

@@ -133,6 +133,10 @@ class Fleet {
     if (live && exchange.state !== 'in_flight' && !this.traces.includes(exchange.id)) {
       this.traces = [...this.traces, exchange.id].slice(-MAX_TRACES);
     }
+    // Written down so a quit cannot leave the restored Home waiting on news that will not come.
+    if (exchange.from !== null && exchange.from === sessions.homePane?.session) {
+      sessions.noteHomeInFlight(this.delegations.map((delegation) => delegation.to));
+    }
   }
 
   private upsertJob(job: HomeJob): void {

@@ -174,7 +174,11 @@
   <div class="c-peek__body" bind:this={scroller} onscroll={onScroll}>
     {#if pane.events.length === 0}
       <p class="c-peek__empty">
-        {pane.detached ? 'This session is not running.' : `Nothing from ${label} yet.`}
+        {pane.restoring
+          ? 'Picking this conversation up again…'
+          : pane.detached
+            ? 'This session is not running.'
+            : `Nothing from ${label} yet.`}
       </p>
     {/if}
     <AgentTranscript
@@ -198,7 +202,27 @@
     <ComposerQueue {pane} {label} {steersMidTurn} />
   {/if}
 
-  {#if pane.detached}
+  {#if pane.detached && pane.restoring}
+    <div class="c-peek__state">
+      <p>Restored from the last run, and on its way back.</p>
+    </div>
+  {:else if pane.detached && pane.error !== null}
+    <div class="c-peek__state">
+      <p>Couldn't pick this conversation up again: {pane.error}</p>
+      <div class="o-row">
+        <Button
+          variant="neutral"
+          size="sm"
+          onclick={() => void sessions.startFresh(pane.id)}
+        >
+          Start fresh
+        </Button>
+        <Button variant="quiet" size="sm" onclick={() => void sessions.reattach(pane.id)}>
+          Try again
+        </Button>
+      </div>
+    </div>
+  {:else if pane.detached}
     <div class="c-peek__state">
       <p>Restored from the last run, with no process behind it.</p>
       <Button variant="neutral" size="sm" onclick={() => void sessions.reattach(pane.id)}>
