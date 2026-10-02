@@ -14,5 +14,5 @@ pub mod remove;
 pub mod slug;
 
 pub use create::{CreatePipeline, CreateRequest, SetupRequest};
-pub use remove::{RemoveOutcome, RemovePipeline, RemoveRequest};
+pub use remove::{RemoveOutcome, RemovePipeline, RemoveRequest, TeardownStep};
 pub use slug::slugify;

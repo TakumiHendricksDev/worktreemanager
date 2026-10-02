@@ -1,4 +1,4 @@
-//! The native remove pipeline's branch-deletion contract.
+//! The native remove pipeline's branch-deletion contract, and the teardown it shows beforehand.
 
 #![allow(clippy::unwrap_used)]
 
@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use wtm_core::model::{
-    BranchRef, Checkout, CommitId, FieldDefault, FieldKind, FieldSpec, NamingSpec, Project,
-    ProjectId, Worktree, WorktreeId,
+    BranchRef, Checkout, CommandSpec, CommitId, FieldDefault, FieldKind, FieldSpec, NamingSpec,
+    OnFailure, Project, ProjectId, Worktree, WorktreeId,
 };
 use wtm_core::ports::exec::CancelToken;
 use wtm_core::ports::progress::NullProgress;
@@ -111,4 +111,90 @@ fn checked_branch_deletion_forces_an_unmerged_branch_after_warning() {
             "delete_branch task/thing force=true".to_owned(),
         ]
     );
+}
+
+fn step(run: &[&str], cwd: wtm_core::model::CwdBase, when: Option<&str>) -> CommandSpec {
+    CommandSpec {
+        run: run.iter().map(|part| (*part).to_owned()).collect(),
+        cwd,
+        env: BTreeMap::new(),
+        timeout_ms: None,
+        pty: false,
+        when: when.map(str::to_owned),
+        on_failure: OnFailure::Warn,
+        args_when: vec![],
+    }
+}
+
+#[test]
+fn the_teardown_preview_renders_each_step_as_the_run_would_and_names_what_it_skips() {
+    // What a removal is shown to do before it runs has to be what it then runs: the same
+    // tokens, the same `when`, the same directory.
+    let mut project = project();
+    project.remove.pre = vec![
+        step(
+            &["docker", "compose", "down"],
+            wtm_core::model::CwdBase::Worktree,
+            Some("env.COMPOSE_PROJECT_NAME | default_if_empty('') != ''"),
+        ),
+        step(
+            &[
+                "chown",
+                "-R",
+                "{{ worktree.path }}",
+                "{{ worktree.branch }}",
+            ],
+            wtm_core::model::CwdBase::RepoRoot,
+            None,
+        ),
+    ];
+    let pipeline = RemovePipeline {
+        git: Arc::new(FakeGit::with_main("/repo", "main")),
+        runner: Arc::new(FakeRunner::new()),
+        pty: Arc::new(FakePty::new()),
+        engine: Arc::new(Engine::new()),
+    };
+    let request = RemoveRequest {
+        project,
+        worktree: Worktree {
+            id: WorktreeId::from_path(std::path::Path::new("/repo-thing")),
+            path: PathBuf::from("/repo-thing"),
+            head: None,
+            checkout: Checkout::Branch {
+                branch: BranchRef::new("task/thing"),
+            },
+            is_main: false,
+            is_bare: false,
+            locked: None,
+            prunable: None,
+        },
+        ambient: Context::new(),
+        delete_branch: false,
+        force: false,
+        acknowledged: vec![],
+    };
+
+    let steps = pipeline.teardown_steps(&request);
+
+    assert_eq!(steps.len(), 2);
+    assert!(
+        steps[0]
+            .skipped
+            .as_deref()
+            .is_some_and(|why| why.contains("is false")),
+        "a worktree that was never set up has nothing to stop: {:?}",
+        steps[0].skipped
+    );
+    assert_eq!(steps[0].cwd, PathBuf::from("/repo-thing"));
+    assert_eq!(
+        steps[1].argv,
+        Ok(vec![
+            "chown".to_owned(),
+            "-R".to_owned(),
+            "/repo-thing".to_owned(),
+            "task/thing".to_owned(),
+        ])
+    );
+    assert_eq!(steps[1].cwd, PathBuf::from("/repo"));
+    assert!(steps[1].skipped.is_none());
 }

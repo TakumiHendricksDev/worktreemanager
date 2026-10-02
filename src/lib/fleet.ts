@@ -101,13 +101,14 @@ export type FleetRow =
     }
   | { kind: 'creation'; key: string; level: 2; projectId: string; job: FleetJob };
 
-/** A worktree Home is creating, as the tree needs it. */
+/** A worktree Home is creating or removing, as the tree needs it. */
 export interface FleetJob {
   id: number;
+  kind: 'create' | 'remove';
   projectId: string;
   /** The directory's last segment, or the branch. */
   title: string;
-  phase: 'running' | 'created' | 'setup_failed' | 'failed';
+  phase: 'running' | 'created' | 'setup_failed' | 'removed' | 'failed';
   /** "Running setup · 9 of 10", or the error. */
   detail: string;
 }

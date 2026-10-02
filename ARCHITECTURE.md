@@ -586,16 +586,38 @@ children — and a pane tiled in a worktree is the user's work. It is announced 
 `parentSession` and an `openedBy`, so the window tiles it like a hand-opened pane and marks it ⌂;
 closing the Home conversation leaves it running.
 
-**Home creates worktrees with the dialog's pipeline, not a copy.** `preview_worktree` is stages 1–6
-— nothing happens — and `create_worktree` previews again before it executes, with no
-acknowledgements: every Error preflight, even one the form would let the user tick past, stops it,
-and the reasons go back to the agent to pass on. Three things the dialog never needed did have to be
-added. Progress goes on `home:worktree` with a job id, because `wtm:progress` carries none and a New
-Worktree form open at the same time would take Home's steps for its own. The setup's output is
-recorded like a dock shell's, so Home's view can attach to its terminal late and answer a prompt in
-it. And `[setup] concurrency = "one_globally"` — parsed, documented, and enforced nowhere, because a
-person starts one creation at a time — is now a count each creation holds, the dialog's included, and
-Home refuses to start a second in such a project while one runs.
+**Home creates and removes worktrees with the dialogs' pipelines, not copies.** `preview_worktree`
+is stages 1–6, so nothing happens, and it goes through the dialog's own request builder.
+`create_request` gives a field the values leave out what `SchemaForm` seeds it with: its default, or
+`false` for a box. The dialog always sends every key, so only a caller with no form in front of it
+ever reaches that fallback. Without it, an agent naming only the issue was told the base branch was
+required, a field the form had already filled in. A command-backed list comes through the
+dropdown's own loader, kept for the field's `cache_ttl_ms`. Values are checked as the form would
+constrain them before the pipeline sees them: a key the form has no field for, a choice outside a
+list that takes no other, a box that is neither ticked nor unticked. Problems come back per field,
+with the field's choices. The plan carries the normalized values out of stage 1, which only ever
+normalized a copy; the form's "`1234` → `ACME-1234`" note had been reading an empty map.
+
+`create_worktree` previews again before it executes, with no acknowledgements, and it refuses more
+than the Create button does. An Error preflight the form would let the user tick past stops it. So
+does a warning, and so does a lookup that fell back to defaults: each is something the form puts in
+front of a person, and Home has no person to put it in front of. Three things the dialog never
+needed did have to be added. Progress goes on `home:worktree` with a job id, because `wtm:progress`
+carries none, and a New Worktree form open at the same time would take Home's steps for its own. The
+setup's output is recorded like a dock shell's, so Home's view can attach to its terminal late and
+answer a prompt in it. And `[setup] concurrency = "one_globally"` is now a count each creation holds,
+the dialog's included, and Home refuses to start a second in such a project while one runs. It was
+parsed and documented before this but enforced nowhere, because a person starts one creation at a
+time.
+
+`remove_worktree` builds the dialog's request, runs its preflight, and removes through the same
+`remove_now` the dialog's command does. `preview_removal` shows the teardown as
+`RemovePipeline::teardown_steps` renders it, with the run's context and `when` rule. Home refuses
+everything the Remove dialog warns about, its errors and its warnings alike. It also refuses on what
+the dialog would end or could lose: an agent session, shell or browser pane open in the worktree
+(removal terminates them), commits not on the branch's remote branch, or a branch on no remote with
+commits not in the base. It never forces, so uncommitted work stays the user's to discard. A removal
+is a `home:worktree` job too, so it appears in Home's tree as a creation does.
 
 ## 5a. Two things the real repository taught us
 

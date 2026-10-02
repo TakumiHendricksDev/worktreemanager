@@ -78,7 +78,7 @@ class Fleet {
   folds = $state<Record<string, boolean>>(readFolds());
   query = $state('');
   only = $state<FleetOnly | null>(null);
-  /** Worktrees Home is creating or created lately. */
+  /** Worktrees Home is creating or removing, or did lately. */
   jobs = $state<HomeJob[]>([]);
   /** Jobs the user has dismissed from the tree. */
   private dismissed = $state<number[]>([]);
@@ -141,9 +141,14 @@ class Fleet {
       ? this.jobs.map((j) => (j.id === job.id ? job : j))
       : [...this.jobs, job];
     // The listing does not know this worktree yet; a session Home opens there must survive the
-    // reconcile that runs against it in the meantime.
-    if (job.worktree) sessions.expectWorktree(job.worktree);
-    if (job.phase === 'created' || job.phase === 'setup_failed') {
+    // reconcile that runs against it in the meantime. A removal's worktree is one the listing is
+    // about to lose, and expecting it would keep it expected for good.
+    if (job.kind === 'create' && job.worktree) sessions.expectWorktree(job.worktree);
+    if (
+      job.phase === 'created' ||
+      job.phase === 'setup_failed' ||
+      job.phase === 'removed'
+    ) {
       if (job.projectId === workspace.activeProjectId) void workspace.refreshWorktrees();
       else void this.fetchOne(job.projectId);
     }
@@ -166,6 +171,7 @@ class Fleet {
       .filter((job) => !this.dismissed.includes(job.id))
       .map((job) => ({
         id: job.id,
+        kind: job.kind,
         projectId: job.projectId,
         title: job.directory.split('/').filter(Boolean).pop() ?? job.branch ?? 'worktree',
         phase: job.phase,
@@ -174,8 +180,8 @@ class Fleet {
             ? job.step
               ? `${job.step.label} · ${job.step.index} of ${job.step.total}`
               : 'Starting…'
-            : job.phase === 'created'
-              ? 'created'
+            : job.phase === 'created' || job.phase === 'removed'
+              ? job.phase
               : (job.error ?? 'failed'),
       })),
   );

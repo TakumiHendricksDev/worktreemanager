@@ -455,7 +455,7 @@
               <SessionDot
                 status={row.job.phase === 'running'
                   ? 'starting'
-                  : row.job.phase === 'created'
+                  : row.job.phase === 'created' || row.job.phase === 'removed'
                     ? 'done'
                     : 'failed'}
               />
@@ -464,10 +464,14 @@
                   <span class="c-fleet__name">⌂ {row.job.title}</span>
                   <span class="c-fleet__status">
                     {row.job.phase === 'running'
-                      ? 'creating…'
+                      ? row.job.kind === 'remove'
+                        ? 'removing…'
+                        : 'creating…'
                       : row.job.phase === 'created'
                         ? 'new'
-                        : 'failed'}
+                        : row.job.phase === 'removed'
+                          ? 'removed'
+                          : 'failed'}
                   </span>
                 </span>
                 <span class="c-fleet__meta" title={row.job.detail}>{row.job.detail}</span>

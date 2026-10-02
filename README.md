@@ -244,12 +244,16 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
 - **The Home agent.** Start Claude, Codex or Cursor in Home's main column. It runs in a folder of its
   own, outside every repository, and has tools for the sessions everywhere else: list them, read one,
   message one and wait for the answer, start one in any worktree of any project, stop a turn it
-  started, close sessions it opened that you haven't used, and create a worktree when you ask — it
-  previews the form's plan first, and anything the preview calls an error stops it, since only you
-  can override one. Its setup runs in Home, in a terminal you can type into. It cannot answer
-  approvals; those come
-  to you under Needs you. Messages it sends arrive labelled *From Home (wtm)*. **History** picks up a
-  past Home conversation.
+  started, and close sessions it opened that you haven't used. It sees each worktree as the sidebar
+  shows it, title, issue and badges included, and it knows each repository's New Worktree form from
+  its `wtm.toml`: the fields, their defaults, their choices, and what the issue lookup turns into a
+  branch and directory. When you ask, it creates a worktree, adopting the branch that already exists
+  for a ticket if you say so, or removes one. It previews first, and anything the dialog would warn
+  you about or ask you to confirm stops it: an error or a warning in the plan, uncommitted or unpushed
+  work, or sessions still open in the worktree. Those are yours to decide, in the dialog. Setup and
+  removal run in Home, where you can watch them, and you can type into the setup's terminal. It
+  cannot answer approvals; those come to you under Needs you. Messages it sends arrive labelled *From
+  Home (wtm)*. **History** picks up a past Home conversation.
 
 ## Agent sessions
 
@@ -362,9 +366,10 @@ Every session gets an MCP server called `wtm`:
 | `code_read_comments`, `code_resolve_comment` | Read your [Code-tab](#code-tab) comments, and resolve them with a note you see on the comment |
 
 The [Home agent](#home) gets a different set instead, because it has no worktree for these to act on:
-`list_projects`, `list_all_sessions`, `read_session`, `message_session`, `open_session`,
-`interrupt_session`, `close_sessions`, `preview_worktree` and `create_worktree`. Sessions are named by short handles such as `s2`, and
-what one session said reaches Home marked as untrusted content.
+`list_projects`, `list_worktrees`, `list_all_sessions`, `read_session`, `message_session`,
+`open_session`, `interrupt_session`, `close_sessions`, `preview_worktree`, `create_worktree`,
+`preview_removal` and `remove_worktree`. Sessions are named by short handles such as `s2`, and what
+one session said reaches Home marked as untrusted content.
 
 **Session awareness** is a beta, off by default (Settings → General). When other sessions share the
 worktree, wtm adds a short note to a session's next message saying who else is there and what state

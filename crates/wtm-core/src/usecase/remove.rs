@@ -66,6 +66,17 @@ pub enum RemoveOutcome {
     },
 }
 
+/// One teardown step as [`RemovePipeline::execute`] would run it, for showing before it does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeardownStep {
+    /// The rendered argv, or why it could not be rendered.
+    pub argv: Result<Vec<String>, String>,
+    pub cwd: std::path::PathBuf,
+    /// Why the step would not run, when its `when` rules it out or cannot be evaluated.
+    pub skipped: Option<String>,
+    pub on_failure: OnFailure,
+}
+
 /// Remove a worktree.
 pub struct RemovePipeline {
     pub git: Arc<dyn Git>,
@@ -149,6 +160,75 @@ impl RemovePipeline {
         Ok(items)
     }
 
+    /// The teardown steps [`Self::execute`] would run, rendered, without running any.
+    ///
+    /// The same context, `when` rule and working directory as the run, through the same two
+    /// helpers, so what is shown before a removal cannot drift from what the removal does. A step
+    /// whose `when` cannot be evaluated is reported as skipped, which is what the run does with it.
+    #[must_use]
+    pub fn teardown_steps(&self, req: &RemoveRequest) -> Vec<TeardownStep> {
+        let ctx = Self::teardown_context(req);
+        req.project
+            .remove
+            .pre
+            .iter()
+            .enumerate()
+            .map(|(index, step)| {
+                let skipped = step.when.as_ref().and_then(|when| {
+                    match self.engine.eval_bool("remove.pre.when", when, &ctx) {
+                        Ok(true) => None,
+                        Ok(false) => Some(format!("its `when` is false: {when}")),
+                        Err(error) => Some(format!("its `when` could not be evaluated: {error}")),
+                    }
+                });
+                let argv = step
+                    .run
+                    .iter()
+                    .enumerate()
+                    .map(|(i, template)| {
+                        self.engine
+                            .render(&format!("remove.pre[{index}][{i}]"), template, &ctx)
+                            .map_err(|error| error.to_string())
+                    })
+                    .collect();
+                TeardownStep {
+                    argv,
+                    cwd: Self::teardown_cwd(req, step),
+                    skipped,
+                    on_failure: step.on_failure,
+                }
+            })
+            .collect()
+    }
+
+    /// The tokens teardown templates render against: the caller's, plus the worktree's own.
+    fn teardown_context(req: &RemoveRequest) -> Context {
+        let mut ctx = req.ambient.clone();
+        ctx.insert(
+            "worktree.path".to_owned(),
+            req.worktree.path.to_string_lossy().into_owned(),
+        );
+        ctx.insert(
+            "worktree.dirname".to_owned(),
+            req.worktree.dirname().to_owned(),
+        );
+        ctx.insert(
+            "worktree.branch".to_owned(),
+            req.worktree
+                .branch()
+                .map(|b| b.as_str().to_owned())
+                .unwrap_or_default(),
+        );
+        ctx
+    }
+
+    fn teardown_cwd(req: &RemoveRequest, step: &crate::model::CommandSpec) -> std::path::PathBuf {
+        match step.cwd {
+            crate::model::CwdBase::Worktree => req.worktree.path.clone(),
+            _ => req.project.root.clone(),
+        }
+    }
+
     /// Run teardown, remove the worktree, and optionally delete the branch.
     pub fn execute(
         &self,
@@ -172,22 +252,7 @@ impl RemovePipeline {
             return Err(WtmError::Preflight(blocking));
         }
 
-        let mut ctx = req.ambient.clone();
-        ctx.insert(
-            "worktree.path".to_owned(),
-            req.worktree.path.to_string_lossy().into_owned(),
-        );
-        ctx.insert(
-            "worktree.dirname".to_owned(),
-            req.worktree.dirname().to_owned(),
-        );
-        ctx.insert(
-            "worktree.branch".to_owned(),
-            req.worktree
-                .branch()
-                .map(|b| b.as_str().to_owned())
-                .unwrap_or_default(),
-        );
+        let ctx = Self::teardown_context(req);
 
         // ── teardown, before git touches the directory ──
         let total = u16::try_from(project.remove.pre.len())
@@ -226,10 +291,7 @@ impl RemovePipeline {
                 })
                 .collect::<Result<_, _>>()?;
 
-            let cwd = match step.cwd {
-                crate::model::CwdBase::Worktree => req.worktree.path.clone(),
-                _ => project.root.clone(),
-            };
+            let cwd = Self::teardown_cwd(req, step);
 
             progress.emit(crate::ports::progress::ProgressEvent::CommandStarted {
                 argv: argv.clone(),

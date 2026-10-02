@@ -23,7 +23,7 @@ use regex::Regex;
 use tauri::State;
 use wtm_core::model::ProjectId;
 use wtm_core::ports::config::ConfigStore;
-use wtm_core::ports::pty::PtyHost;
+use wtm_core::ports::pty::{PtyHost, PtySink};
 
 use crate::app::App;
 use crate::display;
@@ -233,61 +233,72 @@ pub async fn field_options(
         let field = project.field(&field_key).ok_or_else(|| {
             ErrorView::new("unknownField", format!("no field named `{field_key}`"))
         })?;
-
-        let Some(wtm_core::model::OptionsSource::Command {
-            command,
-            parse,
-            exclude,
-            cache_ttl_ms: _,
-        }) = &field.options
-        else {
-            return Ok(Vec::new());
-        };
-
-        let ctx = display::base_context(&project, app.os_tokens());
-        let key = format!("field.{field_key}.options.run");
-        let argv = display::render_command(command, app.engine.as_ref(), &ctx, &key)
-            .map_err(|e| ErrorView::new("render", e.to_string()))?;
-
-        // Defence in depth: the guard rules were checked when the config loaded, but the
-        // argv is only fully known once its templates are rendered.
-        wtm_config::check_forbidden(&project, &argv)?;
-
-        let cwd = display::resolve_cwd(&command.cwd, &project, None, app.engine.as_ref(), &ctx);
-        let mut inv =
-            wtm_core::ports::exec::Invocation::new(argv, cwd, command.timeout_ms.unwrap_or(10_000));
-        inv.env = render_env(command, app.engine.as_ref(), &ctx, &key);
-
-        let output = app
-            .runner
-            .run(&inv, &wtm_core::ports::exec::CancelToken::new())
-            .map_err(|e| ErrorView::new("exec", e.to_string()))?;
-
-        let mut values = match parse {
-            wtm_core::model::OptionsParse::Lines => output.lines(),
-            wtm_core::model::OptionsParse::Nul => output
-                .stdout
-                .split('\0')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect(),
-            wtm_core::model::OptionsParse::Json => {
-                serde_json::from_str::<Vec<String>>(&output.stdout).map_err(|e| {
-                    ErrorView::new("parse", format!("options command did not return JSON: {e}"))
-                })?
-            }
-        };
-
-        if let Some(pattern) = exclude
-            && let Ok(regex) = regex_lite(pattern)
-        {
-            values.retain(|value| !regex.is_match(value));
-        }
-
-        Ok(values)
+        command_options(&app, &project, field)
     })
     .await
+}
+
+/// Run one field's options command, as the form's dropdown does.
+///
+/// Shared with Home's form tools so a choice list reaches the agent through the same render,
+/// guard check, deadline and parse the dropdown's does. Empty for a field whose options are
+/// static or absent: those need no command.
+pub(crate) fn command_options(
+    app: &App,
+    project: &wtm_core::model::Project,
+    field: &wtm_core::model::FieldSpec,
+) -> Reply<Vec<String>> {
+    let Some(wtm_core::model::OptionsSource::Command {
+        command,
+        parse,
+        exclude,
+        cache_ttl_ms: _,
+    }) = &field.options
+    else {
+        return Ok(Vec::new());
+    };
+
+    let ctx = display::base_context(project, app.os_tokens());
+    let key = format!("field.{}.options.run", field.key);
+    let argv = display::render_command(command, app.engine.as_ref(), &ctx, &key)
+        .map_err(|e| ErrorView::new("render", e.to_string()))?;
+
+    // Defence in depth: the guard rules were checked when the config loaded, but the
+    // argv is only fully known once its templates are rendered.
+    wtm_config::check_forbidden(project, &argv)?;
+
+    let cwd = display::resolve_cwd(&command.cwd, project, None, app.engine.as_ref(), &ctx);
+    let mut inv =
+        wtm_core::ports::exec::Invocation::new(argv, cwd, command.timeout_ms.unwrap_or(10_000));
+    inv.env = render_env(command, app.engine.as_ref(), &ctx, &key);
+
+    let output = app
+        .runner
+        .run(&inv, &wtm_core::ports::exec::CancelToken::new())
+        .map_err(|e| ErrorView::new("exec", e.to_string()))?;
+
+    let mut values = match parse {
+        wtm_core::model::OptionsParse::Lines => output.lines(),
+        wtm_core::model::OptionsParse::Nul => output
+            .stdout
+            .split('\0')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        wtm_core::model::OptionsParse::Json => serde_json::from_str::<Vec<String>>(&output.stdout)
+            .map_err(|e| {
+                ErrorView::new("parse", format!("options command did not return JSON: {e}"))
+            })?,
+    };
+
+    if let Some(pattern) = exclude
+        && let Ok(regex) = regex_lite(pattern)
+    {
+        values.retain(|value| !regex.is_match(value));
+    }
+
+    Ok(values)
 }
 
 /// Compile an exclude pattern.
@@ -1062,6 +1073,23 @@ fn decode_field_value(
     }
 }
 
+/// What the New Worktree form puts in a field before anyone types: its default, `false` for an
+/// unticked box, or nothing.
+///
+/// `SchemaForm` seeds every field this way when the form opens, so the dialog always sends every
+/// key and never reaches the fallback in [`create_request`]. A caller with no form in front of it —
+/// the Home agent naming only the issue — does, and has to get the plan the form would have shown,
+/// not "Base branch: This is required" for a field the form had already filled in. An explicit
+/// empty string still means empty: clearing a field is a choice the form can make too.
+#[must_use]
+pub fn seeded_value(field: &wtm_core::model::FieldSpec) -> String {
+    match &field.default {
+        Some(default) => default.as_string(),
+        None if field.kind == wtm_core::model::FieldKind::Bool => "false".to_owned(),
+        None => String::new(),
+    }
+}
+
 /// Build the pipeline's request from what the frontend sent.
 pub(crate) fn create_request(
     app: &App,
@@ -1075,10 +1103,14 @@ pub(crate) fn create_request(
     let project = app.project(project_id)?;
 
     // Everything arrives as a string from the form; `FieldValue::from` maps "" to Empty so
-    // `required` behaves, and a bool field's "true"/"false" is decoded by kind.
+    // `required` behaves, and a bool field's "true"/"false" is decoded by kind. A key that did
+    // not arrive at all takes the value the form would have shown in its place.
     let mut raw = std::collections::BTreeMap::new();
     for field in &project.fields {
-        let text = values.get(&field.key).cloned().unwrap_or_default();
+        let text = values
+            .get(&field.key)
+            .cloned()
+            .unwrap_or_else(|| seeded_value(field));
         let value = decode_field_value(&field.kind, &text);
         raw.insert(field.key.clone(), value);
     }
@@ -1207,7 +1239,7 @@ pub async fn remove_preflight(
     .await
 }
 
-fn remove_request(
+pub(crate) fn remove_request(
     app: &App,
     project_id: &str,
     worktree_id: &str,
@@ -1263,38 +1295,56 @@ pub async fn remove_worktree(
             force,
             acknowledged,
         )?;
-        // End every dock shell and agent in the worktree before teardown runs.
-        //
-        // Two reasons, and the second is the one that bites. A shell sitting in a directory
-        // that is about to be deleted keeps running with an unlinked cwd, which is confusing
-        // but survivable. What is not survivable is what the shell *started*: a dev server
-        // writing into `node_modules` is exactly the untracked churn that makes
-        // `git worktree remove` refuse, so a removal that ought to work fails for a reason
-        // nothing in the dialog mentions.
-        //
-        // One `terminate_groups` for all of them: a serial close would pay 400 ms grace per
-        // session, and a worktree can hold several shells and agents.
-        app.terminate_sessions_in(&worktree_id);
-        // Browsers too: a pane pointed at a dev server in a directory about to be deleted has
-        // nothing left to show, and the frontend learns of it through `browser:closed`.
-        crate::browser::close_all_in(&handle, &app, &worktree_id);
-
         let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
-        let sink = crate::pty_bridge::EventSink::new(handle);
+        let sink: Arc<dyn PtySink> = crate::pty_bridge::EventSink::new(handle.clone());
+        remove_now(&handle, &app, &req, &progress, &sink).map_err(Into::into)
+    })
+    .await
+}
 
-        let outcome = app.remove_pipeline().execute(
-            &req,
-            &progress,
-            &(sink as Arc<dyn wtm_core::ports::pty::PtySink>),
-            &wtm_core::ports::exec::CancelToken::new(),
-        )?;
+/// Remove a worktree whose request is built: end what runs there, tear down, remove, tidy up.
+///
+/// Everything [`remove_worktree`] does after the dialog's click, shared with Home's
+/// `remove_worktree` tool so the two cannot remove a worktree differently. Home refuses before it
+/// gets here if anything is open in the worktree, so the endings below find nothing on that route;
+/// they stay because the race between its check and this is not worth leaving a shell inside a
+/// deleted directory for.
+pub(crate) fn remove_now(
+    handle: &tauri::AppHandle,
+    app: &Arc<App>,
+    req: &wtm_core::usecase::RemoveRequest,
+    progress: &dyn wtm_core::ports::progress::ProgressSink,
+    sink: &Arc<dyn wtm_core::ports::pty::PtySink>,
+) -> Result<wtm_core::usecase::RemoveOutcome, wtm_core::error::WtmError> {
+    let worktree_id = req.worktree.id.as_str();
+    // End every dock shell and agent in the worktree before teardown runs.
+    //
+    // Two reasons, and the second is the one that bites. A shell sitting in a directory
+    // that is about to be deleted keeps running with an unlinked cwd, which is confusing
+    // but survivable. What is not survivable is what the shell *started*: a dev server
+    // writing into `node_modules` is exactly the untracked churn that makes
+    // `git worktree remove` refuse, so a removal that ought to work fails for a reason
+    // nothing in the dialog mentions.
+    //
+    // One `terminate_groups` for all of them: a serial close would pay 400 ms grace per
+    // session, and a worktree can hold several shells and agents.
+    app.terminate_sessions_in(worktree_id);
+    // Browsers too: a pane pointed at a dev server in a directory about to be deleted has
+    // nothing left to show, and the frontend learns of it through `browser:closed`.
+    crate::browser::close_all_in(handle, app, worktree_id);
 
+    let outcome = app.remove_pipeline().execute(
+        req,
+        progress,
+        sink,
+        &wtm_core::ports::exec::CancelToken::new(),
+    )?;
+
+    if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. }) {
         // Drop its place in the sidebar along with the worktree. Without this the app config
         // accumulates paths that no longer exist, and a later worktree created at the same path
         // would come back mysteriously starred, or filed in a group it was never put in.
-        if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. })
-            && let Err(err) = app.forget_in_sidebar(&req.project, &worktree_id)
-        {
+        if let Err(err) = app.forget_in_sidebar(&req.project, worktree_id) {
             // The worktree is already gone; a leftover entry is untidy, not broken.
             tracing::warn!(error = %err, "could not clear a removed worktree from the sidebar");
         }
@@ -1302,15 +1352,12 @@ pub async fn remove_worktree(
         // And the resume entries, for a sharper reason than tidiness: every one names this
         // worktree's absolute path, so each would fail on click with an error about a missing
         // directory — offering to resume something that cannot be resumed.
-        if matches!(outcome, wtm_core::usecase::RemoveOutcome::Removed { .. }) {
-            app.forget_worktree_sessions(&worktree_id);
-            // Comments on its lines are about files that no longer exist.
-            app.code_comments.forget(&worktree_id);
-        }
+        app.forget_worktree_sessions(worktree_id);
+        // Comments on its lines are about files that no longer exist.
+        app.code_comments.forget(worktree_id);
+    }
 
-        Ok(outcome)
-    })
-    .await
+    Ok(outcome)
 }
 
 /// Re-run a project's setup against an existing worktree.

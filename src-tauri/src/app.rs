@@ -2394,7 +2394,7 @@ fn is_hex_colour(value: &str) -> bool {
 /// Done here rather than in the frontend because the webview has no `HOME` to expand against.
 /// A shell would have done this before the path ever reached an argument, so a typed path that
 /// starts with `~` is what a person naturally writes.
-fn expand_tilde(path: &Path) -> PathBuf {
+pub(crate) fn expand_tilde(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     if (text == "~" || text.starts_with("~/"))
         && let Some(home) = std::env::var_os("HOME")

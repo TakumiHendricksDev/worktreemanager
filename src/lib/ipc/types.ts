@@ -1028,24 +1028,25 @@ export interface AgentExchange {
 }
 
 /**
- * A worktree the Home agent is creating, or created lately. Mirrors `home::Job`.
+ * A worktree the Home agent is creating or removing, or did lately. Mirrors `home::Job`.
  *
  * Announced whole on `home:worktree` at every step, and never on `wtm:progress`, which a New
  * Worktree form open at the same time would take for its own.
  */
 export interface HomeJob {
   id: number;
+  kind: 'create' | 'remove';
   projectId: string;
   projectName: string;
   /** The Home session that asked for it. */
   by: string;
   branch: string | null;
   directory: string;
-  phase: 'running' | 'created' | 'setup_failed' | 'failed';
+  phase: 'running' | 'created' | 'setup_failed' | 'removed' | 'failed';
   step: { label: string; index: number; total: number } | null;
-  /** The setup's terminal, once it has one. */
+  /** The job's terminal: a creation's setup once it starts, or the teardown step that stopped a removal. */
   setupSession: string | null;
-  /** The new worktree's id, once git has made it. */
+  /** The worktree's id: a creation's once git has made it, a removal's from the start. */
   worktree: string | null;
   error: string | null;
 }
