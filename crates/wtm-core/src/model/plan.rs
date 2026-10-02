@@ -193,6 +193,13 @@ pub struct PlanPreview {
     /// Derived from the project's own templates rather than hardcoded, so it stays correct
     /// for any config.
     pub naming_fields: Vec<String>,
+    /// Each field's value after its `normalize` template ran, as stage 1 validated it.
+    ///
+    /// Carried out because the request the caller holds has only the raw input: stage 1
+    /// normalizes a copy. Without this the form's "`1234` → `ACME-1234`" note had nothing to
+    /// show, and a caller describing the plan in words could only quote what was typed.
+    #[serde(default)]
+    pub normalized: std::collections::BTreeMap<String, String>,
 }
 
 impl PlanPreview {
@@ -355,6 +362,7 @@ mod tests {
             computed: std::collections::BTreeMap::default(),
             branch_choices: vec![],
             naming_fields: vec![],
+            normalized: std::collections::BTreeMap::default(),
         }
     }
 

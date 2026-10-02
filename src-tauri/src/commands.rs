@@ -1134,7 +1134,7 @@ pub async fn preview_worktree(
             &wtm_core::ports::progress::NullProgress,
             &wtm_core::ports::exec::CancelToken::new(),
         )?;
-        Ok(crate::view::preview_view(&preview, &req.values))
+        Ok(crate::view::preview_view(&preview))
     })
     .await
 }

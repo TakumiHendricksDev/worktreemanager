@@ -201,6 +201,37 @@ fn a_missing_required_field_is_a_field_problem_not_a_crash() {
     }
 }
 
+#[test]
+fn the_preview_carries_the_normalized_values_the_form_shows() {
+    // The request holds only what was typed, so the normalized value has to come back on the
+    // preview or nobody past stage 1 can see it.
+    let h = harness(
+        FakeGit::with_main(REPO, "main").with_rev("main", "abc123"),
+        FakeFileStore::new(),
+    );
+    let mut project = project();
+    project.fields[0].normalize = Some("{{ name | trim | upper }}".to_owned());
+    let req = request(project, &[("name", "  thing "), ("base", "main")]);
+
+    let preview = h
+        .pipeline
+        .preview(&req, &NullProgress, &CancelToken::new())
+        .unwrap();
+
+    assert_eq!(
+        preview.normalized.get("name").map(String::as_str),
+        Some("THING")
+    );
+    assert_eq!(
+        preview.normalized.get("base").map(String::as_str),
+        Some("main")
+    );
+    assert!(
+        req.values.normalized.is_empty(),
+        "the request itself is untouched"
+    );
+}
+
 /// The failure `branch_must_match` exists to catch.
 #[test]
 fn a_name_that_slugifies_to_nothing_is_refused_before_anything_is_created() {

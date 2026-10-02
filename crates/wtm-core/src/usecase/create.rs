@@ -279,6 +279,11 @@ impl CreatePipeline {
                 computed,
                 branch_choices,
                 naming_fields: self.naming_fields(project),
+                normalized: values
+                    .normalized
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.as_template_string()))
+                    .collect(),
             },
             add,
             fetch,

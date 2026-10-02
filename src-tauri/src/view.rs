@@ -1217,9 +1217,11 @@ pub fn preflight_view(item: &PreflightItem) -> PreflightView {
 /// Render the review screen.
 ///
 /// `normalized` is included so the form can show what a value *became* — the reason a user
-/// typing `1234` can see it turn into `ACME-1234` before committing.
+/// typing `1234` can see it turn into `ACME-1234` before committing. It comes from the preview,
+/// not the request: the request only ever held the raw input, so reading it here sent an empty
+/// map and the note never appeared.
 #[must_use]
-pub fn preview_view(preview: &PlanPreview, values: &wtm_core::model::FormValues) -> PreviewView {
+pub fn preview_view(preview: &PlanPreview) -> PreviewView {
     PreviewView {
         branch: preview
             .plan
@@ -1255,11 +1257,7 @@ pub fn preview_view(preview: &PlanPreview, values: &wtm_core::model::FormValues)
             })
             .collect(),
         naming_fields: preview.naming_fields.clone(),
-        normalized: values
-            .normalized
-            .iter()
-            .map(|(key, value)| (key.clone(), value.as_template_string()))
-            .collect(),
+        normalized: preview.normalized.clone(),
         can_create: preview.is_clear(),
     }
 }

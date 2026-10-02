@@ -1100,7 +1100,7 @@ fn preview_worktree(app: &App, args: &Value) -> Result<String, String> {
             &wtm_core::ports::exec::CancelToken::new(),
         )
         .map_err(|e| format!("those values do not make a worktree: {e}"))?;
-    let view = crate::view::preview_view(&preview, &req.values);
+    let view = crate::view::preview_view(&preview);
     Ok(format!(
         "{} › New Worktree\n\n{form}\n{}",
         inert(project.display_name()),
@@ -1186,7 +1186,7 @@ fn create_worktree(
             &wtm_core::ports::exec::CancelToken::new(),
         )
         .map_err(|e| format!("those values do not make a worktree: {e}"))?;
-    let view = crate::view::preview_view(&preview, &req.values);
+    let view = crate::view::preview_view(&preview);
     if !view.can_create || !preview.is_clear() {
         return Err(format!("not created.\n\n{}", describe_plan(&view)));
     }
