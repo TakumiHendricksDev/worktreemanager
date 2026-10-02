@@ -244,6 +244,19 @@
     provider !== null && sessions.capabilities[provider]?.steersMidTurn === true,
   );
 
+  /**
+   * Whether a message written now goes into the running turn rather than waiting for it to end.
+   *
+   * Only in Home, and only where the provider reads it without stopping. Home is where several
+   * things are going on at once — it hands work out, hears back as notices, and is told the next
+   * thing while it is still on the last — so a message that waited for the turn would arrive
+   * after the moment it was about. A worktree pane keeps the queue: there the turn *is* the work,
+   * and a word in the middle of it is something to choose, with ⇧⌘⏎. Cursor's steer stops the
+   * turn to get in, so in Home it queues like everywhere else; ⇧⌘⏎ queues on purpose here, the
+   * mirror of what it does in a worktree.
+   */
+  const steersByDefault = $derived(atHome && steersMidTurn && pane.working);
+
   /** The oldest unanswered approval. One at a time, in arrival order. */
   const blocking = $derived(pane.approvals[0] ?? null);
 
@@ -766,10 +779,12 @@
   /**
    * Send what is in the composer — or, while the session is busy, queue it.
    *
-   * `steer` is ⇧⌘⏎: queued and immediately sent on, the composer's own route to what "Send now" does
-   * for an entry already waiting. With nothing running it is an ordinary send.
+   * `alternate` is ⇧⌘⏎. In a worktree pane it steers: queued and immediately sent on, the composer's
+   * own route to what "Send now" does for an entry already waiting. In Home, where a busy turn is
+   * steered into by default (`steersByDefault`), it queues instead. With nothing running either is
+   * an ordinary send.
    */
-  async function submit(event: Event, steer = false) {
+  async function submit(event: Event, alternate = false) {
     event.preventDefault();
     const text = draft.trim();
     if ((!text && attachments.length === 0) || sending) return;
@@ -877,6 +892,8 @@
      * and the queue is where it can still be edited.
      */
     if (busy) {
+      // ⇧ is always the other one: it steers where a busy pane queues, and queues in Home.
+      const steer = steersByDefault ? !alternate : alternate;
       const queued = sessions.enqueue(pane.id, text, attachments);
       draft = '';
       attachments = [];
@@ -907,6 +924,7 @@
    * "Sends" meaning submits: while the session is busy the message is queued instead, and ⇧⌘⏎
    * queues it and steers it straight into the running turn. Shift, because ⇧⏎ is already the
    * newline and ⌥ is taken by the IME exclusions below, and because it is ⌘⏎ said more urgently.
+   * In Home the two swap — see `steersByDefault` — so ⇧ is always "the other one".
    *
    * The default is still ⌘⏎-only, because an agent prompt is routinely several lines — a stack
    * trace, a diff, a list of files — and a composer where Enter submits makes pasting one an
@@ -1827,9 +1845,11 @@
           <textarea
             class="c-composer__input"
             bind:this={composer}
-            placeholder={busy
-              ? `Queue a message for ${label}…`
-              : `Ask ${label}… — paste or @ files, / for commands`}
+            placeholder={steersByDefault
+              ? `Tell ${label} more — it reads this at its next step…`
+              : busy
+                ? `Queue a message for ${label}…`
+                : `Ask ${label}… — paste or @ files, / for commands`}
             aria-label="Message {label}"
             bind:value={draft}
             oninput={noteCaret}
@@ -1978,14 +1998,16 @@
                 variant="accent"
                 size="sm"
                 type="submit"
-                title={busy
-                  ? `Queue — sends when ${label} is free. ⇧⌘↵ sends it now.`
-                  : undefined}
+                title={steersByDefault
+                  ? `Send now — ${label} reads it at its next step, without stopping. ⇧⌘↵ queues it for after this turn.`
+                  : busy
+                    ? `Queue — sends when ${label} is free. ⇧⌘↵ sends it now.`
+                    : undefined}
                 disabled={(draft.trim().length === 0 && attachments.length === 0) ||
                   pane.ended !== null ||
                   sending}
               >
-                {sending ? 'Sending…' : busy ? 'Queue' : 'Send'}
+                {sending ? 'Sending…' : busy && !steersByDefault ? 'Queue' : 'Send'}
               </Button>
               {#if copiedReply}
                 <span class="c-status--ok">Copied the last reply.</span>

@@ -541,7 +541,7 @@ become links only when they resolve to a real file in the worktree's own list.
 
 Every session in §6b belongs to a worktree, and that is what scopes its tools. Home is the one that
 does not: an agent the user talks to from Home, in a folder of its own, whose job is the sessions in
-everybody else's worktrees — read what one did, ask one something and wait for the answer, start one
+everybody else's worktrees — read what one did, hand one some work and hear how it went, start one
 in another project. It does that work *through* those sessions, so it happens in panes the user can
 see, rather than in Home's own shell.
 
@@ -574,6 +574,46 @@ tools take targets, which none of §6b's do. What keeps it narrow:
   one the user has started talking to has become theirs.
 - It is visible. A session Home opens is a pane in its worktree; what Home sends arrives labelled
   `From Home (wtm):`; every exchange is a wire in Home's tree.
+
+**Delegation does not hold Home's turn.** `message_session` and `open_session` first waited up to
+ten minutes for the reply, like `ask_agent`, and that was wrong for Home in two ways at once. While
+the tool call waited, Home was working, so whatever the user wrote sat in its composer's queue until
+the other session finished. And a reply slower than the deadline was never heard of at all: Home was
+told "did not finish in ten minutes", and nothing told it later. Now both tools return once the
+prompt is delivered (`wait: true` keeps the old behaviour for a quick question, and also gives up as
+soon as the session starts waiting on the user, since only the user can answer that). Each message
+is a *delegation* in `home.rs`, recorded between arming the turn's watch and sending the turn
+(`turns::send_tracked`). Recorded any later, a turn that failed at once could settle first, and the
+delegation would then wait for an ending that had already happened. The event sink settles it. When
+the session finishes, fails or ends, and the first time it starts waiting on the user, Home is sent
+a *notice*. Notices that land within 1.5 s go as one message, labelled `From wtm (not the user):`,
+with each session's text fenced as `read_session`'s is. Then the batch is pruned: an approval that
+was answered in the meantime, or one in a batch that also says how the turn ended, is dropped.
+
+A notice is an ordinary turn, so an idle Home starts one, and a busy Home takes it the way its
+provider takes a second message mid-turn: Claude Code and Codex at their next step, Cursor once the
+current prompt is done. It is never sent as a steer, because Cursor's steer cancels the prompt that
+is running. Three rules keep notices from feeding themselves:
+
+- A notice comes only from a delegation.
+- A delegation comes only from Home's own two tools, sent to a session that is not a Home (`admit`
+  refuses one). Home's turns are never one, and that includes the turns notices start.
+- What Home already knows is not news. A reply its own `wait: true` took is not reported again, and
+  neither is the end of a turn Home stopped with `interrupt_session`.
+
+The race between a waiter giving up and the turn ending is settled with the registry's lock. The
+sink hands the reply to the waiter before it settles the delegation, so a waiter that finds its
+delegation gone (`Registry::release`) knows the reply is already in its channel.
+
+**Home's composer steers into the turn.** A worktree pane queues what is written mid-turn, because
+there the turn *is* the work. Home's turns are mostly coordination: it hands work out, hears back,
+and is told the next thing while it is still on the last one. Where the provider reads a mid-turn
+message without stopping (`steers_mid_turn`: Claude Code writes it to the CLI's stdin, and Codex has
+`turn/steer`), Home's ⌘↵ steers and ⇧⌘↵ queues, the reverse of a worktree pane. Cursor's ACP runs
+one prompt at a time and its steer cancels the prompt, so a Home on Cursor queues as before. Home's
+In-flight list is drawn from the message log, filtered to the Home conversation's own unanswered
+exchanges. It needs no record of its own, because an exchange settles at the moment its delegation
+does.
 
 **What Home reads is fenced**, as page content is (§6c): another session may have read a web page, a
 file or a tool's output that somebody else wrote, so its transcript reaches Home inside a

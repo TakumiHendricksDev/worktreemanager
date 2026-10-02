@@ -45,6 +45,13 @@
 
   const head = $derived(pane.queue.find((entry) => !entry.steered) ?? null);
 
+  /**
+   * Everything listed has gone and is waiting to be read. In Home, where a message written mid-turn
+   * is steered by default, that is the usual case, and "Queued" would say the opposite of what
+   * happened to it.
+   */
+  const allSent = $derived(head === null);
+
   /** What the queue will do next, as one phrase. */
   const next = $derived.by(() => {
     if (head === null) return `Sent · waiting for ${label} to read it`;
@@ -95,7 +102,7 @@
 
 <section class="c-queue" aria-label="Queued messages">
   <div class="c-queue__head">
-    <strong>Queued · {pane.queue.length}</strong>
+    <strong>{allSent ? 'Sent' : 'Queued'} · {pane.queue.length}</strong>
     <!-- Polite, because it changes when a turn ends — which is exactly when a screen-reader user
          wants to know the queue moved, and never worth interrupting them for. -->
     <span class={pane.queueHeld ? 'c-status--warn' : 'c-status--muted'} aria-live="polite"

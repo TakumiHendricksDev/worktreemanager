@@ -27,6 +27,7 @@
   import Button from './ui/Button.svelte';
   import Markdown, { type CodeLink } from './Markdown.svelte';
   import { diffHeaderPath } from '../code-links';
+  import { isWtmNotice, readWtmNotice } from '../home';
 
   const {
     events,
@@ -76,6 +77,8 @@
    */
   type Row =
     | { key: string; kind: 'user'; text: string }
+    /** wtm's news for Home, which arrives as a turn but is not the user's. See `WTM_NOTICE`. */
+    | { key: string; kind: 'wtm'; summary: string; body: string }
     | { key: string; kind: 'attachments'; attachments: AgentAttachment[] }
     | { key: string; kind: 'assistant'; text: string }
     | { key: string; kind: 'thinking'; text: string }
@@ -141,7 +144,11 @@
           break;
 
         case 'user_echo':
-          out.push({ key: `u${index}`, kind: 'user', text: event.text });
+          if (isWtmNotice(event.text)) {
+            out.push({ key: `u${index}`, kind: 'wtm', ...readWtmNotice(event.text) });
+          } else {
+            out.push({ key: `u${index}`, kind: 'user', text: event.text });
+          }
           break;
 
         case 'message_delta': {
@@ -746,6 +753,19 @@
       {:else}
         <p class="c-transcript__user">{row.text}</p>
       {/if}
+    {:else if row.kind === 'wtm'}
+      <!-- Not the user's bubble: drawn on the agent's side, as something the agent was told, and
+           closed by default — the summary is what happened, and the body is the start of each
+           reply, which the session's own pane holds in full. -->
+      <details class="c-transcript__wtm" ontoggle={(event) => toggle(row.key, event)}>
+        <summary class="c-transcript__wtm-head">
+          <span class="c-transcript__wtm-from">wtm</span>
+          {row.summary}
+        </summary>
+        {#if disclosures[row.key]}
+          <p class="c-transcript__wtm-body">{row.body}</p>
+        {/if}
+      </details>
     {:else if row.kind === 'attachments'}
       <div class="c-transcript__attachments" aria-label="User attachments">
         {#each row.attachments as attachment (attachment.path)}

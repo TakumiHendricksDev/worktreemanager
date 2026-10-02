@@ -27,6 +27,7 @@
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { view } from '../state/view.svelte';
   import ActivityList from './ActivityList.svelte';
+  import InFlight from './InFlight.svelte';
   import NeedsYou from './NeedsYou.svelte';
   import CreationPanel from './CreationPanel.svelte';
   import PeekPanel from './PeekPanel.svelte';
@@ -191,12 +192,14 @@
       role="tabpanel"
       hidden={tab !== 'activity'}
     >
+      <InFlight onpeek={peek} />
       <ActivityList />
     </div>
   {:else}
     <aside class="c-home__side" aria-label="What Home is watching">
       <div class="c-home__inbox">
         <NeedsYou onpeek={peek} {onreveal} />
+        <InFlight onpeek={peek} />
       </div>
       <div class="c-tabs c-tabs--inset" role="tablist" aria-label="Side panel">
         <button

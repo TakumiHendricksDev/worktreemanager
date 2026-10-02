@@ -241,19 +241,27 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
 - **Wires.** While one agent is waiting on another — a delegation, or a message from Home — a line
   lights up between them in the tree, with what was asked on the receiving row. **Activity** keeps the
   recent ones.
-- **The Home agent.** Start Claude, Codex or Cursor in Home's main column. It runs in a folder of its
-  own, outside every repository, and has tools for the sessions everywhere else: list them, read one,
-  message one and wait for the answer, start one in any worktree of any project, stop a turn it
-  started, and close sessions it opened that you haven't used. It sees each worktree as the sidebar
+- **In flight** lists the work the Home agent has handed out and not heard back about: which session
+  has it, what it was asked, and since when.
+- **The Home agent.** Start Claude, Codex or Cursor in Home's main column. It runs in a folder of
+  its own, outside every repository, and has tools for the sessions everywhere else: list them, read
+  one, hand one work, start one in any worktree of any project, stop a turn it started, and close
+  sessions it opened that you haven't used. Handing out work doesn't wait for the answer. The Home
+  agent can keep several sessions busy at once, and keep talking to you while they work. When one
+  finishes, stops to ask you something, fails or is closed, wtm tells the Home agent in a message
+  labelled *From wtm*, which its transcript shows as a note from wtm rather than as something you
+  said. What you type into Home while the agent is working goes straight into its current turn with
+  Claude and Codex, and ⇧⌘↵ queues it for after the turn instead. With Cursor it queues, because
+  Cursor can only take a new message by stopping the turn. It sees each worktree as the sidebar
   shows it, title, issue and badges included, and it knows each repository's New Worktree form from
   its `wtm.toml`: the fields, their defaults, their choices, and what the issue lookup turns into a
   branch and directory. When you ask, it creates a worktree, adopting the branch that already exists
   for a ticket if you say so, or removes one. It previews first, and anything the dialog would warn
-  you about or ask you to confirm stops it: an error or a warning in the plan, uncommitted or unpushed
-  work, or sessions still open in the worktree. Those are yours to decide, in the dialog. Setup and
-  removal run in Home, where you can watch them, and you can type into the setup's terminal. It
-  cannot answer approvals; those come to you under Needs you. Messages it sends arrive labelled *From
-  Home (wtm)*. **History** picks up a past Home conversation.
+  you about or ask you to confirm stops it: an error or a warning in the plan, uncommitted or
+  unpushed work, or sessions still open in the worktree. Those are yours to decide, in the dialog.
+  Setup and removal run in Home, where you can watch them, and you can type into the setup's
+  terminal. It cannot answer approvals; those come to you under Needs you. Messages it sends arrive
+  labelled *From Home (wtm)*. **History** picks up a past Home conversation.
 
 ## Agent sessions
 
@@ -294,7 +302,8 @@ and the machine, so pick Agent or Ask for a Cursor session you want to approve s
 
 - **Sending and queueing.** ⌘↵ sends; Settings can make a bare ↵ send instead. While a turn runs,
   Send becomes **Queue**. Queued messages go one per finished turn, and each can be edited, removed,
-  or sent now. ⇧⌘↵ steers a message straight into the running turn.
+  or sent now. ⇧⌘↵ steers a message straight into the running turn. Home's composer works the other
+  way round; see [Home](#home).
 - **Completion.** `@` completes file names from the worktree, and `/` completes the session's skills
   and commands.
 - **Attachments.** Attach files from **+**, by pasting, or by dropping them from Finder, up to 20 MB.
@@ -944,8 +953,8 @@ rest of your config still loads.
 | Sidebar | ↑ ↓ Home End | Move between worktrees and groups |
 | | ← → · F2 | Fold or unfold a group · rename it |
 | | ⌥↑ ⌥↓ | Move the row or group |
-| Composer | ⌘↵ | Send, or queue while a turn runs |
-| | ⇧⌘↵ | Steer the message into the running turn |
+| Composer | ⌘↵ | Send, or queue while a turn runs (in Home, steer it in) |
+| | ⇧⌘↵ | Steer the message into the running turn (in Home, queue it) |
 | | ↵ / ⇧↵ | Send / new line, when Settings says ↵ sends |
 | Browser pane | ⌘L · ⌘[ ⌘] · ⌘R · ⇧⌘C | Address · back, forward · reload · comment mode |
 | Code tab | ⌘F · ⌘B or ⌘-click · ⌥⌘C | Find in the file · go to definition · comment on the selection |

@@ -84,9 +84,9 @@
     <h2 class="c-home__title">Home</h2>
     <p class="c-home__prose">
       Talk to an agent here that isn't in any repository. It can see every session in the
-      tree, read what one has done, message it and wait for the answer, and start new
-      sessions in any worktree. Approvals stay yours: whatever a session asks shows up under
-      Needs you.
+      tree, read what one has done, hand work to it or to a new session in any worktree, and
+      keep talking to you while that work runs — it hears back as each session finishes.
+      Approvals stay yours: whatever a session asks shows up under Needs you.
     </p>
     <div class="o-row">
       {#each agents as option (option.id)}

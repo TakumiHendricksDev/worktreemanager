@@ -46,7 +46,7 @@ import {
   type SpawnedSession,
   type Worktree,
 } from '../ipc/types';
-import { HOME, isHome } from '../home';
+import { HOME, isHome, isWtmNotice } from '../home';
 import { statusOf, worse, type PaneStatus } from '../status';
 import { transferPrompt } from '../transfer';
 import { attention, type Announceable, type Announcement } from './attention.svelte';
@@ -3888,7 +3888,12 @@ class Sessions {
       }
     }
 
-    if (event.kind === 'user_echo' && pane.firstPrompt === null) {
+    // wtm's news for Home is not something anyone asked, so it is never the label.
+    if (
+      event.kind === 'user_echo' &&
+      pane.firstPrompt === null &&
+      !isWtmNotice(event.text)
+    ) {
       // Past Home's label on a message Home sent, which says who asked rather than what.
       const text = event.text.replace(/^From Home \(wtm\):\s*/, '');
       const line = text.trim().split('\n')[0] ?? '';

@@ -1,0 +1,102 @@
+/*
+ * Home's In-flight list: what Home has handed out and not heard back about. Sits under Needs you
+ * and borrows its frame, because the two answer the same question from either end — what is
+ * waiting on you, and what you are waiting on.
+ */
+
+.c-inflight {
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-inflight__heading {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: var(--sp-2);
+  color: var(--fg);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-inflight__count {
+  padding: 0 6px;
+  border: 1.5px solid var(--accent);
+  border-radius: 999px;
+  font-size: var(--step--2);
+}
+
+.c-inflight__note {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 400;
+}
+
+.c-inflight__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-inflight__item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.c-inflight__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--step--1);
+  text-align: left;
+
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+}
+
+.c-inflight__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.c-inflight__who {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-inflight__state,
+.c-inflight__time {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-inflight__where {
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-inflight__text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}

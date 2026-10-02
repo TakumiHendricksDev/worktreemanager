@@ -81,6 +81,40 @@
   max-width: min(56ch, 88%);
 }
 
+/*
+ * wtm's news for Home: on the agent's side and quieter than either party's words, because it is
+ * neither the user nor the agent speaking — it is the app saying what other sessions did.
+ */
+.c-transcript__wtm {
+  align-self: stretch;
+  max-width: 76ch;
+  padding: var(--sp-1) var(--sp-3);
+  border-left: 2px solid var(--info);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  /* See `.c-transcript__user`. */
+  margin-block: var(--sp-1);
+}
+
+.c-transcript__wtm-head {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.c-transcript__wtm-from {
+  margin-right: 6px;
+  color: var(--info);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-transcript__wtm-body {
+  margin-top: var(--sp-1);
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .c-transcript__prompt > .c-transcript__user {
   max-width: 100%;
   cursor: pointer;

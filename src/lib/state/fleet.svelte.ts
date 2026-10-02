@@ -324,6 +324,22 @@ class Fleet {
     return out;
   });
 
+  /**
+   * What Home's conversation has handed out and not heard back about, oldest first.
+   *
+   * From the message log rather than a list of its own: an exchange already says who was asked,
+   * what, and when, and settles exactly when Rust files the notice that ends a delegation — so the
+   * two cannot disagree about what is still out. Only the current conversation's: one that was
+   * closed or replaced has nobody left to tell.
+   */
+  delegations = $derived.by((): AgentExchange[] => {
+    const home = sessions.homePane?.session ?? null;
+    if (home === null) return [];
+    return this.messages.filter(
+      (exchange) => exchange.from === home && exchange.state === 'in_flight',
+    );
+  });
+
   /** The newest exchange still waiting on a reply from this pane, for its row's chip. */
   inboundTo(paneId: string): AgentExchange | null {
     const pane = sessions.paneById(paneId);
