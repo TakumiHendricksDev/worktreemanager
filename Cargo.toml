@@ -21,7 +21,7 @@ members = [
 # Shared package metadata. Every member inherits with `field.workspace = true`.
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.package]
-version      = "3.1.1"
+version      = "3.2.0"
 edition      = "2024"
 rust-version = "1.88"
 license      = "MIT"
