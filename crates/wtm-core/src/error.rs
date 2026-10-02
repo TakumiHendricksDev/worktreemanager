@@ -266,6 +266,12 @@ pub enum ExecError {
     /// and a pipe session told the user it was a pty one for as long as the message said so.
     #[error("session {0} is gone")]
     NoSuchSession(String),
+
+    /// Not started, for a reason known before it could be: a conversation it was asked to resume
+    /// that it no longer has. The message is the whole sentence, because nothing was spawned for
+    /// an argv to name.
+    #[error("{0}")]
+    Refused(String),
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]

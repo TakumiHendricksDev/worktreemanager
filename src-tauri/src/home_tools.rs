@@ -981,7 +981,7 @@ fn sent_text(who: &str) -> String {
 }
 
 /// The agent and place a notice names a session by.
-fn about(app: &App, provider: &str, scope: &SessionScope) -> String {
+pub(crate) fn about(app: &App, provider: &str, scope: &SessionScope) -> String {
     format!("{} in {}", agent_label(provider), place_of(app, scope))
 }
 

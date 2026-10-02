@@ -527,6 +527,52 @@ fn replaces(previous: &AgentEvent, newer: &AgentEvent) -> bool {
     }
 }
 
+/// What a session's replay shows that the quit stopped halfway, and the notice that says so.
+///
+/// Every tool row it opened and never finished is closed as failed, with the quit as its output.
+/// Claude's durable transcript keeps a `tool_use` whose result never arrived, so the resumed
+/// history replays a row that would otherwise say "running" for as long as the pane exists, over
+/// a session that is idle. Codex stores only finished items, so its rows are already closed.
+///
+/// Then one notice, last, so it sits where the turn stopped. It says nothing was sent again,
+/// because the obvious worry on seeing an interrupted turn come back is that it is about to carry
+/// on by itself.
+#[must_use]
+pub fn interrupted_by_quit<'a>(
+    replay: impl Iterator<Item = &'a AgentEvent>,
+    waiting: bool,
+) -> Vec<AgentEvent> {
+    let mut open: Vec<String> = Vec::new();
+    for event in replay {
+        match event {
+            AgentEvent::ToolStarted { id, .. } => open.push(id.clone()),
+            AgentEvent::ToolFinished { id, .. } => open.retain(|open| open != id),
+            _ => {}
+        }
+    }
+    let mut events: Vec<AgentEvent> = open
+        .into_iter()
+        .map(|id| AgentEvent::ToolFinished {
+            id,
+            ok: false,
+            output: Some("Stopped when wtm quit.".to_owned()),
+        })
+        .collect();
+    events.push(AgentEvent::Notice {
+        level: wtm_core::model::NoticeLevel::Warn,
+        message: if waiting {
+            "wtm quit while this session was waiting on you. That request ended with its process \
+             and was not answered. Nothing was sent again when the session came back; send a \
+             message to carry on."
+        } else {
+            "wtm quit while this turn was running, so it stopped here. Nothing was sent again \
+             when the session came back; send a message to carry on."
+        }
+        .to_owned(),
+    });
+    events
+}
+
 /// Drop oldest events from other sessions until the global replay budget is met.
 fn trim_global_replay(
     agents: &mut BTreeMap<wtm_core::model::SessionId, AgentEntry>,
@@ -871,6 +917,12 @@ pub struct App {
     resume: parking_lot::Mutex<()>,
     /// The one recording in progress, if any. See [`crate::dictate`].
     pub dictation: crate::dictate::Dictation,
+    /// Whether this run's window has already started bringing the last run's sessions back.
+    ///
+    /// Process state, and that is the point: a webview reload starts the frontend again but not
+    /// the app, and the sessions it would bring back are still running. See
+    /// [`Self::claim_launch_restore`].
+    launch_restore: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for App {
@@ -972,7 +1024,19 @@ impl App {
             early_replay: parking_lot::Mutex::new(BTreeMap::new()),
             sessions_file: sessions_file.clone(),
             resume: parking_lot::Mutex::new(()),
+            launch_restore: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// True the first time it is asked in this run of the app, and never again.
+    ///
+    /// The frontend restores the last run's sessions once per launch. Asked again after a reload,
+    /// it would resume conversations whose sessions survived the reload and are being adopted, which
+    /// is two CLIs on one conversation.
+    pub fn claim_launch_restore(&self) -> bool {
+        !self
+            .launch_restore
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
     }
 
     #[must_use]
@@ -1675,6 +1739,12 @@ impl App {
         let mut request = req.clone();
         request.executable = Some(executable.to_string_lossy().into_owned());
 
+        // Before the spawn, for a CLI that would otherwise start, say it is ready, and only then
+        // find the conversation gone. See `Provider::resume_problem`.
+        if let Some(problem) = entry.provider.resume_problem(&request) {
+            return Err(wtm_core::error::ExecError::Refused(problem));
+        }
+
         let session = wtm_agent::AgentSession::open(
             entry.provider,
             &request,
@@ -1707,7 +1777,15 @@ impl App {
         let mut agent = AgentEntry {
             scope,
             provider: entry.id.to_owned(),
-            provider_session: String::new(),
+            // A resume already knows the conversation, and every provider keeps its id when it
+            // picks one up. Claude does not say so until its first turn, so without this a
+            // restored pane's conversation stayed on offer under "Pick up where you left off",
+            // and a reload could not match the live session to the pane it was restored into.
+            provider_session: if req.fork.is_none() {
+                req.resume.clone().unwrap_or_default()
+            } else {
+                String::new()
+            },
             title: None,
             ephemeral: req.ephemeral,
             ready: false,
@@ -1843,6 +1921,43 @@ impl App {
         if let Some(entry) = self.agents.lock().get_mut(&id) {
             entry.user_turns = entry.user_turns.saturating_add(1);
         }
+    }
+
+    /// Give a session restored from the last run back what that run knew about it: which Home
+    /// conversation opened it, and whether the user had written to it.
+    ///
+    /// Both lived only in memory, keyed by session ids a quit makes meaningless, so without this
+    /// Home could no longer close a pane it opened, and could close one the user had taken over.
+    /// The window remembers them and passes them with the resume; see `SessionOptions`.
+    ///
+    /// `opened_by` is honoured only when it names a Home session that is running now: a window
+    /// that could hand any session the claim would be handing Home a way to close the user's work.
+    pub fn restore_marks(&self, session: &str, opened_by: Option<&str>, typed: bool) {
+        if typed {
+            self.note_user_turn(session);
+        }
+        let Some(home) = opened_by else { return };
+        let is_home = self
+            .agents
+            .lock()
+            .get(&wtm_core::model::SessionId::new(home))
+            .is_some_and(|entry| entry.scope.is_home());
+        if is_home {
+            self.home.record_opened(home, session);
+        }
+    }
+
+    /// What the quit cut off in a restored session, as the events that say so.
+    ///
+    /// Empty for a session that is not running. See [`interrupted_by_quit`].
+    #[must_use]
+    pub fn interrupted_by_quit(&self, session: &str, waiting: bool) -> Vec<AgentEvent> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents
+            .lock()
+            .get(&id)
+            .map(|entry| interrupted_by_quit(entry.replay.iter(), waiting))
+            .unwrap_or_default()
     }
 
     /// Whether the beta session-awareness channel is enabled for this user.
@@ -2513,6 +2628,62 @@ mod tests {
 
         let snapshot = buffer.snapshot();
         assert_eq!(snapshot.iter().map(|e| e.seq).collect::<Vec<_>>(), [0, 1]);
+    }
+
+    fn tool(id: &str) -> AgentEvent {
+        AgentEvent::ToolStarted {
+            id: id.to_owned(),
+            name: "Bash".to_owned(),
+            title: None,
+        }
+    }
+
+    fn finished(id: &str) -> AgentEvent {
+        AgentEvent::ToolFinished {
+            id: id.to_owned(),
+            ok: true,
+            output: None,
+        }
+    }
+
+    #[test]
+    fn a_turn_the_quit_cut_off_closes_only_the_tools_it_left_running_and_then_says_so() {
+        // Claude's transcript keeps a tool call whose result never came, and replayed as it is the
+        // row says "running" for ever over a session that is idle.
+        let replay = [tool("done"), finished("done"), tool("cut"), notice("text")];
+        let events = interrupted_by_quit(replay.iter(), false);
+
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert!(matches!(
+            &events[0],
+            AgentEvent::ToolFinished { id, ok: false, .. } if id == "cut"
+        ));
+        let AgentEvent::Notice { level, message } = &events[1] else {
+            panic!("the notice comes last, where the turn stopped: {events:?}");
+        };
+        assert_eq!(*level, wtm_core::model::NoticeLevel::Warn);
+        assert!(message.contains("Nothing was sent again"), "{message}");
+    }
+
+    #[test]
+    fn an_approval_the_quit_ended_is_said_to_be_unanswered_rather_than_answerable() {
+        let events = interrupted_by_quit([].iter(), true);
+        assert!(matches!(
+            events.as_slice(),
+            [AgentEvent::Notice { message, .. }] if message.contains("was not answered")
+        ));
+    }
+
+    #[test]
+    fn sessions_are_brought_back_once_per_run_of_the_app_and_not_again_after_a_reload() {
+        // A reload starts the frontend again while the sessions it would restore are still running
+        // and are being adopted; restoring them as well would put two CLIs on one conversation.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let app = App::with_paths(AppPaths::rooted(dir.path())).expect("app should build");
+
+        assert!(app.claim_launch_restore());
+        assert!(!app.claim_launch_restore());
+        assert!(!app.claim_launch_restore());
     }
 
     #[test]

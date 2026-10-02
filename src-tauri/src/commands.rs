@@ -899,8 +899,7 @@ mod tests {
                 model: Some("haiku".to_owned()),
                 effort: Some("low".to_owned()),
                 mode: Some("plan".to_owned()),
-                resume: None,
-                fast: None,
+                ..SessionOptions::default()
             }),
             Some("max"),
         );
@@ -1746,6 +1745,11 @@ pub struct SessionOptions {
     pub resume: Option<String>,
     /// Start in the provider's high-speed mode. Only Claude has one.
     pub fast: Option<bool>,
+    /// For a pane restored from the last run: the Home session that opened it, as that Home
+    /// conversation is running now. See [`App::restore_marks`].
+    pub opened_by: Option<String>,
+    /// For a pane restored from the last run: whether the user had written to it.
+    pub typed: Option<bool>,
 }
 
 /// Every agent this build can drive, and whether this machine can.
@@ -1969,6 +1973,9 @@ fn open_agent_process(
     }
 
     let spec = project.agent_spec(agent_id);
+    // Not spawn arguments: what the last run knew about a restored pane, applied once it exists.
+    let opened_by = options.opened_by.clone();
+    let typed = options.typed == Some(true);
     let mut req = session_request_for(
         app,
         &project,
@@ -2001,8 +2008,44 @@ fn open_agent_process(
             return Err(ErrorView::new("exec", error.to_string()));
         }
     };
+    if opened_by.is_some() || typed {
+        app.restore_marks(session.as_str(), opened_by.as_deref(), typed);
+    }
 
     Ok(session.as_str().to_owned())
+}
+
+/// Whether this window should bring the last run's sessions back: true once per run of the app.
+///
+/// See [`App::claim_launch_restore`] for why a reload answers false.
+#[tauri::command]
+pub async fn claim_launch_restore(app: AppState<'_>) -> Reply<bool> {
+    Ok(app.claim_launch_restore())
+}
+
+/// Say, in a restored session's transcript, that the quit stopped its turn.
+///
+/// Through the session's own event sink, so the closing rows and the notice are numbered into its
+/// replay like everything else it said: a reload repaints them, and Home's `read_session` reads
+/// them. Called once the restored session is ready, which is after a resumed conversation has
+/// replayed its history, so the notice lands below it.
+#[tauri::command]
+pub async fn mark_interrupted_by_quit(
+    handle: tauri::AppHandle,
+    app: AppState<'_>,
+    session: String,
+    waiting: bool,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let sink = crate::agent_bridge::AgentEventSink::new(handle);
+        let id = wtm_core::model::SessionId::new(&session);
+        for event in app.interrupted_by_quit(&session, waiting) {
+            wtm_agent::session::AgentSink::on_event(sink.as_ref(), &id, &event);
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// Send one turn to a session.
@@ -2753,12 +2796,15 @@ pub(crate) fn session_choices(
     options: Option<SessionOptions>,
     inherited: Option<&str>,
 ) -> SessionChoices {
+    // `opened_by` and `typed` are not choices: `open_agent_process` applies them once the session
+    // exists.
     let SessionOptions {
         model,
         effort,
         mode,
         resume,
         fast,
+        ..
     } = options.unwrap_or_default();
 
     /*

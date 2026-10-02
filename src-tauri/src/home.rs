@@ -164,15 +164,25 @@ pub enum Update {
     Failed { error: String },
     /// The session's process ended before the turn did — closed, or exited.
     Ended { summary: String },
+    /// wtm quit while the turn was running, in the last run. `live` when the session has been
+    /// restored and is running now, idle.
+    Interrupted { live: bool },
 }
 
 /// One piece of news for one Home conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notice {
+    /// The message-log exchange it is about, or [`LAST_RUN`] for one the quit ended.
     pub exchange: u64,
     pub target: Target,
     pub update: Update,
 }
+
+/// The exchange a notice about the last run names. Real exchanges are numbered from 1.
+///
+/// Those exchanges died with the message log, which is memory only. Only a `Waiting` notice is
+/// ever matched on its exchange (see [`prune`]), and none is filed for the last run.
+pub const LAST_RUN: u64 = 0;
 
 /// How long a notice waits for others to go with it, in milliseconds.
 ///
@@ -508,6 +518,16 @@ impl Registry {
             .collect()
     }
 
+    /// News about the last run's delegations, which the quit interrupted. The Home conversation to
+    /// deliver to, when this made news for one that has no delivery on its way yet.
+    pub fn interrupted(&self, home: &str, notices: Vec<Notice>) -> Option<String> {
+        let mut state = self.state.lock();
+        notices
+            .into_iter()
+            .filter_map(|notice| file(&mut state, home, notice))
+            .last()
+    }
+
     /// Everything waiting to be told to a Home conversation, which then has no delivery on its way.
     pub fn take_notices(&self, home: &str) -> Vec<Notice> {
         let mut state = self.state.lock();
@@ -569,6 +589,87 @@ pub fn approval_requested(app: &Arc<App>, session: &str) {
     }
 }
 
+/// A session Home had sent work to when wtm quit, as the window remembered it.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterruptedTarget {
+    /// The session it was restored as, or `None` when it is not running.
+    pub session: Option<String>,
+    pub provider: String,
+    pub project: String,
+    pub worktree: String,
+}
+
+/// Tell a restored Home conversation, once, that the quit interrupted the work it had out.
+///
+/// Its delegations lived in [`Registry`] and the message log, both memory only, so after a relaunch
+/// nothing would ever settle them: Home would wait for notices that cannot come, and keep telling
+/// the user the work is in flight. The window remembers which sessions they were and calls this
+/// when the restore is done; the news goes the way every other notice goes.
+///
+/// Says nothing when `home` is not a Home conversation that is running now.
+pub fn interrupted(app: &Arc<App>, home: &str, targets: &[InterruptedTarget]) {
+    let Some(notices) = interrupted_notices(app, home, targets) else {
+        return;
+    };
+    if let Some(home) = app.home.interrupted(home, notices) {
+        deliver_soon(app, home);
+    }
+}
+
+/// The notices [`interrupted`] files, or `None` when `home` is not a running Home conversation.
+///
+/// Apart from the delivery so it can be tested without sending a real turn to a real Home. A target
+/// is live only when it names a session running now; one that is not gets no session, so it is given
+/// no handle.
+#[must_use]
+pub fn interrupted_notices(
+    app: &App,
+    home: &str,
+    targets: &[InterruptedTarget],
+) -> Option<Vec<Notice>> {
+    if !app.overview_of(home).is_some_and(|o| o.scope.is_home()) {
+        return None;
+    }
+    Some(
+        targets
+            .iter()
+            .map(|target| {
+                let scope = SessionScope::worktree(&target.project, &target.worktree);
+                let live = target
+                    .session
+                    .as_deref()
+                    .filter(|session| app.overview_of(session).is_some());
+                Notice {
+                    exchange: LAST_RUN,
+                    target: Target {
+                        session: live.unwrap_or_default().to_owned(),
+                        about: crate::home_tools::about(app, &target.provider, &scope),
+                    },
+                    update: Update::Interrupted {
+                        live: live.is_some(),
+                    },
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Tell a restored Home conversation that the quit interrupted the work it had out.
+#[tauri::command]
+pub async fn home_interrupted(
+    app: crate::commands::AppState<'_>,
+    home: String,
+    targets: Vec<InterruptedTarget>,
+) -> Reply<()> {
+    let app = Arc::clone(&app);
+    crate::commands::blocking(move || {
+        interrupted(&app, &home, &targets);
+        Ok(())
+    })
+    .await
+}
+
 /// Send a Home conversation its news once [`COALESCE_MS`] have passed.
 ///
 /// On a thread of its own because the caller is the event sink, running on a session's reader
@@ -596,7 +697,15 @@ fn deliver(app: &App, home: &str) {
     }
     let lines: Vec<(String, Notice)> = news
         .into_iter()
-        .map(|notice| (app.home.handle_for(home, &notice.target.session), notice))
+        .map(|notice| {
+            // A session that is not running has no handle to mint: one would name nothing.
+            let handle = if notice.target.session.is_empty() {
+                String::new()
+            } else {
+                app.home.handle_for(home, &notice.target.session)
+            };
+            (handle, notice)
+        })
         .collect();
     if let Err(error) = app.send_agent_turn(home, &compose(&lines), &[]) {
         // The Home conversation has gone; its news went with it.
@@ -644,7 +753,11 @@ pub fn compose(lines: &[(String, Notice)]) -> String {
         }
     );
     for (handle, notice) in lines {
-        let who = format!("{handle} ({})", notice.target.about);
+        let who = if handle.is_empty() {
+            notice.target.about.clone()
+        } else {
+            format!("{handle} ({})", notice.target.about)
+        };
         text.push('\n');
         match &notice.update {
             Update::Finished { reply } if reply.is_empty() => {
@@ -680,6 +793,23 @@ pub fn compose(lines: &[(String, Notice)]) -> String {
                 let _ = writeln!(
                     text,
                     "{who} ended before it answered — {summary}. Its handle no longer works."
+                );
+            }
+            Update::Interrupted { live: true } => {
+                let _ = writeln!(
+                    text,
+                    "{who} was working on your task when wtm quit, and its turn stopped there. \
+                     wtm has restored the session: it is idle, and nothing was sent to it again. \
+                     `read_session` {handle} shows how far it got. Ask the user before sending the \
+                     work again."
+                );
+            }
+            Update::Interrupted { live: false } => {
+                let _ = writeln!(
+                    text,
+                    "{who} was working on your task when wtm quit, and its turn stopped there. \
+                     Its session is not running now, so it has no handle; its conversation can be \
+                     picked up again in that worktree. Ask the user before starting the work again."
                 );
             }
         }
@@ -1465,5 +1595,75 @@ mod tests {
         )]);
         assert!(silent.contains("without a written reply"));
         assert!(!silent.contains("<wtm_session_content"), "nothing to fence");
+    }
+
+    fn interrupted(session: &str, live: bool) -> Notice {
+        Notice {
+            exchange: LAST_RUN,
+            target: Target {
+                session: session.to_owned(),
+                about: "Claude Code in webapp › fix-login".to_owned(),
+            },
+            update: Update::Interrupted { live },
+        }
+    }
+
+    #[test]
+    fn work_the_quit_interrupted_is_one_delivery_for_the_home_that_sent_it() {
+        let home = Registry::default();
+        let to = home.interrupted(
+            "h1",
+            vec![interrupted("s-new", true), interrupted("", false)],
+        );
+
+        assert_eq!(to.as_deref(), Some("h1"));
+        assert_eq!(home.take_notices("h1").len(), 2);
+        assert!(home.take_notices("h1").is_empty(), "told once");
+        assert!(
+            home.delegations("h1").is_empty(),
+            "nothing is left in flight"
+        );
+    }
+
+    #[test]
+    fn news_of_the_last_run_joins_a_delivery_already_on_its_way() {
+        let home = Registry::default();
+        delegate(&home, 1, false);
+        assert_eq!(
+            home.settle(1, &finished(), "done").as_deref(),
+            Some("h"),
+            "the first notice starts a delivery"
+        );
+        assert_eq!(
+            home.interrupted("h", vec![interrupted("s-new", true)]),
+            None,
+            "the second goes with it"
+        );
+        assert_eq!(home.take_notices("h").len(), 2);
+    }
+
+    #[test]
+    fn an_interrupted_turn_is_told_as_stopped_and_not_to_be_sent_again_unasked() {
+        let text = compose(&[
+            ("s5".to_owned(), interrupted("s-new", true)),
+            (String::new(), interrupted("", false)),
+        ]);
+
+        assert!(text.starts_with(FROM_WTM), "{text}");
+        assert!(text.contains(
+            "s5 (Claude Code in webapp › fix-login) was working on your task when wtm quit"
+        ));
+        assert!(text.contains("nothing was sent to it again"));
+        assert!(text.contains("`read_session` s5"));
+        // The one that did not come back has no handle, and the line does not invent one.
+        assert!(text.contains(
+            "\nClaude Code in webapp › fix-login was working on your task when wtm quit"
+        ));
+        assert!(text.contains("has no handle"));
+        assert_eq!(
+            text.matches("Ask the user before").count(),
+            2,
+            "neither is restarted on Home's own say-so: {text}"
+        );
     }
 }

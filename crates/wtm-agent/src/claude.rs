@@ -145,24 +145,42 @@ fn claude_history(req: &SessionRequest) -> Vec<AgentEvent> {
     let Some(session) = req.resume.as_deref() else {
         return Vec::new();
     };
-    // Apart from rejecting path traversal, this avoids walking the store for a malformed record.
-    if uuid::Uuid::parse_str(session).is_err() {
-        return Vec::new();
-    }
     let Some(home) = std::env::var_os("HOME") else {
         return Vec::new();
     };
-    let projects = Path::new(&home).join(".claude/projects");
-    let Ok(directories) = std::fs::read_dir(projects) else {
-        return Vec::new();
-    };
+    history_file(Path::new(&home), session)
+        .and_then(|path| File::open(path).ok())
+        .map(|file| claude_history_from(BufReader::new(file)))
+        .unwrap_or_default()
+}
 
-    for directory in directories.flatten() {
-        let path = directory.path().join(format!("{session}.jsonl"));
-        let Ok(file) = File::open(path) else { continue };
-        return claude_history_from(BufReader::new(file));
+/// Where Claude keeps a conversation's durable transcript, if it still has one.
+///
+/// Under `~/.claude/projects/<one directory per cwd>/<id>.jsonl`. Every directory is searched
+/// rather than the one for this cwd, because the directory name is Claude's own encoding of a path
+/// and a guessed encoding that drifted would make every conversation look missing.
+///
+/// `home` is a parameter so the lookup can be tested against a directory of the test's own.
+fn history_file(home: &Path, session: &str) -> Option<std::path::PathBuf> {
+    // Apart from rejecting path traversal, this avoids walking the store for a malformed record.
+    if uuid::Uuid::parse_str(session).is_err() {
+        return None;
     }
-    Vec::new()
+    std::fs::read_dir(home.join(".claude/projects"))
+        .ok()?
+        .flatten()
+        .map(|directory| directory.path().join(format!("{session}.jsonl")))
+        .find(|path| path.is_file())
+}
+
+/// Why Claude cannot resume `session`, or `None` when it has the conversation.
+///
+/// Claude writes the file on the first message, so a session that was opened and never asked
+/// anything has no conversation to resume, and neither does one whose transcript was deleted.
+fn resume_problem_in(home: &Path, session: &str) -> Option<String> {
+    history_file(home, session).is_none().then(|| {
+        "Claude Code has no saved transcript of it in ~/.claude/projects any more".to_owned()
+    })
 }
 
 /// How many replayed events one resumed pane may contribute.
@@ -536,6 +554,13 @@ impl Provider for Claude {
             Path::new(&req.cwd),
             std::env::var_os("HOME").as_deref().map(Path::new),
         )
+    }
+
+    fn resume_problem(&self, req: &SessionRequest) -> Option<String> {
+        // A fork reads its parent through `--resume` too, but `req.fork` names it, not this.
+        let session = req.resume.as_deref()?;
+        let home = std::env::var_os("HOME")?;
+        resume_problem_in(Path::new(&home), session)
     }
 }
 
@@ -2289,5 +2314,37 @@ mod history_tests {
             })
         ));
         assert!(matches!(events.last(), Some(AgentEvent::UserEcho { .. })));
+    }
+
+    const SESSION: &str = "0b6f7a2e-1111-4222-8333-444455556666";
+
+    #[test]
+    fn a_resume_with_no_saved_transcript_is_refused_before_anything_is_spawned() {
+        // Claude says it is ready before it reads the conversation, then prints "No conversation
+        // found" and exits. A restored pane would come back and then end, with nothing to say why.
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude/projects/-repo")).unwrap();
+
+        let problem = resume_problem_in(home.path(), SESSION).expect("nothing to resume");
+        assert!(problem.contains("no saved transcript"), "{problem}");
+    }
+
+    #[test]
+    fn a_resume_whose_transcript_is_in_any_project_directory_goes_ahead() {
+        // Searched across every directory: the name is Claude's encoding of the cwd, and a guess at
+        // it that drifted would make every conversation look gone.
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/projects/-Users-someone-repo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{SESSION}.jsonl")), "").unwrap();
+
+        assert_eq!(resume_problem_in(home.path(), SESSION), None);
+    }
+
+    #[test]
+    fn a_resume_id_that_is_not_a_uuid_never_reaches_the_filesystem() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(history_file(home.path(), "../../etc/passwd"), None);
+        assert!(resume_problem_in(home.path(), "../../etc/passwd").is_some());
     }
 }

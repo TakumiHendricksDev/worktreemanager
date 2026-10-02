@@ -988,6 +988,7 @@ pub(crate) fn open_pane(
             // faster, discovered on a bill rather than in the UI. A repository can still ask for it
             // per agent — `session_request_for` falls through to `[agent.<id>] fast`.
             fast: None,
+            ..crate::commands::SessionOptions::default()
         }),
         inherited.as_deref(),
     )

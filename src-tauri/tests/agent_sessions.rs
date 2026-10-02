@@ -272,3 +272,56 @@ fn closing_a_session_ends_the_cli_rather_than_leaving_it_running() {
         "a closed session must not still be reported as running"
     );
 }
+
+#[test]
+fn a_codex_thread_that_is_no_longer_on_disk_fails_before_the_session_is_ready() {
+    // What a restored pane relies on to tell a conversation that came back from one that did not.
+    // The app server stays up after refusing, so "the process is running" proves nothing; the
+    // refusal arrives as a failure, and readiness never does.
+    let Some((entry, host)) = installed("codex") else {
+        return;
+    };
+
+    let recorder = Arc::new(Recorder::default());
+    let mut req = request();
+    // A well-formed thread id that no rollout has: `thread/resume` answers -32600, "no rollout
+    // found for thread id …" (codex-cli 0.154.0).
+    req.resume = Some("019a0000-0000-7000-8000-000000000000".to_owned());
+    let session = wtm_agent::AgentSession::open(
+        entry.provider,
+        &req,
+        Arc::new(host),
+        &(Arc::clone(&recorder) as Arc<dyn AgentSink>),
+        WEEK_MS,
+        None,
+    )
+    .expect("the app server should spawn");
+
+    let failed = || {
+        recorder
+            .events
+            .lock()
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Failed { .. }))
+    };
+    assert!(
+        settle(failed),
+        "the refusal never arrived. The session said: {}",
+        recorder.diagnosis()
+    );
+    assert!(
+        !*recorder.ready.lock(),
+        "a session whose conversation is gone must not report ready: {}",
+        recorder.diagnosis()
+    );
+    assert!(
+        !recorder
+            .events
+            .lock()
+            .iter()
+            .any(|e| matches!(e, AgentEvent::SessionReady { .. })),
+        "and must not claim a thread"
+    );
+
+    session.close().expect("close");
+}

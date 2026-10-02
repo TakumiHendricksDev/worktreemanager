@@ -256,4 +256,18 @@ pub trait Provider: Send + Sync {
         let _ = req;
         Vec::new()
     }
+
+    /// Why `req.resume` cannot be picked up, said before anything is spawned, or `None`.
+    ///
+    /// For a CLI that only finds out once it is running, and reports it in a way that reads like
+    /// a session that started. Claude declares itself ready before it reads the conversation,
+    /// then prints "No conversation found" and exits, so a restored pane would appear to come
+    /// back and then end.
+    ///
+    /// Defaulted to `None`, so a provider whose refusal arrives as a failure before it is
+    /// ready, as Codex's `thread/resume` error does, needs no opinion here.
+    fn resume_problem(&self, req: &SessionRequest) -> Option<String> {
+        let _ = req;
+        None
+    }
 }
