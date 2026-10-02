@@ -18,6 +18,8 @@
   import { codeRequests } from './lib/state/code-request.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
+  import FleetTree from './lib/components/FleetTree.svelte';
+  import HomeSurface from './lib/components/HomeSurface.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
   import RemoveProjectDialog from './lib/components/RemoveProjectDialog.svelte';
   import RemoveWorktreeDialog from './lib/components/RemoveWorktreeDialog.svelte';
@@ -48,7 +50,11 @@
   import { updates } from './lib/state/update.svelte';
   import { usage } from './lib/state/usage.svelte';
   import { databaseConsole } from './lib/state/database-console.svelte';
+  import { fleet } from './lib/state/fleet.svelte';
+  import { view } from './lib/state/view.svelte';
   import { workspace } from './lib/state/workspace.svelte';
+  import { isHome } from './lib/home';
+  import type { Pane } from './lib/state/sessions.svelte';
 
   const MIN_SIDEBAR = 200;
   const MAX_SIDEBAR = 460;
@@ -61,14 +67,14 @@
   let dragging = $state(false);
   let booted = $state(false);
   let addError = $state<string | null>(null);
-  /**
-   * What the main pane shows.
+  /*
+   * What the main pane shows lives in `view.svelte.ts` now, because Home made it something
+   * `attention` has to read too.
    *
    * New Worktree is a *view*, not a modal: the form, the review screen and a live setup
    * terminal need the room, and a modal implies a quick decision when a setup run can take
    * minutes. Removal stays a modal — a destructive confirmation should block.
    */
-  let mainView = $state<'worktree' | 'database' | 'code' | 'new'>('worktree');
   let showAddProject = $state(false);
   let showRemove = $state(false);
   /**
@@ -92,12 +98,14 @@
   let offAttention: (() => void) | null = null;
   /** Hearing the windows panes are popped out into. See `pane-windows.svelte.ts`. */
   let offWindows: (() => void) | null = null;
+  /** The message log Home draws its wires from. Same contract as `offSessions`. */
+  let offFleet: (() => void) | null = null;
 
   /**
    * The one navigation recipe. Notification clicks and toast clicks both land here, because
-   * both name the same kind of target and both need `mainView`, which lives in this file —
-   * a click that selected a worktree while the create pane owned the screen would look like
-   * it had done nothing.
+   * both name the same kind of target and both have to change the view — a click that selected
+   * a worktree while the create pane or Home owned the screen would look like it had done
+   * nothing.
    *
    * Order matters: `selectProject` is awaited because it refreshes the worktree list and
    * resets the selection, so the `select` after it is the one that sticks. The pane focus is
@@ -110,14 +118,41 @@
     // There is nothing to navigate yet, and boot lands on the last active project on its own;
     // the click still brought the window to the front, which is all it ever did before.
     if (!booted) return;
+    // Home's own pane has no worktree to arrive at; it is on Home, and Home is a view.
+    if (isHome(target.worktreeId)) {
+      view.show('home');
+      view.peek(null);
+      sessions.markPaneSeen(target.paneId);
+      attention.clearPane(target.paneId);
+      return;
+    }
     await arrive(target.projectId, target.worktreeId);
-    mainView = 'worktree';
+    view.show('worktree');
     const alive = sessions.panes.some(
       (p) => p.id === target.paneId && p.worktreeId === target.worktreeId,
     );
     if (alive) sessions.focus(target.worktreeId, target.paneId);
     // Arriving is what clears the worktree's dots and toasts, exactly as ⌘-Tabbing back does.
     sessions.markSeen(target.worktreeId);
+  }
+
+  /**
+   * From Home to a pane in its own worktree.
+   *
+   * `goTo`, and then one more step for a delegated child, which holds no tile: arriving at its
+   * worktree would show the panes around it and not the child itself, so it is put in a tile the
+   * way the Agents dialog's Show does.
+   */
+  async function reveal(pane: Pane): Promise<void> {
+    await goTo({ projectId: pane.projectId, worktreeId: pane.worktreeId, paneId: pane.id });
+    if (pane.parentSession !== null) sessions.showRelated(pane.id);
+  }
+
+  /** From Home to a worktree, with nothing in particular to focus. */
+  async function openWorktree(projectId: string, worktreeId: string): Promise<void> {
+    await arrive(projectId, worktreeId);
+    view.show('worktree');
+    sessions.markSeen(worktreeId);
   }
 
   /** Bring a worktree up: the half of `goTo` a reply's Run shares, before it picks a view. */
@@ -140,9 +175,7 @@
     if (!booted || !request || request.id === navigatedFor) return;
     navigatedFor = request.id;
     untrack(() => {
-      void arrive(request.projectId, request.worktreeId).then(
-        () => (mainView = 'database'),
-      );
+      void arrive(request.projectId, request.worktreeId).then(() => view.show('database'));
     });
   });
 
@@ -158,7 +191,7 @@
     if (!booted || !request || request.id === openedFor) return;
     openedFor = request.id;
     untrack(() => {
-      void arrive(request.projectId, request.worktreeId).then(() => (mainView = 'code'));
+      void arrive(request.projectId, request.worktreeId).then(() => view.show('code'));
     });
   });
 
@@ -215,6 +248,15 @@
         offAttention?.();
         return;
       }
+      // After the sessions, because each exchange names two of them.
+      offFleet = await fleet.init();
+      if (gone) {
+        offFleet?.();
+        offWindows?.();
+        offSessions?.();
+        offAttention?.();
+        return;
+      }
 
       await workspace.init();
       if (gone) return;
@@ -235,7 +277,9 @@
        * you ⌘-Tab back, and the pane is right there. Without this the dot would insist you had not
        * seen a thing you were looking at.
        */
-      sessions.markSeen(workspace.selectedWorktreeId);
+      // Not while Home is up, where the selected worktree is no more on screen than any other —
+      // `HomeSurface` marks what Home shows instead.
+      if (!view.home) sessions.markSeen(workspace.selectedWorktreeId);
       // At most daily, and only once the launch check has answered. See `update.svelte.ts`.
       updates.onFocus();
     };
@@ -251,6 +295,10 @@
     const unlistenSettings = listen('wtm:settings', () => (showSettings = true));
     /* Check for Updates… from the same menu, by the same route. Always runs and always answers. */
     const unlistenUpdates = listen('wtm:check-updates', () => void updates.check(true));
+    /* Go › Home from the same menu, by the same route: AppKit keeps ⇧⌘H for itself. */
+    const unlistenHome = listen('wtm:home', () => {
+      if (booted) view.toggleHome();
+    });
     /*
      * The usage registry. Independent of everything above, so not in the boot chain: the figures
      * come from Rust's record whenever they land, and nothing waits on them.
@@ -294,6 +342,7 @@
         if (!target?.closest('#terminal-dock')) {
           event.preventDefault();
           void workspace.refreshWorktrees();
+          if (view.home) void fleet.refresh();
         }
       }
 
@@ -313,7 +362,8 @@
           !document.querySelector('[aria-modal="true"]')
         ) {
           event.preventDefault();
-          if (workspace.selected) showInspector = true;
+          // Home has no worktree in view, so there is nothing for the dialog to describe.
+          if (workspace.selected && !view.home) showInspector = true;
         }
       }
 
@@ -353,10 +403,12 @@
     const onCodeChord = (event: KeyboardEvent) => {
       const chord = chordOf(event);
       if (!chord || !booted || !workspace.selected) return;
+      // From Home a chord would open a worktree's Code tab you are not looking at.
+      if (view.home) return;
       if (document.querySelector('[aria-modal="true"]')) return;
       event.preventDefault();
       event.stopPropagation();
-      mainView = 'code';
+      view.show('code');
       code.ask(chord, window.getSelection()?.toString().trim().split('\n')[0] ?? '');
     };
     window.addEventListener('keydown', onCodeChord, true);
@@ -368,8 +420,10 @@
       window.removeEventListener('keydown', onCodeChord, true);
       void unlistenSettings.then((off) => off());
       void unlistenUpdates.then((off) => off());
+      void unlistenHome.then((off) => off());
       void unlistenUsage.then((off) => off());
       void unlistenClicks.then((off) => off());
+      offFleet?.();
       offWindows?.();
       offSessions?.();
       offAttention?.();
@@ -477,6 +531,8 @@
 <div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
   <TitleBar
     {sidebarCollapsed}
+    home={view.home}
+    ontogglehome={() => view.toggleHome()}
     ontogglesidebar={toggleSidebar}
     onaddproject={addProject}
     onremoveproject={() => (removingProject = workspace.activeProject)}
@@ -490,11 +546,29 @@
     class:is-sidebar-collapsed={sidebarCollapsed}
   >
     <aside class="c-shell__col" id="worktree-sidebar" hidden={sidebarCollapsed}>
+      <!--
+        In Home the session tree takes the sidebar's place rather than sitting beside it: one lists a
+        project's worktrees, the other every project's, and two trees of the same checkouts side by
+        side would be one too many. The sidebar stays mounted underneath, hidden, so its scroll and
+        its folds are where they were when you come back.
+      -->
       <Sidebar
-        onnew={() => (mainView = 'new')}
-        onselectworktree={() => (mainView = 'worktree')}
-        detailId={mainView === 'new' ? null : 'worktree-detail'}
+        hidden={view.home}
+        onnew={() => view.show('new')}
+        onselectworktree={() => view.show('worktree')}
+        detailId={view.current === 'new' ? null : 'worktree-detail'}
       />
+      {#if view.homeMounted}
+        <FleetTree
+          visible={view.home}
+          onhome={() => view.peek(null)}
+          onopenworktree={(projectId, worktreeId) =>
+            void openWorktree(projectId, worktreeId)}
+          onnewworktree={(projectId) =>
+            void workspace.selectProject(projectId).then(() => view.show('new'))}
+          onaddproject={addProject}
+        />
+      {/if}
     </aside>
 
     <!--
@@ -627,10 +701,12 @@
 
       {#if !booted}
         <div class="c-placeholder"><p>Starting…</p></div>
-      {:else if mainView === 'new' && workspace.activeProjectId}
+      {:else if view.home}
+        <!-- Home draws itself, below; nothing from the worktree chain shows over it. -->
+      {:else if view.current === 'new' && workspace.activeProjectId}
         <NewWorktreePane
           projectId={workspace.activeProjectId}
-          onclose={() => (mainView = 'worktree')}
+          onclose={() => view.show(view.previous === 'home' ? 'home' : 'worktree')}
         />
       {:else if workspace.projects.length === 0}
         <div class="c-placeholder">
@@ -650,11 +726,13 @@
         <Detail
           worktree={workspace.selected}
           projectId={workspace.activeProjectId ?? ''}
-          view={mainView === 'database' || mainView === 'code' ? mainView : 'sessions'}
+          view={view.current === 'database' || view.current === 'code'
+            ? view.current
+            : 'sessions'}
           {sidebarCollapsed}
-          onsessions={() => (mainView = 'worktree')}
-          ondatabase={() => (mainView = 'database')}
-          oncode={() => (mainView = 'code')}
+          onsessions={() => view.show('worktree')}
+          ondatabase={() => view.show('database')}
+          oncode={() => view.show('code')}
           onremove={() => (showRemove = true)}
           oninspect={() => (showInspector = true)}
           onfavorite={() => {
@@ -664,9 +742,9 @@
           onselect={(worktreeId) => {
             // What picking a row in the sidebar does, since this is that list with the rail away.
             workspace.select(worktreeId);
-            mainView = 'worktree';
+            view.show('worktree');
           }}
-          onnew={() => (mainView = 'new')}
+          onnew={() => view.show('new')}
         />
       {:else if !workspace.loadingWorktrees}
         <div class="c-placeholder">
@@ -681,15 +759,34 @@
         unmounts is a transcript that is gone. Mounted here it survives all of them, and is merely
         hidden while the create pane owns the screen.
       -->
-      <SessionSurface visible={booted && mainView === 'worktree'} />
+      <SessionSurface visible={booted && view.current === 'worktree'} />
       <DatabaseSurface
-        visible={booted && mainView === 'database'}
-        onsessions={() => (mainView = 'worktree')}
+        visible={booted && view.current === 'database'}
+        onsessions={() => view.show('worktree')}
       />
       <CodeSurface
-        visible={booted && mainView === 'code'}
-        onsessions={() => (mainView = 'worktree')}
+        visible={booted && view.current === 'code'}
+        onsessions={() => view.show('worktree')}
       />
+      {#if view.homeMounted}
+        <HomeSurface visible={booted && view.home} onreveal={(pane) => void reveal(pane)}>
+          {#snippet main()}
+            <div class="c-home__intro">
+              <h2 class="c-home__title">Home</h2>
+              <p class="c-home__prose">
+                Every agent session in every project is in the tree on the left: what is
+                running, what is done, and what needs you. Pick one to read it and write to
+                it from here. Approvals waiting anywhere are listed beside this, and you can
+                answer them without leaving.
+              </p>
+              <p class="c-home__prose">
+                When one agent hands work to another, a wire lights up between them in the
+                tree while the message is in flight.
+              </p>
+            </div>
+          {/snippet}
+        </HomeSurface>
+      {/if}
     </main>
   </div>
 

@@ -203,7 +203,18 @@ function patch<T>(
 export interface PendingApproval {
   id: string;
   request: ApprovalRequest;
+  /**
+   * When it arrived, as a count of approvals this window has heard — not a time.
+   *
+   * Home lists every session's approvals together, oldest first, which is the one place arrival
+   * order across panes matters (`delegatedApprovals` explains why it did not before). A counter
+   * needs no clock, and replay preserves order, so a reload numbers them in the order they came.
+   */
+  order: number;
 }
+
+/** The last `PendingApproval.order` handed out. Module state: no window shares it with another. */
+let approvalOrder = 0;
 
 /**
  * A message written while its session was busy, waiting to be sent.
@@ -361,6 +372,14 @@ export interface Pane {
   run: string | null;
   /** Human-facing task label supplied by the orchestrator. */
   agentTitle: string | null;
+  /**
+   * The start of the first thing this session was asked, once it has been.
+   *
+   * What Home's tree calls a session that no orchestrator named — "Claude Code" four times down a
+   * worktree says nothing. Kept beside the log rather than read out of it, because the tree renders
+   * every session on every change and must not scan transcripts to do it (see `statuses`).
+   */
+  firstPrompt: string | null;
   /**
    * The provider says this session is out of usage, and the offer to continue elsewhere is standing.
    *
@@ -1964,6 +1983,7 @@ class Sessions {
       parentSession: null,
       run: null,
       agentTitle: null,
+      firstPrompt: null,
       limit: null,
       replayedThrough: null,
       providerSession: null,
@@ -2255,14 +2275,22 @@ class Sessions {
    * `beside` names the pane the new one lands next to. Pass it whenever the caller knows; see
    * `place` for what goes wrong when it does not.
    */
+  /**
+   * Open an agent pane in a worktree, and return its pane id — or null when the cap refused it.
+   *
+   * `repo` is the repository's own settings for this agent. Omitted, they come from
+   * `this.options`, which only ever holds the *active* project's; Home opens sessions in any
+   * project, so it fetches that project's list itself and passes the entry here.
+   */
   async openAgent(
     projectId: string,
     worktreeId: string,
     provider: string,
     placement: Placement = 'right',
     beside?: string,
-  ): Promise<void> {
-    if (!this.hasRoom(worktreeId)) return;
+    repo?: AgentOption,
+  ): Promise<string | null> {
+    if (!this.hasRoom(worktreeId)) return null;
 
     const pane = this.blank({ kind: 'agent', provider }, projectId, worktreeId);
     // The repository's `[agent.<id>]` first, then the provider's own defaults, so the picker shows
@@ -2272,7 +2300,7 @@ class Sessions {
     // picker's choice, and `session_request_for` ranks that above the repository — so seeding only
     // from the capability meant a `wtm.toml` model, effort or mode never reached a pane opened by
     // hand, only the ones an agent opened, which send nothing.
-    const repo =
+    repo ??=
       this.optionsProject === projectId
         ? this.options.find((option) => option.id === provider)
         : undefined;
@@ -2316,6 +2344,7 @@ class Sessions {
       const live = this.paneById(pane.id);
       if (live) live.error = errorMessage(e);
     }
+    return pane.id;
   }
 
   /**
@@ -3727,8 +3756,17 @@ class Sessions {
       }
     }
 
+    if (event.kind === 'user_echo' && pane.firstPrompt === null) {
+      const line = event.text.trim().split('\n')[0] ?? '';
+      pane.firstPrompt = line.length > 120 ? `${line.slice(0, 120)}…` : line || null;
+    }
+
     if (event.kind === 'approval_requested') {
-      pane.approvals = [...pane.approvals, { id: event.id, request: event.request }];
+      approvalOrder += 1;
+      pane.approvals = [
+        ...pane.approvals,
+        { id: event.id, request: event.request, order: approvalOrder },
+      ];
       if (
         pane.sideOf === null &&
         attention.announce(
@@ -3839,7 +3877,7 @@ class Sessions {
       pane.sideOf === null &&
       !inPaneWindow &&
       !this.isOut(pane.id) &&
-      attention.offScreen(pane.worktreeId)
+      attention.offScreen(pane.worktreeId, pane.id)
     )
       pane.unseen = true;
     // An approval nobody can answer any more would sit on screen forever.

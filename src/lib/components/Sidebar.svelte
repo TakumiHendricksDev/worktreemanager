@@ -50,10 +50,17 @@
   import Icon from './ui/Icon.svelte';
 
   const {
+    hidden = false,
     onnew,
     onselectworktree,
     detailId = 'worktree-detail',
   }: {
+    /**
+     * Out of sight while Home's session tree has the column, but still mounted: its scroll, its
+     * roving focus and an edit in progress come back as they were. A class rather than the `hidden`
+     * attribute, because `.c-sidebar` sets `display: flex`, which outranks it.
+     */
+    hidden?: boolean;
     onnew: () => void;
     /** Picking a worktree means "show me that one", so the pane leaves the create view. */
     onselectworktree?: () => void;
@@ -134,7 +141,7 @@
    */
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || hidden) return;
       if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
         event.preventDefault();
         searchEl?.focus();
@@ -652,7 +659,7 @@
   />
 {/snippet}
 
-<nav class="c-sidebar" aria-label="Worktrees">
+<nav class="c-sidebar" class:is-hidden={hidden} aria-label="Worktrees">
   <div class="c-sidebar__controls">
     <div class="c-search" role="search">
       <span class="c-search__icon"><Icon name="search" size={14} /></span>

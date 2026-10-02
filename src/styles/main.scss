@@ -60,6 +60,7 @@
 @use 'objects/tiles';
 
 /* Components — one partial per block, alphabetical within the layer. */
+@use 'components/activity';
 @use 'components/add-project';
 @use 'components/agent-tree';
 @use 'components/agents';
@@ -81,8 +82,11 @@
 @use 'components/drop';
 @use 'components/field';
 @use 'components/find';
+@use 'components/fleet';
 @use 'components/goto';
+@use 'components/home';
 @use 'components/icon';
+@use 'components/inbox';
 @use 'components/input';
 @use 'components/logo';
 @use 'components/markdown';
@@ -92,6 +96,7 @@
 @use 'components/note';
 @use 'components/pane';
 @use 'components/pane-window';
+@use 'components/peek';
 @use 'components/planview';
 @use 'components/popped';
 @use 'components/preflight';
@@ -118,6 +123,7 @@
 @use 'components/trust';
 @use 'components/update';
 @use 'components/usage';
+@use 'components/wire';
 @use 'components/worktree-bar';
 @use 'components/worktree-tab';
 

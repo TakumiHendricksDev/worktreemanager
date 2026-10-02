@@ -57,6 +57,8 @@ export type IconName =
   | 'folder'
   | 'gauge'
   | 'grip'
+  | 'home'
+  | 'inbox'
   | 'locate'
   | 'star'
   | 'star-outline'
@@ -103,6 +105,15 @@ export const icons: Record<IconName, IconSpec> = {
   'chevron-right': { stroke: 'M6.25 4 L10.25 8 L6.25 12' },
   'chevron-up': { stroke: 'M4 9.75 L8 5.75 L12 9.75' },
   check: { stroke: 'M3.5 8.25 L6.5 11.25 L12.5 4.75' },
+  /* A house: roof, walls, door. Home's button and its row in the session tree. */
+  home: {
+    stroke:
+      'M2.25 7.5 L8 2.5 L13.75 7.5 M3.75 6.25 V13.5 H12.25 V6.25 M6.5 13.5 V9.75 H9.5 V13.5',
+  },
+  /* A tray with a dip in its lip: things waiting to be dealt with. Home's Needs-you list. */
+  inbox: {
+    stroke: 'M2 9 L3.75 3.5 H12.25 L14 9 V13.5 H2 Z M2 9 H5.5 L6.5 10.75 H9.5 L10.5 9 H14',
+  },
   /**
    * A lightning bolt, filled rather than stroked.
    *

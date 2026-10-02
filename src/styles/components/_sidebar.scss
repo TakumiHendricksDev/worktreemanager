@@ -17,6 +17,11 @@
   height: 100%;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
+
+  /* While Home's session tree has the column. Hidden, not unmounted — see `Sidebar`'s `hidden`. */
+  &.is-hidden {
+    display: none;
+  }
 }
 
 .c-sidebar__controls {

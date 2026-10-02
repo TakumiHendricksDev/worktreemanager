@@ -29,7 +29,16 @@
    * and every view the pane can show would have had to leave room for it. Beside the traffic
    * lights is where Finder, Mail and Xcode put this button, it is in the same place in both
    * states, and nothing is underneath it.
+   *
+   * # Home sits beside it
+   *
+   * Home spans every project, so it cannot live in anything a project owns — the sidebar, the
+   * worktree bar — and this strip is the one that stays put whichever project is showing. Its count
+   * is the dock badge's: approvals waiting anywhere, which is the reason to go there. While Home is
+   * up the project picker gives way to what Home is about, since the project it names is not what
+   * is on screen.
    */
+  import { fleet } from '../state/fleet.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
@@ -40,6 +49,8 @@
 
   const {
     sidebarCollapsed,
+    home,
+    ontogglehome,
     ontogglesidebar,
     onaddproject,
     onremoveproject,
@@ -47,6 +58,9 @@
     onsettings,
   }: {
     sidebarCollapsed: boolean;
+    /** Whether Home is the view on screen. */
+    home: boolean;
+    ontogglehome: () => void;
     ontogglesidebar: () => void;
     onaddproject: () => void;
     onremoveproject: () => void;
@@ -64,8 +78,19 @@
     document.documentElement.dataset.platform === 'linux' ? null : '⌃⌘S';
 
   const sidebarLabel = $derived(
-    `${sidebarCollapsed ? 'Show' : 'Hide'} worktree sidebar${SIDEBAR_SHORTCUT ? ` (${SIDEBAR_SHORTCUT})` : ''}`,
+    `${sidebarCollapsed ? 'Show' : 'Hide'} ${home ? 'session tree' : 'worktree sidebar'}${SIDEBAR_SHORTCUT ? ` (${SIDEBAR_SHORTCUT})` : ''}`,
   );
+
+  /** The app menu's Go › Home chord, which `lib.rs` binds. None on Linux, which has no app menu. */
+  const HOME_SHORTCUT =
+    document.documentElement.dataset.platform === 'linux' ? null : '⇧⌘H';
+
+  const homeLabel = $derived.by(() => {
+    const waiting = sessions.waitingCount;
+    const what = home ? 'Leave Home' : 'Home';
+    const count = waiting > 0 ? ` — ${waiting} waiting on you` : '';
+    return `${what}${count}${HOME_SHORTCUT ? ` (${HOME_SHORTCUT})` : ''}`;
+  });
 
   const themeIcons: Record<ThemeChoice, IconName> = {
     system: 'theme-system',
@@ -134,33 +159,61 @@
     <Icon name="sidebar" />
   </Button>
 
+  <span class="c-titlebar__home">
+    <Button
+      variant="quiet"
+      icon="md"
+      onclick={ontogglehome}
+      title={homeLabel}
+      ariaLabel={homeLabel}
+      ariaPressed={home}
+    >
+      <Icon name="home" />
+    </Button>
+    {#if sessions.waitingCount > 0}
+      <!-- The number is in the button's name too; this copy is for the eye. -->
+      <span class="c-titlebar__count" aria-hidden="true">{sessions.waitingCount}</span>
+    {/if}
+  </span>
+
   <!--
     Drag region on the container, not just the text: the path may be short, and the empty
     space beside it still has to move the window. Tauri only starts a drag when the event's
     own target carries the attribute, so the picker and its caret are unaffected.
   -->
   <div class="c-titlebar__identity" data-tauri-drag-region>
-    <button
-      class="c-titlebar__project"
-      aria-label="Project: {workspace.activeProject?.name ?? 'none'}"
-      aria-haspopup="menu"
-      onclick={projectMenu}
-      disabled={workspace.projects.length === 0}
-    >
-      <span class="c-titlebar__name">
-        {workspace.activeProject?.name ?? 'No projects yet'}
+    {#if home}
+      <span class="c-titlebar__name c-titlebar__home-name" data-tauri-drag-region>Home</span
+      >
+      <span class="c-titlebar__root" data-tauri-drag-region>
+        {fleet.summary.sessions}
+        {fleet.summary.sessions === 1 ? 'session' : 'sessions'} across {fleet.summary
+          .projects}
+        {fleet.summary.projects === 1 ? 'project' : 'projects'}
       </span>
-      <Icon name="chevron-down" size={12} />
-    </button>
+    {:else}
+      <button
+        class="c-titlebar__project"
+        aria-label="Project: {workspace.activeProject?.name ?? 'none'}"
+        aria-haspopup="menu"
+        onclick={projectMenu}
+        disabled={workspace.projects.length === 0}
+      >
+        <span class="c-titlebar__name">
+          {workspace.activeProject?.name ?? 'No projects yet'}
+        </span>
+        <Icon name="chevron-down" size={12} />
+      </button>
 
-    {#if workspace.activeProject}
-      <!--
+      {#if workspace.activeProject}
+        <!--
         The repository root, for orientation. Not `title`d: it is already the full string,
         and a tooltip repeating what is on screen is noise.
       -->
-      <span class="c-titlebar__root" data-tauri-drag-region>
-        {workspace.activeProject.root}
-      </span>
+        <span class="c-titlebar__root" data-tauri-drag-region>
+          {workspace.activeProject.root}
+        </span>
+      {/if}
     {/if}
   </div>
 

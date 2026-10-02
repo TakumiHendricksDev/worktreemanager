@@ -1,0 +1,109 @@
+/*
+ * The wires in Home's session tree: one line between two rows for every message an agent is
+ * waiting on another to answer, and a fading one for each that just was.
+ *
+ * Three states, each with its own dash as well as its own colour, so a wire never says what it is
+ * by colour alone: dashed and moving while in flight, solid and fading once answered, dotted when it
+ * failed. The chip on the receiving row says it in words.
+ */
+
+/* Over the tree's viewport, taking no pointer events, so the rows beneath stay clickable. */
+.c-wire {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.c-wire__svg {
+  display: block;
+  overflow: visible;
+}
+
+.c-wire__path {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.c-wire__path--in_flight {
+  stroke: var(--accent);
+  stroke-dasharray: 4 4;
+  animation: c-wire-flow 0.9s linear infinite;
+}
+
+.c-wire__path--answered {
+  stroke: var(--info);
+}
+
+.c-wire__path--failed {
+  stroke: var(--danger);
+  stroke-dasharray: 1.5 3;
+}
+
+.c-wire__end--in_flight {
+  fill: var(--accent);
+}
+
+.c-wire__end--answered {
+  fill: var(--info);
+}
+
+.c-wire__end--failed {
+  fill: var(--danger);
+}
+
+/* A settled exchange, drawn once more as it goes. Its `animationend` is what removes it — no timer. */
+.c-wire__path.is-trace,
+.c-wire__end.is-trace {
+  animation: c-wire-fade 1.4s var(--ease) forwards;
+}
+
+/* Scrolled out of view at one end: a way back to it, at the edge it went past. */
+.c-wire__edge {
+  position: absolute;
+  left: 50%;
+  padding: 1px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+  color: var(--fg);
+  font-size: var(--step--2);
+  transform: translateX(-50%);
+}
+
+.c-wire__edge--above {
+  top: 4px;
+}
+
+.c-wire__edge--below {
+  bottom: 4px;
+}
+
+@keyframes c-wire-flow {
+  to {
+    stroke-dashoffset: -8;
+  }
+}
+
+@keyframes c-wire-fade {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+/*
+ * Held still rather than sped up. `generic/_motion.scss` shortens every animation to 0.01ms, which
+ * for an infinite loop is a flicker — the reason `_dot.scss` takes the same exemption. The fade is
+ * left to that rule on purpose: shortened, it still fires `animationend`, so a trace goes at once.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .c-wire__path--in_flight {
+    animation: none;
+  }
+}

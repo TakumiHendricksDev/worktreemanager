@@ -97,6 +97,21 @@ function writeCache(projectId: string, worktrees: Worktree[]): void {
   }
 }
 
+/**
+ * Another project's last known worktrees, for Home's tree.
+ *
+ * Exported wrappers rather than the functions themselves, so the cache keeps one owner: Home reads
+ * what this store last wrote, and writes back what it fetched, which then makes switching to that
+ * project paint its fresh list at once.
+ */
+export function cachedWorktrees(projectId: string): Worktree[] | null {
+  return readCache(projectId);
+}
+
+export function cacheWorktrees(projectId: string, worktrees: Worktree[]): void {
+  writeCache(projectId, worktrees);
+}
+
 /** The cached layout for a project, or null. Shape-checked only as far as rendering needs. */
 function readLayoutCache(projectId: string): SidebarLayout | null {
   try {

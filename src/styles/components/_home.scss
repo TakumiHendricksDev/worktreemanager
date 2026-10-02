@@ -1,0 +1,88 @@
+/*
+ * Home's surface: its own conversation in the main column and, beside it, what it watches —
+ * approvals waiting anywhere, the session being peeked at, and the recent messages between agents.
+ *
+ * Hidden rather than unmounted, like `.c-surface`, for the reason that block gives. Below 880px of
+ * its own width the side column folds into tabs. `HomeSurface` measures that with a
+ * `ResizeObserver` and owns the number, rather than a container query here, because what changes is
+ * the markup — which panels exist — and not only their layout.
+ */
+
+.c-home {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+
+  &.is-hidden {
+    display: none;
+  }
+
+  &.is-narrow {
+    flex-direction: column;
+  }
+}
+
+.c-home__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.c-home__side {
+  display: flex;
+  flex: 0 0 clamp(320px, 36%, 440px);
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+/* Pinned above the tabs, and never allowed to push them off: past this it scrolls on its own. */
+.c-home__inbox {
+  flex: 0 1 auto;
+  max-height: 45%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.c-home__panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.c-home__hint {
+  padding: var(--sp-4);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-home__intro {
+  max-width: 640px;
+  padding: var(--sp-6) var(--sp-5);
+}
+
+.c-home__title {
+  margin-bottom: var(--sp-3);
+  font-size: var(--step-2);
+}
+
+.c-home__prose {
+  margin-bottom: var(--sp-3);
+  color: var(--fg-muted);
+  line-height: 1.5;
+}

@@ -999,6 +999,30 @@ export interface SpawnedSession {
 }
 
 /**
+ * One prompt one agent session sent another, and what came of it. Mirrors `messages::Exchange`.
+ *
+ * Announced on `agent:message` when it is sent and again when it settles, as the whole record both
+ * times, so the window replaces by `id` rather than applying deltas. `from` and `to` are backend
+ * session ids; `from` is null only for a sender that had not finished starting.
+ */
+export interface AgentExchange {
+  id: number;
+  run: string | null;
+  from: string | null;
+  to: string;
+  via: 'ask_agent' | 'spawn_agents' | 'open_session' | 'message_session';
+  /** The start of the prompt. */
+  prompt: string;
+  /** The start of the reply, once there is one. */
+  reply: string | null;
+  error: string | null;
+  state: 'in_flight' | 'answered' | 'failed';
+  /** Unix milliseconds. */
+  sentAt: number;
+  settledAt: number | null;
+}
+
+/**
  * One browser pane, as Rust sees it.
  *
  * The reply to `openBrowser`, a row of `listBrowsers`, and the payload of both `browser:state` and

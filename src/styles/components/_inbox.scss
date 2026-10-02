@@ -1,0 +1,96 @@
+/*
+ * Home's Needs-you list: every approval waiting anywhere, one open at a time.
+ *
+ * A row is a toggle that says what is being asked and whose; the open one shows the ordinary
+ * approval card beneath it, so the decision is made on the same card a pane would have shown.
+ */
+
+.c-inbox {
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-inbox__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--sp-2);
+  color: var(--fg);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-inbox__count {
+  padding: 0 6px;
+  border: 1.5px solid var(--warn);
+  border-radius: 999px;
+  font-size: var(--step--2);
+}
+
+.c-inbox__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-inbox__item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+
+  &.is-open {
+    border-color: var(--warn-line);
+  }
+}
+
+.c-inbox__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  padding: 4px 4px 4px 0;
+}
+
+.c-inbox__toggle {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: auto 1fr;
+  column-gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--fg);
+  font-size: var(--step--1);
+  text-align: left;
+}
+
+.c-inbox__what {
+  font-weight: 600;
+}
+
+.c-inbox__line,
+.c-inbox__who {
+  grid-column: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-inbox__line {
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+}
+
+.c-inbox__who {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-inbox__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.c-inbox__card {
+  padding: 0 var(--sp-2) var(--sp-2);
+}

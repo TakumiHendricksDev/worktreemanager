@@ -981,6 +981,48 @@ blocked session remains discoverable without taxing every scroll position. Focus
 only when the reader was already at the transcript tail, and a resolved request leaves a compact
 “answered” receipt without retaining a possibly secret answer.
 
+**Home is a view with a sentinel, not a worktree.** Home is the one place that spans projects: a
+tree of every agent session, the approvals waiting anywhere, a peek at one session, and what agents
+have lately said to each other. It is a fifth value of the main view rather than a pseudo-worktree in
+the sidebar, and the view moved out of `App.svelte` into `view.svelte.ts` because `attention` has to
+read it: with Home up, *no* worktree is on screen — the selected one included, which until then was
+on screen by definition — so a turn finishing there is news. Anything Home owns is filed under one
+word, `@home`, as both project and worktree id. A nullable `projectId` would have spread through
+every pane record, toast target and notification click; one string no real id can be keeps them all
+`string` and makes "is this Home?" a comparison. The last view, Home or not, is remembered; nothing
+stored opens the worktree view, so an upgrade lands where it always did.
+
+**The tree replaces the sidebar rather than sitting beside it.** The sidebar lists one project's
+worktrees and the tree lists every project's, and two trees of the same checkouts side by side would
+be one too many — at the 860px minimum window there is no room for both anyway. The sidebar stays
+mounted, hidden, so its scroll and folds come back as they were. The tree follows the sidebar's fold
+rule for the same reason: a folded project still shows any session under it that needs you or
+failed. It never reads a transcript, only the structural fields `statuses` reads, because it
+re-renders on every change to every pane. Other projects' listings come from the worktree store's
+cache and are fetched one project at a time when Home is shown, on focus and on ⌘R — the refresh
+policy above, applied to more projects, and still no timer.
+
+**A peek never mounts a second `SessionPane`.** The peeked session's pane is already mounted, hidden,
+in its worktree, and a `SessionPane` holds state of its own — the draft, the scroll, a focus effect,
+a drop listener — so a second copy would mean two composers that disagree. Peek draws what lives on
+the *pane*: the event log, the approvals, the queue. A message written there goes through the same
+store calls, so it is in that pane's queue when you get there. The Needs-you list stacks every
+session's approvals oldest first, which is the one place arrival order across panes matters, so a
+`PendingApproval` now carries an arrival counter — a counter, not a time, because replay preserves
+order and no clock is needed.
+
+**Wires are drawn in viewport space, from a log Rust keeps.** When one session hands work to another,
+the prompt and the answer each appear in their own transcript and nothing connected them. Rust now
+records each exchange — prompt, reply or failure, sender, receiver — in a bounded in-memory ring
+(`messages.rs`), announces the whole record when it starts and when it settles, and serves the ring
+to a reloaded window. The turn waiter that settles them (`turns.rs`) replaced the sink `ask_agent`
+used to wrap around its child, because a sink is fixed when a session opens and Home has to wait on
+sessions it did not open; a waiter that gives up still settles its exchange when the turn finally
+ends, so a slow child's wire does not stay drawn in flight. The wires are an SVG over the tree's
+scroll viewport, measured from the rows whenever anything moves, so an end that has scrolled away is
+clamped to the edge with a way back. They are decorative: the Activity list and a chip on the
+receiving row say the same in words, and under reduced motion they hold still.
+
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 
 **All styles are global, in `src/styles/`. No component has a `<style>` block.** `src/main.ts` imports

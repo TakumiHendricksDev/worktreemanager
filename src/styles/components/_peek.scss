@@ -1,0 +1,108 @@
+/*
+ * One session seen from Home: its header, its transcript, its oldest approval and a small box to
+ * write to it. The transcript is the ordinary `AgentTranscript`, so it looks as it does in its pane.
+ */
+
+.c-peek {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.c-peek__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-peek__head > .c-dot {
+  flex: 0 0 auto;
+  margin-top: 6px;
+}
+
+.c-peek__titles {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.c-peek__title {
+  overflow: hidden;
+  font-size: var(--step--1);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-peek__where {
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-peek__status {
+  color: var(--fg);
+}
+
+.c-peek__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: var(--sp-1);
+}
+
+.c-peek__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--sp-2) var(--sp-3);
+  overflow-y: auto;
+}
+
+.c-peek__empty {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-peek__approval {
+  margin-top: var(--sp-2);
+}
+
+.c-peek__state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-peek__composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.c-peek__input {
+  flex: 1 1 auto;
+  min-height: 44px;
+  max-height: 160px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--step--1);
+  resize: vertical;
+
+  &:focus-visible {
+    border-color: var(--border-focus);
+  }
+}

@@ -30,7 +30,9 @@
 
 import { commands } from '../ipc/commands';
 import { isWtmError } from '../ipc/types';
+import { isHome } from '../home';
 import { inPaneWindow } from '../window-role';
+import { view } from './view.svelte';
 import { workspace } from './workspace.svelte';
 
 /**
@@ -217,8 +219,18 @@ class Attention {
     else if (this.windowFront === paneId) this.windowFront = null;
   }
 
-  /** Whether this worktree's panes are not the ones on screen. */
-  offScreen(worktreeId: string): boolean {
+  /**
+   * Whether this worktree's panes — or, given one, this pane — are not what is on screen.
+   *
+   * Outside Home, every pane in the selected worktree is on screen, because the surface hides by
+   * worktree rather than by pane. Inside Home no worktree is, the selected one included: what Home
+   * shows is its own conversation and, at most, the one pane it is peeking at. So a turn finishing
+   * in the selected worktree while Home is up is news, which is exactly what Home's tree is for.
+   */
+  offScreen(worktreeId: string, paneId?: string): boolean {
+    if (view.home) {
+      return !isHome(worktreeId) && (paneId === undefined || paneId !== view.peeked);
+    }
     return workspace.selectedWorktreeId !== worktreeId;
   }
 
@@ -247,13 +259,15 @@ class Attention {
     // A pane window hears every session's events and records its own pane's, and telling the user
     // is the main window's job alone: two windows judging the same event would post it twice.
     if (inPaneWindow) return false;
-    const hidden = !pane.ownWindow && this.offScreen(pane.worktreeId);
+    const hidden = !pane.ownWindow && this.offScreen(pane.worktreeId, pane.id);
 
     if (!this.inFront && this.windowFront === null) {
       if (this.pref === 'on') this.notify(what, pane);
       // Withheld rather than lost: `askIfEarned` turns this into one question on the next focus.
       else if (this.pref === 'ask') this.earned = true;
-    } else if (hidden) {
+    } else if (hidden && !view.home) {
+      // No toast while Home is up: its tree and its Needs-you list are the summary a toast stands
+      // in for, already on screen, and a card over them would say the same thing twice.
       this.toast(what, pane);
     }
 
@@ -265,6 +279,12 @@ class Attention {
     const next = this.toasts.filter((t) => t.target?.worktreeId !== worktreeId);
     // Guarded, because this runs on every selection change and an unchanged array assigned anyway
     // would signal every reader for nothing.
+    if (next.length !== this.toasts.length) this.toasts = next;
+  }
+
+  /** Drop one pane's toast — Home peeked at it, which is looking at it. */
+  clearPane(paneId: string): void {
+    const next = this.toasts.filter((t) => t.target?.paneId !== paneId);
     if (next.length !== this.toasts.length) this.toasts = next;
   }
 
@@ -359,8 +379,9 @@ class Attention {
    * they are a word the user has seen.
    */
   private words(what: Announcement, pane: Announceable): { title: string; detail: string } {
-    const where =
-      workspace.worktrees.find((w) => w.id === pane.worktreeId)?.title ?? 'A worktree';
+    const where = isHome(pane.worktreeId)
+      ? 'Home'
+      : (workspace.worktrees.find((w) => w.id === pane.worktreeId)?.title ?? 'A worktree');
     const who = pane.provider ?? 'A shell';
     if (what === 'approval') {
       return { title: `${where} needs you`, detail: `${who} is waiting on an approval.` };

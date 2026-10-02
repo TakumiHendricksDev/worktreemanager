@@ -1,0 +1,279 @@
+/**
+ * What Home shows: every project's worktrees, every agent session in them, the approvals waiting on
+ * you, and the messages agents are passing to each other.
+ *
+ * # Read, never polled
+ *
+ * Home is the one view that spans projects, and the worktree store only ever lists the active one.
+ * Every other project's listing is read from the cache that store keeps and then fetched — one
+ * project at a time, when Home is shown, when the window regains focus while it is, and on ⌘R. That
+ * is the refresh policy the rest of the app already follows (ARCHITECTURE §8), applied to more
+ * projects; there is still no timer.
+ *
+ * # It never reads a transcript
+ *
+ * The tree re-renders on every change to every pane, so it reads only the structural fields — the
+ * same rule `sessions.statuses` states. The one transcript Home draws is the peeked one, and that
+ * component reads it directly.
+ */
+
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+
+import { anchorOf, arrangeFleet, HOME_KEY, sessionKey, type FleetOnly } from '../fleet';
+import type { FleetSession } from '../fleet';
+import { isHome } from '../home';
+import { commands } from '../ipc/commands';
+import type { AgentExchange, AgentOption, Worktree } from '../ipc/types';
+import { sessions, type Pane, type PendingApproval } from './sessions.svelte';
+import { view } from './view.svelte';
+import { cachedWorktrees, cacheWorktrees, workspace } from './workspace.svelte';
+
+/** How many exchanges the window keeps. Rust keeps more; the Activity list needs only the recent. */
+const MAX_MESSAGES = 200;
+
+/** How many settled exchanges may still be fading out of the tree at once. */
+const MAX_TRACES = 8;
+
+const FOLDS_KEY = 'wtm.fleet.folds';
+
+function readFolds(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(FOLDS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** A pending approval and the pane it belongs to, for the Needs-you list. */
+export interface Waiting {
+  pane: Pane;
+  approval: PendingApproval;
+}
+
+/** A line drawn between two rows of the tree, by row key. */
+export interface Wire {
+  id: number;
+  from: string;
+  to: string;
+  state: AgentExchange['state'];
+  /** Settled, and drawn once more as it fades. */
+  trace: boolean;
+}
+
+/** Whether a pane is one the tree lists: an agent, not a side question, not Home itself. */
+function listed(pane: Pane): boolean {
+  return pane.kind.kind === 'agent' && pane.sideOf === null && !isHome(pane.worktreeId);
+}
+
+class Fleet {
+  /** Each project's last known worktrees. The active project's comes from `workspace` instead. */
+  listings = $state<Record<string, Worktree[]>>({});
+  /** Each project's agents, for a worktree row's "+" menu. Fetched on first use. */
+  offered = $state<Record<string, AgentOption[]>>({});
+  messages = $state<AgentExchange[]>([]);
+  /** Exchanges that have settled and are still drawn, fading. Dropped by the wire's animation. */
+  traces = $state<number[]>([]);
+  folds = $state<Record<string, boolean>>(readFolds());
+  query = $state('');
+  only = $state<FleetOnly | null>(null);
+
+  /** One refresh at a time; a second request while one runs waits for it rather than racing. */
+  private refreshing: Promise<void> | null = null;
+
+  /** Subscribe to the message log and read what it already holds. Returns teardown. */
+  async init(): Promise<UnlistenFn> {
+    const off = await listen<AgentExchange>('agent:message', (event) => {
+      this.upsert(event.payload);
+    });
+    try {
+      const kept = await commands.agentMessages();
+      // Merged rather than assigned: an exchange can have been announced between subscribing and
+      // reading, and the record the event carried is at least as new as the one in the snapshot.
+      for (const exchange of kept) {
+        if (!this.messages.some((m) => m.id === exchange.id)) this.upsert(exchange, false);
+      }
+    } catch {
+      /* Nothing to draw yet; live exchanges still arrive. */
+    }
+    return off;
+  }
+
+  private upsert(exchange: AgentExchange, live = true): void {
+    const at = this.messages.findIndex((m) => m.id === exchange.id);
+    const next =
+      at < 0
+        ? [...this.messages, exchange].sort((a, b) => a.id - b.id)
+        : this.messages.map((m) => (m.id === exchange.id ? exchange : m));
+    this.messages = next.slice(Math.max(0, next.length - MAX_MESSAGES));
+    // Only a settlement seen live leaves a trace: a reload drawing every recent exchange fading at
+    // once would be a flash of wires about things that ended minutes ago.
+    if (live && exchange.state !== 'in_flight' && !this.traces.includes(exchange.id)) {
+      this.traces = [...this.traces, exchange.id].slice(-MAX_TRACES);
+    }
+  }
+
+  /** The wire's fade finished. */
+  dropTrace(id: number): void {
+    if (this.traces.includes(id)) this.traces = this.traces.filter((t) => t !== id);
+  }
+
+  /** Fetch every usable project's listing, one at a time. Safe to call as often as Home likes. */
+  refresh(): Promise<void> {
+    this.refreshing ??= this.fetchAll().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  private async fetchAll(): Promise<void> {
+    for (const project of workspace.projects) {
+      if (!project.usable || project.id === workspace.activeProjectId) continue;
+      if (!(project.id in this.listings)) {
+        const cached = cachedWorktrees(project.id);
+        if (cached) this.listings = { ...this.listings, [project.id]: cached };
+      }
+      try {
+        const list = await commands.listWorktrees(project.id);
+        // Assigned only when it changed, so a refresh that found nothing new signals no reader —
+        // the same rule `patch` in the sessions store explains.
+        if (JSON.stringify(this.listings[project.id]) !== JSON.stringify(list)) {
+          this.listings = { ...this.listings, [project.id]: list };
+          cacheWorktrees(project.id, list);
+        }
+      } catch {
+        /* The cached list stands; the project's own view will say what went wrong. */
+      }
+    }
+  }
+
+  /** A project's agents, fetched once and kept until the next focus clears them. */
+  async agentsFor(projectId: string): Promise<AgentOption[]> {
+    const known = this.offered[projectId];
+    if (known) return known;
+    const options = await commands.listAgents(projectId);
+    this.offered = { ...this.offered, [projectId]: options };
+    return options;
+  }
+
+  /** Forget fetched agent lists — a repository's `wtm.toml` may have changed while away. */
+  forgetAgents(): void {
+    if (Object.keys(this.offered).length > 0) this.offered = {};
+  }
+
+  /** A project's worktrees as Home knows them. */
+  worktreesOf(projectId: string): Worktree[] | undefined {
+    return projectId === workspace.activeProjectId
+      ? workspace.worktrees
+      : this.listings[projectId];
+  }
+
+  /** Every agent session the tree lists, as structural records. */
+  sessions = $derived.by((): FleetSession[] =>
+    sessions.panes.filter(listed).map((pane) => ({
+      id: pane.id,
+      projectId: pane.projectId,
+      worktreeId: pane.worktreeId,
+      session: pane.session,
+      parentSession: pane.parentSession,
+      status: sessions.statusOfPane(pane),
+      title: pane.agentTitle ?? pane.firstPrompt ?? 'No prompt yet',
+      agent: sessions.labelOf(pane),
+      model: pane.model,
+      openedFromHome: false,
+    })),
+  );
+
+  arrangement = $derived.by(() => {
+    const worktrees: Record<string, { id: string; title: string; subtitle: string }[]> = {};
+    for (const project of workspace.projects) {
+      const list = this.worktreesOf(project.id);
+      if (list) worktrees[project.id] = list;
+    }
+    return arrangeFleet(
+      {
+        projects: workspace.projects.map((p) => ({
+          id: p.id,
+          name: p.name,
+          usable: p.usable,
+        })),
+        worktrees,
+        sessions: this.sessions,
+      },
+      { folds: this.folds, peeked: view.peeked, query: this.query, only: this.only },
+    );
+  });
+
+  /** Every pending approval outside Home's own pane, oldest first. */
+  needsYou = $derived.by((): Waiting[] =>
+    sessions.panes
+      .filter((pane) => listed(pane) && pane.ended === null)
+      .flatMap((pane) => pane.approvals.map((approval) => ({ pane, approval })))
+      .sort((a, b) => a.approval.order - b.approval.order),
+  );
+
+  /** How many agent sessions there are and across how many projects, for the title bar. */
+  summary = $derived.by(() => {
+    const listedPanes = sessions.panes.filter(listed);
+    return {
+      sessions: listedPanes.length,
+      projects: new Set(listedPanes.map((pane) => pane.projectId)).size,
+    };
+  });
+
+  /** The rows that end a wire for a backend session: Home's own row for Home, else its pane. */
+  private keyOf(session: string | null): string | null {
+    const pane = sessions.paneBySession(session);
+    if (!pane) return null;
+    if (isHome(pane.worktreeId)) return HOME_KEY;
+    return sessionKey(pane.id);
+  }
+
+  /** What to draw: every exchange in flight, and the few that just settled. */
+  wires = $derived.by((): Wire[] => {
+    const out: Wire[] = [];
+    for (const exchange of this.messages) {
+      const trace = this.traces.includes(exchange.id);
+      if (exchange.state !== 'in_flight' && !trace) continue;
+      const fromKey = this.keyOf(exchange.from);
+      const toKey = this.keyOf(exchange.to);
+      if (fromKey === null || toKey === null) continue;
+      const from = anchorOf(this.arrangement, fromKey);
+      const to = anchorOf(this.arrangement, toKey);
+      if (from === null || to === null || from === to) continue;
+      out.push({ id: exchange.id, from, to, state: exchange.state, trace });
+    }
+    return out;
+  });
+
+  /** The newest exchange still waiting on a reply from this pane, for its row's chip. */
+  inboundTo(paneId: string): AgentExchange | null {
+    const pane = sessions.paneById(paneId);
+    if (!pane?.session) return null;
+    for (let index = this.messages.length - 1; index >= 0; index -= 1) {
+      const exchange = this.messages[index]!;
+      if (exchange.to === pane.session && exchange.state === 'in_flight') return exchange;
+    }
+    return null;
+  }
+
+  /** A short name for an exchange's end, as Activity and the chips say it. */
+  nameOf(session: string | null): string {
+    const pane = sessions.paneBySession(session);
+    if (!pane) return session === null ? 'An agent' : 'A closed session';
+    if (isHome(pane.worktreeId)) return 'Home';
+    return pane.agentTitle ?? sessions.labelOf(pane);
+  }
+
+  toggle(key: string, expanded: boolean): void {
+    this.folds = { ...this.folds, [key]: expanded };
+    try {
+      localStorage.setItem(FOLDS_KEY, JSON.stringify(this.folds));
+    } catch {
+      /* The fold still holds for this run. */
+    }
+  }
+}
+
+export const fleet = new Fleet();

@@ -18,6 +18,7 @@ import type {
   DatabaseSession,
   Action,
   AgentAttachment,
+  AgentExchange,
   AgentOption,
   AgentSession,
   BackgroundTask,
@@ -416,6 +417,9 @@ export const commands = {
 
   /** Everything a live session has already said, so a re-attached pane is not blank. */
   agentReplay: (session: string) => invoke<SeqEvent[]>('agent_replay', { session }),
+
+  /** What agents have recently said to each other, oldest first. Home draws its wires from it. */
+  agentMessages: () => invoke<AgentExchange[]>('agent_messages'),
 
   /** End a session and forget it. */
   closeAgentSession: (session: string) => invoke<void>('close_agent_session', { session }),
