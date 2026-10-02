@@ -471,9 +471,7 @@ fn target(app: &App, home: &HomeCaller, args: &Value) -> Result<(String, AgentOv
         .get("session")
         .and_then(Value::as_str)
         .ok_or("`session` is required — a handle from `list_all_sessions`, such as `s2`")?;
-    let session = app.home.session_for(&home.session, handle).ok_or_else(|| {
-        format!("there is no session `{handle}`; call `list_all_sessions` for the current handles")
-    })?;
+    let session = app.session_for(&home.session, handle)?;
     let overview = app
         .overview_of(&session)
         .ok_or_else(|| format!("{handle} is no longer running"))?;
@@ -751,7 +749,7 @@ pub fn list_worktrees(app: &App, home: &HomeCaller, args: &Value) -> Result<Stri
                 .map(|s| {
                     let mut line = format!(
                         "{} · {} · {}",
-                        app.home.handle_for(&home.session, &s.session),
+                        app.handle_for(&home.session, &s.session),
                         agent_label(&s.provider),
                         status_text(s)
                     );
@@ -817,7 +815,7 @@ fn list_all_sessions(app: &App, home: &HomeCaller, args: &Value) -> String {
             .map_or(worktree.clone(), |n| n.to_string_lossy().into_owned());
         let _ = writeln!(text, "## {} › {dir}", inert(name));
         for session in list {
-            let handle = app.home.handle_for(&home.session, &session.session);
+            let handle = app.handle_for(&home.session, &session.session);
             let mut line = format!("- {handle} · {}", agent_label(&session.provider));
             if let Some(model) = &session.model {
                 let _ = write!(line, " · {model}");
@@ -832,7 +830,7 @@ fn list_all_sessions(app: &App, home: &HomeCaller, args: &Value) -> String {
             if app.home.opener_of(&session.session).as_deref() == Some(home.session.as_str()) {
                 line.push_str(" · opened by you");
             } else if let Some(parent) = app.handoff.parent_of(&session.session) {
-                let parent = app.home.handle_for(&home.session, &parent);
+                let parent = app.handle_for(&home.session, &parent);
                 let _ = write!(line, " · delegated by {parent}");
             }
             text.push_str(&line);
@@ -866,9 +864,7 @@ fn in_flight(app: &App, home: &HomeCaller) -> String {
         .delegations(&home.session)
         .iter()
         .map(|delegation| {
-            let handle = app
-                .home
-                .handle_for(&home.session, &delegation.target.session);
+            let handle = app.handle_for(&home.session, &delegation.target.session);
             let state = app
                 .overview_of(&delegation.target.session)
                 .map_or_else(|| "closing".to_owned(), |o| status_text(&o));
@@ -1262,7 +1258,7 @@ fn open_session(
     if let Some(title) = &title {
         app.title_live_session(session.as_str(), title);
     }
-    let who = app.home.handle_for(&home.session, session.as_str());
+    let who = app.handle_for(&home.session, session.as_str());
     let opened = format!(
         "Opened {who} ({}) as a pane in {} › {}.",
         agent_label(agent),
@@ -1329,7 +1325,7 @@ fn close_sessions(handle: &AppHandle, app: &Arc<App>, home: &HomeCaller, args: &
     let named: Option<Vec<String>> = args.get("sessions").and_then(Value::as_array).map(|list| {
         list.iter()
             .filter_map(Value::as_str)
-            .filter_map(|h| app.home.session_for(&home.session, h))
+            .filter_map(|h| app.session_for(&home.session, h).ok())
             .collect()
     });
     let mine = app.home.opened(&home.session);
@@ -1342,7 +1338,7 @@ fn close_sessions(handle: &AppHandle, app: &Arc<App>, home: &HomeCaller, args: &
         {
             continue;
         }
-        let who = app.home.handle_for(&home.session, &session);
+        let who = app.handle_for(&home.session, &session);
         let Some(overview) = app.overview_of(&session) else {
             continue;
         };
@@ -2538,7 +2534,7 @@ fn removal(app: &App, home: &HomeCaller, args: &Value) -> Result<Removal, String
         .map(|session| {
             format!(
                 "{} ({}, {})",
-                app.home.handle_for(&home.session, &session.session),
+                app.handle_for(&home.session, &session.session),
                 agent_label(&session.provider),
                 session.status.as_str()
             )

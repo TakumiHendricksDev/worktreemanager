@@ -4,6 +4,8 @@
 //!   `~/Library/Application Support`).
 //! - [`user`] — the app config: registered repositories, UI preferences, exec settings.
 //! - [`sidebar`] — how a project's worktrees are ordered and grouped in the sidebar.
+//! - [`home_handles`] — the session handles each Home conversation has given out, kept so a
+//!   handle names one session for the whole conversation.
 //! - [`layers`] — the four-layer precedence chain and the per-key TOML merge.
 //! - [`trust`] — approval bound to a **content hash**, so editing a config re-arms the
 //!   prompt. A `wtm.toml` declares shell commands and lives inside a repository, which
@@ -23,6 +25,7 @@
 
 pub mod briefs;
 pub mod fs;
+pub mod home_handles;
 pub mod layers;
 pub mod paths;
 pub mod sessions;
@@ -34,6 +37,7 @@ pub mod validate;
 
 pub use briefs::{Brief, BriefMeta};
 pub use fs::{RealFileStore, absolutize, parse_dotenv, unique_temp_path};
+pub use home_handles::{Conversation, HandleRecord, HandleStore, HomeHandles};
 pub use layers::{BUILT_IN_DEFAULTS, LOCAL_FILENAME, LayerPaths, REPO_FILENAME};
 pub use paths::AppPaths;
 pub use sessions::{SessionRecord, SessionStore};

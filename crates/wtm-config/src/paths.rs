@@ -38,6 +38,9 @@ pub const SESSIONS_FILENAME: &str = "sessions.toml";
 /// along with preferences.
 pub const TRUST_FILENAME: &str = "trust.toml";
 
+/// The handles Home conversations have given out. Beside the resume list, for its reasons.
+pub const HANDLES_FILENAME: &str = "home_handles.toml";
+
 /// The Home agent's working directory, under the data root.
 pub const HOME_DIRNAME: &str = "home";
 
@@ -48,6 +51,8 @@ pub struct AppPaths {
     pub config_file: PathBuf,
     pub trust_file: PathBuf,
     pub sessions_file: PathBuf,
+    /// See [`HANDLES_FILENAME`].
+    pub handles_file: PathBuf,
     /// Where the Home agent runs: a session outside every repository still needs a directory.
     ///
     /// # Not under `config_dir`
@@ -96,6 +101,7 @@ impl AppPaths {
             config_file: config_dir.join(CONFIG_FILENAME),
             trust_file: config_dir.join(TRUST_FILENAME),
             sessions_file: config_dir.join(SESSIONS_FILENAME),
+            handles_file: config_dir.join(HANDLES_FILENAME),
             home_dir: data_dir.join(HOME_DIRNAME),
         }
     }

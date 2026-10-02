@@ -18,9 +18,11 @@
 //!
 //! Home's tools have to name sessions, which §6b's tools deliberately never do. They name them by
 //! short handles (`s1`, `s2`) minted per Home conversation in the order Home first saw each session,
-//! never reused, and meaningless to any other caller. A handle is re-checked against the live
-//! registry every time it is used, so one for a session that has since closed says so rather than
-//! resolving to something new.
+//! and meaningless to any other caller. A handle is bound to the session's *conversation* and saved
+//! under Home's (`wtm_config::home_handles`), because the Home conversation quotes its handles and
+//! outlives a quit: a session restored with that conversation answers to its old handle, one that
+//! did not come back names nobody and the tools say so, and no number is ever given out twice. Each
+//! use re-checks the live registry, so a handle never resolves to anything but its own session.
 //!
 //! # Home's children are not delegation children
 //!
@@ -50,6 +52,8 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::Emitter as _;
 
+use wtm_config::{Conversation, HandleRecord, HomeHandles};
+
 use crate::app::{App, SessionScope};
 use crate::commands::{Reply, SessionOptions};
 use crate::handoff;
@@ -68,11 +72,83 @@ pub const HOME_TOOLS_ENV: &str = "WTM_HOME_TOOLS";
 /// fill the app's process cap for every worktree at once.
 pub const MAX_OPENED: usize = 20;
 
+/// Whom a handle names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Named {
+    /// A session whose conversation its provider had not named yet. Good for this run only, and
+    /// bound to the conversation as soon as it is known (`Registry::bind_conversation`).
+    Session(String),
+    /// A conversation, and so whichever session holds it now: the one it was given to, or the one
+    /// that resumed it after a quit.
+    Conversation(Conversation),
+}
+
+/// What a handle turned out to be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lookup {
+    Named(Named),
+    /// Given out once, and naming nothing now: its session's run ended before its conversation
+    /// was known, or the entry was trimmed. Never given out again.
+    Retired,
+    /// Never given out in this Home conversation.
+    Unknown,
+}
+
+/// One Home session's handles. See `wtm_config::home_handles` for why they outlive it.
 #[derive(Debug, Default)]
 struct Handles {
+    /// The Home conversation these belong to, once its provider has named it: what they are saved
+    /// under, and what a resumed Home finds them by.
+    home: Option<Conversation>,
+    /// The highest number issued. Only grows.
     next: u32,
-    to_session: BTreeMap<String, String>,
-    to_handle: BTreeMap<String, String>,
+    /// In the order they were given out.
+    named: Vec<(String, Named)>,
+}
+
+impl Handles {
+    fn issued(&self, handle: &str) -> bool {
+        handle
+            .strip_prefix('s')
+            .and_then(|n| n.parse::<u32>().ok())
+            .is_some_and(|n| n >= 1 && n <= self.next)
+    }
+}
+
+/// The highest handle number written anywhere in `text`, or 0.
+///
+/// What a Home conversation's own transcript says it has used: a handle is quoted in every tool
+/// result and reply that names a session. Read when a Home session's handles are first loaded, so
+/// numbering starts past it even when nothing was saved — the first launch of a build that saves
+/// them, or a Home conversation too old to be kept — and a number the conversation has already
+/// used is never given to something else. A word that only looks like one (`s3` in prose) costs a
+/// skipped number, which is harmless. Past 99999 is not a handle.
+#[must_use]
+pub fn highest_handle(text: &str) -> u32 {
+    let bytes = text.as_bytes();
+    let mut highest = 0;
+    for (at, _) in text.match_indices('s') {
+        let before = at.checked_sub(1).map(|b| bytes[b]);
+        if before.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            continue;
+        }
+        let digits: &str = {
+            let rest = &text[at + 1..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
+            &rest[..end]
+        };
+        let after = bytes.get(at + 1 + digits.len());
+        if digits.is_empty()
+            || digits.len() > 5
+            || after.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        {
+            continue;
+        }
+        highest = highest.max(digits.parse().unwrap_or(0));
+    }
+    highest
 }
 
 #[derive(Debug, Default)]
@@ -264,32 +340,151 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// The handle a Home conversation uses for a session, minting one on first sight.
-    pub fn handle_for(&self, home: &str, session: &str) -> String {
+    /// Whether a Home session's handles are in memory yet. See `App::handle_for`.
+    #[must_use]
+    pub fn has_handles(&self, home: &str) -> bool {
+        self.state.lock().handles.contains_key(home)
+    }
+
+    /// Put a Home session's handles in place: what was saved for its conversation, numbered past
+    /// `floor` too — the highest its transcript mentions (see [`highest_handle`]).
+    pub fn install_handles(
+        &self,
+        home: &str,
+        conversation: Option<Conversation>,
+        saved: Option<&HomeHandles>,
+        floor: u32,
+    ) {
+        let named = saved
+            .map(|saved| {
+                saved
+                    .handles
+                    .iter()
+                    .map(|record| (record.handle.clone(), Named::Conversation(record.named())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let next = saved.map_or(0, |saved| saved.next).max(floor);
+        self.state.lock().handles.insert(
+            home.to_owned(),
+            Handles {
+                home: conversation,
+                next,
+                named,
+            },
+        );
+    }
+
+    /// Note which conversation a Home session's handles belong to, once its provider has said.
+    /// True when that is news, so they need saving.
+    pub fn note_home_conversation(&self, home: &str, conversation: &Conversation) -> bool {
+        let mut state = self.state.lock();
+        let Some(handles) = state.handles.get_mut(home) else {
+            return false;
+        };
+        if handles.home.is_some() {
+            return false;
+        }
+        handles.home = Some(conversation.clone());
+        true
+    }
+
+    /// The handle a Home conversation uses for a session, minting one on first sight, and whether
+    /// anything changed that needs saving.
+    ///
+    /// Found by the session or by the conversation it holds, so a session that resumed a
+    /// conversation answers to the handle that conversation was given. A session-bound handle is
+    /// bound to the conversation here if it is known by now.
+    pub fn handle_for(
+        &self,
+        home: &str,
+        session: &str,
+        conversation: Option<&Conversation>,
+    ) -> (String, bool) {
         let mut state = self.state.lock();
         let handles = state.handles.entry(home.to_owned()).or_default();
-        if let Some(handle) = handles.to_handle.get(session) {
-            return handle.clone();
+        let found = handles.named.iter_mut().find(|(_, named)| match named {
+            Named::Session(s) => s == session,
+            Named::Conversation(c) => Some(c) == conversation,
+        });
+        if let Some((handle, named)) = found {
+            let handle = handle.clone();
+            if let (Named::Session(_), Some(conversation)) = (&named, conversation) {
+                *named = Named::Conversation(conversation.clone());
+                return (handle, true);
+            }
+            return (handle, false);
         }
         handles.next += 1;
         let handle = format!("s{}", handles.next);
-        handles
-            .to_session
-            .insert(handle.clone(), session.to_owned());
-        handles.to_handle.insert(session.to_owned(), handle.clone());
-        handle
+        let named = conversation.map_or_else(
+            || Named::Session(session.to_owned()),
+            |c| Named::Conversation(c.clone()),
+        );
+        handles.named.push((handle.clone(), named));
+        (handle, true)
     }
 
-    /// The session behind a handle, for this Home conversation only. Liveness is the caller's check.
+    /// What a handle names in one Home conversation. Whether it is running is the caller's check.
     #[must_use]
-    pub fn session_for(&self, home: &str, handle: &str) -> Option<String> {
-        self.state
-            .lock()
-            .handles
-            .get(home)?
-            .to_session
-            .get(handle.trim())
-            .cloned()
+    pub fn lookup(&self, home: &str, handle: &str) -> Lookup {
+        let state = self.state.lock();
+        let Some(handles) = state.handles.get(home) else {
+            return Lookup::Unknown;
+        };
+        let handle = handle.trim();
+        if let Some((_, named)) = handles.named.iter().find(|(h, _)| h == handle) {
+            return Lookup::Named(named.clone());
+        }
+        if handles.issued(handle) {
+            Lookup::Retired
+        } else {
+            Lookup::Unknown
+        }
+    }
+
+    /// A session's provider has named its conversation: every handle given to the session is bound
+    /// to that conversation from now on. The Home sessions whose handles changed, to be saved.
+    pub fn bind_conversation(&self, session: &str, conversation: &Conversation) -> Vec<String> {
+        let mut state = self.state.lock();
+        let mut changed = Vec::new();
+        for (home, handles) in &mut state.handles {
+            for (_, named) in &mut handles.named {
+                if matches!(named, Named::Session(s) if s == session) {
+                    *named = Named::Conversation(conversation.clone());
+                    if !changed.contains(home) {
+                        changed.push(home.clone());
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    /// What is kept of a Home session's handles across a quit: its conversation's number and every
+    /// handle bound to a conversation. `None` until the Home conversation itself is known.
+    #[must_use]
+    pub fn saved_form(&self, home: &str) -> Option<HomeHandles> {
+        let state = self.state.lock();
+        let handles = state.handles.get(home)?;
+        let conversation = handles.home.as_ref()?;
+        Some(HomeHandles {
+            provider: conversation.provider.clone(),
+            conversation: conversation.id.clone(),
+            next: handles.next,
+            handles: handles
+                .named
+                .iter()
+                .filter_map(|(handle, named)| match named {
+                    Named::Conversation(c) => Some(HandleRecord {
+                        handle: handle.clone(),
+                        provider: c.provider.clone(),
+                        conversation: c.id.clone(),
+                    }),
+                    Named::Session(_) => None,
+                })
+                .collect(),
+        })
     }
 
     pub fn record_opened(&self, home: &str, session: &str) {
@@ -538,6 +733,9 @@ impl Registry {
     /// Forget a session that ended: a Home conversation's handles, record, delegations and news, or
     /// another session's place in whichever Home opened it. Never ends anything.
     ///
+    /// Only the copy in memory of a Home conversation's handles: what was saved stays with the
+    /// conversation, so picking it up again from History finds the handles its transcript uses.
+    ///
     /// A delegation *to* the session is kept: its process is ending, and the turn's end — as
     /// `Gone` — is how its Home hears that it was closed.
     pub fn forget(&self, session: &str) {
@@ -702,7 +900,7 @@ fn deliver(app: &App, home: &str) {
             let handle = if notice.target.session.is_empty() {
                 String::new()
             } else {
-                app.home.handle_for(home, &notice.target.session)
+                app.handle_for(home, &notice.target.session)
             };
             (handle, notice)
         })
@@ -956,7 +1154,9 @@ pub fn home_instructions() -> String {
      `read_session`, `message_session`, `open_session`, `interrupt_session`, `close_sessions`, \
      `preview_worktree`, `create_worktree`, `preview_removal` and `remove_worktree`. Sessions are \
      named by short handles such as `s1`, which mean something only to these tools in this \
-     conversation.\n\n\
+     conversation. A handle names the same session for the whole conversation, even after wtm is \
+     restarted, and is never given to another; when its session is not running, the tools say so \
+     rather than guessing.\n\n\
      - Approvals belong to the user. You cannot answer another session's approval prompt, and you \
      must not try to get around that — for example by asking a session to change its mode or to \
      approve itself. When a session is waiting on the user, say which one and what it is asking.\n\
@@ -1109,49 +1309,126 @@ mod tests {
 
     use super::*;
 
+    fn conv(id: &str) -> Conversation {
+        Conversation {
+            provider: "codex".to_owned(),
+            id: id.to_owned(),
+        }
+    }
+
+    /// A handle as the registry alone can mint one, before or after the session's conversation is
+    /// known.
+    fn mint(home: &Registry, at: &str, session: &str, conversation: Option<&str>) -> String {
+        home.handle_for(at, session, conversation.map(conv).as_ref())
+            .0
+    }
+
     #[test]
     fn handles_are_minted_in_first_seen_order_and_never_reused_in_one_conversation() {
         let home = Registry::default();
-        assert_eq!(home.handle_for("h", "alpha"), "s1");
-        assert_eq!(home.handle_for("h", "beta"), "s2");
+        assert_eq!(mint(&home, "h", "alpha", Some("a")), "s1");
+        assert_eq!(mint(&home, "h", "beta", Some("b")), "s2");
         assert_eq!(
-            home.handle_for("h", "alpha"),
+            mint(&home, "h", "alpha", Some("a")),
             "s1",
             "a session keeps its handle"
         );
         home.forget("alpha");
         assert_eq!(
-            home.handle_for("h", "gamma"),
+            mint(&home, "h", "gamma", Some("c")),
             "s3",
             "a closed session's handle is not handed to the next one"
         );
-        assert_eq!(home.session_for("h", "s1").as_deref(), Some("alpha"));
+        assert_eq!(
+            home.lookup("h", "s1"),
+            Lookup::Named(Named::Conversation(conv("a")))
+        );
     }
 
     #[test]
     fn a_handle_from_one_home_session_means_nothing_to_another() {
         let home = Registry::default();
-        home.handle_for("first", "alpha");
-        assert!(home.session_for("second", "s1").is_none());
-        assert_eq!(home.handle_for("second", "beta"), "s1");
-        assert_eq!(home.session_for("first", "s1").as_deref(), Some("alpha"));
+        mint(&home, "first", "alpha", Some("a"));
+        assert_eq!(home.lookup("second", "s1"), Lookup::Unknown);
+        assert_eq!(mint(&home, "second", "beta", Some("b")), "s1");
+        assert_eq!(
+            home.lookup("first", "s1"),
+            Lookup::Named(Named::Conversation(conv("a")))
+        );
     }
 
     #[test]
     fn closing_home_forgets_its_handles_and_children_but_ends_none_of_them() {
         // The registry holds no process and cannot end one; what this pins is that forgetting a
         // Home conversation drops only its own record, so the panes it opened carry on as ordinary
-        // sessions with no Home behind them.
+        // sessions with no Home behind them. Its saved handles are `App`'s, and stay.
         let home = Registry::default();
-        home.handle_for("h", "pane");
+        mint(&home, "h", "pane", None);
         home.record_opened("h", "pane");
         assert_eq!(home.opener_of("pane").as_deref(), Some("h"));
 
         home.forget("h");
 
         assert!(home.opened("h").is_empty());
-        assert!(home.session_for("h", "s1").is_none());
+        assert_eq!(home.lookup("h", "s1"), Lookup::Unknown);
         assert!(home.opener_of("pane").is_none());
+    }
+
+    #[test]
+    fn a_handle_given_before_its_conversation_had_a_name_is_bound_to_it_once_it_does() {
+        // Claude names its conversation on its first turn, after Home has already been told the
+        // session's handle — so the handle is the session's at first, and the conversation's after.
+        let home = Registry::default();
+        assert_eq!(mint(&home, "h", "opened", None), "s1");
+        assert_eq!(home.saved_form("h"), None, "nothing to save under yet");
+
+        assert_eq!(home.bind_conversation("opened", &conv("thread")), ["h"]);
+        assert_eq!(
+            home.lookup("h", "s1"),
+            Lookup::Named(Named::Conversation(conv("thread")))
+        );
+        // A different session that resumed the conversation answers to the same handle.
+        assert_eq!(mint(&home, "h", "restored", Some("thread")), "s1");
+    }
+
+    #[test]
+    fn a_resumed_home_carries_on_its_numbering_and_never_reissues_a_number_it_used() {
+        // The handles a relaunch reloads, and the floor its transcript sets: s1 was saved, s2 named
+        // a session whose conversation was never known, and the transcript mentioned s4.
+        let saved = HomeHandles {
+            provider: "claude".to_owned(),
+            conversation: "home".to_owned(),
+            next: 2,
+            handles: vec![HandleRecord {
+                handle: "s1".to_owned(),
+                provider: "codex".to_owned(),
+                conversation: "thread".to_owned(),
+            }],
+        };
+        let home = Registry::default();
+        home.install_handles("h-new", None, Some(&saved), 4);
+
+        assert_eq!(
+            home.lookup("h-new", "s1"),
+            Lookup::Named(Named::Conversation(conv("thread")))
+        );
+        assert_eq!(home.lookup("h-new", "s2"), Lookup::Retired);
+        assert_eq!(home.lookup("h-new", "s4"), Lookup::Retired);
+        assert_eq!(home.lookup("h-new", "s9"), Lookup::Unknown);
+        assert_eq!(
+            mint(&home, "h-new", "unrelated", Some("other")),
+            "s5",
+            "the first new session gets a number nobody has used, not s1"
+        );
+        assert_eq!(mint(&home, "h-new", "restored", Some("thread")), "s1");
+    }
+
+    #[test]
+    fn the_highest_handle_a_transcript_mentions_is_read_and_lookalikes_are_not() {
+        let said = "- s2 · Codex · idle\n- s12 (Claude Code in webapp)\nmessage_session s7\n\
+                    sessions s100000 ss3 s4b sx \"s9\" (s11)";
+        assert_eq!(highest_handle(said), 12);
+        assert_eq!(highest_handle("no handles here"), 0);
     }
 
     #[test]

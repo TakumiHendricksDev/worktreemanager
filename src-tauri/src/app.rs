@@ -915,6 +915,10 @@ pub struct App {
     /// doing it — two panes becoming ready at the same moment is the ordinary case.
     sessions_file: PathBuf,
     resume: parking_lot::Mutex<()>,
+    /// Where Home's session handles are kept, and the lock that serializes writes to it. See
+    /// [`Self::handle_for`].
+    handles_file: PathBuf,
+    handles_write: parking_lot::Mutex<()>,
     /// The one recording in progress, if any. See [`crate::dictate`].
     pub dictation: crate::dictate::Dictation,
     /// Whether this run's window has already started bringing the last run's sessions back.
@@ -957,6 +961,7 @@ impl App {
     pub fn with_paths(paths: AppPaths) -> Result<Self, ConfigError> {
         // Captured before `paths` is moved into the config store below.
         let sessions_file = paths.sessions_file.clone();
+        let handles_file = paths.handles_file.clone();
 
         // Read the PATH override *before* building the runner, since the override is the
         // documented escape hatch for a bundled app that cannot see Homebrew.
@@ -1024,6 +1029,8 @@ impl App {
             early_replay: parking_lot::Mutex::new(BTreeMap::new()),
             sessions_file: sessions_file.clone(),
             resume: parking_lot::Mutex::new(()),
+            handles_file,
+            handles_write: parking_lot::Mutex::new(()),
             launch_restore: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -2454,8 +2461,178 @@ impl App {
     /// Note the provider's own id for a running session, so `resumable` can exclude it.
     pub fn note_provider_session(&self, session: &str, provider_session: &str) {
         let id = wtm_core::model::SessionId::new(session);
-        if let Some(entry) = self.agents.lock().get_mut(&id) {
+        let provider = {
+            let mut agents = self.agents.lock();
+            let Some(entry) = agents.get_mut(&id) else {
+                return;
+            };
             provider_session.clone_into(&mut entry.provider_session);
+            entry.provider.clone()
+        };
+        // A handle Home gave this session before its conversation had a name is bound to the
+        // conversation now, so it survives a quit with it.
+        let conversation = wtm_config::Conversation {
+            provider,
+            id: provider_session.to_owned(),
+        };
+        for home in self.home.bind_conversation(session, &conversation) {
+            self.save_handles(&home);
+        }
+    }
+
+    // ─────────────────────────────── Home's handles ───────────────────────────────
+
+    /// The conversation a running session holds, once its provider has named it.
+    fn conversation_of(&self, session: &str) -> Option<wtm_config::Conversation> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents
+            .lock()
+            .get(&id)
+            .filter(|entry| !entry.provider_session.is_empty())
+            .map(|entry| wtm_config::Conversation {
+                provider: entry.provider.clone(),
+                id: entry.provider_session.clone(),
+            })
+    }
+
+    /// The running session holding a conversation, if one is.
+    fn session_holding(&self, conversation: &wtm_config::Conversation) -> Option<String> {
+        let running = self.running_agents();
+        self.agents
+            .lock()
+            .iter()
+            .find(|(session, entry)| {
+                running.contains(session.as_str())
+                    && !entry.ephemeral
+                    && entry.provider == conversation.provider
+                    && entry.provider_session == conversation.id
+            })
+            .map(|(session, _)| session.as_str().to_owned())
+    }
+
+    /// The handle a Home session uses for another session, minting one on first sight.
+    ///
+    /// # Why this outlives the process
+    ///
+    /// The handles are quoted throughout the Home conversation, and the conversation is resumed
+    /// after a quit. They used to live only in memory, keyed by the Home session, so a relaunch
+    /// started again from `s1` while the conversation went on reading its old ones — and `s1` came
+    /// to name a different session, which is how a message meant for one went to another. Now each
+    /// is bound to a conversation and saved under the Home conversation (`wtm_config::home_handles`).
+    /// A restored session answers to its old handle; one that did not come back names nobody, and
+    /// says so; numbers are never given out twice.
+    pub fn handle_for(&self, home: &str, session: &str) -> String {
+        self.ensure_handles(home);
+        let conversation = self.conversation_of(session);
+        let (handle, changed) = self.home.handle_for(home, session, conversation.as_ref());
+        if changed {
+            self.save_handles(home);
+        }
+        handle
+    }
+
+    /// The running session a Home session's handle names, or what to tell Home instead.
+    ///
+    /// # Errors
+    ///
+    /// The sentence for Home when the handle was never given out, or names a session that is not
+    /// running now. Never another session.
+    pub fn session_for(&self, home: &str, handle: &str) -> Result<String, String> {
+        self.ensure_handles(home);
+        let handle = handle.trim();
+        let gone = || {
+            format!(
+                "`{handle}` is not running any more. A handle names the same session for the whole \
+                 conversation and is never given to another, so it does not mean anything else \
+                 now; `list_all_sessions` shows the sessions running now"
+            )
+        };
+        match self.home.lookup(home, handle) {
+            crate::home::Lookup::Named(crate::home::Named::Session(session)) => {
+                if self.overview_of(&session).is_some() {
+                    Ok(session)
+                } else {
+                    Err(gone())
+                }
+            }
+            crate::home::Lookup::Named(crate::home::Named::Conversation(conversation)) => {
+                self.session_holding(&conversation).ok_or_else(gone)
+            }
+            crate::home::Lookup::Retired => Err(gone()),
+            crate::home::Lookup::Unknown => Err(format!(
+                "there is no session `{handle}`; call `list_all_sessions` for the current handles"
+            )),
+        }
+    }
+
+    /// Have a Home session's handles in memory: what was saved for its conversation, numbered past
+    /// anything its own transcript already used.
+    fn ensure_handles(&self, home: &str) {
+        let conversation = self.conversation_of(home);
+        if self.home.has_handles(home) {
+            if let Some(conversation) = &conversation
+                && self.home.note_home_conversation(home, conversation)
+            {
+                self.save_handles(home);
+            }
+            return;
+        }
+        let saved = conversation.as_ref().and_then(|conversation| {
+            let _guard = self.handles_write.lock();
+            wtm_config::HandleStore::load(&self.handles_file)
+                .get(conversation)
+                .cloned()
+        });
+        let floor = self.highest_handle_said(home);
+        self.home
+            .install_handles(home, conversation, saved.as_ref(), floor);
+    }
+
+    /// The highest handle a Home session's transcript mentions. See `home::highest_handle`.
+    fn highest_handle_said(&self, home: &str) -> u32 {
+        let id = wtm_core::model::SessionId::new(home);
+        let agents = self.agents.lock();
+        let Some(entry) = agents.get(&id) else {
+            return 0;
+        };
+        let mut text = String::new();
+        for event in entry.replay.iter() {
+            match event {
+                // Deltas run together, so a handle split across two is still read whole.
+                AgentEvent::MessageDelta { text: delta } => text.push_str(delta),
+                AgentEvent::Message { text: said } | AgentEvent::UserEcho { text: said } => {
+                    text.push('\n');
+                    text.push_str(said);
+                }
+                AgentEvent::ToolFinished {
+                    output: Some(output),
+                    ..
+                } => {
+                    text.push('\n');
+                    text.push_str(output);
+                }
+                AgentEvent::ToolStarted {
+                    title: Some(title), ..
+                } => {
+                    text.push('\n');
+                    text.push_str(title);
+                }
+                _ => {}
+            }
+        }
+        crate::home::highest_handle(&text)
+    }
+
+    /// Write a Home session's handles down, once its conversation is known.
+    fn save_handles(&self, home: &str) {
+        let Some(form) = self.home.saved_form(home) else {
+            return;
+        };
+        let _guard = self.handles_write.lock();
+        let mut store = wtm_config::HandleStore::load(&self.handles_file);
+        store.put(form);
+        if let Err(error) = store.save(&self.handles_file) {
+            tracing::warn!(%error, "could not write Home's session handles");
         }
     }
 

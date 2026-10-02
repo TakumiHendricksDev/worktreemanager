@@ -43,7 +43,7 @@ impl AgentSink for Quiet {
 const GONE: &str = "019a0000-0000-7000-8000-000000000000";
 
 struct Fixture {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     app: App,
     entry: &'static wtm_agent::ProviderEntry,
     sink: Arc<dyn AgentSink>,
@@ -58,7 +58,7 @@ fn fixture() -> Option<Fixture> {
         return None;
     }
     Some(Fixture {
-        _dir: dir,
+        dir,
         app,
         entry,
         sink: Arc::new(Quiet),
@@ -66,6 +66,24 @@ fn fixture() -> Option<Fixture> {
 }
 
 impl Fixture {
+    /// What a relaunch is to the state that outlives it: a new app over the same files. Every
+    /// session of the old one is closed first, as a quit ends them.
+    fn relaunch(self, sessions: &[&str]) -> Self {
+        for session in sessions {
+            self.app.close_agent(session);
+        }
+        let Self {
+            dir, entry, sink, ..
+        } = self;
+        let app = App::with_paths(AppPaths::rooted(dir.path())).unwrap();
+        Self {
+            dir,
+            app,
+            entry,
+            sink,
+        }
+    }
+
     fn open(&self, scope: SessionScope, resume: Option<&str>) -> String {
         let req = wtm_agent::SessionRequest {
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
@@ -178,6 +196,92 @@ fn home_hears_of_interrupted_work_with_a_handle_only_for_a_session_that_came_bac
     assert!(home::interrupted_notices(&f.app, "not-running", &targets).is_none());
 
     for session in [home, back] {
+        f.app.close_agent(&session);
+    }
+}
+
+/// Conversations, as ids their provider would know them by. Resuming one names it at once.
+const HOME: &str = "019a0000-0000-7000-8000-00000000000a";
+const OPENED: &str = "019a0000-0000-7000-8000-00000000000b";
+const OTHER: &str = "019a0000-0000-7000-8000-00000000000c";
+const UNRELATED: &str = "019a0000-0000-7000-8000-00000000000d";
+const LATE: &str = "019a0000-0000-7000-8000-00000000000e";
+
+#[test]
+fn a_homes_handle_names_the_same_session_after_a_relaunch_or_names_nobody() {
+    // What happened: Home opened a session and was told `s1`. After a relaunch the handle table
+    // started again, `s1` went to the first session listed — an unrelated pane restored from the
+    // last run — and Home's next `message_session s1` delivered its task there.
+    let Some(f) = fixture() else { return };
+    let home = f.open(SessionScope::Home, Some(HOME));
+    let opened = f.open(worktree(), Some(OPENED));
+    let other = f.open(worktree(), Some(OTHER));
+    // One whose conversation its provider names only later, as Claude does on its first turn.
+    let late = f.open(worktree(), None);
+    assert_eq!(f.app.handle_for(&home, &opened), "s1");
+    assert_eq!(f.app.handle_for(&home, &other), "s2");
+    assert_eq!(f.app.handle_for(&home, &late), "s3");
+    f.app.note_provider_session(&late, LATE);
+
+    let f = f.relaunch(&[&home, &opened, &other, &late]);
+    // Home resumes its conversation, and the unrelated pane is the first session it sees.
+    let home = f.open(SessionScope::Home, Some(HOME));
+    let unrelated = f.open(worktree(), Some(UNRELATED));
+    let new = f.app.handle_for(&home, &unrelated);
+    assert_eq!(
+        new, "s4",
+        "a number Home has used is never given to another session"
+    );
+    assert!(
+        f.app.session_for(&home, "s1").is_err(),
+        "the session s1 named has not come back, so s1 names nobody"
+    );
+
+    // The session it opened comes back, holding the same conversation, and answers to s1 again.
+    let opened_again = f.open(worktree(), Some(OPENED));
+    let late_again = f.open(worktree(), Some(LATE));
+    assert_eq!(f.app.session_for(&home, "s1"), Ok(opened_again.clone()));
+    assert_eq!(f.app.handle_for(&home, &opened_again), "s1");
+    assert_eq!(f.app.session_for(&home, "s3"), Ok(late_again.clone()));
+
+    // The one that did not come back is refused, and said to be gone rather than unknown.
+    let gone = f.app.session_for(&home, "s2").unwrap_err();
+    assert!(gone.contains("not running any more"), "{gone}");
+    assert!(
+        f.app
+            .session_for(&home, "s9")
+            .unwrap_err()
+            .contains("there is no session")
+    );
+    assert_eq!(f.app.session_for(&home, &new), Ok(unrelated.clone()));
+
+    for session in [home, unrelated, opened_again, late_again] {
+        f.app.close_agent(&session);
+    }
+}
+
+#[test]
+fn a_different_home_conversation_after_a_relaunch_does_not_inherit_the_old_ones_handles() {
+    let Some(f) = fixture() else { return };
+    let home = f.open(SessionScope::Home, Some(HOME));
+    let opened = f.open(worktree(), Some(OPENED));
+    assert_eq!(f.app.handle_for(&home, &opened), "s1");
+
+    let f = f.relaunch(&[&home, &opened]);
+    // A new Home conversation, not the resumed one.
+    let fresh = f.open(SessionScope::Home, Some(OTHER));
+    let opened_again = f.open(worktree(), Some(OPENED));
+    assert_eq!(
+        f.app.session_for(&fresh, "s1").unwrap_err(),
+        "there is no session `s1`; call `list_all_sessions` for the current handles"
+    );
+    assert_eq!(
+        f.app.handle_for(&fresh, &opened_again),
+        "s1",
+        "its own numbering"
+    );
+
+    for session in [fresh, opened_again] {
         f.app.close_agent(&session);
     }
 }

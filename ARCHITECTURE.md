@@ -563,8 +563,14 @@ tools take targets, which none of §6b's do. What keeps it narrow:
   nothing else. Authorisation is the token's scope, checked at the socket on every call, so a worktree
   bridge that sent the Home action anyway is refused.
 - Targets are per-conversation handles — `s1`, `s2` — minted in the order Home first saw each
-  session, never reused, meaningless to any other caller, and re-checked against the live registry on
-  every use. A session id still never appears in a tool result.
+  session, meaningless to any other caller, and re-checked against the live registry on every use. A
+  session id still never appears in a tool result. A handle is bound to the session's conversation,
+  not its process, and saved under the Home conversation (`home_handles.toml`, beside the resume
+  list), because Home's transcript quotes its handles and is resumed after a quit. In memory only, a
+  relaunch numbered from `s1` again while the conversation read its old ones, and a message went to
+  the wrong session. So a restored session answers to its old handle, one that did not come back is
+  refused as gone, and no number is given out twice: a resumed Home starts past both what was saved
+  and the highest handle its own transcript mentions.
 - Every gate a click passes, Home passes. Opening a session goes through the same `open_pane` a
   delegation does: the repository's trust, `offers_agent`, the guards on a rendered MCP argv, and the
   worktree existing on disk.

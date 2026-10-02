@@ -927,7 +927,8 @@ wtm. See [the PATH problem](#the-path-problem).
 
 Everything lives in `~/.config/wtm/`. `config.toml` holds preferences, registered projects and
 their sidebar layouts. `trust.toml` holds your trust decisions, `sessions.toml` the conversations
-you can resume, `plans/` the saved plans, and `wtm.log` the log. Two dictation keys have no control
+you can resume, `home_handles.toml` the session handles each Home conversation has used, `plans/`
+the saved plans, and `wtm.log` the log. Two dictation keys have no control
 in the dialog: `ui.dictate_language` (default `en`) and `ui.dictate_max_seconds` (default 120).
 
 ### Palettes
