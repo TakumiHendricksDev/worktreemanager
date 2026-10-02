@@ -102,10 +102,10 @@
     const read = (name: string, fallback: string) =>
       getComputedStyle(root).getPropertyValue(name).trim() || fallback;
     return {
-      background: read('--bg-code', '#080d0b'),
-      foreground: read('--fg', '#f0f5f2'),
-      cursor: read('--accent', '#3fb27a'),
-      selectionBackground: read('--bg-active', '#2a3831'),
+      background: read('--bg-code', '#161c18'),
+      foreground: read('--fg', '#eff4f1'),
+      cursor: read('--accent', '#45b77f'),
+      selectionBackground: read('--bg-active', '#3b4740'),
     };
   }
 

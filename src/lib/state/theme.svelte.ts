@@ -3,8 +3,7 @@
  *
  * Two independent axes. `data-palette` picks the hue, `data-theme` picks the mode, and
  * every one of the nine palettes works in both — so "follow the system" keeps meaning what
- * it meant before palettes existed. How dark dark mode goes belongs to the palette rather
- * than being a third axis here: see `depth` in `settings/_palettes.scss`.
+ * it meant before palettes existed.
  *
  * Four rules make this work without a flash of the wrong colours:
  *
@@ -107,10 +106,9 @@ class ThemeStore {
    *
    * For the two consumers that copy computed colours out of CSS rather than referencing
    * them — xterm, and the runtime inside a browser pane — and so cannot follow a custom
-   * property on their own. They used to watch `resolved`, which was nearly enough while
-   * every palette shared one lightness: a palette switch left the terminal with the old
-   * palette's accent, and nobody noticed. With the soft palettes it left a near-black
-   * terminal inside a charcoal window.
+   * property on their own. They used to watch `resolved`, so a palette switch left the
+   * terminal wearing the old palette's accent and tint. That went unnoticed until palettes
+   * briefly came at two lightnesses and it left a near-black terminal in a charcoal window.
    */
   applied = $state(0);
 
