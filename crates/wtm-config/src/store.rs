@@ -336,8 +336,10 @@ fn declared_commands_in(value: &Value) -> Vec<Vec<String>> {
 ///
 /// The CLI that receives `extra_args` comes from the compiled catalogue, so the prompt shows the
 /// agent's id and an ellipsis where the catalogue's own arguments go, rather than an argv nobody
-/// would run. The rest of `[agent.<id>]` (model, effort, mode) names no process, and stays outside
-/// the prompt.
+/// would run. `[agent.<id>.env]` goes in front of that, `KEY=value` the way a shell would write it,
+/// because an environment is as much a way to run code as an argument is: `NODE_OPTIONS` loads a
+/// script into a Node CLI, and `ANTHROPIC_BASE_URL` decides which server reads the worktree. The
+/// rest of `[agent.<id>]` (model, effort, mode) names no process, and stays outside the prompt.
 fn collect_agent_processes(value: &Value, out: &mut Vec<Vec<String>>) {
     let Some(agents) = value.get("agent").and_then(Value::as_table) else {
         return;
@@ -354,12 +356,19 @@ fn collect_agent_processes(value: &Value, out: &mut Vec<Vec<String>>) {
                 push_argv(out, argv);
             }
         }
+        let env: Vec<String> = match agent.get("env") {
+            Some(Value::Table(vars)) => vars
+                .iter()
+                .map(|(name, value)| format!("{name}={}", argv_word(value)))
+                .collect(),
+            other => other.map(argv_words).unwrap_or_default(),
+        };
         let extra = agent.get("extra_args").map(argv_words).unwrap_or_default();
-        if !extra.is_empty() {
+        if !env.is_empty() || !extra.is_empty() {
             push_argv(
                 out,
-                [id.clone(), "…".to_owned()]
-                    .into_iter()
+                env.into_iter()
+                    .chain([id.clone(), "…".to_owned()])
                     .chain(extra)
                     .collect(),
             );
@@ -805,6 +814,41 @@ mod tests {
 
         h.approve("wtm.toml");
         assert!(h.store.load(&h.repo).is_ok());
+    }
+
+    /// An agent's environment runs code as surely as its arguments do — `NODE_OPTIONS` loads a
+    /// script into Claude Code, and a base URL decides which server reads the worktree — so a layer
+    /// declaring nothing but `[agent.<id>.env]` still has to be approved. It shares one line with
+    /// `extra_args`, written the way a shell would put the two together, because that line is what
+    /// the agent will actually be started with.
+    #[test]
+    fn an_agents_environment_is_refused_until_approved_and_shown_beside_its_arguments() {
+        let h = Harness::new();
+        h.write_repo_config(
+            "[agent.claude]\nextra_args = ['--verbose']\n\n\
+             [agent.claude.env]\nNODE_OPTIONS = '--require ./hook.js'\n",
+        );
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Untrusted { commands, .. } => assert_eq!(
+                commands,
+                vec![vec![
+                    "NODE_OPTIONS=--require ./hook.js".to_owned(),
+                    "claude".to_owned(),
+                    "…".to_owned(),
+                    "--verbose".to_owned(),
+                ]],
+                "the prompt must show the variable, its value and which agent gets it"
+            ),
+            other => panic!("expected Untrusted, got {other:?}"),
+        }
+
+        h.approve("wtm.toml");
+        let project = h.store.load(&h.repo).unwrap();
+        assert_eq!(
+            project.agent["claude"].env["NODE_OPTIONS"],
+            "--require ./hook.js"
+        );
     }
 
     /// The other half of the agent rule: choosing a model or a mode starts no process of the

@@ -130,7 +130,32 @@
   const chosenGroup = $derived(providers.find((p) => p.id === chosen) ?? null);
   const capability = $derived(chosenGroup?.capability ?? null);
 
-  const models = $derived(capability?.models ?? []);
+  /**
+   * The pane's model when this provider's list does not have it, as an entry of its own.
+   *
+   * A repository can name any model — `[agent.<id>] model` is a free string so a config outlives
+   * the build it was written against, and a CLI pointed at a local server has models no list here
+   * will ever contain. Falling through to the default instead put "Opus 5.5" on a pane running
+   * something else, and then every effort, mode or Fast change sent that default back as the model
+   * and switched the session to it.
+   *
+   * It borrows the default's ladder, which is the one this control showed before: the CLI still
+   * takes the flag, and wtm has nothing better to offer for a model it has never seen. Not marked
+   * default, and no implied mode — both are claims about a model this build knows.
+   */
+  const unlisted = $derived.by(() => {
+    const base = capability?.models.find((m) => m.isDefault) ?? capability?.models[0];
+    if (!model || !base || capability?.models.some((m) => m.id === model)) return null;
+    return {
+      ...base,
+      id: model,
+      label: model,
+      description: "Not in wtm's list for this agent",
+      isDefault: false,
+      impliedMode: null,
+    };
+  });
+  const models = $derived([...(capability?.models ?? []), ...(unlisted ? [unlisted] : [])]);
   const selected = $derived(
     models.find((m) => m.id === model) ??
       models.find((m) => m.isDefault) ??
@@ -189,7 +214,9 @@
   function pickModel(event: Event) {
     const next = parseOption((event.currentTarget as HTMLSelectElement).value);
     const group = providers.find((p) => p.id === next.provider);
-    const model = group?.capability?.models.find((m) => m.id === next.model);
+    const model = (next.provider === chosen ? models : group?.capability?.models)?.find(
+      (m) => m.id === next.model,
+    );
     // Snapped rather than carried over: the new model may not have the rung the old one was on. Now
     // doubly so — across providers the ladders are different lengths, not just different defaults.
     const keep = model?.efforts.some((e) => e.effort === currentEffort) === true;
@@ -290,7 +317,7 @@
                Never both asides at once — "as of this build" belongs to the *selected* group, and a
                pending swap says the more urgent thing about the same control. -->
           <span class="c-model-picker__aside">on restart</span>
-        {:else if !capability.modelsAreLive}
+        {:else if !capability.modelsAreLive && unlisted === null}
           <!-- Attached to the model, which is what it is about. Loose at the end of the row it
                landed next to the flag checkbox and read as that control's caption. -->
           <span
@@ -333,7 +360,7 @@
                 ? group.label
                 : `${group.label} — as of this build`}
             >
-              {#each group.capability.models as option (option.id)}
+              {#each group.id === chosen ? models : group.capability.models as option (option.id)}
                 <option value="{group.id}:{option.id}">{option.label}</option>
               {/each}
             </optgroup>

@@ -6,9 +6,10 @@
 //! lifetime preconditions the bindings cannot express — so this module is a sequence of one-line
 //! SAFETY comments, each citing the same two facts: the call is on the main thread (proved by the
 //! `MainThreadMarker` the handle carries) and the references are live (they are `Retained`, held
-//! by the handle for the closure's duration). The two genuinely delicate sites are [`attach`],
-//! which trusts pointers Tauri produced, and the completion blocks, which read a pointer WebKit
-//! hands them; both say what they rely on.
+//! by the handle for the closure's duration). The genuinely delicate sites are [`attach`], which
+//! trusts pointers Tauri produced, the completion blocks, which read a pointer WebKit hands them,
+//! and [`NavigationObserver`], which stands in for another library's delegate; each says what it
+//! relies on.
 //!
 //! # Why the handle retains
 //!
@@ -22,18 +23,24 @@ use std::ffi::c_void;
 use std::sync::mpsc;
 
 use block2::RcBlock;
-use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::rc::{Retained, Weak};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::{
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+};
 use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{NSDictionary, NSError, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSDictionary, NSError, NSObject, NSObjectProtocol, NSString, NSURL};
 use objc2_web_kit::{
-    WKContentWorld, WKScriptMessage, WKScriptMessageHandler, WKSnapshotConfiguration,
-    WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKWebView,
+    WKContentWorld, WKNavigation, WKNavigationDelegate, WKScriptMessage, WKScriptMessageHandler,
+    WKSnapshotConfiguration, WKUserContentController, WKUserScript, WKUserScriptInjectionTime,
+    WKWebView,
 };
 
-use crate::{Error, Message, OnMessage, Reply, World};
+use crate::{Error, LoadFailure, Message, Navigation, OnMessage, OnNavigation, Reply, World};
+
+/// The key a [`NavigationObserver`] is attached under. Only its address matters.
+static OBSERVER_KEY: u8 = 0;
 
 pub(crate) struct Handle {
     view: Retained<WKWebView>,
@@ -208,6 +215,184 @@ impl Handle {
     pub(crate) fn history(&self) -> (bool, bool) {
         // SAFETY: two getters on the live view, on the main thread.
         unsafe { (self.view.canGoBack(), self.view.canGoForward()) }
+    }
+
+    pub(crate) fn observe_navigation(&self, on: OnNavigation) {
+        // SAFETY: a getter on the live view, on the main thread.
+        let inner = unsafe { self.view.navigationDelegate() };
+        let observer = NavigationObserver::new(self.mtm, inner.as_ref(), on);
+        // `navigationDelegate` is weak, so something has to own the observer, and the choice is
+        // the whole of its memory safety. It is attached to the delegate it forwards to: wry's,
+        // which wry owns for as long as the view lives. That ties the two lifetimes together, so
+        // WebKit's weak reference empties at the moment the forwarding target goes, and never
+        // points at an observer with nothing behind it. Attaching it to the *view* instead would
+        // be a cycle — wry's delegate holds the view strongly, and the observer would hold the
+        // delegate — and every closed browser pane would leak its WebContent process.
+        let owner: &AnyObject = match &inner {
+            Some(inner) => inner.as_ref(),
+            None => self.view.as_ref(),
+        };
+        // SAFETY: both objects are live; the key is a static whose address is unique to this
+        // crate; the policy retains the observer, which the owner releases when it deallocates.
+        // `setNavigationDelegate` is a setter on the live view, on the main thread.
+        unsafe {
+            objc2::ffi::objc_setAssociatedObject(
+                std::ptr::from_ref(owner).cast_mut(),
+                std::ptr::from_ref(&OBSERVER_KEY).cast(),
+                Retained::as_ptr(&observer).cast_mut().cast(),
+                objc2::ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
+            );
+            self.view
+                .setNavigationDelegate(Some(ProtocolObject::from_ref(&*observer)));
+        }
+    }
+}
+
+/// What a failed navigation's `NSError` says, as plain data.
+fn load_failure(view: &WKWebView, error: &NSError, committed: bool) -> LoadFailure {
+    // The `NSURL` under `NSErrorFailingURLKey`, not the string under `…URLStringKey`: WebKit's
+    // navigation errors carry only the former, observed on macOS 26 for both a refused connection
+    // and a Stop. Spelled as the key's value rather than the `NSURLErrorFailingURLErrorKey` symbol,
+    // which would need a Foundation feature for one string; the value is documented and stable.
+    let url = error
+        .userInfo()
+        .objectForKey(&NSString::from_str("NSErrorFailingURLKey"))
+        .and_then(|value| value.downcast::<NSURL>().ok())
+        .and_then(|url| url.absoluteString())
+        .map(|url| url.to_string());
+    LoadFailure {
+        domain: error.domain().to_string(),
+        code: i64::try_from(error.code()).unwrap_or_default(),
+        description: error.localizedDescription().to_string(),
+        url,
+        committed,
+        // SAFETY: a getter on the live view WebKit is calling about, on the main thread.
+        loading: unsafe { view.isLoading() },
+    }
+}
+
+struct ObserverIvars {
+    /// The delegate this one stands in front of. Weak, because that delegate owns this observer;
+    /// see [`Handle::observe_navigation`].
+    inner: Option<Weak<ProtocolObject<dyn WKNavigationDelegate>>>,
+    on_navigation: OnNavigation,
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements, and `NavigationObserver` does not
+    // implement Drop.
+    //
+    // # How it stands in for wry's delegate
+    //
+    // A WKWebView has one navigation delegate, wry's is it, and wry implements commit, finish and
+    // policy but not the two failure callbacks. So this becomes the delegate, implements those two
+    // and the process-termination callback, and hands every other message to wry's through
+    // `forwardingTargetForSelector:` — the runtime's fast forwarding, which re-sends the message to
+    // that object unchanged, whatever its signature. WebKit asks `respondsToSelector:` for each
+    // optional method once, when the delegate is set, so this answers for itself *and* for wry's;
+    // a method neither implements is never sent, which is what keeps forwarding from ever reaching
+    // a target that cannot answer.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "WtmBrowserNavigationObserver"]
+    #[ivars = ObserverIvars]
+    struct NavigationObserver;
+
+    // SAFETY: both override NSObject methods with NSObject's own signatures: a selector in, a BOOL
+    // out; a selector in, an unretained object (or nil) out.
+    impl NavigationObserver {
+        #[unsafe(method(respondsToSelector:))]
+        fn responds_to_selector(&self, selector: Sel) -> bool {
+            // SAFETY: NSObject's own implementation, answering for this class's methods.
+            let own: bool = unsafe { msg_send![super(self), respondsToSelector: selector] };
+            own || self
+                .inner()
+                .is_some_and(|inner| inner.respondsToSelector(selector))
+        }
+
+        #[unsafe(method(forwardingTargetForSelector:))]
+        fn forwarding_target_for_selector(&self, selector: Sel) -> *mut AnyObject {
+            match self.inner() {
+                // Unretained, as the method's contract is: the delegate is owned by wry for as long
+                // as this observer exists, so the pointer outlives the temporary dropped here.
+                Some(inner) if inner.respondsToSelector(selector) => {
+                    Retained::as_ptr(&inner).cast_mut().cast()
+                }
+                _ => std::ptr::null_mut(),
+            }
+        }
+    }
+
+    unsafe impl NSObjectProtocol for NavigationObserver {}
+
+    // SAFETY: each method matches the protocol's declared signature. Each also passes the call on
+    // to the inner delegate when it implements the method itself, so a later wry that starts
+    // handling failures is not silently shadowed.
+    unsafe impl WKNavigationDelegate for NavigationObserver {
+        #[unsafe(method(webView:didFailProvisionalNavigation:withError:))]
+        fn did_fail_provisional_navigation(
+            &self,
+            view: &WKWebView,
+            navigation: Option<&WKNavigation>,
+            error: &NSError,
+        ) {
+            (self.ivars().on_navigation)(Navigation::Failed(load_failure(view, error, false)));
+            if let Some(inner) = self.inner()
+                && inner.respondsToSelector(sel!(webView:didFailProvisionalNavigation:withError:))
+            {
+                // SAFETY: the inner delegate says it implements this; the arguments are WebKit's.
+                unsafe {
+                    inner.webView_didFailProvisionalNavigation_withError(view, navigation, error);
+                }
+            }
+        }
+
+        #[unsafe(method(webView:didFailNavigation:withError:))]
+        fn did_fail_navigation(
+            &self,
+            view: &WKWebView,
+            navigation: Option<&WKNavigation>,
+            error: &NSError,
+        ) {
+            (self.ivars().on_navigation)(Navigation::Failed(load_failure(view, error, true)));
+            if let Some(inner) = self.inner()
+                && inner.respondsToSelector(sel!(webView:didFailNavigation:withError:))
+            {
+                // SAFETY: as above.
+                unsafe { inner.webView_didFailNavigation_withError(view, navigation, error) };
+            }
+        }
+
+        #[unsafe(method(webViewWebContentProcessDidTerminate:))]
+        fn web_content_process_did_terminate(&self, view: &WKWebView) {
+            (self.ivars().on_navigation)(Navigation::ContentProcessTerminated);
+            if let Some(inner) = self.inner()
+                && inner.respondsToSelector(sel!(webViewWebContentProcessDidTerminate:))
+            {
+                // SAFETY: as above. wry implements this one, for Tauri's app-wide hook.
+                unsafe { inner.webViewWebContentProcessDidTerminate(view) };
+            }
+        }
+    }
+);
+
+impl NavigationObserver {
+    fn new(
+        mtm: MainThreadMarker,
+        inner: Option<&Retained<ProtocolObject<dyn WKNavigationDelegate>>>,
+        on_navigation: OnNavigation,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ObserverIvars {
+            inner: inner.map(Weak::from_retained),
+            on_navigation,
+        });
+        // SAFETY: `init` is NSObject's documented designated initializer, sent exactly once to
+        // a freshly allocated instance.
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn inner(&self) -> Option<Retained<ProtocolObject<dyn WKNavigationDelegate>>> {
+        self.ivars().inner.as_ref().and_then(Weak::load)
     }
 }
 

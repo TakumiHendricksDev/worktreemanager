@@ -224,7 +224,10 @@ any depth and a `[database.*]` table were its first two. `[agent.<id>]` added tw
 spelled `run`: MCP servers (`command` plus `args`), and `extra_args` on the agent CLI itself. For a while
 only a typed copy of the list knew about them, and nothing called that copy, so a repository declaring
 nothing but an MCP server loaded without a prompt. `wtm-config`'s `collect_agent_processes` is the walk
-for those two now, and the typed copy is gone, so there is one list to keep current.
+for those two now, and the typed copy is gone, so there is one list to keep current. It gained a third
+when `[agent.<id>.env]` started reaching the process — it had been parsed and never applied, which is
+the only reason it was not on the list already. An environment runs code as surely as an argument:
+`NODE_OPTIONS` loads a script into any CLI written in Node.
 
 ---
 
@@ -376,7 +379,11 @@ a page's CSP does not govern. Reaching that world takes four WebKit calls wry do
 is why there is a second fenced FFI crate, `wtm-webview`, shaped like `wtm-notify`: the workspace
 lints table with `unsafe_code = "deny"`, a macOS arm and an uninhabited no-op arm, and a handle that
 lives only inside Tauri's `with_webview` closure so nothing `!Send` is ever stored. Its `Cargo.toml`
-header records why no safe wrapper would do. The one script in the *page* world, `page-hook.js`,
+header records why no safe wrapper would do. The same crate fills one gap of another kind: wry
+reports a load that commits and a load that finishes and never one that *fails*, so `wtm-webview`
+stands a forwarding observer in front of wry's navigation delegate to hear failed loads and a page
+process that quit. Without it a pane whose dev server was down stayed "loading" for good, and its
+Reload reloaded the blank page it was born on. The one script in the *page* world, `page-hook.js`,
 captures console output and History API calls, and everything it says is treated as a prompt to
 re-read the truth from the webview, never as the truth.
 

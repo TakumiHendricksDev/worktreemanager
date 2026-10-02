@@ -10,7 +10,9 @@
 # block the reply channel, evaluation *in* that world with a result, and a PNG
 # snapshot. wry exposes none of the four — its scripts and its IPC live in the
 # page world — so this crate calls WebKit directly through objc2, inside the
-# closure Tauri's `with_webview` runs on the main thread.
+# closure Tauri's `with_webview` runs on the main thread. It also hears what wry
+# never reports — a navigation that failed, a page process that quit — through
+# an observer standing in front of wry's navigation delegate.
 #
 # The unsafe density is higher than `wtm-notify`'s and it is worth saying so:
 # every objc2-web-kit method is `unsafe fn` in 0.3, so `mac.rs` is a sequence of

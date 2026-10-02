@@ -635,6 +635,11 @@ class Sessions {
   /** The agent catalogue, with availability. */
   options = $state<AgentOption[]>([]);
   /**
+   * The project `options` was answered for. Its `offered` and its repository settings are that
+   * project's, so a pane opened anywhere else must not start from them.
+   */
+  private optionsProject: string | null = null;
+  /**
    * What each provider can do, by id, once asked.
    *
    * Fetched lazily and cached for the window's life: for Codex the answer costs a throwaway app
@@ -1629,6 +1634,7 @@ class Sessions {
   async refreshOptions(projectId?: string | null): Promise<void> {
     try {
       const next = await commands.listAgents(projectId);
+      this.optionsProject = projectId ?? null;
       if (JSON.stringify(this.options) !== JSON.stringify(next)) this.options = next;
     } catch {
       /* Deliberately silent, as `workspace.refreshOpeners` is and for the same reason. */
@@ -2259,17 +2265,34 @@ class Sessions {
     if (!this.hasRoom(worktreeId)) return;
 
     const pane = this.blank({ kind: 'agent', provider }, projectId, worktreeId);
-    // The provider's own defaults, so a session starts on the model it would have chosen and the
-    // picker shows that rather than an empty control. `null` until the capability lands, which the
-    // picker resolves to the default itself.
+    // The repository's `[agent.<id>]` first, then the provider's own defaults, so the picker shows
+    // what the session will run on rather than an empty control.
+    //
+    // The repository's layer has to be applied here, not left to Rust. Whatever this sends is the
+    // picker's choice, and `session_request_for` ranks that above the repository — so seeding only
+    // from the capability meant a `wtm.toml` model, effort or mode never reached a pane opened by
+    // hand, only the ones an agent opened, which send nothing.
+    const repo =
+      this.optionsProject === projectId
+        ? this.options.find((option) => option.id === provider)
+        : undefined;
     const capability = this.capabilities[provider];
     const preferred = capability?.models.find((m) => m.isDefault) ?? capability?.models[0];
-    pane.model = preferred?.id ?? null;
-    pane.effort = preferred?.defaultEffort ?? null;
+    const model = repo?.model ?? preferred?.id ?? null;
+    // Absent for a model the capability does not list — a local one, say — which then borrows the
+    // provider default's ladder, as the picker does.
+    const listed = capability?.models.find((m) => m.id === model);
+    pane.model = model;
+    pane.effort = repo?.effort ?? listed?.defaultEffort ?? preferred?.defaultEffort ?? null;
     // Auto for all three: each capability marks it default, agreeing with
     // `ProviderEntry::default_mode`, so the pill shows the mode the spawn below asks for. `null`
-    // before the capability lands leaves the choice to that same Rust default.
-    pane.mode = capability?.modes.find((m) => m.isDefault)?.id ?? null;
+    // before the capability lands leaves the choice to that same Rust default. A repository's
+    // `opusplan` brings its Plan mode, which Rust would apply itself if this sent nothing.
+    pane.mode =
+      repo?.mode ??
+      listed?.impliedMode ??
+      capability?.modes.find((m) => m.isDefault)?.id ??
+      null;
 
     this.panes = [...this.panes, pane];
     this.place(worktreeId, pane.id, placement, beside);

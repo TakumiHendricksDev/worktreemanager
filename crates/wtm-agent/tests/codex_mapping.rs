@@ -818,23 +818,193 @@ fn abandoning_declines_everything_outstanding_so_the_server_is_never_left_waitin
 }
 
 #[test]
-fn a_server_request_this_build_does_not_know_is_still_declinable() {
-    // An MCP elicitation, a tool asking for input — anything with an id and a method that is not
-    // one of the three approvals. Shown as `raw` rather than acted on, but *kept* in the pending
-    // map, because a request that is neither answered nor declined leaves the server blocked
-    // forever. Dropping it on the floor is the bug this test exists for.
+fn a_server_request_this_build_does_not_know_is_refused_at_once_rather_than_left_blocking() {
+    // Anything with an id and a method this driver has no card for. A request that is neither
+    // answered nor refused leaves the turn that sent it waiting forever, and these used to be kept
+    // and declined only on close — which is how an elicitation held a real turn for an hour behind
+    // a collapsed row with no buttons. Still drawn, so it is not invisible.
     let mut driver = ready_driver();
     let steps = driver.on_line(
-        r#"{"jsonrpc":"2.0","id":21,"method":"mcpServer/elicitation/request","params":{"mode":"form"}}"#,
+        r#"{"jsonrpc":"2.0","id":21,"method":"item/tool/call","params":{"threadId":"t","turnId":"t1","tool":"lookup","arguments":{}}}"#,
     );
     assert!(matches!(
         events(&steps).first(),
         Some(AgentEvent::Raw { .. })
     ));
 
-    let frames = writes(&driver.abandon());
-    assert_eq!(frames.len(), 1, "an unknown request must still be declined");
+    let frames = writes(&steps);
+    assert_eq!(frames.len(), 1, "the refusal goes out with the row");
     assert_eq!(frames[0]["id"], 21);
+    assert_eq!(frames[0]["error"]["code"], -32601);
+    assert!(
+        driver.abandon().is_empty(),
+        "a refused request must not be answered a second time on close"
+    );
+}
+
+/// An MCP server's tool-call approval, as codex-cli 0.154.0 relays it in Auto mode — after the
+/// auto-reviewer has already approved the tool call itself, which is why it reaches the client at
+/// all. Captured from a test MCP server sending the `_meta` Computer Use sends with its "Allow
+/// Computer Use to use …?", which is the request that held a real turn for an hour while this
+/// driver drew it as a `Raw` row. Note the id: the server numbers its own requests from zero.
+const ELICITATION: &str = r#"{"method":"mcpServer/elicitation/request","id":0,"params":{"threadId":"01a0f96b-cf34-7901-8b72-3564de9ba8fe","turnId":"01a0f96b-cf9b-7461-9577-97cc7bc8fc27","serverName":"probe","mode":"form","_meta":{"codex_approval_kind":"mcp_tool_call","connector_id":"probe","connector_name":"Probe","persist":["session","always"],"tool_name":"open_app","tool_params":{"app":"com.google.Chrome"},"tool_params_display":[{"name":"app","display_name":"App","value":"Google Chrome"}]},"message":"Allow Probe to use \"Google Chrome\"?","requestedSchema":{"type":"object","properties":{}}}}"#;
+
+#[test]
+fn an_mcp_tool_approval_is_a_card_whose_allow_accepts_with_empty_content() {
+    let mut driver = ready_driver();
+    match events(&driver.on_line(ELICITATION)).first() {
+        Some(AgentEvent::ApprovalRequested {
+            id,
+            blocking,
+            request: ApprovalRequest::Permissions { summary, items },
+        }) => {
+            assert_eq!(id, "0");
+            assert!(blocking);
+            assert_eq!(summary, "Allow Probe to use \"Google Chrome\"?");
+            assert_eq!(items, &vec!["App: Google Chrome".to_owned()]);
+        }
+        other => panic!("expected a permissions card, got {other:?}"),
+    }
+
+    let steps = driver.answer("0", &ApprovalAnswer::Allow);
+    let frames = writes(&steps);
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["id"], 0);
+    assert_eq!(
+        frames[0]["result"],
+        json!({ "action": "accept", "content": {}, "_meta": null })
+    );
+    assert!(matches!(
+        events(&steps).first(),
+        Some(AgentEvent::ApprovalResolved { id }) if id == "0"
+    ));
+}
+
+#[test]
+fn always_this_session_asks_the_server_to_remember_an_approval_it_offered_to() {
+    let mut driver = ready_driver();
+    driver.on_line(ELICITATION);
+    let frames = writes(&driver.answer("0", &ApprovalAnswer::AllowForSession));
+    assert_eq!(frames[0]["result"]["action"], "accept");
+    assert_eq!(
+        frames[0]["result"]["_meta"],
+        json!({ "persist": "session" })
+    );
+}
+
+#[test]
+fn deny_declines_an_elicitation_in_its_own_shape_rather_than_with_a_decision() {
+    // `decision` is the command-approval reply. Sent to an elicitation, the server cannot read it.
+    let mut driver = ready_driver();
+    driver.on_line(ELICITATION);
+    let frames = writes(&driver.answer("0", &ApprovalAnswer::Deny { message: None }));
+    assert_eq!(
+        frames[0]["result"],
+        json!({ "action": "decline", "content": null, "_meta": null })
+    );
+}
+
+#[test]
+fn an_elicitation_no_card_can_answer_is_declined_at_once_and_said_so() {
+    // A form with fields, a plugin suggestion that wants its own install flow, a URL to visit.
+    // Accepting any of them with nothing filled in would be a lie; leaving them open is the hang.
+    for (id, params) in [
+        (
+            31,
+            r#"{"threadId":"t","turnId":"t1","serverName":"forms","mode":"form","_meta":null,"message":"Your name?","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}}"#,
+        ),
+        (
+            32,
+            r#"{"threadId":"t","turnId":"t1","serverName":"plugins","mode":"form","_meta":{"codex_approval_kind":"tool_suggestion","suggest_type":"install","suggest_reason":"r","tool_id":"x","tool_name":"x","tool_type":"plugin"},"message":"Install x?","requestedSchema":{"type":"object","properties":{}}}"#,
+        ),
+        (
+            33,
+            r#"{"threadId":"t","turnId":"t1","serverName":"auth","mode":"url","_meta":null,"message":"Sign in","url":"https://example.com/sign-in","elicitationId":"e1"}"#,
+        ),
+    ] {
+        let mut driver = ready_driver();
+        let steps = driver.on_line(&format!(
+            r#"{{"method":"mcpServer/elicitation/request","id":{id},"params":{params}}}"#
+        ));
+        let frames = writes(&steps);
+        assert_eq!(frames.len(), 1, "request {id} must be answered at once");
+        assert_eq!(frames[0]["id"], id);
+        assert_eq!(frames[0]["result"]["action"], "decline");
+        assert!(
+            matches!(
+                events(&steps).first(),
+                Some(AgentEvent::Notice {
+                    level: NoticeLevel::Warn,
+                    ..
+                })
+            ),
+            "request {id} must say why nothing was asked"
+        );
+        assert!(driver.abandon().is_empty());
+    }
+}
+
+#[test]
+fn stopping_a_turn_cancels_the_elicitation_it_is_waiting_on_before_interrupting() {
+    // The order Codex's own desktop client uses. The server would cancel it on the interrupt
+    // anyway; answering first means it is never handling the interrupt while still owed a reply.
+    let mut driver = ready_driver();
+    running_turn(&mut driver);
+    driver.on_line(ELICITATION);
+
+    let steps = driver.interrupt();
+    let frames = writes(&steps);
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["id"], 0);
+    assert_eq!(frames[0]["result"]["action"], "cancel");
+    assert_eq!(frames[1]["method"], "turn/interrupt");
+    assert_eq!(frames[1]["params"]["turnId"], TURN);
+    assert!(matches!(
+        events(&steps).first(),
+        Some(AgentEvent::ApprovalResolved { id }) if id == "0"
+    ));
+    assert!(
+        driver.abandon().is_empty(),
+        "a cancelled elicitation must not be answered again on close"
+    );
+}
+
+#[test]
+fn a_request_the_server_settled_itself_collapses_its_card() {
+    // Captured after an interrupt on 0.154.0: the server cancels what the turn was waiting on and
+    // says so. A card left open would offer an answer nobody wants and keep the pane "waiting".
+    let mut driver = ready_driver();
+    driver.on_line(ELICITATION);
+
+    let steps = driver.on_line(
+        r#"{"method":"serverRequest/resolved","params":{"threadId":"01a0f96b-cf34-7901-8b72-3564de9ba8fe","requestId":0},"emittedAtMs":1790891001924}"#,
+    );
+    assert!(matches!(
+        events(&steps).as_slice(),
+        [AgentEvent::ApprovalResolved { id }] if id == "0"
+    ));
+    assert!(
+        writes(&driver.answer("0", &ApprovalAnswer::Allow)).is_empty(),
+        "an answer to a settled request must not reach the server"
+    );
+    assert!(
+        driver
+            .on_line(
+                r#"{"method":"serverRequest/resolved","params":{"threadId":"t","requestId":0}}"#
+            )
+            .is_empty(),
+        "settling one this driver no longer holds draws nothing"
+    );
+}
+
+#[test]
+fn abandoning_an_open_elicitation_declines_it_in_its_own_shape() {
+    let mut driver = ready_driver();
+    driver.on_line(ELICITATION);
+    let frames = writes(&driver.abandon());
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["result"]["action"], "decline");
+    assert!(frames[0]["result"].get("decision").is_none());
 }
 
 #[test]
