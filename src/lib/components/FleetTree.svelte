@@ -21,7 +21,7 @@
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { view } from '../state/view.svelte';
   import { workspace } from '../state/workspace.svelte';
-  import { STATUS_WORD } from '../status';
+  import { STATUS_WORD, type PaneStatus } from '../status';
   import CloseSessionDialog from './CloseSessionDialog.svelte';
   import FleetWires from './FleetWires.svelte';
   import Button from './ui/Button.svelte';
@@ -87,23 +87,85 @@
     return row.kind === 'session' && row.session.id === view.peeked;
   }
 
+  /** One count in a row's tag: its words, and the dot and number it shrinks to when compact. */
+  interface Tally {
+    word: string;
+    status: PaneStatus | null;
+    n: number | null;
+  }
+
   /** What a heading says about what is under it. Words, never only the dot beside them. */
-  function summary(c: {
+  function tally(c: {
     total: number;
     attention: number;
     working: number;
     done: number;
     failed: number;
-  }): string {
-    const parts: string[] = [];
+  }): Tally[] {
+    const parts: Tally[] = [];
+    const count = (n: number, status: PaneStatus, word: string) =>
+      parts.push({ word: `${n} ${word}`, status, n });
     if (c.attention > 0)
-      parts.push(`${c.attention} need${c.attention === 1 ? 's' : ''} you`);
-    if (c.failed > 0) parts.push(`${c.failed} failed`);
-    if (c.working > 0) parts.push(`${c.working} running`);
-    if (c.done > 0) parts.push(`${c.done} done`);
-    if (parts.length === 0 && c.total > 0) parts.push(`${c.total} idle`);
-    return parts.join(' · ');
+      count(c.attention, 'attention', c.attention === 1 ? 'needs you' : 'need you');
+    if (c.failed > 0) count(c.failed, 'failed', 'failed');
+    if (c.working > 0) count(c.working, 'working', 'running');
+    if (c.done > 0) count(c.done, 'done', 'done');
+    if (parts.length === 0 && c.total > 0) count(c.total, 'idle', 'idle');
+    return parts;
   }
+
+  // ─────────────────────────────── counts that fit ───────────────────────────────
+
+  /**
+   * Rows whose count is drawn compact — each count as its dot and number — by row key.
+   *
+   * Only where the full words would leave the name less room than a short one needs, so a long
+   * name truncates first and the count is never cut. Decided by measuring, because whether it fits
+   * depends on how many counts the row has, how deep it is, and how wide the column is.
+   */
+  let compact = $state<Record<string, boolean>>({});
+
+  /** Room under which even a short name does not fit: about five characters at the tree's size. */
+  const MIN_NAME_PX = 40;
+
+  /**
+   * Measure every row with a count. Works from either form: the words stay in the tag, clipped out
+   * of sight when compact, so the room the name would have beside them can always be worked out —
+   * which is what keeps a row from flipping between the two forms as each changes the space.
+   */
+  function fit(): void {
+    if (!treeEl || !visible) return;
+    const next: Record<string, boolean> = {};
+    for (const row of treeEl.querySelectorAll<HTMLElement>('[data-nav]')) {
+      const name = row.querySelector<HTMLElement>(':scope > .c-fleet__name');
+      const tag = row.querySelector<HTMLElement>(':scope > .c-fleet__tag');
+      const words = tag?.querySelector<HTMLElement>(':scope > .c-fleet__tag-full');
+      const key = row.dataset.nav;
+      if (!name || !tag || !words || !key) continue;
+      const text = document.createRange();
+      text.selectNodeContents(name);
+      const wanted = text.getBoundingClientRect().width;
+      const room = name.clientWidth + tag.offsetWidth - words.offsetWidth;
+      if (wanted > room + 1 && room < MIN_NAME_PX) next[key] = true;
+    }
+    if (JSON.stringify(next) !== JSON.stringify(compact)) compact = next;
+  }
+
+  // On any change to the rows, after the DOM has it. The read of `compact` is after the `tick`, so
+  // this effect does not depend on what it writes.
+  $effect(() => {
+    void rows;
+    if (!visible) return;
+    void tick().then(fit);
+  });
+
+  // And whenever the column changes width: the sidebar dragged, or a scrollbar arriving.
+  onMount(() => {
+    if (!treeEl) return;
+    const observer = new ResizeObserver(() => fit());
+    observer.observe(treeEl);
+    return () => observer.disconnect();
+  });
 
   function peek(paneId: string) {
     view.peek(paneId);
@@ -318,6 +380,26 @@
   }
 </script>
 
+{#snippet tag(key: string, parts: Tally[])}
+  {#if parts.length > 0}
+    {@const words = parts.map((part) => part.word).join(' · ')}
+    <span
+      class="c-fleet__tag"
+      class:is-compact={compact[key] === true}
+      title={compact[key] ? words : undefined}
+    >
+      <span class="c-fleet__tag-full">{words}</span>
+      {#if compact[key]}
+        {#each parts as part (part.word)}
+          <span class="c-fleet__tag-part" aria-hidden="true">
+            {#if part.status}<SessionDot status={part.status} />{/if}{part.n ?? ''}
+          </span>
+        {/each}
+      {/if}
+    </span>
+  {/if}
+{/snippet}
+
 {#snippet twisty(row: FleetRow)}
   {@const expanded = expandedOf(row)}
   {#if expanded === null}
@@ -425,16 +507,22 @@
             {#if row.kind === 'home'}
               <span class="c-fleet__icon"><Icon name="home" size={14} /></span>
               <span class="c-fleet__name">Home</span>
-              <span class="c-fleet__meta">
-                {fleet.summary.sessions}
-                {fleet.summary.sessions === 1 ? 'session' : 'sessions'}
-              </span>
+              {@render tag(row.key, [
+                {
+                  word: `${fleet.summary.sessions} ${fleet.summary.sessions === 1 ? 'session' : 'sessions'}`,
+                  status: null,
+                  n: fleet.summary.sessions,
+                },
+              ])}
             {:else if row.kind === 'project'}
               {#if row.status}<SessionDot status={row.status} />{/if}
-              <span class="c-fleet__name">{row.project.name}</span>
-              <span class="c-fleet__meta">
-                {row.project.usable ? summary(row.counts) : 'needs attention'}
-              </span>
+              <span class="c-fleet__name" title={row.project.name}>{row.project.name}</span>
+              {@render tag(
+                row.key,
+                row.project.usable
+                  ? tally(row.counts)
+                  : [{ word: 'needs attention', status: 'attention', n: null }],
+              )}
               <span class="c-fleet__actions">
                 <Button
                   variant="quiet"
@@ -455,9 +543,11 @@
               <span class="c-fleet__name" title={row.worktree.subtitle}
                 >{row.worktree.title}</span
               >
-              <span class="c-fleet__meta">
-                {row.expanded === null ? row.worktree.subtitle : summary(row.counts)}
-              </span>
+              {#if row.expanded === null}
+                <span class="c-fleet__meta">{row.worktree.subtitle}</span>
+              {:else}
+                {@render tag(row.key, tally(row.counts))}
+              {/if}
               <span class="c-fleet__actions">
                 <Button
                   variant="quiet"
@@ -502,9 +592,10 @@
                 <span class="c-fleet__meta" title={row.job.detail}>{row.job.detail}</span>
               </span>
             {:else if row.kind === 'idle'}
-              <span class="c-fleet__name c-fleet__name--quiet">
-                Other worktrees ({row.count})
-              </span>
+              <span class="c-fleet__name c-fleet__name--quiet">Other worktrees</span>
+              {@render tag(row.key, [
+                { word: `(${row.count})`, status: null, n: row.count },
+              ])}
             {:else}
               {@const inbound = fleet.inboundTo(row.session.id)}
               <SessionDot status={row.session.status} />

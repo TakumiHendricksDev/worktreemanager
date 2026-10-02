@@ -38,9 +38,11 @@
   flex: 0 0 auto;
 }
 
-/* A count that is also a filter: pressed, it narrows the tree to that state. */
+/* A count that is also a filter: pressed, it narrows the tree to that state. Never narrowed: the
+   strip wraps a whole chip to the next line instead. */
 .c-fleet__count {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
   height: 22px;
@@ -131,8 +133,11 @@
   align-items: flex-start;
 }
 
-.c-fleet__row--session > .c-dot {
+.c-fleet__row > .c-dot {
   flex: 0 0 auto;
+}
+
+.c-fleet__row--session > .c-dot {
   margin-top: 5px;
 }
 
@@ -155,6 +160,21 @@
   white-space: nowrap;
 }
 
+/*
+ * In a row with a count, the name is the one thing that gives way, and it takes the slack as well,
+ * which is what puts the count at the row's end. It used to share the shortfall with the count:
+ * both shrank in proportion to their width, so a long name cut "1 idle" to "1 i…" while keeping
+ * most of its own length.
+ */
+.c-fleet__row > .c-fleet__name {
+  flex: 1 1 auto;
+}
+
+/* "Other worktrees (3)" reads as one phrase, so its count stays beside the name. */
+.c-fleet__row--idle > .c-fleet__name {
+  flex-grow: 0;
+}
+
 .c-fleet__name--quiet {
   color: var(--fg-muted);
 }
@@ -169,6 +189,36 @@
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * A count: "1 running", "2 failed · 4 idle", "7 sessions". Never narrowed, wrapped or cut. Where a
+ * row is too narrow for it beside even a short name, FleetTree marks it compact and it shows each
+ * count as its dot and number. The words stay in the tag, clipped out of sight but still read
+ * aloud and still measured, which is how the tree knows when they fit again.
+ */
+.c-fleet__tag {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+  font-weight: 400;
+  white-space: nowrap;
+
+  &.is-compact > .c-fleet__tag-full {
+    position: absolute;
+    clip-path: inset(50%);
+    pointer-events: none;
+  }
+}
+
+.c-fleet__tag-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 .c-fleet__body {
