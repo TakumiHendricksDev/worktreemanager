@@ -1877,6 +1877,8 @@ class Sessions {
     const panes: Pane[] = [];
     const layouts: Record<string, Layout | null> = {};
     const focused: Record<string, string | null> = {};
+    /** Worktrees whose stored surface held panes with no place; written again without them. */
+    const orphaned = new Set<string>();
 
     for (const worktreeId of storedWorktrees()) {
       const surface = readSurface(worktreeId);
@@ -1891,10 +1893,34 @@ class Sessions {
       // worktree would silently drop panes from whichever ones `storedWorktrees` happened to
       // return last. It is enforced where a process is actually created instead — `materialise`
       // and `reattach` both check `hasRoom`.
-      const roots = surface.panes
+      //
+      // A pane that is in no tile has nowhere to come back to unless something else shows it: the
+      // rail shows delegated children, Home's surface shows Home's pane, and a parent is out of the
+      // tree while the rail has swapped one of its children into its tile (`showRelated`). Anything
+      // else no worktree view can show, only Home's tree, where it sat "not running" across
+      // launches until the launch restore resumed it — a CLI for a pane nobody could see. These
+      // were children written by a build that did not store `parentSession` yet. Pop-outs are put
+      // back in the tree before `remember` writes, so they are never among them. They are let go
+      // here, and the surface is written again without them below.
+      const tiled = new Set(panesOf(surface.layout));
+      const named = new Set(
+        surface.panes.flatMap((pane) =>
+          [pane.parentPane, pane.parentSession].filter((id): id is string => !!id),
+        ),
+      );
+      const placed = surface.panes.filter(
+        (pane) =>
+          tiled.has(pane.id) ||
+          !!pane.parentSession ||
+          isHome(worktreeId) ||
+          named.has(pane.id) ||
+          (pane.session !== null && named.has(pane.session)),
+      );
+      if (placed.length < surface.panes.length) orphaned.add(worktreeId);
+      const roots = placed
         .filter((pane) => !pane.parentSession)
         .slice(0, MAX_PANES_PER_WORKTREE);
-      const children = surface.panes.filter((pane) => pane.parentSession).slice(0, 20);
+      const children = placed.filter((pane) => pane.parentSession).slice(0, 20);
       const kept = [...roots, ...children];
 
       let layout = surface.layout;
@@ -1959,18 +1985,21 @@ class Sessions {
         : null;
     }
 
-    if (panes.length === 0) return;
+    if (panes.length > 0) {
+      // Past every id we just took back, so the next `blank` cannot mint one that collides with a
+      // restored pane and silently join two leaves of the tree.
+      nextPaneId = panes.reduce((highest, pane) => {
+        const n = Number.parseInt(pane.id.replace('pane-', ''), 10);
+        return Number.isFinite(n) ? Math.max(highest, n) : highest;
+      }, nextPaneId);
 
-    // Past every id we just took back, so the next `blank` cannot mint one that collides with a
-    // restored pane and silently join two leaves of the tree.
-    nextPaneId = panes.reduce((highest, pane) => {
-      const n = Number.parseInt(pane.id.replace('pane-', ''), 10);
-      return Number.isFinite(n) ? Math.max(highest, n) : highest;
-    }, nextPaneId);
-
-    this.panes = [...this.panes, ...panes];
-    this.layouts = { ...this.layouts, ...layouts };
-    this.focused = { ...this.focused, ...focused };
+      this.panes = [...this.panes, ...panes];
+      this.layouts = { ...this.layouts, ...layouts };
+      this.focused = { ...this.focused, ...focused };
+    }
+    // After the panes are in, because this writes what the store now holds for each worktree — which
+    // for one whose every pane was an orphan is nothing, and removes its entry.
+    for (const worktreeId of orphaned) this.remember(worktreeId);
   }
 
   /**
@@ -2237,6 +2266,24 @@ class Sessions {
     pane.error = reason;
     if (session) void commands.closeAgentSession(session).catch(() => {});
     this.remember(pane.worktreeId);
+    // A pane an earlier build wrote does not know what it was asked, and "No prompt yet · failed"
+    // over a conversation that existed says the opposite of what happened. The resume list kept
+    // its title.
+    if (pane.firstPrompt === null && pane.providerSession)
+      void this.titleFromResumeList(pane.id);
+  }
+
+  /** Name a pane after its conversation's entry in the resume list, if it has one. */
+  private async titleFromResumeList(paneId: string): Promise<void> {
+    const wanted = this.paneById(paneId)?.providerSession;
+    if (!wanted) return;
+    const worktreeId = this.paneById(paneId)?.worktreeId ?? '';
+    const list = await commands.listResumable(worktreeId).catch(() => []);
+    const title = list.find((record) => record.providerSession === wanted)?.title?.trim();
+    const live = this.paneById(paneId);
+    if (!title || !live || live.firstPrompt !== null || live.providerSession !== wanted)
+      return;
+    live.firstPrompt = title.replace(/^From Home \(wtm\):\s*/, '');
   }
 
   /**

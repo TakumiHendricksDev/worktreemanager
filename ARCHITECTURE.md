@@ -1073,7 +1073,11 @@ itself ready before it reads `--resume`, then prints "No conversation found" and
 `Provider::resume_problem` refuses before the spawn when the transcript file is gone, as
 `ExecError::Refused`. Codex's app server stays up and answers `thread/resume` with an error, which
 arrives as a failure before ready, and `reattach` waits for ready, failure or exit to decide. A pane
-whose worktree is gone, or whose project is no longer registered, is dropped first.
+whose worktree is gone, or whose project is no longer registered, is dropped first. So is a pane
+that is in no tile and is neither a delegated child, Home's pane, nor a parent whose tile the rail
+has given to one of its children. No view can show such a pane. Builds before `parentSession` was
+stored left children like that, and they sat in Home's tree as *not running* until the restore
+tried to resume them.
 
 What Home knew is carried with the panes. Each remembers which Home conversation opened it, by that
 conversation's provider id, and whether the user had written to it. Both go back with the resume
