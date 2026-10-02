@@ -86,3 +86,14 @@
   color: var(--fg-muted);
   line-height: 1.5;
 }
+
+.c-home__past {
+  margin-top: var(--sp-5);
+}
+
+.c-home__resume {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}

@@ -72,7 +72,12 @@
           onmovestart: (event: PointerEvent) => void;
           onmovekey: (event: KeyboardEvent) => void;
         }
-      | { kind: 'window' };
+      | { kind: 'window' }
+      /**
+       * Home's own conversation, drawn by Home's surface. It has no worktree, so nothing here that
+       * reaches into one — file links, a SQL run, a split, a pop-out — is offered.
+       */
+      | { kind: 'home'; onhistory: (event: MouseEvent) => void };
   } = $props();
 
   /**
@@ -82,6 +87,8 @@
    * mounts in another's — so a reactive read would only ever see one value.
    */
   const inWindow = untrack(() => host.kind === 'window');
+  /** Home's pane. Read once, for the same reason as `inWindow`. */
+  const atHome = untrack(() => host.kind === 'home');
 
   // Seeded from a draft that came with the pane from another window, so words typed there are here.
   const carried = untrack(() => sessions.takeDraft(pane.id));
@@ -145,11 +152,13 @@
    * list — the `@` list's — so only a path that is really there becomes a link.
    */
   $effect(() => {
-    if (provider !== null && !sessions.files[pane.worktreeId]) {
+    if (provider !== null && !atHome && !sessions.files[pane.worktreeId]) {
       void sessions.loadFiles(pane.worktreeId);
     }
   });
   const codeLink = $derived.by(() => {
+    // Home has no worktree for a path to resolve in, so its replies carry no file links.
+    if (atHome) return undefined;
     const root =
       workspace.worktrees.find((w) => w.id === pane.worktreeId)?.path ?? pane.worktreeId;
     const index = fileIndex(sessions.files[pane.worktreeId] ?? [], root);
@@ -357,7 +366,8 @@
    */
   const groups = $derived(
     sessions.options
-      .filter((o) => o.available && o.offered)
+      // Home has no repository to decline an agent, so only what is installed matters there.
+      .filter((o) => o.available && (atHome || o.offered))
       .map((o) => ({
         id: o.id,
         label: o.label,
@@ -375,7 +385,10 @@
    * the honest outcome on a machine with one agent installed.
    */
   const continuation = $derived(
-    sessions.options.find((o) => o.id !== provider && o.available && o.offered) ?? null,
+    atHome
+      ? null
+      : (sessions.options.find((o) => o.id !== provider && o.available && o.offered) ??
+          null),
   );
 
   /**
@@ -454,8 +467,8 @@
   }
 
   /** Whether Split and Pop out are offered at all. See their buttons for why each is withheld. */
-  const canSplit = $derived(!pane.ended && !pane.error && !inWindow);
-  const canPopOut = $derived(!inWindow && !pane.detached);
+  const canSplit = $derived(!pane.ended && !pane.error && !inWindow && !atHome);
+  const canPopOut = $derived(!inWindow && !atHome && !pane.detached);
   /** Restart as a labelled button, because something is waiting on it. Never folded away. */
   const restartCalls = $derived(Boolean(pane.ended || pane.error) || pending !== null);
 
@@ -1014,7 +1027,7 @@
    * panes open would otherwise run eight of them at startup for a list most sessions never use.
    */
   $effect(() => {
-    if (query?.kind !== 'file') return;
+    if (query?.kind !== 'file' || atHome) return;
     if (sessions.files[pane.worktreeId] !== undefined) return;
     void sessions.loadFiles(pane.worktreeId);
   });
@@ -1172,7 +1185,7 @@
     const picked = await open({
       multiple: true,
       directory,
-      defaultPath: pane.worktreeId,
+      defaultPath: atHome ? undefined : pane.worktreeId,
       title: directory ? 'Add folders' : 'Add files',
     });
     if (picked === null) return;
@@ -1340,6 +1353,19 @@
           </span>
         {/if}
 
+        {#if host.kind === 'home'}
+          <!-- Past Home conversations. Home has no empty-worktree list to offer them from. -->
+          <Button
+            variant="quiet"
+            size="sm"
+            title="Pick up a past Home conversation"
+            ariaHaspopup="menu"
+            onclick={host.onhistory}
+          >
+            History
+          </Button>
+        {/if}
+
         {#if restartCalls}
           <Button
             variant="neutral"
@@ -1505,7 +1531,9 @@
           {/if}
           <AgentTranscript
             events={pane.events}
-            onrunsql={(sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}
+            onrunsql={atHome
+              ? undefined
+              : (sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}
             {codeLink}
           />
 

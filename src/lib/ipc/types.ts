@@ -996,6 +996,11 @@ export interface SpawnedSession {
   parentSession: string | null;
   run: string | null;
   title: string | null;
+  /**
+   * The Home session that opened this one into its worktree, where it is tiled like a hand-opened
+   * pane. `parentSession` is then null: it is not a delegation child behind a rail.
+   */
+  openedBy: string | null;
 }
 
 /**

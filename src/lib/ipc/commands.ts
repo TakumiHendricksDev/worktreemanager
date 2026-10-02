@@ -226,6 +226,21 @@ export const commands = {
     };
   }) => invoke<string>('open_agent_session', { options: {}, ...args }),
 
+  /**
+   * Start a Home session: an agent outside every worktree, whose tools reach the sessions inside
+   * them. `resume` picks up a past Home conversation, listed by `listResumable(HOME)`.
+   */
+  openHomeSession: (args: {
+    agentId: string;
+    options?: {
+      model?: string | null;
+      effort?: string | null;
+      mode?: string | null;
+      fast?: boolean | null;
+      resume?: string | null;
+    };
+  }) => invoke<string>('open_home_session', { options: {}, ...args }),
+
   /** Fork a live conversation for one ephemeral `/btw` question. */
   openAgentSideSession: (args: {
     parentSession: string;

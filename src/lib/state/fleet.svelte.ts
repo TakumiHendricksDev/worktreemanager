@@ -181,7 +181,7 @@ class Fleet {
       title: pane.agentTitle ?? pane.firstPrompt ?? 'No prompt yet',
       agent: sessions.labelOf(pane),
       model: pane.model,
-      openedFromHome: false,
+      openedFromHome: pane.openedFromHome,
     })),
   );
 

@@ -46,6 +46,7 @@ import {
   type SpawnedSession,
   type Worktree,
 } from '../ipc/types';
+import { HOME, isHome } from '../home';
 import { statusOf, worse, type PaneStatus } from '../status';
 import { transferPrompt } from '../transfer';
 import { attention, type Announceable, type Announcement } from './attention.svelte';
@@ -381,6 +382,15 @@ export interface Pane {
    */
   firstPrompt: string | null;
   /**
+   * Opened into its worktree by Home, rather than by hand or by a delegation.
+   *
+   * Not `parentSession`, deliberately. That field drives the close cascade, the rail, the cap's
+   * exemption and the relayed approvals, and every one of them would be wrong for a pane tiled in
+   * its worktree: closing the Home conversation would have closed it, and its approvals would have
+   * been answered in Home's transcript as well as the inbox. This only marks it, for Home's tree.
+   */
+  openedFromHome: boolean;
+  /**
    * The provider says this session is out of usage, and the offer to continue elsewhere is standing.
    *
    * A register outside the transcript, like `usage` and `pendingProvider`: the banner needs the
@@ -588,6 +598,7 @@ interface StoredPane {
   parentSession?: string | null;
   run?: string | null;
   agentTitle?: string | null;
+  openedFromHome?: boolean;
 }
 
 /** A worktree's whole surface: the tree, what filled it, and where focus was. */
@@ -1180,6 +1191,8 @@ class Sessions {
     pane.parentSession = spawned.parentSession;
     pane.run = spawned.run;
     pane.agentTitle = spawned.title;
+    // Tiled, below, like a hand-opened pane — `parentSession` is null for these. See the field.
+    pane.openedFromHome = spawned.openedBy !== null && spawned.openedBy !== undefined;
     this.numberRun(pane.run);
     this.panes = [...this.panes, pane];
 
@@ -1513,6 +1526,7 @@ class Sessions {
     const pane = this.paneById(paneId);
     if (
       pane &&
+      !isHome(pane.worktreeId) &&
       request.kind === 'plan_review' &&
       answer.kind !== 'deny' &&
       request.markdown.trim().length > 0
@@ -1603,7 +1617,8 @@ class Sessions {
       return;
     }
     const source = this.paneById(paneId);
-    if (!source) return;
+    // Home has no worktree to open the continuation in; its own launcher starts another agent.
+    if (!source || isHome(source.worktreeId)) return;
 
     const kind = source.kind;
     const fromLabel =
@@ -1722,6 +1737,7 @@ class Sessions {
         pane.parentSession = stored.parentSession ?? null;
         pane.run = stored.run ?? null;
         pane.agentTitle = stored.agentTitle ?? null;
+        pane.openedFromHome = stored.openedFromHome ?? false;
         // Re-numbered in stored order, which is the order they were announced in — so a restored
         // rail reads the same as the one that was written, without the ordinals being persisted.
         this.numberRun(pane.run);
@@ -1836,17 +1852,12 @@ class Sessions {
     pane.error = null;
 
     try {
-      const session = await commands.openAgentSession({
-        projectId: pane.projectId,
-        worktreeId: pane.worktreeId,
-        agentId: pane.kind.provider,
-        options: {
-          model: pane.model,
-          effort: pane.effort,
-          mode: pane.mode,
-          fast: pane.fast,
-          resume: pane.providerSession,
-        },
+      const session = await this.spawnAgent(pane, {
+        model: pane.model,
+        effort: pane.effort,
+        mode: pane.mode,
+        fast: pane.fast,
+        resume: pane.providerSession,
       });
       await this.claimOrClose(pane.id, session, 'agent');
       this.error = null;
@@ -1907,8 +1918,9 @@ class Sessions {
     }
     await this.attach(pane.id, session);
     // A restored pane is already in the tree, in the place the user put it. Placing it again would
-    // move it, which is the behaviour this whole path exists to stop.
-    if (!restored) this.place(worktreeId, pane.id, 'right');
+    // move it, which is the behaviour this whole path exists to stop. Home's pane is never placed
+    // anywhere: it is drawn by Home's surface, and a tile would mount it a second time.
+    if (!restored && !isHome(worktreeId)) this.place(worktreeId, pane.id, 'right');
     else this.remember(worktreeId);
   }
 
@@ -1984,6 +1996,7 @@ class Sessions {
       run: null,
       agentTitle: null,
       firstPrompt: null,
+      openedFromHome: false,
       limit: null,
       replayedThrough: null,
       providerSession: null,
@@ -2345,6 +2358,111 @@ class Sessions {
       if (live) live.error = errorMessage(e);
     }
     return pane.id;
+  }
+
+  /**
+   * Spawn the process behind an agent pane: Home's route for Home's pane, the worktree's otherwise.
+   *
+   * The one place the two routes split, so a restart, a resume and a reattach of Home's pane go to
+   * `open_home_session` without each having to remember to.
+   */
+  private spawnAgent(
+    pane: Pane,
+    options: {
+      model: string | null;
+      effort: string | null;
+      mode: string | null;
+      fast: boolean;
+      resume?: string | null;
+    },
+  ): Promise<string> {
+    const provider = pane.kind.kind === 'agent' ? pane.kind.provider : '';
+    if (isHome(pane.worktreeId)) {
+      return commands.openHomeSession({ agentId: provider, options });
+    }
+    return commands.openAgentSession({
+      projectId: pane.projectId,
+      worktreeId: pane.worktreeId,
+      agentId: provider,
+      options,
+    });
+  }
+
+  /** Home's own conversation, when there is one. Never a side question or a delegated child. */
+  homePane = $derived(
+    this.panes.find(
+      (p) => isHome(p.worktreeId) && p.sideOf === null && p.parentSession === null,
+    ) ?? null,
+  );
+
+  /**
+   * Start Home's conversation with an agent, or pick a past one up again with `resume`.
+   *
+   * One at a time: a Home pane already open is closed first, and its conversation stays under
+   * History, exactly as a Restart leaves one resumable. Never placed in any layout — Home's surface
+   * draws it, and a tile would mount it twice.
+   */
+  async openHome(
+    provider: string,
+    resume?: { providerSession: string; model: string | null; effort: string | null },
+  ): Promise<string | null> {
+    const current = this.homePane;
+    if (current) await this.close(current.id);
+    if (!this.hasRoom(HOME)) return null;
+
+    const pane = this.blank({ kind: 'agent', provider }, HOME, HOME);
+    const capability = this.capabilities[provider];
+    const preferred = capability?.models.find((m) => m.isDefault) ?? capability?.models[0];
+    pane.model = resume?.model ?? preferred?.id ?? null;
+    const listed = capability?.models.find((m) => m.id === pane.model);
+    pane.effort =
+      resume?.effort ?? listed?.defaultEffort ?? preferred?.defaultEffort ?? null;
+    pane.mode =
+      listed?.impliedMode ?? capability?.modes.find((m) => m.isDefault)?.id ?? null;
+    pane.providerSession = resume?.providerSession ?? null;
+    this.panes = [...this.panes, pane];
+    this.focus(HOME, pane.id);
+    void this.loadCapability(provider);
+
+    try {
+      const session = await commands.openHomeSession({
+        agentId: provider,
+        options: {
+          model: pane.model,
+          effort: pane.effort,
+          mode: resume ? null : pane.mode,
+          fast: pane.fast,
+          resume: resume?.providerSession ?? null,
+        },
+      });
+      await this.claimOrClose(pane.id, session, 'agent');
+      this.error = null;
+    } catch (e) {
+      const live = this.paneById(pane.id);
+      if (live) live.error = errorMessage(e);
+    }
+    void this.refreshResumable(HOME);
+    return pane.id;
+  }
+
+  /**
+   * Fill a Home pane restored from the last run, the first time Home is shown — what `materialise`
+   * does for a worktree's panes. One with nothing to resume, or whose resume fails, closes, and the
+   * conversation stays under History.
+   */
+  async materialiseHome(): Promise<void> {
+    const pane = this.homePane;
+    if (!pane?.detached) return;
+    if (!pane.providerSession) {
+      await this.close(pane.id);
+      return;
+    }
+    const outcome = await this.reattach(pane.id);
+    if (outcome === 'failed') {
+      const reason = this.paneById(pane.id)?.error ?? 'it could not be resumed';
+      await this.close(pane.id);
+      this.error = `Home's last conversation did not come back: ${reason}. It is still under History.`;
+    }
   }
 
   /**
@@ -3489,16 +3607,11 @@ class Sessions {
               rows: SPAWN_ROWS,
               cols: SPAWN_COLS,
             })
-          : await commands.openAgentSession({
-              projectId: pane.projectId,
-              worktreeId: pane.worktreeId,
-              agentId: pane.kind.provider,
-              options: {
-                model: pane.model,
-                effort: pane.effort,
-                mode: pane.mode,
-                fast: pane.fast,
-              },
+          : await this.spawnAgent(pane, {
+              model: pane.model,
+              effort: pane.effort,
+              mode: pane.mode,
+              fast: pane.fast,
             });
       await this.claimOrClose(pane.id, session, pane.kind.kind);
     } catch (e) {
@@ -3604,6 +3717,7 @@ class Sessions {
         parentSession: pane.parentSession,
         run: pane.run,
         agentTitle: pane.agentTitle,
+        openedFromHome: pane.openedFromHome,
       })),
     });
   }

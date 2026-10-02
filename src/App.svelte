@@ -19,6 +19,7 @@
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
   import FleetTree from './lib/components/FleetTree.svelte';
+  import HomeAgent from './lib/components/HomeAgent.svelte';
   import HomeSurface from './lib/components/HomeSurface.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
   import RemoveProjectDialog from './lib/components/RemoveProjectDialog.svelte';
@@ -771,19 +772,7 @@
       {#if view.homeMounted}
         <HomeSurface visible={booted && view.home} onreveal={(pane) => void reveal(pane)}>
           {#snippet main()}
-            <div class="c-home__intro">
-              <h2 class="c-home__title">Home</h2>
-              <p class="c-home__prose">
-                Every agent session in every project is in the tree on the left: what is
-                running, what is done, and what needs you. Pick one to read it and write to
-                it from here. Approvals waiting anywhere are listed beside this, and you can
-                answer them without leaving.
-              </p>
-              <p class="c-home__prose">
-                When one agent hands work to another, a wire lights up between them in the
-                tree while the message is in flight.
-              </p>
-            </div>
+            <HomeAgent visible={booted && view.home} />
           {/snippet}
         </HomeSurface>
       {/if}

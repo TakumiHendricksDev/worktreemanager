@@ -83,7 +83,8 @@ project's convention. With the variable unset the tests skip.
 ## Contents
 
 [Install](#install) · [Updating](#updating-an-install-you-already-have) ·
-[The window](#the-window) · [Agent sessions](#agent-sessions) · [Worktrees](#worktrees) ·
+[The window](#the-window) · [Home](#home) · [Agent sessions](#agent-sessions) ·
+[Worktrees](#worktrees) ·
 [Registering a project](#registering-a-project) · [Writing wtm.toml](#writing-wtmtoml) ·
 [Database viewer](#database-viewer) · [Code tab](#code-tab) · [Browser panes](#browser-panes) ·
 [Panes in their own windows](#panes-in-their-own-windows) · [Open in …](#open-in-) ·
@@ -164,6 +165,7 @@ surface.
 **Title bar.** From left to right:
 
 - The sidebar toggle (⌃⌘S).
+- **Home** (⇧⌘H), with the number of approvals waiting anywhere. See [Home](#home).
 - The project picker. It switches repositories, has **Add a repository…**, and has **Remove "name"
   from wtm…**, which forgets a repository without touching anything on disk. A ● marks a project with
   a session waiting on you.
@@ -221,6 +223,30 @@ their worktree. Shells start again, browsers reload, and agent panes resume thei
 place. Resuming starts the agent's CLI; no message is sent until you write one. An agent pane with nothing to
 resume, or whose resume fails, closes, and a banner says why. Its conversation is still under **Pick
 up where you left off**.
+
+## Home
+
+Home is a view that isn't any one worktree. Open it with the house in the title bar, or Go › Home
+(⇧⌘H); the same again goes back to where you were. wtm reopens on Home if you quit from it.
+
+- **The session tree** takes the sidebar's place: every project, its worktrees, and every agent
+  session in them, with delegated children nested under the session that started them. Each says
+  what it is doing — *working…*, *needs you*, *done*, *failed* — and a folded project still shows any
+  session that needs you or failed. The counts at the top filter it. **+** on a worktree starts an
+  agent there, as an ordinary pane in that worktree.
+- **Needs you** lists every approval waiting in any session, oldest first, and you answer each on the
+  same card the pane would have shown, without going there.
+- **Peek** shows the session you picked in the tree: its transcript, what it is waiting on, and a box
+  to send it a message or queue one. **Open in worktree** takes you to its pane.
+- **Wires.** While one agent is waiting on another — a delegation, or a message from Home — a line
+  lights up between them in the tree, with what was asked on the receiving row. **Activity** keeps the
+  recent ones.
+- **The Home agent.** Start Claude, Codex or Cursor in Home's main column. It runs in a folder of its
+  own, outside every repository, and has tools for the sessions everywhere else: list them, read one,
+  message one and wait for the answer, start one in any worktree of any project, stop a turn it
+  started, and close sessions it opened that you haven't used. It cannot answer approvals; those come
+  to you under Needs you. Messages it sends arrive labelled *From Home (wtm)*. **History** picks up a
+  past Home conversation.
 
 ## Agent sessions
 
@@ -331,6 +357,11 @@ Every session gets an MCP server called `wtm`:
 | `list_sessions` | The other sessions in this worktree. Only with session awareness on |
 | `browser_*` | Drive the worktree's browser panes; see [Browser panes](#browser-panes). Turned off with Settings → *Agents may use browser panes* |
 | `code_read_comments`, `code_resolve_comment` | Read your [Code-tab](#code-tab) comments, and resolve them with a note you see on the comment |
+
+The [Home agent](#home) gets a different set instead, because it has no worktree for these to act on:
+`list_projects`, `list_all_sessions`, `read_session`, `message_session`, `open_session`,
+`interrupt_session` and `close_sessions`. Sessions are named by short handles such as `s2`, and
+what one session said reaches Home marked as untrusted content.
 
 **Session awareness** is a beta, off by default (Settings → General). When other sessions share the
 worktree, wtm adds a short note to a session's next message saying who else is there and what state
@@ -895,6 +926,7 @@ rest of your config still loads.
 |---|---|---|
 | Anywhere | ⌘, | Settings |
 | | ⌃⌘S | Show or hide the sidebar |
+| | ⇧⌘H | Home, and back |
 | | ⌘R | Refresh the worktree list |
 | | ⌘I | Details (except while focus is in a pane) |
 | | ⌘F | Filter the worktrees. The Database and Code views use it to find in themselves instead |
