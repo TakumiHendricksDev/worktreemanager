@@ -64,9 +64,30 @@
   flex: 0 0 1px;
 }
 
-/* Pinned above the tabs, and never allowed to push them off: past this it scrolls on its own. */
+/*
+ * Needs you and In flight, pinned above the tabs and never allowed to push them off: as tall as
+ * they are, up to 45% of the column. In the Activity tab, In flight alone, above the list.
+ *
+ * # Why it never shrinks
+ *
+ * It did, as `flex: 0 1 auto` beside a panel with an automatic basis, and flexbox shares out the
+ * shrinking in proportion to each item's basis. Peek's basis is its whole transcript, thousands of
+ * pixels, so a long one dragged this box down with it, far below its cap: In flight shrank to its
+ * heading and a scrollbar with nothing under it. Fixed at its own height, it leaves Peek the rest.
+ *
+ * # Why a grid
+ *
+ * So the two share the 45% rather than one pushing the other out of sight. It was one scrolling
+ * box, and an open approval card in Needs you put In flight below its fold, which is exactly when
+ * both matter: a session Home handed work to is asking you something. Rows of `minmax(0, auto)`
+ * grow evenly towards their content and stop there, so a short section keeps all of its height and
+ * a long one takes what is left. Each scrolls its own list, under its own heading. The box's own
+ * `overflow-y` stays as the fallback: an engine that would not shrink the rows still scrolls it.
+ */
 .c-home__inbox {
-  flex: 0 1 auto;
+  display: grid;
+  flex: 0 0 auto;
+  grid-auto-rows: minmax(0, auto);
   max-height: 45%;
   min-height: 0;
   overflow-y: auto;

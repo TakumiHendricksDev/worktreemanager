@@ -5,7 +5,12 @@
  * approval card beneath it, so the decision is made on the same card a pane would have shown.
  */
 
+/* A column whose list scrolls under the heading, so the section can be given less than its height —
+   a share of `.c-home__inbox`, or the Needs you tab. */
 .c-inbox {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: var(--sp-3) var(--sp-3) var(--sp-2);
   border-bottom: 1px solid var(--border);
 }
@@ -31,6 +36,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .c-inbox__item {

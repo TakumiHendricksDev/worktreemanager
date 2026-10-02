@@ -248,7 +248,9 @@
       role="tabpanel"
       hidden={tab !== 'activity'}
     >
-      <InFlight onpeek={peek} />
+      <div class="c-home__inbox">
+        <InFlight onpeek={peek} />
+      </div>
       <ActivityList />
     </div>
   {:else}
