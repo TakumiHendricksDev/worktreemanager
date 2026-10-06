@@ -42,7 +42,7 @@ pub use layers::{BUILT_IN_DEFAULTS, LOCAL_FILENAME, LayerPaths, REPO_FILENAME};
 pub use paths::AppPaths;
 pub use sessions::{SessionRecord, SessionStore};
 pub use sidebar::{SidebarGroup, SidebarLayout};
-pub use store::FileConfigStore;
+pub use store::{ExecutionRevision, FileConfigStore};
 pub use trust::{TrustStore, content_hash};
 pub use user::{PaletteDef, Theme, UserConfig};
 pub use validate::check_forbidden;

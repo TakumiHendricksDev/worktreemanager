@@ -28,6 +28,8 @@ pub mod openers;
 pub mod pane_windows;
 pub mod pty_bridge;
 pub mod shell_admission;
+pub mod shell_output;
+pub mod shell_runs;
 pub mod turns;
 pub mod update;
 pub mod usage;
