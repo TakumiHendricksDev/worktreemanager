@@ -21,6 +21,7 @@
  */
 
 import { worse, type PaneStatus } from './status';
+import type { WorktreeIdentity } from './worktree-label';
 
 /** One agent session, as the tree needs it. `fleet.svelte.ts` builds these from panes. */
 export interface FleetSession {
@@ -38,6 +39,9 @@ export interface FleetSession {
   model: string | null;
   /** Opened into its worktree by Home rather than by hand. */
   openedFromHome: boolean;
+  kind: 'agent' | 'shell';
+  completed: boolean;
+  detail: string;
 }
 
 export interface FleetProject {
@@ -46,7 +50,7 @@ export interface FleetProject {
   usable: boolean;
 }
 
-export interface FleetWorktree {
+export interface FleetWorktree extends WorktreeIdentity {
   id: string;
   title: string;
   subtitle: string;
@@ -257,7 +261,17 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
     const order: FleetWorktree[] = [...listed];
     for (const s of mine) {
       if (!byId.has(s.worktreeId)) {
-        const stray = { id: s.worktreeId, title: basename(s.worktreeId), subtitle: '' };
+        const stray: FleetWorktree = {
+          id: s.worktreeId,
+          title: basename(s.worktreeId),
+          subtitle: '',
+          dirname: basename(s.worktreeId),
+          path: s.worktreeId,
+          branch: null,
+          head: null,
+          issueKey: null,
+          isMain: false,
+        };
         byId.set(stray.id, stray);
         order.push(stray);
       }

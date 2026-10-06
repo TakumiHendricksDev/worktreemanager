@@ -20,7 +20,9 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 import { anchorOf, arrangeFleet, HOME_KEY, sessionKey, type FleetOnly } from '../fleet';
-import type { FleetJob, FleetSession } from '../fleet';
+import type { FleetJob, FleetSession, FleetWorktree } from '../fleet';
+import { runSettled, runStatus } from '../shell-script';
+import { shellRuns } from './shell-runs.svelte';
 import { HOME_AGENT, isHome } from '../home';
 import { commands } from '../ipc/commands';
 import type { AgentExchange, AgentOption, HomeJob, Worktree } from '../ipc/types';
@@ -64,7 +66,7 @@ export interface Wire {
 
 /** Whether a pane is one the tree lists: an agent, not a side question, not Home itself. */
 function listed(pane: Pane): boolean {
-  return pane.kind.kind === 'agent' && pane.sideOf === null && !isHome(pane.worktreeId);
+  return pane.kind.kind !== 'browser' && pane.sideOf === null && !isHome(pane.worktreeId);
 }
 
 class Fleet {
@@ -251,22 +253,44 @@ class Fleet {
 
   /** Every agent session the tree lists, as structural records. */
   sessions = $derived.by((): FleetSession[] =>
-    sessions.panes.filter(listed).map((pane) => ({
-      id: pane.id,
-      projectId: pane.projectId,
-      worktreeId: pane.worktreeId,
-      session: pane.session,
-      parentSession: pane.parentSession,
-      status: sessions.statusOfPane(pane),
-      title: pane.agentTitle ?? pane.firstPrompt ?? 'No prompt yet',
-      agent: sessions.labelOf(pane),
-      model: pane.model,
-      openedFromHome: pane.openedFromHome,
-    })),
+    sessions.panes.filter(listed).map((pane) => {
+      const shell = pane.kind.kind === 'shell';
+      const run = shell ? shellRuns.forSession(pane.session) : undefined;
+      const label = sessions.labelOf(pane);
+      const status = run
+        ? run.phase === 'interrupted' || (run.outcome && run.outcome.kind !== 'success')
+          ? 'failed'
+          : runSettled(run)
+            ? 'idle'
+            : 'working'
+        : sessions.statusOfPane(pane);
+      const title = shell
+        ? run?.request.command.split('\n')[0] || 'Shell'
+        : (pane.agentTitle ??
+          pane.firstPrompt ??
+          (pane.error
+            ? `Couldn’t ${pane.detached ? 'restore' : 'start'} ${label} session`
+            : `New ${label} session`));
+      return {
+        id: pane.id,
+        projectId: pane.projectId,
+        worktreeId: pane.worktreeId,
+        session: pane.session,
+        parentSession: pane.parentSession,
+        status,
+        title,
+        agent: shell ? 'Shell' : label,
+        model: pane.model,
+        openedFromHome: pane.openedFromHome || run?.requester != null,
+        kind: shell ? 'shell' : 'agent',
+        completed: run ? runSettled(run) : pane.lastTurnFinished,
+        detail: run ? runStatus(run) : (pane.error ?? ''),
+      };
+    }),
   );
 
   arrangement = $derived.by(() => {
-    const worktrees: Record<string, { id: string; title: string; subtitle: string }[]> = {};
+    const worktrees: Record<string, FleetWorktree[]> = {};
     for (const project of workspace.projects) {
       const list = this.worktreesOf(project.id);
       if (list) worktrees[project.id] = list;
