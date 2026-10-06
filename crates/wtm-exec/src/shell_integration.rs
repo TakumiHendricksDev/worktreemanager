@@ -246,7 +246,12 @@ mod tests {
         }
 
         fn dispatch(&mut self, epoch: u64, capability: &str) {
-            writeln!(self.reader.get_mut(), "run {epoch} {capability}").unwrap();
+            // Match production: publish the complete line, not formatting fragments which can
+            // wake ZLE before the sending thread has finished writing the request.
+            self.reader
+                .get_mut()
+                .write_all(format!("run {epoch} {capability}\n").as_bytes())
+                .unwrap();
         }
     }
 

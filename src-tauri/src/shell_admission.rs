@@ -158,7 +158,10 @@ impl Shell {
             });
             (stream, epoch)
         };
-        if let Err(error) = writeln!(stream, "run {epoch} {capability}") {
+        // Formatting directly into a socket splits the line into several writes. ZLE can wake
+        // on the first fragment and expire its bounded read before this thread sends the rest.
+        let message = format!("run {epoch} {capability}\n");
+        if let Err(error) = stream.write_all(message.as_bytes()) {
             self.release(capability);
             return Err(error.to_string());
         }
