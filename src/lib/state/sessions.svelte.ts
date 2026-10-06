@@ -4218,6 +4218,17 @@ class Sessions {
     this.expected.add(worktreeId);
   }
 
+  /** A successful removal is stronger evidence than a stale listing or an expected-create marker. */
+  forgetWorktree(projectId: string, worktreeId: string): void {
+    this.expected.delete(worktreeId);
+    this.reconcile(
+      projectId,
+      this.panes
+        .filter((pane) => pane.projectId === projectId && pane.worktreeId !== worktreeId)
+        .map((pane) => pane.worktreeId),
+    );
+  }
+
   reconcile(projectId: string, ids: string[]): void {
     const alive = new Set(ids);
     for (const id of ids) this.expected.delete(id);

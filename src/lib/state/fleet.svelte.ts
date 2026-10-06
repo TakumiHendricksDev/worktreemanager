@@ -206,6 +206,18 @@ class Fleet {
     }
   }
 
+  /** A confirmed removal invalidates the exact project's cached tree, including while Home
+   * is looking at another project. Failed refreshes cannot put the deleted row back. */
+  async removed(projectId: string, worktreeId: string): Promise<void> {
+    const current = this.worktreesOf(projectId) ?? cachedWorktrees(projectId) ?? [];
+    const kept = current.filter((w) => w.id !== worktreeId);
+    this.listings = { ...this.listings, [projectId]: kept };
+    cacheWorktrees(projectId, kept);
+    sessions.forgetWorktree(projectId, worktreeId);
+    await workspace.afterRemoval(projectId, worktreeId);
+    if (workspace.activeProjectId !== projectId) await this.fetchOne(projectId);
+  }
+
   /** A project's agents, fetched once and kept until the next focus clears them. */
   async agentsFor(projectId: string): Promise<AgentOption[]> {
     const known = this.offered[projectId];

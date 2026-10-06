@@ -44,6 +44,7 @@
   import { resolveWorktreeTarget, worktreeActions } from '../worktree-menu';
   import { attention } from '../state/attention.svelte';
   import { errorMessage } from '../ipc/types';
+  import { worktreeRemoval } from '../state/worktree-removal.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { inRail, worse, type PaneStatus } from '../status';
@@ -416,7 +417,7 @@
 
     await popUp(
       [
-        ...worktreeActions(target),
+        ...worktreeActions(target, (captured) => void worktreeRemoval.request(captured)),
         separator,
         item(starred ? 'Remove from Favorites' : 'Add to Favorites', () =>
           workspace.toggleFavorite(worktreeId),
@@ -479,7 +480,8 @@
 
   function onRowMenu(event: MouseEvent, worktreeId: string) {
     event.preventDefault();
-    void rowMenu(worktreeId);
+    (event.currentTarget as HTMLElement).focus();
+    void rowMenu(worktreeId, { x: event.clientX, y: event.clientY });
   }
 
   function onGroupMenu(event: MouseEvent, groupId: string) {

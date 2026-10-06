@@ -12,7 +12,8 @@
    */
   import { commands } from '../ipc/commands';
   import { errorMessage, type Preflight, type Worktree } from '../ipc/types';
-  import { workspace } from '../state/workspace.svelte';
+  import { fleet } from '../state/fleet.svelte';
+  import { sessions } from '../state/sessions.svelte';
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
   import Choice from './ui/Choice.svelte';
@@ -35,6 +36,12 @@
   let done = $state<string | null>(null);
   let session = $state<string | null>(null);
   const acknowledged = $state<string[]>([]);
+
+  const affected = $derived(
+    sessions.panes.filter(
+      (pane) => pane.projectId === projectId && pane.worktreeId === worktree.id,
+    ),
+  );
 
   const errors = $derived(preflight.filter((p) => p.severity === 'error'));
   const warns = $derived(preflight.filter((p) => p.severity === 'warn'));
@@ -78,6 +85,7 @@
   }
 
   async function remove() {
+    if (!canRemove) return;
     busy = true;
     error = null;
     try {
@@ -103,7 +111,7 @@
       if (outcome.warnings.length > 0) {
         done += ' ' + outcome.warnings.map((w) => w.message).join(' ');
       }
-      await workspace.refreshWorktrees();
+      await fleet.removed(projectId, worktree.id);
     } catch (e) {
       error = errorMessage(e);
     } finally {
@@ -112,11 +120,22 @@
   }
 </script>
 
-<Dialog title={done ? 'Removed' : 'Remove worktree'} {onclose} closeDisabled={busy} wide>
+<Dialog
+  title={done ? 'Removed' : 'Remove this worktree?'}
+  {onclose}
+  closeDisabled={busy}
+  wide
+>
   {#snippet body()}
     {#if done}
       <p class="c-status--ok">{done}</p>
     {:else}
+      <p>
+        This ends the worktree’s agents, shells and browser panes before running teardown.
+        {#if affected.length > 0}{affected.length} open {affected.length === 1
+            ? 'pane will close'
+            : 'panes will close'}.{/if}
+      </p>
       <p class="c-remove__target"><code>{worktree.path}</code></p>
       {#if worktree.branch}
         <p class="c-remove__sub">on <code>{worktree.branch}</code></p>

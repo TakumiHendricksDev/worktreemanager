@@ -19,6 +19,7 @@
   import { treePrefs } from '../state/tree-prefs.svelte';
   import { attention } from '../state/attention.svelte';
   import { fleet } from '../state/fleet.svelte';
+  import { worktreeRemoval } from '../state/worktree-removal.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { view } from '../state/view.svelte';
   import { workspace } from '../state/workspace.svelte';
@@ -241,7 +242,7 @@
     }
     if (epoch !== menuEpoch || !visible || !anchor.isConnected) return;
     const entries: MenuEntry[] = [
-      ...worktreeActions(target),
+      ...worktreeActions(target, (captured) => void worktreeRemoval.request(captured)),
       separator,
       heading('Start an agent here'),
       ...options.map((option) =>
@@ -486,6 +487,7 @@
             onclick={() => activate(row)}
             oncontextmenu={(event) => {
               event.preventDefault();
+              event.currentTarget.focus();
               rowMenu(event, row, event.currentTarget);
             }}
             onfocus={() => {

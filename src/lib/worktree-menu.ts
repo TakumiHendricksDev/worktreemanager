@@ -48,7 +48,10 @@ export async function openWorktreeLink(target: WorktreeTarget, link: Link): Prom
   workspace.rememberLink(target.projectId, link.label);
 }
 
-export function worktreeActions(target: WorktreeTarget): MenuEntry[] {
+export function worktreeActions(
+  target: WorktreeTarget,
+  remove: (target: WorktreeTarget) => void,
+): MenuEntry[] {
   const { worktree } = target;
   return [
     worktree.links.length > 0
@@ -78,6 +81,12 @@ export function worktreeActions(target: WorktreeTarget): MenuEntry[] {
         const current = await revalidateWorktree(target);
         await navigator.clipboard.writeText(current.worktree.path);
       }),
+    ),
+    separator,
+    item(
+      worktree.isMain ? 'Remove worktree — main checkout' : 'Remove worktree…',
+      () => remove(target),
+      !worktree.isMain,
     ),
   ];
 }

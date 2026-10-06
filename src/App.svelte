@@ -44,6 +44,7 @@
   import { commands } from './lib/ipc/commands';
   import { errorMessage, type NotificationClick, type Project } from './lib/ipc/types';
   import { attention } from './lib/state/attention.svelte';
+  import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
   import { composerPrefs } from './lib/state/composer.svelte';
   import { dictation } from './lib/state/dictate.svelte';
@@ -83,7 +84,7 @@
    * minutes. Removal stays a modal — a destructive confirmation should block.
    */
   let showAddProject = $state(false);
-  let showRemove = $state(false);
+
   /**
    * The project being removed, captured when the dialog opens.
    *
@@ -698,7 +699,13 @@
           onsessions={() => view.show('worktree')}
           ondatabase={() => view.show('database')}
           oncode={() => view.show('code')}
-          onremove={() => (showRemove = true)}
+          onremove={() => {
+            if (workspace.activeProjectId && workspace.selected)
+              void worktreeRemoval.request({
+                projectId: workspace.activeProjectId,
+                worktree: workspace.selected,
+              });
+          }}
           oninspect={() => (showInspector = true)}
           onfavorite={() => {
             const id = workspace.selected?.id;
@@ -758,11 +765,11 @@
     />
   {/if}
 
-  {#if showRemove && workspace.selected && workspace.activeProjectId}
+  {#if worktreeRemoval.target}
     <RemoveWorktreeDialog
-      projectId={workspace.activeProjectId}
-      worktree={workspace.selected}
-      onclose={() => (showRemove = false)}
+      projectId={worktreeRemoval.target.projectId}
+      worktree={worktreeRemoval.target.worktree}
+      onclose={() => worktreeRemoval.close()}
     />
   {/if}
 
