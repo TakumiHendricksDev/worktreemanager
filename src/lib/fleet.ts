@@ -10,7 +10,7 @@
  * # Flat rows, not a nested structure
  *
  * The tree is drawn as one list of rows with a level each, because that is what both of its other
- * consumers want. Arrow keys walk rows in screen order, and the wires measure rows by key — a nested
+ * consumers want. Arrow keys walk rows in screen order, and selection follows stable row keys — a nested
  * structure would make each of them flatten it again, and two flattenings can disagree.
  *
  * # What a fold may not hide
@@ -118,7 +118,7 @@ export interface FleetJob {
 }
 
 /** What the tree can be narrowed to, besides a typed filter. */
-export type FleetOnly = 'attention' | 'working' | 'done';
+export type FleetOnly = 'attention' | 'working' | 'done' | 'failed';
 
 export interface FleetInput {
   projects: readonly FleetProject[];
@@ -140,10 +140,6 @@ export interface FleetOptions {
 
 export interface FleetArrangement {
   rows: FleetRow[];
-  /** Every session's ancestors by row key, nearest first, for anchoring a wire to a fold. */
-  ancestry: ReadonlyMap<string, readonly string[]>;
-  /** Which keys are on screen. */
-  visible: ReadonlySet<string>;
 }
 
 export const HOME_KEY = 'home';
@@ -182,8 +178,13 @@ function rollUp(statuses: readonly PaneStatus[]): PaneStatus | null {
   return found;
 }
 
-function matchesOnly(status: PaneStatus, only: FleetOnly | null): boolean {
+function matchesOnly(session: FleetSession, only: FleetOnly | null): boolean {
+  const status = session.status;
   if (only === null) return true;
+  if (only === 'done')
+    return (
+      status === 'done' || (session.completed && (status === 'idle' || status === 'ended'))
+    );
   if (only === 'working') return status === 'working' || status === 'starting';
   return status === only;
 }
@@ -212,7 +213,6 @@ function basename(path: string): string {
  */
 export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArrangement {
   const rows: FleetRow[] = [{ kind: 'home', key: HOME_KEY, level: 1 }];
-  const ancestry = new Map<string, string[]>();
   const terms = options.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const filtering = terms.length > 0 || options.only !== null;
 
@@ -245,7 +245,7 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
   };
 
   const sessionMatches = (s: FleetSession, place: string): boolean =>
-    matchesOnly(s.status, options.only) &&
+    matchesOnly(s, options.only) &&
     terms.every((term) => textOf(s.title, s.agent, s.model, place).includes(term));
 
   const open = (key: string, fallback: boolean): boolean =>
@@ -288,7 +288,11 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
     const worktreeMatches = (w: FleetWorktree) =>
       options.only === null &&
       terms.length > 0 &&
-      terms.every((term) => textOf(w.title, w.subtitle, project.name).includes(term));
+      terms.every((term) =>
+        textOf(w.title, w.subtitle, w.path, w.branch, w.issueKey, project.name).includes(
+          term,
+        ),
+      );
     const shownBusy = filtering
       ? busy.filter(
           (w) =>
@@ -296,7 +300,12 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
             mine
               .filter((s) => s.worktreeId === w.id)
               .some((root) =>
-                subtree(root).some((s) => sessionMatches(s, `${w.title} ${project.name}`)),
+                subtree(root).some((s) =>
+                  sessionMatches(
+                    s,
+                    textOf(w.title, w.subtitle, w.path, w.branch, w.issueKey, project.name),
+                  ),
+                ),
               ),
         )
       : busy;
@@ -338,10 +347,16 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
         });
       }
 
-      const place = `${worktree.title} ${project.name}`;
-      const emit = (s: FleetSession, level: number, above: string[], shown: boolean) => {
+      const place = textOf(
+        worktree.title,
+        worktree.subtitle,
+        worktree.path,
+        worktree.branch,
+        worktree.issueKey,
+        project.name,
+      );
+      const emit = (s: FleetSession, level: number, shown: boolean) => {
         const key = sessionKey(s.id);
-        ancestry.set(key, above);
         const below = kids(s);
         const matched = !filtering || subtree(s).some((d) => sessionMatches(d, place));
         if (!matched) return;
@@ -359,16 +374,11 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
           });
         }
         for (const child of below) {
-          emit(
-            child,
-            kept ? level + 1 : level,
-            [key, ...above],
-            kept && shown && sessionOpen,
-          );
+          emit(child, kept ? level + 1 : level, kept && shown && sessionOpen);
         }
       };
       // Under a folded project there is no worktree row, so what the fold keeps sits one level up.
-      for (const root of here) emit(root, projectOpen ? 3 : 2, [wKey, pKey], worktreeOpen);
+      for (const root of here) emit(root, projectOpen ? 3 : 2, worktreeOpen);
     }
 
     // What Home is making here, between what is running and what is quiet.
@@ -415,19 +425,5 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
     }
   }
 
-  return { rows, ancestry, visible: new Set(rows.map((row) => row.key)) };
-}
-
-/**
- * Where a wire to `key` should end: the row itself, or the nearest heading folded over it.
- *
- * Null when nothing on the way up is on screen — a project the filter hid entirely — and then no
- * wire is drawn for that end at all, rather than one into empty space.
- */
-export function anchorOf(arrangement: FleetArrangement, key: string): string | null {
-  if (arrangement.visible.has(key)) return key;
-  for (const above of arrangement.ancestry.get(key) ?? []) {
-    if (arrangement.visible.has(above)) return above;
-  }
-  return null;
+  return { rows };
 }

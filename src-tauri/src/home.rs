@@ -1200,8 +1200,8 @@ pub fn home_instructions() -> String {
     "You are the Home agent in Worktree Manager (wtm). You are not inside any repository: your \
      working directory is a private scratch folder. Your job is to help the user coordinate their \
      coding-agent sessions across every project and worktree wtm manages. The user is watching you \
-     in wtm's Home view, which draws every session as a tree and shows each message you send to \
-     one as a live wire between you.\n\n\
+     in wtm's Home view, which lists sessions by project and worktree. In flight and Activity \
+     show your delegations and messages.\n\n\
      Your tools are `mcp__wtm__list_projects`, `list_worktrees`, `list_all_sessions`, \
      `read_session`, `message_session`, `open_session`, `interrupt_session`, `close_sessions`, \
      `preview_worktree`, `create_worktree`, `preview_removal`, `remove_worktree`, `list_shells`, \

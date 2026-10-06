@@ -495,7 +495,7 @@ export const commands = {
   markInterruptedByQuit: (session: string, waiting: boolean) =>
     invoke<void>('mark_interrupted_by_quit', { session, waiting }),
 
-  /** What agents have recently said to each other, oldest first. Home draws its wires from it. */
+  /** What agents have recently said to each other, oldest first. Home shows it in Activity. */
   agentMessages: () => invoke<AgentExchange[]>('agent_messages'),
 
   /** End a session and forget it. */

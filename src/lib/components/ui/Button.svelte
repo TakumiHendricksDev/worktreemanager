@@ -25,6 +25,7 @@
     ariaPressed,
     ariaControls,
     ariaHaspopup,
+    tabindex,
     onclick,
     children,
   }: {
@@ -66,6 +67,8 @@
     ariaControls?: string;
     /** For a button that opens a native menu. See `native-menu.ts`. */
     ariaHaspopup?: 'menu';
+    /** Composite controls own their roving tab stop. */
+    tabindex?: 0 | -1;
     onclick?: (event: MouseEvent) => void;
     children: Snippet;
   } = $props();
@@ -76,6 +79,7 @@
   {disabled}
   {title}
   {onclick}
+  {tabindex}
   aria-label={ariaLabel}
   aria-expanded={ariaExpanded}
   aria-pressed={ariaPressed}

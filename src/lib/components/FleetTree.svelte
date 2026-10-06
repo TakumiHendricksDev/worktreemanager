@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
    * Home's left column: every project, its worktrees, and every agent session running in them, as
-   * one tree — with wires drawn between sessions while one is talking to another.
+   * one compact location tree.
    *
    * It takes the sidebar's place while Home is up rather than sitting beside it. The sidebar lists
    * one project's worktrees; this lists all of them, so the two side by side would be two trees of
@@ -9,12 +9,12 @@
    * was.
    *
    * What goes where is `fleet.ts`; this renders its rows and owns only what needs the DOM — the
-   * roving focus, the menus, and the measuring `FleetWires` does over it. Like the sidebar it is a
+   * roving focus and the menus. Like the sidebar it is a
    * genuine `role="tree"`: focus lives on the rows, and the tree listens for the keys that bubble.
    */
   import { onMount, tick } from 'svelte';
 
-  import { HOME_KEY, type FleetRow } from '../fleet';
+  import { HOME_KEY, type FleetRow, type FleetCounts, type FleetOnly } from '../fleet';
   import { heading, item, popUp, separator, under, type MenuEntry } from '../native-menu';
   import { attention } from '../state/attention.svelte';
   import { fleet } from '../state/fleet.svelte';
@@ -23,7 +23,7 @@
   import { workspace } from '../state/workspace.svelte';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import CloseSessionDialog from './CloseSessionDialog.svelte';
-  import FleetWires from './FleetWires.svelte';
+  import { worktreeLabel } from '../worktree-label';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
   import SessionDot from './ui/SessionDot.svelte';
@@ -52,7 +52,6 @@
   const tabKey = $derived(rows.some((row) => row.key === focusKey) ? focusKey : HOME_KEY);
 
   let treeEl = $state<HTMLDivElement | null>(null);
-  let scrollEl = $state<HTMLDivElement | null>(null);
   let searchEl = $state<HTMLInputElement | null>(null);
 
   /** The tree's own ⌘F, while it is the one on screen. The sidebar's is gated the other way. */
@@ -69,103 +68,56 @@
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const counts = $derived.by(() => {
-    let attention = 0;
-    let working = 0;
-    let done = 0;
-    for (const session of fleet.sessions) {
-      if (session.status === 'attention') attention += 1;
-      else if (session.status === 'working' || session.status === 'starting') working += 1;
-      else if (session.status === 'done') done += 1;
-    }
-    return { attention, working, done };
-  });
-
   function selected(row: FleetRow): boolean {
     if (row.kind === 'home') return view.peeked === null && fleet.jobShown === null;
     if (row.kind === 'creation') return fleet.jobShown === row.job.id;
     return row.kind === 'session' && row.session.id === view.peeked;
   }
 
-  /** One count in a row's tag: its words, and the dot and number it shrinks to when compact. */
-  interface Tally {
-    word: string;
-    status: PaneStatus | null;
-    n: number | null;
+  function countDetail(row: Extract<FleetRow, { kind: 'project' | 'worktree' }>): string {
+    const c: FleetCounts = row.counts;
+    const visibleCount = rows.filter(
+      (candidate) =>
+        candidate.kind === 'session' &&
+        (row.kind === 'project'
+          ? candidate.session.projectId === row.project.id
+          : candidate.session.worktreeId === row.worktree.id),
+    ).length;
+    const filtered = fleet.query.trim() !== '' || fleet.only !== null;
+    return `${filtered ? `${visibleCount} of ` : ''}${c.total} sessions · ${c.attention} need you · ${c.working} running · ${c.done} unread completions · ${c.failed} failed`;
   }
 
-  /** What a heading says about what is under it. Words, never only the dot beside them. */
-  function tally(c: {
-    total: number;
-    attention: number;
-    working: number;
-    done: number;
-    failed: number;
-  }): Tally[] {
-    const parts: Tally[] = [];
-    const count = (n: number, status: PaneStatus, word: string) =>
-      parts.push({ word: `${n} ${word}`, status, n });
-    if (c.attention > 0)
-      count(c.attention, 'attention', c.attention === 1 ? 'needs you' : 'need you');
-    if (c.failed > 0) count(c.failed, 'failed', 'failed');
-    if (c.working > 0) count(c.working, 'working', 'running');
-    if (c.done > 0) count(c.done, 'done', 'done');
-    if (parts.length === 0 && c.total > 0) count(c.total, 'idle', 'idle');
-    return parts;
+  function statusOf(row: FleetRow): PaneStatus | null {
+    if (row.kind === 'session') return row.session.status;
+    if (row.kind === 'project') return row.project.usable ? row.status : 'attention';
+    if (row.kind === 'worktree') return row.status;
+    if (row.kind === 'creation')
+      return row.job.phase === 'running'
+        ? 'starting'
+        : row.job.phase === 'created' || row.job.phase === 'removed'
+          ? 'done'
+          : 'failed';
+    return null;
   }
 
-  // ─────────────────────────────── counts that fit ───────────────────────────────
-
-  /**
-   * Rows whose count is drawn compact — each count as its dot and number — by row key.
-   *
-   * Only where the full words would leave the name less room than a short one needs, so a long
-   * name truncates first and the count is never cut. Decided by measuring, because whether it fits
-   * depends on how many counts the row has, how deep it is, and how wide the column is.
-   */
-  let compact = $state<Record<string, boolean>>({});
-
-  /** Room under which even a short name does not fit: about five characters at the tree's size. */
-  const MIN_NAME_PX = 40;
-
-  /**
-   * Measure every row with a count. Works from either form: the words stay in the tag, clipped out
-   * of sight when compact, so the room the name would have beside them can always be worked out —
-   * which is what keeps a row from flipping between the two forms as each changes the space.
-   */
-  function fit(): void {
-    if (!treeEl || !visible) return;
-    const next: Record<string, boolean> = {};
-    for (const row of treeEl.querySelectorAll<HTMLElement>('[data-nav]')) {
-      const name = row.querySelector<HTMLElement>(':scope > .c-fleet__name');
-      const tag = row.querySelector<HTMLElement>(':scope > .c-fleet__tag');
-      const words = tag?.querySelector<HTMLElement>(':scope > .c-fleet__tag-full');
-      const key = row.dataset.nav;
-      if (!name || !tag || !words || !key) continue;
-      const text = document.createRange();
-      text.selectNodeContents(name);
-      const wanted = text.getBoundingClientRect().width;
-      const room = name.clientWidth + tag.offsetWidth - words.offsetWidth;
-      if (wanted > room + 1 && room < MIN_NAME_PX) next[key] = true;
-    }
-    if (JSON.stringify(next) !== JSON.stringify(compact)) compact = next;
+  function titleOf(row: FleetRow): string {
+    if (row.kind === 'worktree') return worktreeLabel(row.worktree).detail;
+    if (row.kind === 'session')
+      return [
+        row.session.title,
+        row.session.agent,
+        row.session.model,
+        STATUS_WORD[row.session.status],
+        row.session.detail,
+        row.session.openedFromHome ? 'Opened by Home' : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+    if (row.kind === 'creation') return row.job.detail;
+    if (row.kind === 'project')
+      return row.project.usable ? countDetail(row) : 'Repository needs attention';
+    return '';
   }
-
-  // On any change to the rows, after the DOM has it. The read of `compact` is after the `tick`, so
-  // this effect does not depend on what it writes.
-  $effect(() => {
-    void rows;
-    if (!visible) return;
-    void tick().then(fit);
-  });
-
-  // And whenever the column changes width: the sidebar dragged, or a scrollbar arriving.
-  onMount(() => {
-    if (!treeEl) return;
-    const observer = new ResizeObserver(() => fit());
-    observer.observe(treeEl);
-    return () => observer.disconnect();
-  });
 
   function peek(paneId: string) {
     view.peek(paneId);
@@ -193,7 +145,10 @@
         else onopenworktree(row.projectId, row.worktree.id);
         return;
       case 'session':
-        peek(row.session.id);
+        if (row.session.kind === 'shell') {
+          onopenworktree(row.session.projectId, row.session.worktreeId);
+          sessions.focus(row.session.worktreeId, row.session.id);
+        } else peek(row.session.id);
         return;
       case 'creation':
         fleet.showJob(row.job.id);
@@ -286,7 +241,7 @@
       if (!pane) return;
       void popUp(
         [
-          item('Peek', () => peek(pane.id)),
+          ...(pane.kind.kind === 'agent' ? [item('Peek', () => peek(pane.id))] : []),
           item('Open in its worktree', () =>
             onopenworktree(pane.projectId, pane.worktreeId),
           ),
@@ -380,26 +335,6 @@
   }
 </script>
 
-{#snippet tag(key: string, parts: Tally[])}
-  {#if parts.length > 0}
-    {@const words = parts.map((part) => part.word).join(' · ')}
-    <span
-      class="c-fleet__tag"
-      class:is-compact={compact[key] === true}
-      title={compact[key] ? words : undefined}
-    >
-      <span class="c-fleet__tag-full">{words}</span>
-      {#if compact[key]}
-        {#each parts as part (part.word)}
-          <span class="c-fleet__tag-part" aria-hidden="true">
-            {#if part.status}<SessionDot status={part.status} />{/if}{part.n ?? ''}
-          </span>
-        {/each}
-      {/if}
-    </span>
-  {/if}
-{/snippet}
-
 {#snippet twisty(row: FleetRow)}
   {@const expanded = expandedOf(row)}
   {#if expanded === null}
@@ -439,39 +374,35 @@
     </div>
   </div>
 
-  <!-- The counts double as filters, so the question "what needs me" is one click from the answer. -->
-  <div class="c-fleet__counts" role="group" aria-label="Show only">
-    <button
-      class="c-fleet__count"
-      class:is-pressed={fleet.only === 'attention'}
-      aria-pressed={fleet.only === 'attention'}
-      disabled={counts.attention === 0 && fleet.only !== 'attention'}
-      onclick={() => (fleet.only = fleet.only === 'attention' ? null : 'attention')}
+  <div class="c-fleet__filter">
+    <label class="u-visually-hidden" for="fleet-status">Session status</label>
+    <select
+      id="fleet-status"
+      class="c-fleet__select"
+      value={fleet.only ?? ''}
+      onchange={(event) =>
+        (fleet.only = (event.currentTarget.value || null) as FleetOnly | null)}
     >
-      <SessionDot status="attention" />{counts.attention} need you
-    </button>
-    <button
-      class="c-fleet__count"
-      class:is-pressed={fleet.only === 'working'}
-      aria-pressed={fleet.only === 'working'}
-      disabled={counts.working === 0 && fleet.only !== 'working'}
-      onclick={() => (fleet.only = fleet.only === 'working' ? null : 'working')}
-    >
-      <SessionDot status="working" />{counts.working} running
-    </button>
-    <button
-      class="c-fleet__count"
-      class:is-pressed={fleet.only === 'done'}
-      aria-pressed={fleet.only === 'done'}
-      disabled={counts.done === 0 && fleet.only !== 'done'}
-      onclick={() => (fleet.only = fleet.only === 'done' ? null : 'done')}
-    >
-      <SessionDot status="done" />{counts.done} done
-    </button>
+      <option value="">All sessions</option>
+      <option value="attention">Needs you</option>
+      <option value="working">Running</option>
+      <option value="done">Completed</option>
+      <option value="failed">Failed</option>
+    </select>
+    {#if fleet.only !== null || fleet.query !== ''}
+      <Button
+        variant="quiet"
+        size="sm"
+        onclick={() => {
+          fleet.only = null;
+          fleet.query = '';
+        }}>Clear</Button
+      >
+    {/if}
   </div>
 
   <div class="c-fleet__wrap">
-    <div class="c-fleet__scroll" bind:this={scrollEl}>
+    <div class="c-fleet__scroll">
       <!-- svelte-ignore a11y_interactive_supports_focus -->
       <div
         role="tree"
@@ -483,6 +414,7 @@
       >
         {#each rows as row (row.key)}
           {@const expanded = expandedOf(row)}
+          {@const status = statusOf(row)}
           <!-- Keys are the tree's, which hears them bubble from the focused row; a click is the
                mouse's route to the same activation. -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -491,6 +423,8 @@
             class="c-fleet__row c-fleet__row--{row.kind}"
             class:is-selected={selected(row)}
             data-nav={row.key}
+            title={titleOf(row)}
+            aria-describedby={`fleet-detail-${row.key}`}
             tabindex={row.key === tabKey ? 0 : -1}
             aria-level={row.level}
             aria-expanded={expanded ?? undefined}
@@ -503,33 +437,57 @@
             }}
             onfocus={() => (focusKey = row.key)}
           >
-            {@render twisty(row)}
-            {#if row.kind === 'home'}
-              <span class="c-fleet__icon"><Icon name="home" size={14} /></span>
-              <span class="c-fleet__name">Home</span>
-              {@render tag(row.key, [
-                {
-                  word: `${fleet.summary.sessions} ${fleet.summary.sessions === 1 ? 'session' : 'sessions'}`,
-                  status: null,
-                  n: fleet.summary.sessions,
-                },
-              ])}
-            {:else if row.kind === 'project'}
-              {#if row.status}<SessionDot status={row.status} />{/if}
-              <span class="c-fleet__name" title={row.project.name}>{row.project.name}</span>
-              {@render tag(
-                row.key,
-                row.project.usable
-                  ? tally(row.counts)
-                  : [{ word: 'needs attention', status: 'attention', n: null }],
-              )}
-              <span class="c-fleet__actions">
+            <span id={`fleet-detail-${row.key}`} class="u-visually-hidden"
+              >{titleOf(row)}</span
+            >
+            <span class="c-fleet__marker">
+              {#if row.kind === 'home'}<Icon name="home" size={14} />
+              {:else if status && status !== 'idle'}<SessionDot {status} labelled />{/if}
+            </span>
+            <span class="c-fleet__identity">
+              {@render twisty(row)}
+              {#if row.kind === 'home'}<span class="c-fleet__name">Home</span>
+              {:else if row.kind === 'project'}<span class="c-fleet__name"
+                  >{row.project.name}</span
+                >
+              {:else if row.kind === 'worktree'}
+                {@const identity = worktreeLabel(row.worktree)}
+                {#if identity.key}<span class="c-fleet__key">{identity.key}</span>{/if}
+                <span class="c-fleet__name">{identity.name}</span>
+              {:else if row.kind === 'idle'}<span class="c-fleet__name">No sessions</span>
+              {:else if row.kind === 'creation'}<span class="c-fleet__name"
+                  >{row.job.title}</span
+                >
+              {:else}
+                <span class="c-fleet__name">{row.session.title}</span>
+                <span class="c-fleet__provider"
+                  >{row.session.agent.replace(' Code', '').replace(' Agent', '')}</span
+                >
+              {/if}
+            </span>
+            <span class="c-fleet__tag">
+              {#if row.kind === 'project' || row.kind === 'worktree'}
+                {#if row.counts.total > 0}<span
+                    title={countDetail(row)}
+                    aria-label={countDetail(row)}>{row.counts.total}</span
+                  >{/if}
+              {:else if row.kind === 'idle'}<span
+                  aria-label={`${row.count} worktrees without sessions`}>{row.count}</span
+                >{/if}
+            </span>
+            <span class="c-fleet__actions">
+              {#if row.kind === 'project' || row.kind === 'worktree'}
                 <Button
                   variant="quiet"
                   icon="sm"
-                  title="More for {row.project.name}"
-                  ariaLabel="More for {row.project.name}"
+                  title={row.kind === 'project'
+                    ? `More for ${row.project.name}`
+                    : `More for ${row.worktree.title}`}
+                  ariaLabel={row.kind === 'project'
+                    ? `More for ${row.project.name}`
+                    : `More for ${row.worktree.title}`}
                   ariaHaspopup="menu"
+                  tabindex={-1}
                   onclick={(event) => {
                     event.stopPropagation();
                     rowMenu(event, row, event.currentTarget as Element);
@@ -537,94 +495,12 @@
                 >
                   <Icon name="more" size={14} />
                 </Button>
-              </span>
-            {:else if row.kind === 'worktree'}
-              {#if row.status}<SessionDot status={row.status} />{/if}
-              <span class="c-fleet__name" title={row.worktree.subtitle}
-                >{row.worktree.title}</span
-              >
-              {#if row.expanded === null}
-                <span class="c-fleet__meta">{row.worktree.subtitle}</span>
-              {:else}
-                {@render tag(row.key, tally(row.counts))}
               {/if}
-              <span class="c-fleet__actions">
-                <Button
-                  variant="quiet"
-                  icon="sm"
-                  title="Start an agent in {row.worktree.title}"
-                  ariaLabel="Start an agent in {row.worktree.title}"
-                  ariaHaspopup="menu"
-                  onclick={(event) =>
-                    void startIn(
-                      event,
-                      row.projectId,
-                      row.worktree.id,
-                      event.currentTarget as Element,
-                    )}
-                >
-                  <Icon name="plus" size={14} />
-                </Button>
-              </span>
-            {:else if row.kind === 'creation'}
-              <SessionDot
-                status={row.job.phase === 'running'
-                  ? 'starting'
-                  : row.job.phase === 'created' || row.job.phase === 'removed'
-                    ? 'done'
-                    : 'failed'}
-              />
-              <span class="c-fleet__body">
-                <span class="c-fleet__line">
-                  <span class="c-fleet__name">⌂ {row.job.title}</span>
-                  <span class="c-fleet__status">
-                    {row.job.phase === 'running'
-                      ? row.job.kind === 'remove'
-                        ? 'removing…'
-                        : 'creating…'
-                      : row.job.phase === 'created'
-                        ? 'new'
-                        : row.job.phase === 'removed'
-                          ? 'removed'
-                          : 'failed'}
-                  </span>
-                </span>
-                <span class="c-fleet__meta" title={row.job.detail}>{row.job.detail}</span>
-              </span>
-            {:else if row.kind === 'idle'}
-              <span class="c-fleet__name c-fleet__name--quiet">Other worktrees</span>
-              {@render tag(row.key, [
-                { word: `(${row.count})`, status: null, n: row.count },
-              ])}
-            {:else}
-              {@const inbound = fleet.inboundTo(row.session.id)}
-              <SessionDot status={row.session.status} />
-              <span class="c-fleet__body">
-                <span class="c-fleet__line">
-                  <span class="c-fleet__name" title={row.session.title}
-                    >{row.session.title}</span
-                  >
-                  <span class="c-fleet__status">{STATUS_WORD[row.session.status]}</span>
-                </span>
-                <span class="c-fleet__meta">
-                  {#if row.session.openedFromHome}<span
-                      class="c-fleet__badge"
-                      title="Opened from Home">⌂</span
-                    >{/if}{row.session.agent}{#if row.session.model}
-                    · {row.session.model}{/if}
-                </span>
-                {#if inbound}
-                  <span class="c-fleet__chip" title={inbound.prompt}>
-                    ← {fleet.nameOf(inbound.from)}: “{inbound.prompt}”
-                  </span>
-                {/if}
-              </span>
-            {/if}
+            </span>
           </div>
         {/each}
       </div>
     </div>
-    <FleetWires {visible} {scrollEl} {treeEl} />
   </div>
 
   <div class="c-fleet__foot">

@@ -579,7 +579,7 @@ tools take targets, which none of §6b's do. What keeps it narrow:
   Closing is limited to sessions Home opened that are idle and that the user has never written to —
   one the user has started talking to has become theirs.
 - It is visible. A session Home opens is a pane in its worktree; what Home sends arrives labelled
-  `From Home (wtm):`; every exchange is a wire in Home's tree.
+  `From Home (wtm):`; every exchange appears in Home's Activity list.
 
 **Reviewed shell commands are a separate authorization.** Assistant fences tagged sh, bash,
 zsh, shell or shellscript offer Run; untagged and unfinished blocks cannot execute. Every click
@@ -1265,17 +1265,14 @@ session's approvals oldest first, which is the one place arrival order across pa
 `PendingApproval` now carries an arrival counter — a counter, not a time, because replay preserves
 order and no clock is needed.
 
-**Wires are drawn in viewport space, from a log Rust keeps.** When one session hands work to another,
-the prompt and the answer each appear in their own transcript and nothing connected them. Rust now
-records each exchange — prompt, reply or failure, sender, receiver — in a bounded in-memory ring
-(`messages.rs`), announces the whole record when it starts and when it settles, and serves the ring
-to a reloaded window. The turn waiter that settles them (`turns.rs`) replaced the sink `ask_agent`
-used to wrap around its child, because a sink is fixed when a session opens and Home has to wait on
-sessions it did not open; a waiter that gives up still settles its exchange when the turn finally
-ends, so a slow child's wire does not stay drawn in flight. The wires are an SVG over the tree's
-scroll viewport, measured from the rows whenever anything moves, so an end that has scrolled away is
-clamped to the edge with a way back. They are decorative: the Activity list and a chip on the
-receiving row say the same in words, and under reduced motion they hold still.
+**Relationships stay in Activity and In flight.** Rust records each exchange — prompt, reply or
+failure, sender, receiver — in a bounded in-memory ring (`messages.rs`), announces it on start and
+settlement, and serves it to reloaded windows. The turn waiter (`turns.rs`) settles an exchange even
+when its caller stopped waiting. The tree shows location, one aligned status, and a nonshrinking
+session count. It has no wires or per-row message chips; Activity and In flight explain those
+relationships in words. Issue keys stay whole, with the descriptive title alone ellipsized. Full
+branch/path and Home provenance remain in tooltips and selected detail. Shell rows open the actual
+terminal in its worktree, rather than mounting a second transcript or terminal in Peek.
 
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 

@@ -13,7 +13,7 @@ export const HOME = '@home';
 
 /**
  * What wtm calls Home's own agent, wherever it names it: the pane's title, the tab it is in, the
- * end of a wire. In a sentence it is "the Home agent".
+ * top of the tree. In a sentence it is "the Home agent".
  *
  * Not the CLI's name, which every other pane is titled by. Home can run Claude Code, Codex or
  * Cursor, and titled "Claude Code" its pane read as one more Claude session rather than the one
