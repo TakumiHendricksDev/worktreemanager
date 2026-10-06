@@ -900,6 +900,9 @@ pub struct App {
     pub messages: crate::messages::Log,
     /// Home conversations' handles and the sessions they opened. See `home.rs`.
     pub home: crate::home::Registry,
+    pub shell_admission: crate::shell_admission::Registry,
+    pub shell_runs: crate::shell_runs::Registry,
+    pub shell_creation: parking_lot::Mutex<()>,
     /// How many worktree creations are running, by project id. See [`CreateGuard`].
     creating: Arc<parking_lot::Mutex<BTreeMap<String, usize>>>,
     agents: parking_lot::Mutex<BTreeMap<wtm_core::model::SessionId, AgentEntry>>,
@@ -1023,6 +1026,9 @@ impl App {
             turns: crate::turns::Registry::default(),
             messages: crate::messages::Log::default(),
             home: crate::home::Registry::default(),
+            shell_admission: crate::shell_admission::Registry::default(),
+            shell_runs: crate::shell_runs::Registry::default(),
+            shell_creation: parking_lot::Mutex::new(()),
             creating: Arc::default(),
             dictation: crate::dictate::Dictation::default(),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
@@ -1560,23 +1566,109 @@ impl App {
         cols: u16,
         sink: Arc<dyn wtm_core::ports::pty::PtySink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
+        self.open_shell_inner(worktree, project_id, (argv, None), rows, cols, sink)
+    }
+
+    pub fn open_run_shell(
+        &self,
+        worktree: &Worktree,
+        project_id: &str,
+        home: Option<String>,
+        rows: u16,
+        cols: u16,
+        sink: Arc<dyn wtm_core::ports::pty::PtySink>,
+    ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
+        self.open_shell_inner(
+            worktree,
+            project_id,
+            (vec!["/bin/zsh".into(), "-l".into()], home),
+            rows,
+            cols,
+            sink,
+        )
+    }
+
+    fn open_shell_inner(
+        &self,
+        worktree: &Worktree,
+        project_id: &str,
+        launch: (Vec<String>, Option<String>),
+        rows: u16,
+        cols: u16,
+        sink: Arc<dyn wtm_core::ports::pty::PtySink>,
+    ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
         use wtm_core::ports::pty::PtyHost;
+        let (argv, owner) = launch;
 
         // Before the spawn, so descriptors a finished session is still holding are released
         // before a new pair is allocated. This is the app's only caller.
         self.pty.reap_finished(KEEP_FINISHED_SESSIONS);
 
-        let inv = wtm_core::ports::exec::Invocation::new(
+        let mut inv = wtm_core::ports::exec::Invocation::new(
             argv,
             worktree.path.clone(),
             crate::commands::SHELL_TIMEOUT_MS,
         );
-        // `inv.env` stays empty on purpose: `PtyHostImpl::spawn` already lays down
-        // `child_env()` — so `PATH` and `LOGIN_PATH` are the resolved ones — and a `TERM`, and
-        // a login shell is about to re-source the user's profile over the top of both anyway.
-        let spawned = self
+        // Unsupported shells retain their usual startup. Only ZLE can currently
+        // prove an empty editor at dispatch; an ordinary prompt string cannot.
+        let integration = if Path::new(inv.program())
+            .file_name()
+            .is_some_and(|name| name == "zsh")
+        {
+            let prepared = (|| -> Result<_, String> {
+                let helper = std::env::current_exe().map_err(|e| e.to_string())?;
+                let original = std::env::var_os("ZDOTDIR")
+                    .or_else(|| std::env::var_os("HOME"))
+                    .map(PathBuf::from)
+                    .ok_or("The shell profile directory is unavailable.")?;
+                let socket = self
+                    .config
+                    .paths()
+                    .config_dir
+                    .join(crate::bridge::SOCKET_FILENAME);
+                let integration = wtm_exec::shell_integration::ShellIntegration::create(
+                    &socket, &helper, &original,
+                )?;
+                Ok(Arc::new(crate::shell_admission::Shell::new(
+                    project_id,
+                    worktree.id.as_str(),
+                    owner,
+                    integration,
+                )))
+            })();
+            match prepared {
+                Ok(shell) => {
+                    inv.env.insert(
+                        "ZDOTDIR".into(),
+                        shell.integration.directory().to_string_lossy().into_owned(),
+                    );
+                    self.shell_admission.prepare(Arc::clone(&shell));
+                    Some(shell)
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "shell integration is unavailable");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let spawned = match self
             .pty
-            .spawn(&inv, rows, cols, Some(worktree.id.as_str()), sink)?;
+            .spawn(&inv, rows, cols, Some(worktree.id.as_str()), sink)
+        {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                if let Some(shell) = &integration {
+                    self.shell_admission.abandon(shell);
+                }
+                return Err(error);
+            }
+        };
+        if let Some(shell) = integration {
+            self.shell_admission
+                .register(spawned.session.as_str(), shell);
+        }
 
         // Taken after the spawn, unlike the version this replaces: with no reuse check there is
         // nothing to make atomic, so there is no reason to hold a lock across a process launch.
@@ -1648,6 +1740,11 @@ impl App {
         if self.shells.lock().remove(&session).is_none() {
             return false;
         }
+        if let Some(run) = self.shell_runs.active(session_id) {
+            crate::shell_control::interrupt(&run, "The shell was closed.");
+            self.shell_runs.release(&run);
+        }
+        self.shell_admission.close(session_id);
         self.forget_shell_output(&session);
         let closed = match self.pty.kill(&session) {
             Ok(()) => true,
@@ -2164,6 +2261,7 @@ impl App {
     /// that outlived its session was one UUID and `Caller` per pane until the worktree died, and
     /// the only thing that can still present it is a CLI we just signalled to exit.
     pub fn close_agent(&self, session: &str) -> bool {
+        self.close_home_runs(session);
         // Descendants first: `forget_session` drops the parentage map, and doing that
         // before signalling would leave child CLIs running with no owner.
         for child in self.handoff.descendants(session) {
@@ -2176,6 +2274,25 @@ impl App {
         self.home.forget(session);
         self.pipe.reap_finished(KEEP_FINISHED_SESSIONS);
         closed
+    }
+
+    pub fn close_home_runs(&self, home: &str) {
+        for run in self.shell_runs.all() {
+            if run.prepared.source.home() == Some(home) {
+                crate::shell_control::interrupt(&run, "Home closed before the command settled.");
+                crate::shell_control::release(self, &run);
+            }
+        }
+        self.shell_runs.forget_home(home);
+    }
+
+    pub fn close_shell_runs(&self) {
+        for run in self.shell_runs.all() {
+            crate::shell_control::interrupt(&run, "wtm closed before the command settled.");
+        }
+        for shell in self.live_shells() {
+            self.shell_admission.close(&shell.session);
+        }
     }
 
     fn end_agent_process(&self, session: &str) -> bool {
@@ -2197,6 +2314,15 @@ impl App {
     /// Used by worktree removal: calling [`Self::close_shell`] / [`Self::close_agent`] in a
     /// loop would pay 400 ms per session.
     pub fn terminate_sessions_in(&self, worktree_id: &str) {
+        for run in self.shell_runs.all() {
+            if run.prepared.target.worktree == worktree_id {
+                crate::shell_control::interrupt(&run, "The worktree is being removed.");
+                self.shell_runs.release(&run);
+            }
+        }
+        for session in self.shells_in(worktree_id) {
+            self.shell_admission.close(&session);
+        }
         let shells: Vec<wtm_core::model::SessionId> = self
             .shells_in(worktree_id)
             .into_iter()

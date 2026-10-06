@@ -169,6 +169,17 @@ impl Shell {
     /// A UI keystroke queued after reservation invalidates the capability even if
     /// the widget has not received that keystroke yet.
     pub fn consume(&self, capability: &str) -> Result<(), String> {
+        self.consume_if(capability, || Ok(()))
+    }
+
+    /// Acquire the input sequencer before authorization locks. A blocked PTY
+    /// writer must not leave its output reader waiting on a run-state lock held
+    /// by the consumer which is itself waiting for this input sequencer.
+    pub fn consume_if(
+        &self,
+        capability: &str,
+        authorize: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut state = self.state.lock();
         let valid = !state.closed
             && state.reservation.as_ref().is_some_and(|r| {
@@ -180,6 +191,7 @@ impl Shell {
         if !valid {
             return Err("The shell changed before Run was accepted. Nothing ran.".into());
         }
+        authorize()?;
         if let Some(reservation) = &mut state.reservation {
             reservation.consumed = true;
         }

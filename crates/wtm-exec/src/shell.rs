@@ -25,6 +25,14 @@ use crate::signal;
 
 pub const MAX_SCRIPT_BYTES: usize = 64 * 1024;
 
+/// The shell control socket must not be inherited by the reviewed command.
+pub fn close_inherited_control(fd: i32) -> Result<(), String> {
+    if fd < 3 {
+        return Err("The private shell control descriptor is invalid.".into());
+    }
+    nix::unistd::close(fd).map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interpreter {
     Sh,
@@ -204,6 +212,8 @@ pub fn run_inherited(
     cancel: &CancelToken,
     on_started: impl FnOnce(u32) -> Result<(), String>,
 ) -> Result<ExitOutcome, String> {
+    let span = tracing::info_span!("reviewed_shell", interpreter = interpreter.name(), cwd = %cwd.display(), timeout_ms);
+    let _entered = span.enter();
     if cancel.is_cancelled() {
         return Ok(ExitOutcome::Cancelled);
     }

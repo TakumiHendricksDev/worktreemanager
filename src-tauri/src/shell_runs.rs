@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -171,6 +172,7 @@ pub enum Phase {
     Prepared,
     AwaitingApproval,
     AwaitingPane,
+    OpeningShell,
     Reserved,
     Running,
     Completed,
@@ -206,6 +208,8 @@ pub struct State {
     pub session: Option<String>,
     pub capability: Option<String>,
     pub child: Option<u32>,
+    pub helper: Option<u32>,
+    pub control: Option<UnixStream>,
     pub output: Output,
     pub problem: Option<String>,
     pub grant: bool,
@@ -298,23 +302,27 @@ impl Run {
 struct Entries {
     runs: BTreeMap<String, Arc<Run>>,
     keys: BTreeMap<(Source, String), String>,
-    grants: Vec<(String, Target)>,
+    capabilities: BTreeMap<String, String>,
+    active: BTreeMap<String, String>,
 }
 
 #[derive(Default)]
-pub struct Registry(Mutex<Entries>);
+pub struct Registry {
+    entries: Mutex<Entries>,
+    grants: Mutex<Vec<(String, Target)>>,
+}
 
 impl std::fmt::Debug for Registry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Registry")
-            .field("runs", &self.0.lock().runs.len())
+            .field("runs", &self.entries.lock().runs.len())
             .finish_non_exhaustive()
     }
 }
 
 impl Registry {
     pub fn prepare(&self, prepared: Prepared) -> Result<Arc<Run>, String> {
-        let mut entries = self.0.lock();
+        let mut entries = self.entries.lock();
         let key = (prepared.source.clone(), prepared.request.key.clone());
         if let Some(id) = entries.keys.get(&key) {
             let run = entries
@@ -375,12 +383,7 @@ impl Registry {
         if entries.runs.len() >= MAX_RUNS {
             return Err("The command history limit for this app launch has been reached.".into());
         }
-        let grant = home.is_some_and(|home| {
-            entries
-                .grants
-                .iter()
-                .any(|(owner, target)| owner == home && *target == prepared.target)
-        });
+        let grant = home.is_some_and(|home| self.has_grant(home, &prepared.target));
         let phase = if home.is_some() && !grant {
             Phase::AwaitingApproval
         } else {
@@ -395,6 +398,8 @@ impl Registry {
                 session: None,
                 capability: None,
                 child: None,
+                helper: None,
+                control: None,
                 output: Output::new(framing.clone()),
                 problem: None,
                 grant,
@@ -408,7 +413,7 @@ impl Registry {
     }
 
     pub fn get(&self, id: &str) -> Result<Arc<Run>, String> {
-        self.0
+        self.entries
             .lock()
             .runs
             .get(id)
@@ -417,32 +422,80 @@ impl Registry {
     }
 
     pub fn all(&self) -> Vec<Arc<Run>> {
-        self.0.lock().runs.values().cloned().collect()
+        self.entries.lock().runs.values().cloned().collect()
+    }
+
+    pub fn reserve(&self, run: &Arc<Run>, session: &str) -> Result<String, String> {
+        let mut entries = self.entries.lock();
+        let mut state = run.state.lock();
+        if state.phase != Phase::AwaitingPane {
+            return Err("This run has already been dispatched or cancelled.".into());
+        }
+        if entries.active.contains_key(session) {
+            return Err("This shell already has a run.".into());
+        }
+        let capability = uuid::Uuid::new_v4().simple().to_string();
+        state.phase = Phase::Reserved;
+        state.session = Some(session.into());
+        state.capability = Some(capability.clone());
+        entries
+            .capabilities
+            .insert(capability.clone(), run.id.clone());
+        entries.active.insert(session.into(), run.id.clone());
+        Ok(capability)
+    }
+
+    pub fn by_capability(&self, capability: &str) -> Result<Arc<Run>, String> {
+        let entries = self.entries.lock();
+        entries
+            .capabilities
+            .get(capability)
+            .and_then(|id| entries.runs.get(id))
+            .cloned()
+            .ok_or_else(|| "This shell-run capability is gone or already used.".into())
+    }
+
+    pub fn consume_capability(&self, capability: &str) {
+        self.entries.lock().capabilities.remove(capability);
+    }
+
+    pub fn active(&self, session: &str) -> Option<Arc<Run>> {
+        let entries = self.entries.lock();
+        entries
+            .active
+            .get(session)
+            .and_then(|id| entries.runs.get(id))
+            .cloned()
+    }
+
+    pub fn release(&self, run: &Run) {
+        let mut entries = self.entries.lock();
+        entries.capabilities.retain(|_, id| id != &run.id);
+        entries.active.retain(|_, id| id != &run.id);
     }
 
     /// Called only by the human IPC route, never the Home tool dispatcher.
     pub fn set_grant(&self, home: &str, target: Target, allow: bool) {
-        let mut entries = self.0.lock();
-        entries.grants.retain(|(owner, existing)| {
+        let mut grants = self.grants.lock();
+        grants.retain(|(owner, existing)| {
             owner != home
                 || existing.project != target.project
                 || existing.worktree != target.worktree
         });
         if allow {
-            entries.grants.push((home.into(), target));
+            grants.push((home.into(), target));
         }
     }
 
     pub fn has_grant(&self, home: &str, target: &Target) -> bool {
-        self.0
+        self.grants
             .lock()
-            .grants
             .iter()
             .any(|(owner, existing)| owner == home && existing == target)
     }
 
     pub fn forget_home(&self, home: &str) {
-        self.0.lock().grants.retain(|(owner, _)| owner != home);
+        self.grants.lock().retain(|(owner, _)| owner != home);
         for run in self.all() {
             if run.prepared.source.home() == Some(home) {
                 run.interrupt("Home closed before this command settled.");
@@ -514,10 +567,22 @@ mod tests {
         let prepared = Prepared::create(&setup.app, prepared.request, Source::Human).unwrap();
         let run = registry.prepare(prepared).unwrap();
         assert_eq!(run.view().phase, Phase::Prepared);
+        assert!(registry.reserve(&run, "shell").is_err());
         assert!(!setup.fixture.root().join("executed").exists());
         assert!(run.approve().unwrap());
         assert!(!run.approve().unwrap());
         assert_eq!(run.view().phase, Phase::AwaitingPane);
+        let capability = registry.reserve(&run, "shell").unwrap();
+        assert!(Arc::ptr_eq(
+            &run,
+            &registry.by_capability(&capability).unwrap()
+        ));
+        assert!(registry.reserve(&run, "other-shell").is_err());
+        registry.consume_capability(&capability);
+        assert!(registry.by_capability(&capability).is_err());
+        registry.release(&run);
+        assert!(registry.active("shell").is_none());
+
         assert!(!setup.fixture.root().join("executed").exists());
     }
 

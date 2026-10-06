@@ -97,6 +97,16 @@ impl EventSink {
 
 impl PtySink for EventSink {
     fn on_output(&self, session: &SessionId, chunk: &[u8]) {
+        let filtered;
+        let chunk = if let Some(app) = &self.recorder {
+            filtered = crate::shell_control::capture(&self.app, app, session, chunk);
+            filtered.as_slice()
+        } else {
+            chunk
+        };
+        if chunk.is_empty() {
+            return;
+        }
         // Kept before it is emitted, and numbered by the same call, so a window can never be sent
         // a chunk the ring does not have — the order `agent_bridge` keeps for the same reason.
         let seq = self
@@ -116,6 +126,17 @@ impl PtySink for EventSink {
     }
 
     fn on_exit(&self, session: &SessionId, outcome: &ExitOutcome) {
+        if let Some(app) = &self.recorder {
+            if let Some(run) = app.shell_runs.active(session.as_str()) {
+                crate::shell_control::cancel(
+                    &self.app,
+                    app,
+                    &run,
+                    "The shell exited before its run settled.",
+                );
+            }
+            app.shell_admission.close(session.as_str());
+        }
         let event = ExitEvent {
             session: session.as_str().to_owned(),
             outcome: outcome.clone(),

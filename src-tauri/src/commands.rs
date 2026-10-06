@@ -1415,9 +1415,16 @@ pub async fn pty_write(app: AppState<'_>, session: String, data_base64: String) 
     blocking(move || {
         let bytes = crate::pty_bridge::base64_decode(&data_base64)
             .ok_or_else(|| ErrorView::new("badInput", "terminal input was not valid base64"))?;
-        app.pty
-            .write(&wtm_core::model::SessionId::new(session), &bytes)
-            .map_err(|e| ErrorView::new("exec", e.to_string()))
+        let write = || {
+            app.pty
+                .write(&wtm_core::model::SessionId::new(&session), &bytes)
+        };
+        let result = if let Some(shell) = app.shell_admission.get(&session) {
+            shell.manual_input(write)
+        } else {
+            write()
+        };
+        result.map_err(|e| ErrorView::new("exec", e.to_string()))
     })
     .await
 }
