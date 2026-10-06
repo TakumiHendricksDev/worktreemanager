@@ -78,7 +78,7 @@ time            = { version = "0.3", features = ["formatting", "parsing", "local
 # `libc::killpg` is an unsafe extern call. nix wraps exactly these syscalls in a
 # safe, well-maintained API — so the only `unsafe` in this repo is the fenced
 # objc2 FFI in `wtm-notify`, which carries its own lints table saying why.
-nix             = { version = "0.31", features = ["signal", "process", "user"] }
+nix             = { version = "0.31", features = ["signal", "process", "user", "term"] }
 uuid            = { version = "1", features = ["v4", "serde"] }
 tracing         = "0.1"
 postgres        = "0.19"

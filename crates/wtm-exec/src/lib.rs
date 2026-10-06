@@ -38,6 +38,8 @@ pub mod path;
 pub mod pipe;
 pub mod pty;
 pub mod runner;
+pub mod shell;
+pub mod shell_frames;
 pub mod signal;
 
 pub use clock::SystemClock;
