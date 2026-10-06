@@ -22,6 +22,7 @@ pub mod handoff;
 pub mod home;
 pub mod home_tools;
 pub mod messages;
+pub mod native_menu;
 pub mod notifier;
 pub mod openers;
 pub mod pane_windows;
@@ -245,6 +246,7 @@ pub fn run() {
         })
         .on_window_event(pane_windows::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            native_menu::popup_native_menu,
             commands::dictation_status,
             commands::set_dictation_key,
             commands::start_dictation,

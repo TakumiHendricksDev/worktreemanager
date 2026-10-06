@@ -67,6 +67,8 @@ import type {
 } from './types';
 
 export const commands = {
+  popupNativeMenu: (rid: number, kind: 'menu' | 'submenu', at?: { x: number; y: number }) =>
+    invoke<void>('popup_native_menu', { rid, kind, at }),
   // ── projects ──
   listProjects: () => invoke<Project[]>('list_projects'),
   /** Accepts any path inside a repository. Returns the resolved id, not just the list. */
