@@ -674,6 +674,35 @@ the dialog would end or could lose: an agent session, shell or browser pane open
 commits not in the base. It never forces, so uncommitted work stays the user's to discard. A removal
 is a `home:worktree` job too, so it appears in Home's tree as a creation does.
 
+### Native UI and nested event loops
+
+Native menus and file pickers can service webview IPC before returning. No resource
+table, application registry or plugin-state guard may span native presentation,
+`run_on_main_thread`, `with_webview`, a synchronous UI reply wait or a callback that
+can reenter. Clone the owned handles under a short lock, release it, then dispatch.
+
+Tauri 2.11.6's menu `popup` command violates this rule: its worker holds the webview
+resource table while waiting for AppKit's menu tracking loop. A nested resource IPC
+on the main thread then waits for the worker's lock. `native_menu::popup_native_menu`
+replaces that presentation boundary; menu creation and action Channels remain Tauri's.
+An atomic admission flag rejects overlapping tracking without holding another lock.
+The frontend queues openings, discards stale requests, and defers actions until
+tracking ends. A dismissed menu stays alive until the next opening because its action
+Channel may arrive after the popup reply.
+
+The modal audit covered application-menu callbacks (event emission only), pane-window
+creation/close, browser dispatch/snapshot/navigation callbacks, and the pinned
+`tauri-plugin-dialog` 2.7.3 / `rfd` 0.16.0 picker paths. These extract registry state
+before UI calls; dialog scopes are updated after selection, and rfd releases its
+future-state lock before starting the sheet/modal loop. No additional lock-lifetime
+changes were needed in those paths. This is a boundary to preserve in future work,
+not a claim that every native dependency is reentrancy-safe.
+
+The resource callback regression test fails when its guard is moved past the callback.
+Mocked IPC checks queueing and Channel delivery; neither proves AppKit behavior.
+`docs/native-menu-regression.md` describes the isolated old/new native probe and its
+external watchdog. Never run a deliberate hang against the user's working app.
+
 ## 5a. Two things the real repository taught us
 
 Both were found by running against a real repository rather than by reasoning, and both are the kind of

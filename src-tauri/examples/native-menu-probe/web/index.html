@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8"><title>Native menu regression probe</title></head>
+  <body>
+    <h1>Isolated native menu probe</h1>
+    <p>Keep each menu or picker open for five seconds. A resource request and an async
+      heartbeat must finish before dismissal. The old route should freeze only this probe;
+      the external watchdog stops it after 60 seconds.</p>
+    <button id="fixed">Fixed menu</button>
+    <button id="old">Old plugin route (expected hang)</button>
+    <button id="file">File picker</button>
+    <button id="folder">Folder picker</button>
+    <p>After a fixed-menu pass, dismiss with Escape, reopen and select the file-picker action.</p>
+    <pre id="results" aria-live="polite"></pre>
+    <script src="probe.js"></script>
+  </body>
+</html>
