@@ -519,14 +519,23 @@ terminal you can type into, and *Cancel setup* stops it. If setup fails, the wor
 
 ### Removing one
 
-⋯ → **Remove Worktree…** shows the path and branch, then the options:
+Right-click a worktree in either the project sidebar or Home’s tree (or press ⇧F10) to open its
+configured links, copy its exact branch name, copy its absolute directory path, or remove it.
+Detached worktrees have no branch to copy. Actions always use that row, even when another project
+is selected.
+
+**Remove worktree…**, also available in the worktree bar’s ⋯ menu, asks about the named path and
+branch and warns that its panes will close. Nothing is removed before the final confirmation.
+Both options default off:
 
 - *Also delete the branch*.
 - *Force — discard uncommitted and untracked files*.
 
 Preflight re-runs as you change them. The project's teardown steps run first, so containers are
 stopped before their directory goes. If a teardown step fails, nothing is removed and you see its
-output. The main worktree can't be removed.
+output. Main and locked worktrees cannot be removed; Force never unlocks one. Refusals are checked
+again before panes close. Removing a worktree from Home refreshes its project without switching
+the project you were viewing.
 
 ### Details
 

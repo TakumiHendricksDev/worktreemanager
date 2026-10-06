@@ -2277,19 +2277,25 @@ impl App {
     }
 
     pub fn close_home_runs(&self, home: &str) {
-        for run in self.shell_runs.all() {
-            if run.prepared.source.home() == Some(home) {
-                crate::shell_control::interrupt(&run, "Home closed before the command settled.");
-                crate::shell_control::release(self, &run);
-            }
+        let runs: Vec<_> = self
+            .shell_runs
+            .all()
+            .into_iter()
+            .filter(|run| run.prepared.source.home() == Some(home))
+            .collect();
+        crate::shell_control::interrupt_many(&runs, "Home closed before the command settled.", &[]);
+        for run in runs {
+            crate::shell_control::release(self, &run);
         }
         self.shell_runs.forget_home(home);
     }
 
     pub fn close_shell_runs(&self) {
-        for run in self.shell_runs.all() {
-            crate::shell_control::interrupt(&run, "wtm closed before the command settled.");
-        }
+        crate::shell_control::interrupt_many(
+            &self.shell_runs.all(),
+            "wtm closed before the command settled.",
+            &[],
+        );
         for shell in self.live_shells() {
             self.shell_admission.close(&shell.session);
         }
@@ -2314,15 +2320,12 @@ impl App {
     /// Used by worktree removal: calling [`Self::close_shell`] / [`Self::close_agent`] in a
     /// loop would pay 400 ms per session.
     pub fn terminate_sessions_in(&self, worktree_id: &str) {
-        for run in self.shell_runs.all() {
-            if run.prepared.target.worktree == worktree_id {
-                crate::shell_control::interrupt(&run, "The worktree is being removed.");
-                self.shell_runs.release(&run);
-            }
-        }
-        for session in self.shells_in(worktree_id) {
-            self.shell_admission.close(&session);
-        }
+        let runs: Vec<_> = self
+            .shell_runs
+            .all()
+            .into_iter()
+            .filter(|run| run.prepared.target.worktree == worktree_id)
+            .collect();
         let shells: Vec<wtm_core::model::SessionId> = self
             .shells_in(worktree_id)
             .into_iter()
@@ -2335,7 +2338,13 @@ impl App {
             .collect();
         let mut pids = self.pty.take_pids(&shells);
         pids.extend(self.pipe.take_pids(&agents));
-        wtm_exec::signal::terminate_groups(&pids);
+        crate::shell_control::interrupt_many(&runs, "The worktree is being removed.", &pids);
+        for run in runs {
+            self.shell_runs.release(&run);
+        }
+        for session in &shells {
+            self.shell_admission.close(session.as_str());
+        }
         {
             let mut map = self.shells.lock();
             for session in &shells {

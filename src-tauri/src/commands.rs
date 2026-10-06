@@ -1315,6 +1315,9 @@ pub(crate) fn remove_now(
     progress: &dyn wtm_core::ports::progress::ProgressSink,
     sink: &Arc<dyn wtm_core::ports::pty::PtySink>,
 ) -> Result<wtm_core::usecase::RemoveOutcome, wtm_core::error::WtmError> {
+    // The dialog's preview may be stale. Refuse before ending panes, then the pipeline checks
+    // again immediately before teardown in case the directory changed while they were closing.
+    app.remove_pipeline().validate(req)?;
     let worktree_id = req.worktree.id.as_str();
     // End every dock shell and agent in the worktree before teardown runs.
     //

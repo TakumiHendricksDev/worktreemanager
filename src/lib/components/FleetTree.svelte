@@ -264,6 +264,7 @@
   }
 
   function rowMenu(event: MouseEvent | null, row: FleetRow, anchor: Element) {
+    menuEpoch += 1;
     if (row.kind === 'worktree') {
       void startIn(event, row.projectId, row.worktree.id, anchor);
       return;
@@ -576,7 +577,8 @@
 
   <div class="c-fleet__foot">
     <Button variant="neutral" full onclick={onaddproject}>
-      <Icon name="plus" size={14} /> Add a repository…
+      <Icon name="plus" size={14} /><span class="c-fleet__add-label">Add a repository…</span
+      >
     </Button>
   </div>
 </nav>

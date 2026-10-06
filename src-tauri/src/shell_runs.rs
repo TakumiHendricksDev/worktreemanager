@@ -742,4 +742,53 @@ mod tests {
         assert!(fresh.all().is_empty());
         assert!(!fresh.has_grant("home", &run.prepared.target));
     }
+    #[test]
+    fn batch_interruption_closes_every_active_control_without_rewriting_finished_runs() {
+        use std::io::Read;
+        let setup = Setup::new();
+        let registry = Registry::default();
+        let mut runs = Vec::new();
+        let mut readers = Vec::new();
+        for key in ["first", "second"] {
+            let run = registry
+                .prepare(setup.prepared(key, Source::Human))
+                .unwrap();
+            let (control, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+            reader
+                .set_read_timeout(Some(std::time::Duration::from_millis(250)))
+                .unwrap();
+            run.state.lock().phase = Phase::Running;
+            run.state.lock().control = Some(control);
+            runs.push(run);
+            readers.push(reader);
+        }
+        let finished = registry
+            .prepare(setup.prepared("finished", Source::Human))
+            .unwrap();
+        {
+            let mut state = finished.state.lock();
+            state.output.push(finished.framing.begin().as_bytes());
+            state.output.push(finished.framing.end().as_bytes());
+            state
+                .output
+                .finish(wtm_core::model::ExitOutcome::Failed { code: 7 });
+            state.phase = Phase::Completed;
+        }
+        runs.push(finished.clone());
+        crate::shell_control::interrupt_many(&runs, "Worktree removed", &[]);
+        for mut reader in readers {
+            assert_eq!(reader.read(&mut [0_u8; 1]).unwrap(), 0);
+        }
+        for run in &runs[..2] {
+            let state = run.state.lock();
+            assert_eq!(state.phase, Phase::Interrupted);
+            assert!(state.output.complete());
+            assert_eq!(state.problem.as_deref(), Some("Worktree removed"));
+        }
+        assert_eq!(finished.view().phase, Phase::Completed);
+        assert_eq!(
+            finished.view().outcome,
+            Some(wtm_core::model::ExitOutcome::Failed { code: 7 })
+        );
+    }
 }

@@ -198,3 +198,56 @@ fn the_teardown_preview_renders_each_step_as_the_run_would_and_names_what_it_ski
     assert_eq!(steps[1].cwd, PathBuf::from("/repo"));
     assert!(steps[1].skipped.is_none());
 }
+#[test]
+fn locked_worktrees_refuse_before_teardown_even_when_force_is_requested() {
+    for reason in ["", "external checkout"] {
+        for force in [false, true] {
+            let git = Arc::new(FakeGit::with_main("/repo", "main"));
+            let runner = Arc::new(FakeRunner::new());
+            let mut project = project();
+            project.remove.pre = vec![step(
+                &["stop-containers"],
+                wtm_core::model::CwdBase::Worktree,
+                None,
+            )];
+            let request = RemoveRequest {
+                project,
+                worktree: Worktree {
+                    id: WorktreeId::from_path(std::path::Path::new("/repo-locked")),
+                    path: PathBuf::from("/repo-locked"),
+                    head: None,
+                    checkout: Checkout::Detached,
+                    is_main: false,
+                    is_bare: false,
+                    locked: Some(reason.into()),
+                    prunable: None,
+                },
+                ambient: Context::new(),
+                delete_branch: false,
+                force,
+                acknowledged: vec!["locked".into()],
+            };
+            let pipeline = RemovePipeline {
+                git: git.clone(),
+                runner: runner.clone(),
+                pty: Arc::new(FakePty::new()),
+                engine: Arc::new(Engine::new()),
+            };
+            let result = pipeline.execute(
+                &request,
+                &NullProgress,
+                &(Arc::new(NullPtySink) as Arc<dyn wtm_core::ports::pty::PtySink>),
+                &CancelToken::new(),
+            );
+            assert!(
+                matches!(result, Err(wtm_core::error::WtmError::Preflight(ref items))
+                if items.iter().any(|item| item.id == "locked" && !item.overridable))
+            );
+            assert!(runner.calls().is_empty(), "a refusal cannot run teardown");
+            assert!(
+                git.mutations().is_empty(),
+                "a refusal cannot remove or unlock"
+            );
+        }
+    }
+}

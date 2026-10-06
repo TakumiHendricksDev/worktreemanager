@@ -206,6 +206,14 @@ Retry setup / Open shell / Remove worktree. `Retry setup` reuses stage 9 verbati
 
 ---
 
+**Removal captures its target before confirmation.** Both trees and the worktree bar use one
+`worktree-removal` request and the same dialog/IPC/pipeline. Selection changes cannot retarget a
+request. `RemovePipeline::validate` supplies the identical error/override rules before the app ends
+panes and again before teardown. Main and locked checkouts are unoverridable; no route silently
+unlocks one. Confirmed removal invalidates the named project's caches and reconciles only that
+worktree's panes, even when another project is active. Managed run children and ordinary process
+groups are signalled together, with one grace period and no app/run lock held while waiting.
+
 ## 6. Trust
 
 `wtm.toml` is arbitrary code execution by a file that lives inside a repository. Cloning a hostile repo

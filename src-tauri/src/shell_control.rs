@@ -357,11 +357,29 @@ pub fn interrupt(run: &Run, reason: &str) {
     end(run, reason, Phase::Interrupted);
 }
 
+/// App/Home closure and worktree removal pay one grace period for all run children and the
+/// caller's ordinary shell/agent groups. No registry or run guard survives into that wait.
+pub fn interrupt_many(runs: &[Arc<Run>], reason: &str, other_groups: &[u32]) {
+    let ended = runs
+        .iter()
+        .filter_map(|run| end_state(run, reason, Phase::Interrupted));
+    finish_ends(ended, other_groups);
+}
+
+struct Ended {
+    child: Option<u32>,
+    helper: Option<u32>,
+}
+
 fn end(run: &Run, reason: &str, phase: Phase) {
+    finish_ends(end_state(run, reason, phase), &[]);
+}
+
+fn end_state(run: &Run, reason: &str, phase: Phase) -> Option<Ended> {
     let (child, helper, control) = {
         let mut state = run.state.lock();
         if state.phase.terminal() {
-            return;
+            return None;
         }
         state.phase = phase;
         state.problem = Some(reason.into());
@@ -375,13 +393,20 @@ fn end(run: &Run, reason: &str, phase: Phase) {
     if let Some(control) = control {
         let _ = control.shutdown(Shutdown::Both);
     }
-    if let Some(child) = child {
-        wtm_exec::signal::terminate_group(child);
-    }
-    if let Some(helper) = helper {
+    run.changed.notify_all();
+    Some(Ended { child, helper })
+}
+
+fn finish_ends(ended: impl IntoIterator<Item = Ended>, other_groups: &[u32]) {
+    let ended: Vec<_> = ended.into_iter().collect();
+    let mut groups = other_groups.to_vec();
+    groups.extend(ended.iter().filter_map(|end| end.child));
+    groups.sort_unstable();
+    groups.dedup();
+    wtm_exec::signal::terminate_groups(&groups);
+    for helper in ended.iter().filter_map(|end| end.helper) {
         wtm_exec::signal::terminate_helper(helper);
     }
-    run.changed.notify_all();
 }
 
 /// Only the private binary mode calls this; no GUI, app state or live data path

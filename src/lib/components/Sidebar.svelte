@@ -390,6 +390,7 @@
   let menuEpoch = 0;
   async function rowMenu(worktreeId: string, at?: { x: number; y: number }) {
     const epoch = ++menuEpoch;
+    const origin = navItems().find((row) => row.dataset.nav === `row:${worktreeId}`);
     const projectId = workspace.activeProjectId;
     if (!projectId) return;
     let target;
@@ -399,7 +400,13 @@
       attention.notice('Could not open worktree menu', errorMessage(e));
       return;
     }
-    if (epoch !== menuEpoch || workspace.activeProjectId !== projectId || hidden) return;
+    if (
+      epoch !== menuEpoch ||
+      workspace.activeProjectId !== projectId ||
+      hidden ||
+      !origin?.isConnected
+    )
+      return;
     const here = locate(workspace.layout, worktreeId);
     const starred = workspace.isFavorite(worktreeId);
     const ungrouped = workspace.layout.groups.find((g) => g.id === UNGROUPED);
@@ -432,6 +439,7 @@
   }
 
   async function groupMenu(groupId: string, at?: { x: number; y: number }) {
+    menuEpoch += 1;
     const section = sectionOf(groupId);
     if (!section) return;
     const custom = section.kind === 'custom';
