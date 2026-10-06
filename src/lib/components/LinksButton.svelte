@@ -20,13 +20,21 @@
    * worktree bar leaves it out. In a narrow bar the label goes and the icon stays, which is why the
    * name is also in `aria-label` and the tooltip — see `$bar-links-fold`.
    */
-  import { commands } from '../ipc/commands';
+  import {
+    resolveWorktreeTarget,
+    openWorktreeLink,
+    worktreeAction,
+  } from '../worktree-menu';
   import type { Link } from '../ipc/types';
   import { item, popUp, under } from '../native-menu';
   import { workspace } from '../state/workspace.svelte';
   import Icon from './ui/Icon.svelte';
 
-  const { projectId, links }: { projectId: string; links: Link[] } = $props();
+  const {
+    projectId,
+    worktreeId,
+    links,
+  }: { projectId: string; worktreeId: string; links: Link[] } = $props();
 
   /**
    * Matched by label, falling back to the first. A remembered label the config has since dropped
@@ -42,9 +50,10 @@
   const rest = $derived(links.filter((link) => link !== primary));
 
   function open(link: Link) {
-    workspace.rememberLink(projectId, link.label);
-    // The scheme is validated in Rust, and there is nothing useful to do if the OS declines.
-    void commands.openUrl(link.url).catch(() => {});
+    worktreeAction(async () => {
+      const target = await resolveWorktreeTarget(projectId, worktreeId);
+      await openWorktreeLink(target, link);
+    });
   }
 
   function menu(event: MouseEvent) {

@@ -24,6 +24,7 @@
   import { workspace } from '../state/workspace.svelte';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import CloseSessionDialog from './CloseSessionDialog.svelte';
+  import { resolveWorktreeTarget, worktreeActions } from '../worktree-menu';
   import { worktreeLabel } from '../worktree-label';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -219,6 +220,7 @@
   }
 
   /** Start an agent in a worktree from Home. The pane is tiled there; Home peeks at it. */
+  let menuEpoch = 0;
   async function startIn(
     event: MouseEvent | null,
     projectId: string,
@@ -226,14 +228,21 @@
     anchor: Element,
   ) {
     event?.stopPropagation();
+    const epoch = ++menuEpoch;
+    const at = event ? { x: event.clientX, y: event.clientY } : under(anchor);
     let options;
+    let target;
     try {
+      target = await resolveWorktreeTarget(projectId, worktreeId);
       options = await fleet.agentsFor(projectId);
     } catch (e) {
-      sessions.error = `Could not list that repository's agents: ${String(e)}`;
+      sessions.error = `Could not open that worktree's menu: ${String(e)}`;
       return;
     }
+    if (epoch !== menuEpoch || !visible || !anchor.isConnected) return;
     const entries: MenuEntry[] = [
+      ...worktreeActions(target),
+      separator,
       heading('Start an agent here'),
       ...options.map((option) =>
         item(
@@ -250,7 +259,7 @@
       separator,
       item('Open this worktree', () => onopenworktree(projectId, worktreeId)),
     ];
-    void popUp(entries, under(anchor));
+    void popUp(entries, at);
   }
 
   function rowMenu(event: MouseEvent | null, row: FleetRow, anchor: Element) {

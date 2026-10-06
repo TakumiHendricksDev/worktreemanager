@@ -41,6 +41,9 @@
     type Slot,
   } from '../sidebar';
   import { item, popUp, separator, type MenuEntry } from '../native-menu';
+  import { resolveWorktreeTarget, worktreeActions } from '../worktree-menu';
+  import { attention } from '../state/attention.svelte';
+  import { errorMessage } from '../ipc/types';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { inRail, worse, type PaneStatus } from '../status';
@@ -383,7 +386,19 @@
     return workspace.layout.groups.filter((g) => kindOf(g.id) === 'custom');
   }
 
+  let menuEpoch = 0;
   async function rowMenu(worktreeId: string, at?: { x: number; y: number }) {
+    const epoch = ++menuEpoch;
+    const projectId = workspace.activeProjectId;
+    if (!projectId) return;
+    let target;
+    try {
+      target = await resolveWorktreeTarget(projectId, worktreeId);
+    } catch (e) {
+      attention.notice('Could not open worktree menu', errorMessage(e));
+      return;
+    }
+    if (epoch !== menuEpoch || workspace.activeProjectId !== projectId || hidden) return;
     const here = locate(workspace.layout, worktreeId);
     const starred = workspace.isFavorite(worktreeId);
     const ungrouped = workspace.layout.groups.find((g) => g.id === UNGROUPED);
@@ -401,6 +416,8 @@
 
     await popUp(
       [
+        ...worktreeActions(target),
+        separator,
         item(starred ? 'Remove from Favorites' : 'Add to Favorites', () =>
           workspace.toggleFavorite(worktreeId),
         ),
