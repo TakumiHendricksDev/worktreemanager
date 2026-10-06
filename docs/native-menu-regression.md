@@ -52,6 +52,27 @@ An old-route timeout is expected; it is not a passing fixed-route result.
 5. Record macOS/WebKit versions, route, before-dismissal output and result. The
    old route and new route must be compared on the same machine/build.
 
+## 2026-10-06 approved run: UI control unavailable
+
+The unchanged example was rebuilt at `273f2b2` and launched through the unchanged
+watchdog on macOS 26.5.2 (25F84), WebKit 21624.2.5.11.8. The launcher cleared all
+inherited `WTM_*` variables and supplied temporary config/data/TMPDIR paths; the
+example supplied its temporary WebKit profile and did not construct wtm state or
+an agent socket.
+
+The probe reported its PID 0.557 seconds after launch. Native UI control failed
+with `Sky Computer Use native pipe startup failed`, including after resetting the
+control connection. No menu-opening message, resource heartbeat or dialog action
+was recorded. At 60.079 seconds the watchdog reported stopping only its own probe
+child; the wrapper exited at 60.085 seconds.
+
+This verifies launch and watchdog shutdown only. It is **not** evidence that the
+old route hung or that the fixed route passed. The route/dialog comparison remains
+pending working UI control or a person operating the probe buttons. Permission to
+run the isolated probe has been granted; no further approval is needed for this
+same isolated comparison. The installed application and its live data were not
+used. The timestamped local log is `/tmp/wtm-native-probe-attempt.log`.
+
 ## Application click-through before release
 
 In an isolated development profile, keep a shell or agent streaming while holding

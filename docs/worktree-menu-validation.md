@@ -42,6 +42,6 @@ single grace period for multiple groups.
    foreground job control and Home grants, and the [sidebar checks](sidebar-validation.md) in both
    themes and densities. Confirm a real shell row opens the original terminal rather than a copy.
 
-The isolated native probe is built but has not been run by the implementation session: it requires
-Takumi's separate approval. Mocked browser checks do not establish AppKit, WKWebView clipboard,
-terminal job control, or assistive-technology behavior in the installed app.
+The isolated native probe is approved, but its route comparison remains pending working UI control;
+see the dated attempt in `native-menu-regression.md`. Mocked browser checks do not establish AppKit,
+WKWebView clipboard, terminal job control, or assistive-technology behavior in the installed app.
