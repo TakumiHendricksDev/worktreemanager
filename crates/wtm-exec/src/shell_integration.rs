@@ -277,13 +277,17 @@ mod tests {
         let refused = "22222222222222222222222222222222";
         terminal.dispatch(epoch, refused);
         assert_eq!(terminal.line(), format!("refused {refused}"));
-        terminal.input(b"\x03");
+        // The refusal is written before the widget returns. SIGINT in that gap cancels the
+        // widget, not the editor, so waiting for a fresh prompt after Ctrl-C races its unwind.
+        // Queued editor input gives the fixture an actual completed-command barrier instead.
+        terminal.input(b"\x15print -r -- PRIMARY-RESET\n");
         terminal.prompt();
         terminal.input(b"echo '\n");
         let epoch = terminal.prompt();
         terminal.dispatch(epoch, refused);
         assert_eq!(terminal.line(), format!("refused {refused}"));
-        terminal.input(b"\x03");
+        // Complete the quoted fixture command rather than signalling a still-unwinding widget.
+        terminal.input(b"'\n");
         terminal.prompt();
         terminal.input(b"sleep 10 &\n");
         let epoch = terminal.prompt();
