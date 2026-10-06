@@ -18,6 +18,7 @@
   import { codeRequests } from './lib/state/code-request.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
+  import HomeShellPermissions from './lib/components/HomeShellPermissions.svelte';
   import RunShellDialog from './lib/components/RunShellDialog.svelte';
   import { shellRuns } from './lib/state/shell-runs.svelte';
   import FleetTree from './lib/components/FleetTree.svelte';
@@ -454,7 +455,7 @@
    * "no badge", where zero would be a badge reading 0.
    */
   $effect(() => {
-    const waiting = sessions.waitingCount;
+    const waiting = sessions.waitingCount + shellRuns.pending.length;
     void getCurrentWindow()
       .setBadgeCount(waiting > 0 ? waiting : undefined)
       .catch(() => {});
@@ -795,4 +796,11 @@
 
 {#if shellRuns.review}
   {#key shellRuns.review.id}<RunShellDialog review={shellRuns.review} />{/key}
+{/if}
+
+{#if shellRuns.permissions}
+  <HomeShellPermissions
+    home={shellRuns.permissions}
+    onclose={() => (shellRuns.permissions = null)}
+  />
 {/if}

@@ -16,6 +16,7 @@ export interface ShellReview {
   run?: ShellRun;
 }
 class ShellRuns {
+  permissions = $state<string | null>(null);
   review = $state<ShellReview | null>(null);
   runs = $state<ShellRun[]>([]);
   private admitting = new Set<string>();
@@ -59,7 +60,7 @@ class ShellRuns {
     )
       return;
     this.runs = [...this.runs.filter((old) => old.id !== run.id), run];
-    if (run.phase === 'awaiting_approval' && !this.noticed.has(run.id)) {
+    if (!inPaneWindow && run.phase === 'awaiting_approval' && !this.noticed.has(run.id)) {
       this.noticed.add(run.id);
       attention.notice(
         'Home command needs you',

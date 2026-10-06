@@ -1273,8 +1273,8 @@
   class:is-focused={isFocused}
   bind:this={section}
   aria-label="{atHome ? HOME_AGENT : label} session"
-  onfocusin={() => sessions.noteFocus(pane.worktreeId, pane.id)}
-  onclick={() => {
+  onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
+  onfocusin={() => {
     sessions.noteFocus(pane.worktreeId, pane.id);
     if (kind === 'shell' && pane.session)
       void commands.focusRunShell(pane.session).catch(() => {});
@@ -1381,6 +1381,13 @@
         {/if}
 
         {#if host.kind === 'home'}
+          <Button
+            variant="quiet"
+            size="sm"
+            title="Review and revoke Home’s temporary shell grants"
+            disabled={!pane.session}
+            onclick={() => (shellRuns.permissions = pane.session)}>Commands</Button
+          >
           <!-- Past Home conversations. Home has no empty-worktree list to offer them from. -->
           <Button
             variant="quiet"

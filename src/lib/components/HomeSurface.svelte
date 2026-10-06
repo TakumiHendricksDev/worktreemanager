@@ -33,6 +33,7 @@
   import { HOME_AGENT } from '../home';
   import { commands } from '../ipc/commands';
   import { attention } from '../state/attention.svelte';
+  import { shellRuns } from '../state/shell-runs.svelte';
   import { fleet } from '../state/fleet.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { view } from '../state/view.svelte';
@@ -179,7 +180,11 @@
 
   const tabs = $derived<{ id: Tab; label: string; count?: number }[]>([
     { id: 'home', label: HOME_AGENT },
-    { id: 'inbox', label: 'Needs you', count: fleet.needsYou.length },
+    {
+      id: 'inbox',
+      label: 'Needs you',
+      count: fleet.needsYou.length + shellRuns.pending.length,
+    },
     { id: 'peek', label: 'Peek' },
     { id: 'activity', label: 'Activity' },
   ]);
@@ -235,7 +240,7 @@
 
   {#if narrow}
     <div class="c-home__panel" id="home-inbox" role="tabpanel" hidden={tab !== 'inbox'}>
-      {#if fleet.needsYou.length === 0}
+      {#if fleet.needsYou.length + shellRuns.pending.length === 0}
         <p class="c-home__hint">Nothing is waiting on you.</p>
       {/if}
       <NeedsYou onpeek={peek} {onreveal} />

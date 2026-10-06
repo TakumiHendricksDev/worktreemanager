@@ -32,6 +32,12 @@ export interface ShellRun {
   outcome: ExitOutcome | null;
   problem: string | null;
 }
+export interface HomeShellGrant {
+  projectId: string;
+  worktreeId: string;
+  directory: string;
+  valid: boolean;
+}
 export interface RunShell {
   session: string;
   project: string;

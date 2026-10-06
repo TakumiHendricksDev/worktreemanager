@@ -808,6 +808,7 @@ function hostOf(url: string | null): string | null {
 }
 
 class Sessions {
+  private openingShellRuns = new Map<string, string>();
   panes = $state<Pane[]>([]);
   /** One split tree per worktree, keyed by worktree id. */
   layouts = $state<Record<string, Layout | null>>({});
@@ -2715,8 +2716,10 @@ class Sessions {
     const pane = this.blank({ kind: 'shell' }, projectId, worktreeId);
     this.panes = [...this.panes, pane];
     this.place(worktreeId, pane.id, 'below');
+    this.openingShellRuns.set(pane.id, run.id);
     try {
       await tick();
+      if (!this.paneById(pane.id) || !this.openingShellRuns.has(pane.id)) return;
       const admitted = await commands.admitShellRun(run.id, SPAWN_ROWS, SPAWN_COLS);
       if (!admitted.session)
         throw new Error(admitted.problem ?? 'The shell could not be opened.');
@@ -2725,6 +2728,8 @@ class Sessions {
       const live = this.paneById(pane.id);
       if (live) live.error = errorMessage(e);
       await commands.cancelShellRun(run.id).catch(() => {});
+    } finally {
+      this.openingShellRuns.delete(pane.id);
     }
   }
 
@@ -4023,6 +4028,13 @@ class Sessions {
     const pane = this.paneById(paneId);
     if (!pane) return;
     this.forgetOut(paneId);
+    const opening = this.openingShellRuns.get(paneId);
+    if (opening) {
+      this.openingShellRuns.delete(paneId);
+      await commands.cancelShellRun(opening).catch((e) => {
+        this.error = errorMessage(e);
+      });
+    }
 
     if (pane.session) {
       try {

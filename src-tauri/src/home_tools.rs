@@ -51,7 +51,7 @@ pub const FENCE: &str = "wtm_session_content";
 
 /// Every Home tool, in the order the bridge lists them. The bridge refuses any other name before
 /// it reaches the socket.
-pub const TOOLS: [&str; 12] = [
+pub const TOOLS: [&str; 16] = [
     "list_projects",
     "list_worktrees",
     "list_all_sessions",
@@ -64,6 +64,10 @@ pub const TOOLS: [&str; 12] = [
     "create_worktree",
     "preview_removal",
     "remove_worktree",
+    "list_shells",
+    "run_shell_command",
+    "read_shell_output",
+    "close_shell",
 ];
 
 /// What a Home session sends is labelled, so the receiving session — and the user reading its
@@ -87,7 +91,7 @@ pub fn definitions(agents: &[(String, String)]) -> Vec<Value> {
     let session = json!({ "type": "string", "description": "A session handle from `list_all_sessions`, such as `s2`." });
     let project = json!({ "type": "string", "description": "The project's name or root path, from `list_projects`." });
     let worktree = json!({ "type": "string", "description": "The worktree's directory name, branch, issue key or path, from `list_projects`." });
-    vec![
+    let mut definitions = vec![
         json!({
             "name": "list_projects",
             "description": "List every repository wtm manages and its worktrees as the sidebar shows them: each worktree's display title, branch, issue key and the badges its repository's config defines, how many agent sessions it has, and which fields each project's New Worktree form takes. Check here for an existing worktree before creating one.",
@@ -220,7 +224,9 @@ pub fn definitions(agents: &[(String, String)]) -> Vec<Value> {
                 "required": ["project", "worktree"]
             }
         }),
-    ]
+    ];
+    definitions.extend(crate::home_shells::definitions());
+    definitions
 }
 
 /// The Home session behind a token.
@@ -284,6 +290,9 @@ pub fn run(handle: &AppHandle, app: &Arc<App>, token: &str, call: &HomeCall) -> 
         "create_worktree" => create_worktree(handle, app, &home, args),
         "preview_removal" => preview_removal(app, &home, args),
         "remove_worktree" => remove_worktree(handle, app, &home, args),
+        tool @ ("list_shells" | "run_shell_command" | "read_shell_output" | "close_shell") => {
+            crate::home_shells::run(handle, app, &home, tool, args)
+        }
         other => Err(format!("no Home tool named `{other}`")),
     };
     match outcome {
@@ -309,10 +318,14 @@ pub fn fenced(handle: &str, body: &str) -> String {
 }
 
 fn neutralised(text: &str) -> String {
+    neutralise_fence(text, FENCE)
+}
+
+pub(crate) fn neutralise_fence(text: &str, fence: &str) -> String {
     let lower = text.to_ascii_lowercase();
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
-    while let Some(found) = lower[at..].find(FENCE) {
+    while let Some(found) = lower[at..].find(fence) {
         let index = at + found;
         // The `<` or `</` in front of the name, if there is one.
         let mut start = index;
@@ -326,8 +339,8 @@ fn neutralised(text: &str) -> String {
         } else {
             out.push_str(&text[at..index]);
         }
-        out.push_str(&text[index..index + FENCE.len()]);
-        at = index + FENCE.len();
+        out.push_str(&text[index..index + fence.len()]);
+        at = index + fence.len();
         if text[at..].starts_with('>') {
             out.push('›');
             at += 1;
@@ -1117,7 +1130,7 @@ fn message_session(
 }
 
 /// The project a name or root path means, refusing an ambiguous one.
-fn resolve_project(app: &App, wanted: &str) -> Result<wtm_core::model::Project, String> {
+pub(crate) fn resolve_project(app: &App, wanted: &str) -> Result<wtm_core::model::Project, String> {
     let projects = app.projects().map_err(|e| e.to_string())?;
     let mut matches: Vec<_> = projects
         .iter()

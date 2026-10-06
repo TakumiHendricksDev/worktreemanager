@@ -243,7 +243,19 @@ pub fn validate(app: &App, run: &Run) -> Result<(), String> {
         {
             return Err("The requesting Home session is no longer running.".into());
         }
-        let granted = run.state.lock().grant;
+        let (granted, session) = {
+            let state = run.state.lock();
+            (state.grant, state.session.clone())
+        };
+        if granted
+            && session.as_deref().is_some_and(|session| {
+                app.shell_admission
+                    .get(session)
+                    .is_none_or(|shell| !shell.owned_untouched(home))
+            })
+        {
+            return Err("The user has adopted this shell. Home needs per-run approval.".into());
+        }
         if granted && !app.shell_runs.has_grant(home, &run.prepared.target) {
             return Err("Home's worktree grant was revoked. Nothing ran.".into());
         }
@@ -336,13 +348,22 @@ pub fn cancel(handle: &tauri::AppHandle, app: &App, run: &Run, reason: &str) {
     settle(handle, app, run);
 }
 
+pub fn cancel_user(handle: &tauri::AppHandle, app: &App, run: &Run) {
+    end(run, "The user cancelled this run.", Phase::Cancelled);
+    settle(handle, app, run);
+}
+
 pub fn interrupt(run: &Run, reason: &str) {
+    end(run, reason, Phase::Interrupted);
+}
+
+fn end(run: &Run, reason: &str, phase: Phase) {
     let (child, helper, control) = {
         let mut state = run.state.lock();
         if state.phase.terminal() {
             return;
         }
-        state.phase = Phase::Interrupted;
+        state.phase = phase;
         state.problem = Some(reason.into());
         state.output.interrupt(reason);
         (

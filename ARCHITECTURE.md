@@ -581,6 +581,45 @@ tools take targets, which none of §6b's do. What keeps it narrow:
 - It is visible. A session Home opens is a pane in its worktree; what Home sends arrives labelled
   `From Home (wtm):`; every exchange is a wire in Home's tree.
 
+**Reviewed shell commands are a separate authorization.** Assistant fences tagged sh, bash,
+zsh, shell or shellscript offer Run; untagged and unfinished blocks cannot execute. Every click
+opens one review sheet showing the exact script, child interpreter, canonical worktree directory
+and destination. Copy and Cancel have no execution effect. Home's transcript has no implicit
+worktree. The final Run is the approval, including for multiline or destructive scripts; there is
+no heuristic that claims a command is safe. Scripts preserve whitespace and heredocs, normalize
+CRLF visibly, reject terminal controls, and use a private script file with parse-only validation.
+They run in a child sh/bash/zsh at the worktree root with inherited exports, leaving the parent's
+cwd, functions and shell settings alone. No script is typed into a terminal or bracketed paste.
+
+Automatic reuse requires a verified empty primary zsh prompt, no foreground or background job,
+and a one-use reservation that no manual input has invalidated. A private socket wakes a ZLE
+widget; no key sequence can leak into a foreground program. The widget rechecks its live edit
+buffer, continuation state and prompt epoch before consuming the request. Unsupported or unknown
+shells remain ordinary terminals; auto opens a new integrated zsh pane when none qualifies.
+macOS bash 3.2 does not expose a reliable empty Readline buffer for this admission protocol, so
+bash is supported as a child interpreter, not as a reusable parent. User startup files are chained
+through a private ZDOTDIR wrapper, never edited. Main-window pane placement and the existing
+20-per-worktree/40-global caps precede every managed shell spawn.
+
+Home's `list_shells`, `run_shell_command`, `read_shell_output` and `close_shell` use the same
+service. Per-run approval is the default; the backend holds immutable requests for Needs you.
+No MCP tool or argument can approve one. Home's Commands sheet can explicitly grant arbitrary
+commands in one worktree until that Home session closes or wtm quits. This is separate from
+config trust and binds the canonical worktree identity and config/trust revision. A grant covers
+only Home's untouched shells and new visible panes; a user-owned or adopted shell needs per-run
+review. Revocation blocks unconsumed requests, while Stop command ends an already running one.
+The UI states that normal user privileges extend outside the worktree and include network access.
+
+Shell and run handles have a random, memory-only Home epoch, separate from durable agent handles.
+Restore cannot recreate a grant, approval or command. Duplicate request keys cannot change payloads
+or execute twice; pending duplicates coalesce and denied commands cannot evade denial with new keys.
+The helper's wait result and private PTY end frame must both arrive before success is reported.
+Cursor reads are bounded, preserve split UTF-8, flag dropped bytes and distinguish remaining pages
+from process completion. Loss is interrupted/unknown, never inferred exit 0. Shell output is
+fenced as untrusted `<wtm_shell_content>` with case-insensitive closing-tag neutralization.
+One completion notice comes from each requested run, through Home's existing coalesced notice path;
+notices grant no new authority. Only Home's untouched, verified idle shells can be closed by tools.
+
 **Delegation does not hold Home's turn.** `message_session` and `open_session` first waited up to
 ten minutes for the reply, like `ask_agent`, and that was wrong for Home in two ways at once. While
 the tool call waited, Home was working, so whatever the user wrote sat in its composer's queue until
@@ -601,7 +640,8 @@ provider takes a second message mid-turn: Claude Code and Codex at their next st
 current prompt is done. It is never sent as a steer, because Cursor's steer cancels the prompt that
 is running. Three rules keep notices from feeding themselves:
 
-- A notice comes only from a delegation.
+- An agent notice comes only from a delegation; a shell notice comes only from one explicitly
+  requested run, watched once through its terminal state.
 - A delegation comes only from Home's own two tools, sent to a session that is not a Home (`admit`
   refuses one). Home's turns are never one, and that includes the turns notices start.
 - What Home already knows is not news. A reply its own `wait: true` took is not reported again, and
@@ -734,7 +774,11 @@ passwords, SMTP credentials — and the app's job involves displaying that file.
 **Nothing of yours leaves the machine without a direct user action.** Dictation sends recorded audio
 to the compiled-in `api.deepgram.com` host. The database viewer connects only after a config's
 credential-free target has passed the existing content-hash trust gate and the user clicks Connect.
-There is no telemetry, analytics or crash reporting.
+There is no telemetry, analytics or crash reporting. A reviewed shell Run authorizes the displayed
+script's normal user access. Home's explicit, temporary worktree grant (§6f) authorizes subsequent
+commands within the user's task without another per-command click; it is off by default, revocable,
+and never restored. Granting is a direct user action, and the sheet states the filesystem and
+network authority involved.
 
 **There is one request that is not a user action: the update check.** At launch, and at most daily
 after that, wtm asks `api.github.com` for its own latest release. That is a deliberate exception,

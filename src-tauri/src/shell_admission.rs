@@ -225,6 +225,29 @@ impl Shell {
             && Self::availability_of(&state, foreground) == Availability::Ready
     }
 
+    pub fn owned_untouched(&self, home: &str) -> bool {
+        self.owner.as_deref() == Some(home) && !self.state.lock().adopted
+    }
+
+    pub fn close_for(&self, home: &str, foreground: bool) -> bool {
+        let stream = {
+            let mut state = self.state.lock();
+            if self.owner.as_deref() != Some(home)
+                || state.adopted
+                || Self::availability_of(&state, foreground) != Availability::Ready
+            {
+                return false;
+            }
+            state.closed = true;
+            state.prompt = None;
+            state.stream.take()
+        };
+        if let Some(stream) = stream {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        true
+    }
+
     pub fn focus(&self, order: u64) {
         self.state.lock().focus = order;
     }
@@ -366,6 +389,26 @@ mod tests {
         shell.connect(server).unwrap();
         shell.prompt(7, 0);
         BufReader::new(client)
+    }
+
+    #[test]
+    fn home_can_only_close_its_untouched_idle_shell_and_the_close_reserves_it_atomically() {
+        let owned = shell("project", "worktree", Some("home"));
+        let _reader = ready(&owned);
+        assert!(!owned.close_for("other", true));
+        assert!(!owned.close_for("home", false));
+        assert!(owned.close_for("home", true));
+        assert!(owned.reserve("too-late", true).is_err());
+        let adopted = shell("project", "worktree", Some("home"));
+        let _reader = ready(&adopted);
+        adopted.manual_input(|| ());
+        adopted.prompt(8, 0);
+        assert!(!adopted.owned_untouched("home"));
+        assert!(!adopted.close_for("home", true));
+        let busy = shell("project", "worktree", Some("home"));
+        let _reader = ready(&busy);
+        busy.prompt(8, 1);
+        assert!(!busy.close_for("home", true));
     }
 
     #[test]

@@ -20,6 +20,7 @@ pub mod dictate;
 pub mod display;
 pub mod handoff;
 pub mod home;
+pub mod home_shells;
 pub mod home_tools;
 pub mod messages;
 pub mod native_menu;
@@ -303,6 +304,7 @@ pub fn run() {
             shell_commands::deny_shell_run,
             shell_commands::cancel_shell_run,
             shell_commands::set_home_shell_grant,
+            shell_commands::list_home_shell_grants,
             shell_commands::focus_run_shell,
             commands::list_terminals,
             commands::terminal_replay,

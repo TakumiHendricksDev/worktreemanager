@@ -159,7 +159,13 @@ fn start_inner(
             {
                 return fail(handle, app, run, "This shell belongs to another worktree.");
             }
-            if !human && run.prepared.source.home() != shell.owner.as_deref() {
+            if !human
+                && run
+                    .prepared
+                    .source
+                    .home()
+                    .is_none_or(|home| !shell.owned_untouched(home))
+            {
                 return fail(
                     handle,
                     app,
@@ -389,14 +395,7 @@ pub async fn cancel_shell_run(
     let app = Arc::clone(&app);
     blocking(move || {
         let run = app.shell_runs.get(&run_id).map_err(error)?;
-        shell_control::cancel(&handle, &app, &run, "The user cancelled this run.");
-        {
-            let mut state = run.state.lock();
-            if state.phase == Phase::Interrupted {
-                state.phase = Phase::Cancelled;
-            }
-        }
-        shell_control::announce(&handle, &run);
+        shell_control::cancel_user(&handle, &app, &run);
         Ok(())
     })
     .await
@@ -404,6 +403,7 @@ pub async fn cancel_shell_run(
 
 #[tauri::command]
 pub async fn set_home_shell_grant(
+    handle: tauri::AppHandle,
     app: AppState<'_>,
     home: String,
     project_id: String,
@@ -418,9 +418,60 @@ pub async fn set_home_shell_grant(
         {
             return Err(error("That Home session is no longer running."));
         }
-        let target = Target::resolve(&app, &project_id, &worktree_id).map_err(error)?;
-        app.shell_runs.set_grant(&home, target, allow);
+        if allow {
+            let target = Target::resolve(&app, &project_id, &worktree_id).map_err(error)?;
+            app.shell_runs.set_grant(&home, target, true);
+        } else {
+            app.shell_runs
+                .revoke_grant(&home, &project_id, &worktree_id);
+            for run in app.shell_runs.all() {
+                let state = run.state.lock();
+                let cancel = run.prepared.source.home() == Some(home.as_str())
+                    && run.prepared.target.project == project_id
+                    && run.prepared.target.worktree == worktree_id
+                    && state.grant
+                    && !state.phase.terminal()
+                    && state.phase != Phase::Running;
+                drop(state);
+                if cancel {
+                    shell_control::cancel(
+                        &handle,
+                        &app,
+                        &run,
+                        "Home's worktree grant was revoked. Nothing ran.",
+                    );
+                }
+            }
+        }
         Ok(())
+    })
+    .await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantView {
+    project_id: String,
+    worktree_id: String,
+    directory: String,
+    valid: bool,
+}
+
+#[tauri::command]
+pub async fn list_home_shell_grants(app: AppState<'_>, home: String) -> Reply<Vec<GrantView>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(app
+            .shell_runs
+            .grants_for(&home)
+            .into_iter()
+            .map(|target| GrantView {
+                valid: target.revalidate(&app).is_ok(),
+                project_id: target.project,
+                worktree_id: target.worktree,
+                directory: target.directory.to_string_lossy().into_owned(),
+            })
+            .collect())
     })
     .await
 }

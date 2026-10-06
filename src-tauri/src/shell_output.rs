@@ -20,6 +20,7 @@ pub struct Read {
     pub next_cursor: u64,
     pub gap: bool,
     pub complete: bool,
+    pub more: bool,
     pub outcome: Option<ExitOutcome>,
     pub problem: Option<String>,
 }
@@ -77,16 +78,26 @@ impl Output {
     }
 
     pub fn read(&self, cursor: u64) -> Result<Read, String> {
+        self.read_limit(cursor, self.limit)
+    }
+
+    pub fn read_limit(&self, cursor: u64, limit: usize) -> Result<Read, String> {
         if cursor > self.next {
             return Err("The output cursor is ahead of this run.".into());
         }
         let first = self.next - self.bytes.len() as u64;
         let start = cursor.max(first);
         let offset = usize::try_from(start - first).map_err(|e| e.to_string())?;
-        let mut bytes: Vec<u8> = self.bytes.iter().skip(offset).copied().collect();
+        let mut bytes: Vec<u8> = self
+            .bytes
+            .iter()
+            .skip(offset)
+            .take(limit.max(4))
+            .copied()
+            .collect();
         // Keep raw output byte-exact. Only the *display text* is decoded; a gap
         // can begin mid-codepoint and is honestly represented by U+FFFD.
-        if !self.complete() {
+        if !self.complete() || start + (bytes.len() as u64) < self.next {
             let mut valid = 0;
             while valid < bytes.len() {
                 match std::str::from_utf8(&bytes[valid..]) {
@@ -109,6 +120,7 @@ impl Output {
             next_cursor: start + bytes.len() as u64,
             gap: cursor < first,
             complete: self.complete(),
+            more: start + (bytes.len() as u64) < self.next,
             outcome: if self.filter.complete() && self.problem.is_none() {
                 self.outcome.clone()
             } else {
@@ -122,6 +134,21 @@ impl Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paged_output_keeps_utf8_whole_and_reports_when_a_finished_run_has_more_bytes() {
+        let frame = Framing::default();
+        let mut output = Output::new(frame.clone());
+        output.push(format!("{}日ab日cd{}", frame.begin(), frame.end()).as_bytes());
+        output.finish(ExitOutcome::Success);
+        let first = output.read_limit(0, 6).unwrap();
+        assert_eq!(first.text, "日ab");
+        assert_eq!(first.next_cursor, 5);
+        assert!(first.complete && first.more);
+        let second = output.read_limit(first.next_cursor, 6).unwrap();
+        assert_eq!(second.text, "日cd");
+        assert!(second.complete && !second.more);
+    }
 
     #[test]
     fn neither_a_stream_boundary_nor_a_control_outcome_alone_claims_completion() {

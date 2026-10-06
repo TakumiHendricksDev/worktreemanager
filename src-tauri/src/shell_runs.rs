@@ -120,6 +120,7 @@ pub struct Prepared {
     pub interpreter: Interpreter,
     pub executable: PathBuf,
     pub script: ScriptFile,
+    allow_grant: bool,
 }
 
 impl std::fmt::Debug for Prepared {
@@ -155,6 +156,13 @@ impl Prepared {
             &executable,
             &target.directory,
         )?;
+        let allow_grant = source.home().is_none_or(|home| {
+            matches!(request.shell.as_str(), "auto" | "new")
+                || app
+                    .shell_admission
+                    .get(&request.shell)
+                    .is_some_and(|shell| shell.owned_untouched(home))
+        });
         Ok(Self {
             request,
             source,
@@ -162,6 +170,7 @@ impl Prepared {
             interpreter,
             executable,
             script,
+            allow_grant,
         })
     }
 }
@@ -213,6 +222,7 @@ pub struct State {
     pub output: Output,
     pub problem: Option<String>,
     pub grant: bool,
+    pub watched: bool,
 }
 
 pub struct Run {
@@ -383,7 +393,8 @@ impl Registry {
         if entries.runs.len() >= MAX_RUNS {
             return Err("The command history limit for this app launch has been reached.".into());
         }
-        let grant = home.is_some_and(|home| self.has_grant(home, &prepared.target));
+        let grant =
+            prepared.allow_grant && home.is_some_and(|home| self.has_grant(home, &prepared.target));
         let phase = if home.is_some() && !grant {
             Phase::AwaitingApproval
         } else {
@@ -403,6 +414,7 @@ impl Registry {
                 output: Output::new(framing.clone()),
                 problem: None,
                 grant,
+                watched: false,
             }),
             framing,
             changed: Condvar::new(),
@@ -485,6 +497,21 @@ impl Registry {
         if allow {
             grants.push((home.into(), target));
         }
+    }
+
+    pub fn grants_for(&self, home: &str) -> Vec<Target> {
+        self.grants
+            .lock()
+            .iter()
+            .filter(|(owner, _)| owner == home)
+            .map(|(_, target)| target.clone())
+            .collect()
+    }
+
+    pub fn revoke_grant(&self, home: &str, project: &str, worktree: &str) {
+        self.grants.lock().retain(|(owner, target)| {
+            owner != home || target.project != project || target.worktree != worktree
+        });
     }
 
     pub fn has_grant(&self, home: &str, target: &Target) -> bool {
@@ -670,6 +697,37 @@ mod tests {
             .unregister_project(std::path::Path::new(&setup.root))
             .unwrap();
         assert!(Prepared::create(&setup.app, second.request, Source::Human).is_err());
+    }
+
+    #[test]
+    fn a_worktree_grant_cannot_approve_an_explicit_unknown_or_user_owned_shell() {
+        let setup = Setup::new();
+        let registry = Registry::default();
+        let mut request = setup.prepared("explicit", Source::Human).request;
+        request.shell = "not-a-home-owned-shell".into();
+        let prepared = Prepared::create(&setup.app, request, Source::Home("home".into())).unwrap();
+        registry.set_grant("home", prepared.target.clone(), true);
+        assert_eq!(
+            registry.prepare(prepared).unwrap().view().phase,
+            Phase::AwaitingApproval
+        );
+    }
+
+    #[test]
+    fn revoking_one_worktree_grant_cannot_leave_it_active_or_change_another_homes_grant() {
+        let setup = Setup::new();
+        let registry = Registry::default();
+        let target = setup.prepared("target", Source::Human).target;
+        registry.set_grant("home", target.clone(), true);
+        registry.set_grant("other", target.clone(), true);
+        registry.revoke_grant("home", &target.project, &target.worktree);
+        assert!(!registry.has_grant("home", &target));
+        assert!(registry.has_grant("other", &target));
+        let prepared = setup.prepared("after-revoke", Source::Home("home".into()));
+        assert_eq!(
+            registry.prepare(prepared).unwrap().view().phase,
+            Phase::AwaitingApproval
+        );
     }
 
     #[test]

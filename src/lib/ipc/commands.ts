@@ -81,6 +81,8 @@ export const commands = {
   denyShellRun: (runId: string) => invoke<void>('deny_shell_run', { runId }),
   cancelShellRun: (runId: string) => invoke<void>('cancel_shell_run', { runId }),
   focusRunShell: (session: string) => invoke<void>('focus_run_shell', { session }),
+  listHomeShellGrants: (home: string) =>
+    invoke<import('../shell-script').HomeShellGrant[]>('list_home_shell_grants', { home }),
   setHomeShellGrant: (
     home: string,
     projectId: string,
