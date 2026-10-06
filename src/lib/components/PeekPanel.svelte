@@ -145,6 +145,8 @@
           · {pane.model}{/if} · {where}
         {#if STATUS_WORD[status]}<span class="c-peek__status">· {STATUS_WORD[status]}</span
           >{/if}
+        {#if pane.openedFromHome}
+          · Opened by Home{/if}
       </p>
     </div>
     <span class="c-peek__actions">

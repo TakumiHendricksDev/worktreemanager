@@ -103,6 +103,7 @@ export type FleetRow =
       /** Null for a session with no children. */
       expanded: boolean | null;
     }
+  | { kind: 'settled'; key: string; level: number; count: number; expanded: boolean }
   | { kind: 'creation'; key: string; level: 2; projectId: string; job: FleetJob };
 
 /** A worktree Home is creating or removing, as the tree needs it. */
@@ -134,6 +135,7 @@ export interface FleetOptions {
   folds: Readonly<Record<string, boolean>>;
   /** The pane being peeked at, which no fold may hide. */
   peeked: string | null;
+  focused?: string | null;
   query: string;
   only: FleetOnly | null;
 }
@@ -153,7 +155,7 @@ export const jobKey = (id: number) => `creation:${id}`;
 const SETTLED: ReadonlySet<PaneStatus> = new Set(['idle', 'ended', 'done', 'detached']);
 
 function urgent(status: PaneStatus): boolean {
-  return status === 'attention' || status === 'failed';
+  return status === 'attention' || status === 'failed' || status === 'done';
 }
 
 function noCounts(): FleetCounts {
@@ -360,7 +362,8 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
         const below = kids(s);
         const matched = !filtering || subtree(s).some((d) => sessionMatches(d, place));
         if (!matched) return;
-        const kept = shown || urgent(s.status) || s.id === options.peeked;
+        const kept =
+          shown || urgent(s.status) || s.id === options.peeked || s.id === options.focused;
         // A run that is still busy opens itself; a finished one larger than a few rows stays shut.
         const busyBelow = below.some((c) => subtree(c).some((d) => !SETTLED.has(d.status)));
         const sessionOpen = open(key, busyBelow || below.length <= 3);
@@ -373,12 +376,39 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
             expanded: below.length === 0 ? null : sessionOpen,
           });
         }
-        for (const child of below) {
-          emit(child, kept ? level + 1 : level, kept && shown && sessionOpen);
+        emitList(below, kept ? level + 1 : level, kept && shown && sessionOpen);
+      };
+      // Consecutive quiet siblings fold in place. Grouping every idle session together would move
+      // rows on each status change, just as someone is reaching for one with the keyboard.
+      const quietTree = (s: FleetSession) =>
+        subtree(s).every((child) => SETTLED.has(child.status) && child.status !== 'done');
+      const emitList = (list: FleetSession[], level: number, shown: boolean) => {
+        for (let at = 0; at < list.length;) {
+          let end = at;
+          if (!filtering && shown && quietTree(list[at]!)) {
+            while (end < list.length && quietTree(list[end]!)) end += 1;
+          }
+          if (end - at >= 3) {
+            const group = list.slice(at, end);
+            const key = `settled:${worktree.id}:${list[at]!.id}`;
+            const expanded = open(key, false);
+            rows.push({
+              kind: 'settled',
+              key,
+              level,
+              expanded,
+              count: group.reduce((n, root) => n + subtree(root).length, 0),
+            });
+            for (const root of group) emit(root, level + 1, expanded);
+            at = end;
+          } else {
+            emit(list[at]!, level, shown);
+            at += 1;
+          }
         }
       };
-      // Under a folded project there is no worktree row, so what the fold keeps sits one level up.
-      for (const root of here) emit(root, projectOpen ? 3 : 2, worktreeOpen);
+      // Under a folded project there is no worktree row, so retained rows sit one level up.
+      emitList(here, projectOpen ? 3 : 2, worktreeOpen);
     }
 
     // What Home is making here, between what is running and what is quiet.

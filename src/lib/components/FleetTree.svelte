@@ -12,10 +12,11 @@
    * roving focus and the menus. Like the sidebar it is a
    * genuine `role="tree"`: focus lives on the rows, and the tree listens for the keys that bubble.
    */
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
 
   import { HOME_KEY, type FleetRow, type FleetCounts, type FleetOnly } from '../fleet';
   import { heading, item, popUp, separator, under, type MenuEntry } from '../native-menu';
+  import { treePrefs } from '../state/tree-prefs.svelte';
   import { attention } from '../state/attention.svelte';
   import { fleet } from '../state/fleet.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
@@ -39,7 +40,7 @@
     /** The Home row was chosen: back to Home's own conversation. */
     onhome: () => void;
     /** Leave Home for a worktree. */
-    onopenworktree: (projectId: string, worktreeId: string) => void;
+    onopenworktree: (projectId: string, worktreeId: string) => void | Promise<void>;
     onnewworktree: (projectId: string) => void;
     onaddproject: () => void;
   } = $props();
@@ -54,18 +55,53 @@
   let treeEl = $state<HTMLDivElement | null>(null);
   let searchEl = $state<HTMLInputElement | null>(null);
 
+  let previousRows: FleetRow[] = [];
+  let treeOwnedFocus = false;
+  $effect.pre(() => {
+    const nextRows = rows;
+    untrack(() => {
+      if (!nextRows.some((row) => row.key === focusKey)) {
+        const index = previousRows.findIndex((row) => row.key === focusKey);
+        const level = previousRows[index]?.level ?? 1;
+        const exists = (row: FleetRow) => nextRows.some((next) => next.key === row.key);
+        const ancestor = previousRows
+          .slice(0, index)
+          .reverse()
+          .find((row) => row.level < level && exists(row));
+        const neighbor = previousRows.slice(index + 1).find(exists);
+        const heldFocus = treeOwnedFocus;
+        focusKey = ancestor?.key ?? neighbor?.key ?? HOME_KEY;
+        if (heldFocus) focusRow(focusKey);
+      }
+      previousRows = nextRows;
+    });
+  });
+
   /** The tree's own ⌘F, while it is the one on screen. The sidebar's is gated the other way. */
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!visible || event.defaultPrevented) return;
+      if (
+        !visible ||
+        event.defaultPrevented ||
+        (event.target instanceof Element &&
+          event.target.closest('input, textarea, [contenteditable], .cm-editor, .xterm'))
+      )
+        return;
       if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
         event.preventDefault();
         searchEl?.focus();
         searchEl?.select();
       }
     };
+    const onFocus = (event: FocusEvent) => {
+      treeOwnedFocus = event.target instanceof Node && !!treeEl?.contains(event.target);
+    };
+    window.addEventListener('focusin', onFocus);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('focusin', onFocus);
+    };
   });
 
   function selected(row: FleetRow): boolean {
@@ -137,6 +173,7 @@
       case 'project':
         fleet.toggle(row.key, !row.expanded);
         return;
+      case 'settled':
       case 'idle':
         fleet.toggle(row.key, !row.expanded);
         return;
@@ -146,8 +183,9 @@
         return;
       case 'session':
         if (row.session.kind === 'shell') {
-          onopenworktree(row.session.projectId, row.session.worktreeId);
-          sessions.focus(row.session.worktreeId, row.session.id);
+          void Promise.resolve(
+            onopenworktree(row.session.projectId, row.session.worktreeId),
+          ).then(() => sessions.focus(row.session.worktreeId, row.session.id));
         } else peek(row.session.id);
         return;
       case 'creation':
@@ -346,7 +384,12 @@
   {/if}
 {/snippet}
 
-<nav class="c-fleet" class:is-hidden={!visible} aria-label="Sessions everywhere">
+<nav
+  style:--fleet-row-height={treePrefs.density === 'compact' ? '26px' : '30px'}
+  class="c-fleet"
+  class:is-hidden={!visible}
+  aria-label="Sessions everywhere"
+>
   <div class="c-fleet__controls">
     <div class="c-search" role="search">
       <span class="c-search__icon"><Icon name="search" size={14} /></span>
@@ -422,6 +465,7 @@
             role="treeitem"
             class="c-fleet__row c-fleet__row--{row.kind}"
             class:is-selected={selected(row)}
+            class:has-key={row.kind === 'worktree' && !!row.worktree.issueKey}
             data-nav={row.key}
             title={titleOf(row)}
             aria-describedby={`fleet-detail-${row.key}`}
@@ -435,7 +479,17 @@
               event.preventDefault();
               rowMenu(event, row, event.currentTarget);
             }}
-            onfocus={() => (focusKey = row.key)}
+            onfocus={() => {
+              focusKey = row.key;
+              fleet.focused = row.kind === 'session' ? row.session.id : null;
+            }}
+            onfocusout={(event) => {
+              if (
+                !(event.relatedTarget instanceof Node) ||
+                !treeEl?.contains(event.relatedTarget)
+              )
+                fleet.focused = null;
+            }}
           >
             <span id={`fleet-detail-${row.key}`} class="u-visually-hidden"
               >{titleOf(row)}</span
@@ -454,6 +508,9 @@
                 {@const identity = worktreeLabel(row.worktree)}
                 {#if identity.key}<span class="c-fleet__key">{identity.key}</span>{/if}
                 <span class="c-fleet__name">{identity.name}</span>
+              {:else if row.kind === 'settled'}<span class="c-fleet__name"
+                  >Idle / finished</span
+                >
               {:else if row.kind === 'idle'}<span class="c-fleet__name">No sessions</span>
               {:else if row.kind === 'creation'}<span class="c-fleet__name"
                   >{row.job.title}</span
@@ -471,6 +528,9 @@
                     title={countDetail(row)}
                     aria-label={countDetail(row)}>{row.counts.total}</span
                   >{/if}
+              {:else if row.kind === 'settled'}<span
+                  aria-label={`${row.count} idle or finished sessions`}>{row.count}</span
+                >
               {:else if row.kind === 'idle'}<span
                   aria-label={`${row.count} worktrees without sessions`}>{row.count}</span
                 >{/if}

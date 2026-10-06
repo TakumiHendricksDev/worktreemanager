@@ -44,6 +44,7 @@
   import { commands } from './lib/ipc/commands';
   import { errorMessage, type NotificationClick, type Project } from './lib/ipc/types';
   import { attention } from './lib/state/attention.svelte';
+  import { treePrefs } from './lib/state/tree-prefs.svelte';
   import { composerPrefs } from './lib/state/composer.svelte';
   import { dictation } from './lib/state/dictate.svelte';
   import { initMainWindow } from './lib/state/pane-windows.svelte';
@@ -211,6 +212,7 @@
       // into the moment a pane mounts, and reading this late would send the first Enter of the
       // session under the default rather than the chosen behaviour.
       await composerPrefs.init();
+      await treePrefs.init();
       await sessionAwareness.init();
       await browsers.init();
       await browserTools.init();
@@ -534,8 +536,7 @@
         <FleetTree
           visible={view.home}
           onhome={() => view.peek(null)}
-          onopenworktree={(projectId, worktreeId) =>
-            void openWorktree(projectId, worktreeId)}
+          onopenworktree={(projectId, worktreeId) => openWorktree(projectId, worktreeId)}
           onnewworktree={(projectId) =>
             void workspace.selectProject(projectId).then(() => view.show('new'))}
           onaddproject={addProject}
@@ -736,8 +737,7 @@
         <HomeSurface
           visible={booted && view.home}
           onreveal={(pane) => void reveal(pane)}
-          onopenworktree={(projectId, worktreeId) =>
-            void openWorktree(projectId, worktreeId)}
+          onopenworktree={(projectId, worktreeId) => openWorktree(projectId, worktreeId)}
         >
           {#snippet main()}
             <HomeAgent visible={booted && view.home} />

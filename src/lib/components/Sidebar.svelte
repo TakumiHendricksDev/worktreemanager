@@ -142,6 +142,11 @@
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || hidden) return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('input, textarea, [contenteditable], .cm-editor, .xterm')
+      )
+        return;
       if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
         event.preventDefault();
         searchEl?.focus();

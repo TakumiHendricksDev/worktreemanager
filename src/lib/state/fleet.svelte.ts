@@ -64,6 +64,7 @@ class Fleet {
   messages = $state<AgentExchange[]>([]);
   folds = $state<Record<string, boolean>>(readFolds());
   query = $state('');
+  focused = $state<string | null>(null);
   only = $state<FleetOnly | null>(null);
   /** Worktrees Home is creating or removing, or did lately. */
   jobs = $state<HomeJob[]>([]);
@@ -281,7 +282,13 @@ class Fleet {
         sessions: this.sessions,
         jobs: this.shownJobs,
       },
-      { folds: this.folds, peeked: view.peeked, query: this.query, only: this.only },
+      {
+        folds: this.folds,
+        peeked: view.peeked,
+        focused: this.focused,
+        query: this.query,
+        only: this.only,
+      },
     );
   });
 

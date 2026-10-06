@@ -244,21 +244,19 @@ and Home's when you open Home.
 Home is a view that isn't any one worktree. Open it with the house in the title bar, or Go › Home
 (⇧⌘H); the same again goes back to where you were. wtm reopens on Home if you quit from it.
 
-- **The session tree** takes the sidebar's place: every project, its worktrees, and every agent
-  session in them, with delegated children nested under the session that started them. Each says
-  what it is doing — *working…*, *needs you*, *done*, *failed* — and a folded project still shows any
-  session that needs you or failed. The counts at the top filter it. **+** on a worktree starts an
-  agent there, as an ordinary pane in that worktree. Right-click a session, or press the context-menu
-  key or ⇧F10 on it, to peek at it, open it in its worktree, stop its turn, or close it. Closing asks
-  first, as the pane's own close button does, and says if a turn would stop or a request go
-  unanswered.
+- **The session tree** lists projects, worktrees, agents and shells. Issue keys stay whole; full
+  branch and path remain in tooltips. One aligned marker shows each row's status, and container
+  counts never truncate. Search includes hidden branch/path metadata; the status selector offers
+  All, Needs you, Running, Completed and Failed. Consecutive idle/finished sessions fold into a
+  count, while approvals, failures, unread completions and the selected/focused row stay visible.
+  Settings → Appearance offers Standard and Compact density. The worktree's **⋯** menu starts an
+  agent there. Right-click a session or press ⇧F10 for its actions; closing asks first. Shell rows
+  open their terminal in the worktree. “Opened by Home” lives in the tooltip and selected detail.
 - **Needs you** lists every approval waiting in any session, oldest first, and you answer each on the
   same card the pane would have shown, without going there.
 - **Peek** shows the session you picked in the tree: its transcript, what it is waiting on, and a box
   to send it a message or queue one. **Open in worktree** takes you to its pane.
-- **Wires.** While one agent is waiting on another — a delegation, or a message from Home — a line
-  lights up between them in the tree, with what was asked on the receiving row. **Activity** keeps the
-  recent ones.
+- **Activity** keeps recent messages and replies between sessions. The tree has no connection wires.
 - **In flight** lists the work the Home agent has handed out and not heard back about: which session
   has it, what it was asked, and since when.
 - **The side panel** holding Needs you, Peek and Activity is as wide as you drag the line beside it,
@@ -284,6 +282,19 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
   Setup and removal run in Home, where you can watch them, and you can type into the setup's
   terminal. It cannot answer approvals; those come to you under Needs you. Messages it sends arrive
   labelled *From Home (wtm)*. **History** picks up a past Home conversation.
+- **Shell commands** proposed in an assistant's `sh`, `bash`, `zsh`, `shell` or `shellscript` block
+  have **Run** beside Copy, including Peek and Home. Every click opens a review sheet with the exact
+  script, interpreter, target directory and shell choice. Home requires an explicit worktree.
+  Final **Run** executes the reviewed block in a child shell at that worktree's root. Only verified
+  idle zsh panes can be reused; otherwise wtm opens a visible shell. Untagged, console and fish
+  blocks have no Run. Multi-line syntax stays intact; stripping a single-line `$ ` prompt is an
+  explicit edit. Commands run with your normal user permissions, including access outside the root.
+- **Home commands** appear under Needs you for per-run approval. Home's **Commands** button can
+  explicitly allow commands in a worktree until Home closes or wtm quits. Revoking cancels unused
+  grant requests; use the run header's Stop for a command already running. Home can read paged
+  output and exit status, and close only its own untouched idle shells. It cannot grant itself
+  permission, answer your approval, or reuse a shell after you adopt it by typing there. No pending
+  command, approval or grant is replayed after an app restart.
 - **After a relaunch** the Home agent comes back first, as the same conversation, and its tools see
   every restored session. It can still close the sessions it opened, unless you have written to them
   since. If it had work out when wtm quit, wtm tells it once, in a *From wtm* note, which sessions

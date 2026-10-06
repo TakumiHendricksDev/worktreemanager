@@ -138,3 +138,34 @@
   padding: var(--sp-2) var(--sp-3) var(--sp-3);
   border-top: 1px solid var(--border);
 }
+
+/* At large text sizes a whole issue key cannot share a narrow line with the count. The key gets
+   the full row below its controls; it is never scaled down or clipped to make the count fit. */
+@container (max-width: 14rem) {
+  .c-fleet__row.has-key {
+    position: relative;
+  }
+  .c-fleet__row.has-key > .c-fleet__identity {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-left: 0;
+    flex-wrap: wrap;
+  }
+  .c-fleet__row.has-key > .c-fleet__marker {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .c-fleet__row.has-key > .c-fleet__tag {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .c-fleet__row.has-key > .c-fleet__actions {
+    grid-column: 4;
+    grid-row: 1;
+  }
+  .c-fleet__row.has-key .c-fleet__twisty {
+    position: absolute;
+    top: 6px;
+    left: 28px;
+  }
+}
