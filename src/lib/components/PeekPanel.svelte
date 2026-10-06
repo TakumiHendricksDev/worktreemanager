@@ -20,6 +20,7 @@
   import { fileIndex, resolveRef, type CodeRef } from '../code-links';
   import { codeRequests } from '../state/code-request.svelte';
   import { composerPrefs } from '../state/composer.svelte';
+  import { shellRuns } from '../state/shell-runs.svelte';
   import { databaseConsole } from '../state/database-console.svelte';
   import { fleet } from '../state/fleet.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
@@ -183,6 +184,7 @@
     {/if}
     <AgentTranscript
       events={pane.events}
+      onrunshell={(snippet) => shellRuns.open(pane.projectId, pane.worktreeId, snippet)}
       onrunsql={(sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}
       {codeLink}
     />

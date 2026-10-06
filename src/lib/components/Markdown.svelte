@@ -16,6 +16,7 @@
   import { parse, type Block, type Span } from '../markdown';
   import { onDestroy } from 'svelte';
   import Button from './ui/Button.svelte';
+  import { shellSnippet, type ShellSnippet } from '../shell-script';
 
   /** How a reply's file references resolve and open. See `code-links.ts`. */
   export interface CodeLink {
@@ -26,6 +27,7 @@
   const {
     source,
     onrunsql,
+    onrunshell,
     codeLink,
   }: {
     source: string;
@@ -35,6 +37,7 @@
      * worktree whose database the SQL is about.
      */
     onrunsql?: (sql: string) => void;
+    onrunshell?: (snippet: ShellSnippet) => void;
     /**
      * Inline code that names a file in the worktree — `src/app.py:42` — becomes a link that opens it
      * in the Code tab. Opt-in for the same reason as `onrunsql`: only a reply in a pane has a
@@ -112,15 +115,26 @@
         {@render spans(block.spans)}
       </svelte:element>
     {:else if block.kind === 'code'}
+      {@const shell = shellSnippet(block.lang, block.raw)}
       <!-- No highlighting. The language is shown instead, because knowing a block is `rust` is most
            of what highlighting communicates here and the rest costs a dependency and a theme. -->
       <div class="c-markdown__block">
         {#if block.lang}<span class="c-markdown__lang">{block.lang}</span>{/if}
         <span class="c-markdown__actions">
-          <Button variant="quiet" size="sm" onclick={() => void copyBlock(block.text, i)}>
+          <Button variant="quiet" size="sm" onclick={() => void copyBlock(block.raw, i)}>
             {copiedBlock === i ? 'Copied' : 'Copy'}
           </Button>
-          {#if runnable(block.lang)}
+          {#if onrunshell && shell}
+            <Button
+              variant="quiet"
+              size="sm"
+              disabled={!block.complete}
+              title={block.complete
+                ? 'Review command before running'
+                : 'Waiting for the closing code fence'}
+              onclick={() => onrunshell?.(shell)}>Run</Button
+            >
+          {:else if runnable(block.lang)}
             <Button
               variant="quiet"
               size="sm"

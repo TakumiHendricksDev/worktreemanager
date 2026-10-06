@@ -54,6 +54,23 @@ pub fn list_shells(app: &App, project: &str, worktree: &str) -> Vec<ShellView> {
 }
 
 #[tauri::command]
+pub async fn shell_run_target(
+    app: AppState<'_>,
+    project_id: String,
+    worktree_id: String,
+) -> Reply<String> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        Ok(Target::resolve(&app, &project_id, &worktree_id)
+            .map_err(error)?
+            .directory
+            .to_string_lossy()
+            .into_owned())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn list_run_shells(
     app: AppState<'_>,
     project_id: String,

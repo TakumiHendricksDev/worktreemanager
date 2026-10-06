@@ -21,6 +21,7 @@
   import { commandsFor } from '../agent-commands';
   import { HOME_AGENT } from '../home';
   import { composerPrefs } from '../state/composer.svelte';
+  import { shellRuns } from '../state/shell-runs.svelte';
   import { databaseConsole } from '../state/database-console.svelte';
   import { DESTINATION, dictation } from '../state/dictate.svelte';
   import { item, popUp, under, type MenuEntry } from '../native-menu';
@@ -41,6 +42,7 @@
   import SideQuestion from './SideQuestion.svelte';
   import Suggest from './Suggest.svelte';
   import Terminal from './Terminal.svelte';
+  import ShellRunHeader from './ShellRunHeader.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import Dialog from './ui/Dialog.svelte';
@@ -1272,7 +1274,11 @@
   bind:this={section}
   aria-label="{atHome ? HOME_AGENT : label} session"
   onfocusin={() => sessions.noteFocus(pane.worktreeId, pane.id)}
-  onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
+  onclick={() => {
+    sessions.noteFocus(pane.worktreeId, pane.id);
+    if (kind === 'shell' && pane.session)
+      void commands.focusRunShell(pane.session).catch(() => {});
+  }}
 >
   <div class="c-pane__main">
     <header class="c-pane__head" class:has-origin={origin !== null}>
@@ -1575,6 +1581,7 @@
         <BrowserPane bind:this={browserPane} {pane} {visible} />
       </div>
     {:else if kind === 'shell'}
+      <ShellRunHeader session={pane.session} />
       <div class="c-pane__body c-pane__body--terminal">
         <Terminal
           bind:this={terminal}
@@ -1593,6 +1600,8 @@
           {/if}
           <AgentTranscript
             events={pane.events}
+            onrunshell={(snippet) =>
+              shellRuns.open(pane.projectId, pane.worktreeId, snippet)}
             onrunsql={atHome
               ? undefined
               : (sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}

@@ -1,3 +1,4 @@
+import { tick } from 'svelte';
 /**
  * Every session in every worktree: shells and agent chats, in one list.
  *
@@ -2703,6 +2704,30 @@ class Sessions {
    *
    * `beside` names the pane the new one lands next to, as in `openAgent`.
    */
+  /** A backend-approved run still needs a real layout leaf before it may spawn. */
+  async admitShellRun(run: import('../shell-script').ShellRun): Promise<void> {
+    if (inPaneWindow || run.phase !== 'awaiting_pane') return;
+    const { projectId, worktreeId } = run.request;
+    if (!this.hasRoom(worktreeId)) {
+      await commands.cancelShellRun(run.id);
+      return;
+    }
+    const pane = this.blank({ kind: 'shell' }, projectId, worktreeId);
+    this.panes = [...this.panes, pane];
+    this.place(worktreeId, pane.id, 'below');
+    try {
+      await tick();
+      const admitted = await commands.admitShellRun(run.id, SPAWN_ROWS, SPAWN_COLS);
+      if (!admitted.session)
+        throw new Error(admitted.problem ?? 'The shell could not be opened.');
+      await this.claimOrClose(pane.id, admitted.session, 'shell');
+    } catch (e) {
+      const live = this.paneById(pane.id);
+      if (live) live.error = errorMessage(e);
+      await commands.cancelShellRun(run.id).catch(() => {});
+    }
+  }
+
   async openShell(
     projectId: string,
     worktreeId: string,

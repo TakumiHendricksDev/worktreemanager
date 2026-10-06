@@ -43,7 +43,7 @@ export type TableAlignment = 'left' | 'center' | 'right' | null;
 export type Block =
   | { kind: 'paragraph'; spans: Span[] }
   | { kind: 'heading'; level: number; spans: Span[] }
-  | { kind: 'code'; lang: string | null; text: string }
+  | { kind: 'code'; lang: string | null; text: string; raw: string; complete: boolean }
   | { kind: 'list'; ordered: boolean; start: number; items: ListItem[] }
   | { kind: 'table'; header: Span[][]; alignments: TableAlignment[]; rows: Span[][][] }
   | { kind: 'quote'; blocks: Block[] }
@@ -70,7 +70,7 @@ const SAFE_HREF = /^https?:\/\/\S/i;
 const BARE_URL = /^https?:\/\/[^\s<>[\]()]*[^\s<>[\]().,;:!?'"]/i;
 
 export function parse(source: string): Block[] {
-  return blocks(source.replace(/\r\n?/g, '\n').split('\n'));
+  return blocks(source.split('\n'));
 }
 
 function blocks(lines: string[]): Block[] {
@@ -100,13 +100,16 @@ function blocks(lines: string[]): Block[] {
         body.push(deindent(lines[i] ?? '', indent.length));
         i += 1;
       }
-      if (i < lines.length) i += 1;
+      const complete = i < lines.length;
+      if (complete) i += 1;
       // Trailing blank lines trimmed: mid-stream the last line is always the empty tail of the
       // split, and a code block that grows a blank line at the bottom on every keystroke jitters.
       out.push({
         kind: 'code',
         lang: lang || null,
-        text: body.join('\n').replace(/\s+$/, ''),
+        text: body.join('\n').replace(/\r\n?/g, '\n').replace(/\s+$/, ''),
+        raw: body.join('\n') + (complete && body.length > 0 ? '\n' : ''),
+        complete,
       });
       continue;
     }

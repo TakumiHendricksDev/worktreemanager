@@ -18,6 +18,8 @@
   import { codeRequests } from './lib/state/code-request.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
+  import RunShellDialog from './lib/components/RunShellDialog.svelte';
+  import { shellRuns } from './lib/state/shell-runs.svelte';
   import FleetTree from './lib/components/FleetTree.svelte';
   import HomeAgent from './lib/components/HomeAgent.svelte';
   import HomeSurface from './lib/components/HomeSurface.svelte';
@@ -103,6 +105,7 @@
   let offWindows: (() => void) | null = null;
   /** The message log Home draws its wires from. Same contract as `offSessions`. */
   let offFleet: (() => void) | null = null;
+  let offShellRuns: (() => void) | null = null;
 
   /**
    * The one navigation recipe. Notification clicks and toast clicks both land here, because
@@ -266,6 +269,8 @@
       await workspace.init();
       if (gone) return;
       booted = true;
+      offShellRuns = await shellRuns.init();
+      if (gone) offShellRuns();
 
       // Last, and not awaited: a network round trip must not hold up a window that is otherwise
       // ready, and nothing above depends on its answer.
@@ -428,6 +433,7 @@
       void unlistenHome.then((off) => off());
       void unlistenUsage.then((off) => off());
       void unlistenClicks.then((off) => off());
+      offShellRuns?.();
       offFleet?.();
       offWindows?.();
       offSessions?.();
@@ -786,3 +792,7 @@
   -->
   <Toasts onnavigate={(target) => void goTo(target)} />
 </div>
+
+{#if shellRuns.review}
+  {#key shellRuns.review.id}<RunShellDialog review={shellRuns.review} />{/key}
+{/if}

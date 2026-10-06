@@ -26,17 +26,20 @@
   import { tick } from 'svelte';
   import Button from './ui/Button.svelte';
   import Markdown, { type CodeLink } from './Markdown.svelte';
+  import type { ShellSnippet } from '../shell-script';
   import { diffHeaderPath } from '../code-links';
   import { isWtmNotice, readWtmNotice } from '../home';
 
   const {
     events,
     onrunsql,
+    onrunshell,
     codeLink,
   }: {
     events: AgentEvent[];
     /** A reply's SQL to run in the Database console. See `Markdown`. */
     onrunsql?: (sql: string) => void;
+    onrunshell?: (snippet: ShellSnippet) => void;
     /** File references that open in the Code tab — in replies, and on a patch's file headers. */
     codeLink?: CodeLink;
   } = $props();
@@ -795,7 +798,7 @@
       <!-- The one place arbitrary document structure appears. Rendered as elements rather than a
            string of HTML, so nothing a model writes can become markup — see `markdown.ts`. -->
       <div class="c-transcript__said">
-        <Markdown source={row.text} {onrunsql} {codeLink} />
+        <Markdown source={row.text} {onrunsql} {onrunshell} {codeLink} />
       </div>
     {:else if row.kind === 'thinking'}
       <!--

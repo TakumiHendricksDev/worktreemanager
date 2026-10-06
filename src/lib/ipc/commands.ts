@@ -7,6 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 
 import type {
   AccountUsage,
@@ -67,6 +68,25 @@ import type {
 } from './types';
 
 export const commands = {
+  shellRunTarget: (projectId: string, worktreeId: string) =>
+    invoke<string>('shell_run_target', { projectId, worktreeId }),
+  listRunShells: (projectId: string, worktreeId: string) =>
+    invoke<RunShell[]>('list_run_shells', { projectId, worktreeId }),
+  prepareShellRun: (request: ShellRunRequest) =>
+    invoke<ShellRun>('prepare_shell_run', { request }),
+  listShellRuns: () => invoke<ShellRun[]>('list_shell_runs'),
+  approveShellRun: (runId: string) => invoke<ShellRun>('approve_shell_run', { runId }),
+  admitShellRun: (runId: string, rows: number, cols: number) =>
+    invoke<ShellRun>('admit_shell_run', { runId, rows, cols }),
+  denyShellRun: (runId: string) => invoke<void>('deny_shell_run', { runId }),
+  cancelShellRun: (runId: string) => invoke<void>('cancel_shell_run', { runId }),
+  focusRunShell: (session: string) => invoke<void>('focus_run_shell', { session }),
+  setHomeShellGrant: (
+    home: string,
+    projectId: string,
+    worktreeId: string,
+    allow: boolean,
+  ) => invoke<void>('set_home_shell_grant', { home, projectId, worktreeId, allow }),
   popupNativeMenu: (rid: number, kind: 'menu' | 'submenu', at?: { x: number; y: number }) =>
     invoke<void>('popup_native_menu', { rid, kind, at }),
   // ── projects ──

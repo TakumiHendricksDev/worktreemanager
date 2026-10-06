@@ -294,6 +294,7 @@ pub fn run() {
             commands::pty_resize,
             commands::pty_kill,
             commands::open_terminal,
+            shell_commands::shell_run_target,
             shell_commands::list_run_shells,
             shell_commands::prepare_shell_run,
             shell_commands::list_shell_runs,
