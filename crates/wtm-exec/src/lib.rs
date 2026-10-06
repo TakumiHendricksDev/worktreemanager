@@ -40,6 +40,7 @@ pub mod pty;
 pub mod runner;
 pub mod shell;
 pub mod shell_frames;
+pub mod shell_integration;
 pub mod signal;
 
 pub use clock::SystemClock;

@@ -154,6 +154,22 @@ impl PtyHostImpl {
         }
     }
 
+    /// A prompt report alone cannot prove that a foreground job has not started.
+    /// Clone the master handle before making the OS query, outside the registry.
+    #[must_use]
+    pub fn shell_owns_foreground(&self, id: &SessionId) -> bool {
+        let Ok((pid, master, outcome)) = self.with_session(id, |s| {
+            (s.pid, Arc::clone(&s.master), Arc::clone(&s.outcome))
+        }) else {
+            return false;
+        };
+        if outcome.lock().is_some() {
+            return false;
+        }
+        let foreground = master.lock().process_group_leader();
+        pid.and_then(|pid| i32::try_from(pid).ok()) == foreground && foreground.is_some()
+    }
+
     /// Terminate every running session's group, with one grace period for all.
     ///
     /// For app shutdown, and it is not optional housekeeping. `portable-pty` calls

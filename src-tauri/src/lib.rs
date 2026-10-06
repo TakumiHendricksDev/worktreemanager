@@ -27,6 +27,7 @@ pub mod notifier;
 pub mod openers;
 pub mod pane_windows;
 pub mod pty_bridge;
+pub mod shell_admission;
 pub mod turns;
 pub mod update;
 pub mod usage;
