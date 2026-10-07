@@ -29,6 +29,7 @@ import {
 import { attention } from './attention.svelte';
 import { composerPrefs } from './composer.svelte';
 import { codeRequests } from './code-request.svelte';
+import { shellRuns } from './shell-runs.svelte';
 import { databaseConsole } from './database-console.svelte';
 import { sessions } from './sessions.svelte';
 import { theme } from './theme.svelte';
@@ -133,6 +134,10 @@ async function obeyIntent(intent: PaneIntent): Promise<void> {
     case 'focusOrOpenShell':
       await commands.focusPaneWindow(null).catch(() => {});
       await sessions.focusOrOpenShell(intent.projectId, intent.worktreeId);
+      return;
+    case 'reviewShell':
+      await commands.focusPaneWindow(null).catch(() => {});
+      shellRuns.open(intent.projectId, intent.worktreeId, intent.snippet);
       return;
     case 'openInDatabase':
       await commands.focusPaneWindow(null).catch(() => {});

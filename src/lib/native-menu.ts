@@ -11,8 +11,8 @@
  * `svelte-check` as the only gate. A `<select>` cannot hold a submenu or a separator, though, and
  * "Move to ▸" is a submenu; Tauri's menu API is the native menu the `<select>` would have been.
  *
- * It needed no new capability: `core:default` includes `core:menu:default`, which is what grants
- * `menu|new` and `menu|popup`.
+ * Creation uses `core:menu:default`. Presentation uses our command because Tauri 2.11.6's
+ * `menu|popup` holds the resource-table lock across native tracking and deadlocks nested IPC.
  *
  * # Why the switchers are menus and not `<select>`s
  *
@@ -30,7 +30,6 @@
  * one opens: one is alive at a time, and none is closed while its own click is in flight.
  */
 
-import { LogicalPosition } from '@tauri-apps/api/dpi';
 import {
   Menu,
   type CheckMenuItemOptions,
@@ -38,6 +37,9 @@ import {
   type PredefinedMenuItemOptions,
   type SubmenuOptions,
 } from '@tauri-apps/api/menu';
+import { commands } from './ipc/commands';
+import { errorMessage } from './ipc/types';
+import { attention } from './state/attention.svelte';
 
 export type MenuEntry =
   | { kind: 'item'; text: string; enabled?: boolean; checked?: boolean; action: () => void }
@@ -67,7 +69,7 @@ export const separator: MenuEntry = { kind: 'separator' };
 type Native =
   MenuItemOptions | CheckMenuItemOptions | SubmenuOptions | PredefinedMenuItemOptions;
 
-function native(entry: MenuEntry): Native {
+function native(entry: MenuEntry, dispatch: (action: () => void) => void): Native {
   switch (entry.kind) {
     case 'separator':
       return { item: 'Separator' };
@@ -75,7 +77,7 @@ function native(entry: MenuEntry): Native {
       return {
         text: entry.text,
         enabled: entry.enabled ?? true,
-        items: entry.items.map(native),
+        items: entry.items.map((child) => native(child, dispatch)),
       };
     case 'heading':
       return { text: entry.text, enabled: false };
@@ -85,7 +87,7 @@ function native(entry: MenuEntry): Native {
         enabled: entry.enabled ?? true,
         // Only when asked for: Rust takes any item that has a `checked` field for a check item.
         ...(entry.checked === undefined ? {} : { checked: entry.checked }),
-        action: () => entry.action(),
+        action: () => dispatch(entry.action),
       };
   }
 }
@@ -107,6 +109,20 @@ function tidy(entries: MenuEntry[]): MenuEntry[] {
 }
 
 let open: Menu | null = null;
+let queued = Promise.resolve();
+let generation = 0;
+
+function report(error: unknown): void {
+  attention.notice('Could not open the menu', errorMessage(error));
+}
+
+function act(action: () => void): void {
+  try {
+    void Promise.resolve(action()).catch(report);
+  } catch (error) {
+    report(error);
+  }
+}
 
 /**
  * Where a menu opened by a button goes: under its left edge, the way a macOS pull-down opens.
@@ -123,15 +139,42 @@ export function under(button: Element): { x: number; y: number } {
  * Show a menu at a point in the window's client coordinates, or at the pointer when `at` is omitted
  * — which is what a right-click wants. A keyboard-opened menu passes the focused row's corner.
  */
-export async function popUp(
-  entries: MenuEntry[],
-  at?: { x: number; y: number },
-): Promise<void> {
-  const previous = open;
-  open = null;
-  void previous?.close();
+export function popUp(entries: MenuEntry[], at?: { x: number; y: number }): Promise<void> {
+  const request = ++generation;
+  queued = queued
+    .then(async () => {
+      if (request !== generation) return;
+      const previous = open;
+      open = null;
+      await previous?.close();
 
-  const menu = await Menu.new({ items: tidy(entries).map(native) });
-  open = menu;
-  await menu.popup(at ? new LogicalPosition(at.x, at.y) : undefined);
+      let tracking = true;
+      const actions: (() => void)[] = [];
+      const dispatch = (action: () => void) => {
+        if (tracking) actions.push(action);
+        else act(action);
+      };
+      const menu = await Menu.new({
+        items: tidy(entries).map((entry) => native(entry, dispatch)),
+      });
+      if (request !== generation) {
+        await menu.close();
+        return;
+      }
+      open = menu;
+      try {
+        await commands.popupNativeMenu(menu.rid, 'menu', at);
+      } catch (error) {
+        open = null;
+        await menu.close();
+        throw error;
+      } finally {
+        // AppKit may deliver an action before tracking returns. Opening another native
+        // menu or a file picker here must wait until the current operation has ended.
+        tracking = false;
+        for (const action of actions) act(action);
+      }
+    })
+    .catch(report);
+  return queued;
 }

@@ -420,6 +420,29 @@ class Workspace {
     await this.refreshWorktrees();
   }
 
+  /** Drop a confirmed removal even if the subsequent refresh fails. Never change projects. */
+  async afterRemoval(projectId: string, worktreeId: string): Promise<void> {
+    const cached = readCache(projectId);
+    if (cached)
+      writeCache(
+        projectId,
+        cached.filter((w) => w.id !== worktreeId),
+      );
+    try {
+      localStorage.removeItem(LAYOUT_CACHE_PREFIX + projectId);
+    } catch {
+      /* Cache only. */
+    }
+    if (this.activeProjectId !== projectId) return;
+    this.worktrees = this.worktrees.filter((w) => w.id !== worktreeId);
+    if (this.selectedWorktreeId === worktreeId)
+      this.select(
+        this.worktrees.find((w) => w.isMain)?.id ?? this.worktrees[0]?.id ?? null,
+      );
+    await this.refreshWorktrees();
+    await this.loadLayout(projectId);
+  }
+
   async refreshWorktrees(): Promise<void> {
     const projectId = this.activeProjectId;
     if (!projectId) {

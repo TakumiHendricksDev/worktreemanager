@@ -1315,6 +1315,9 @@ pub(crate) fn remove_now(
     progress: &dyn wtm_core::ports::progress::ProgressSink,
     sink: &Arc<dyn wtm_core::ports::pty::PtySink>,
 ) -> Result<wtm_core::usecase::RemoveOutcome, wtm_core::error::WtmError> {
+    // The dialog's preview may be stale. Refuse before ending panes, then the pipeline checks
+    // again immediately before teardown in case the directory changed while they were closing.
+    app.remove_pipeline().validate(req)?;
     let worktree_id = req.worktree.id.as_str();
     // End every dock shell and agent in the worktree before teardown runs.
     //
@@ -1415,9 +1418,16 @@ pub async fn pty_write(app: AppState<'_>, session: String, data_base64: String) 
     blocking(move || {
         let bytes = crate::pty_bridge::base64_decode(&data_base64)
             .ok_or_else(|| ErrorView::new("badInput", "terminal input was not valid base64"))?;
-        app.pty
-            .write(&wtm_core::model::SessionId::new(session), &bytes)
-            .map_err(|e| ErrorView::new("exec", e.to_string()))
+        let write = || {
+            app.pty
+                .write(&wtm_core::model::SessionId::new(&session), &bytes)
+        };
+        let result = if let Some(shell) = app.shell_admission.get(&session) {
+            shell.manual_input(write)
+        } else {
+            write()
+        };
+        result.map_err(|e| ErrorView::new("exec", e.to_string()))
     })
     .await
 }

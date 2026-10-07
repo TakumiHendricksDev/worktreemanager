@@ -206,6 +206,14 @@ Retry setup / Open shell / Remove worktree. `Retry setup` reuses stage 9 verbati
 
 ---
 
+**Removal captures its target before confirmation.** Both trees and the worktree bar use one
+`worktree-removal` request and the same dialog/IPC/pipeline. Selection changes cannot retarget a
+request. `RemovePipeline::validate` supplies the identical error/override rules before the app ends
+panes and again before teardown. Main and locked checkouts are unoverridable; no route silently
+unlocks one. Confirmed removal invalidates the named project's caches and reconciles only that
+worktree's panes, even when another project is active. Managed run children and ordinary process
+groups are signalled together, with one grace period and no app/run lock held while waiting.
+
 ## 6. Trust
 
 `wtm.toml` is arbitrary code execution by a file that lives inside a repository. Cloning a hostile repo
@@ -579,7 +587,46 @@ tools take targets, which none of §6b's do. What keeps it narrow:
   Closing is limited to sessions Home opened that are idle and that the user has never written to —
   one the user has started talking to has become theirs.
 - It is visible. A session Home opens is a pane in its worktree; what Home sends arrives labelled
-  `From Home (wtm):`; every exchange is a wire in Home's tree.
+  `From Home (wtm):`; every exchange appears in Home's Activity list.
+
+**Reviewed shell commands are a separate authorization.** Assistant fences tagged sh, bash,
+zsh, shell or shellscript offer Run; untagged and unfinished blocks cannot execute. Every click
+opens one review sheet showing the exact script, child interpreter, canonical worktree directory
+and destination. Copy and Cancel have no execution effect. Home's transcript has no implicit
+worktree. The final Run is the approval, including for multiline or destructive scripts; there is
+no heuristic that claims a command is safe. Scripts preserve whitespace and heredocs, normalize
+CRLF visibly, reject terminal controls, and use a private script file with parse-only validation.
+They run in a child sh/bash/zsh at the worktree root with inherited exports, leaving the parent's
+cwd, functions and shell settings alone. No script is typed into a terminal or bracketed paste.
+
+Automatic reuse requires a verified empty primary zsh prompt, no foreground or background job,
+and a one-use reservation that no manual input has invalidated. A private socket wakes a ZLE
+widget; no key sequence can leak into a foreground program. The widget rechecks its live edit
+buffer, continuation state and prompt epoch before consuming the request. Unsupported or unknown
+shells remain ordinary terminals; auto opens a new integrated zsh pane when none qualifies.
+macOS bash 3.2 does not expose a reliable empty Readline buffer for this admission protocol, so
+bash is supported as a child interpreter, not as a reusable parent. User startup files are chained
+through a private ZDOTDIR wrapper, never edited. Main-window pane placement and the existing
+20-per-worktree/40-global caps precede every managed shell spawn.
+
+Home's `list_shells`, `run_shell_command`, `read_shell_output` and `close_shell` use the same
+service. Per-run approval is the default; the backend holds immutable requests for Needs you.
+No MCP tool or argument can approve one. Home's Commands sheet can explicitly grant arbitrary
+commands in one worktree until that Home session closes or wtm quits. This is separate from
+config trust and binds the canonical worktree identity and config/trust revision. A grant covers
+only Home's untouched shells and new visible panes; a user-owned or adopted shell needs per-run
+review. Revocation blocks unconsumed requests, while Stop command ends an already running one.
+The UI states that normal user privileges extend outside the worktree and include network access.
+
+Shell and run handles have a random, memory-only Home epoch, separate from durable agent handles.
+Restore cannot recreate a grant, approval or command. Duplicate request keys cannot change payloads
+or execute twice; pending duplicates coalesce and denied commands cannot evade denial with new keys.
+The helper's wait result and private PTY end frame must both arrive before success is reported.
+Cursor reads are bounded, preserve split UTF-8, flag dropped bytes and distinguish remaining pages
+from process completion. Loss is interrupted/unknown, never inferred exit 0. Shell output is
+fenced as untrusted `<wtm_shell_content>` with case-insensitive closing-tag neutralization.
+One completion notice comes from each requested run, through Home's existing coalesced notice path;
+notices grant no new authority. Only Home's untouched, verified idle shells can be closed by tools.
 
 **Delegation does not hold Home's turn.** `message_session` and `open_session` first waited up to
 ten minutes for the reply, like `ask_agent`, and that was wrong for Home in two ways at once. While
@@ -601,7 +648,8 @@ provider takes a second message mid-turn: Claude Code and Codex at their next st
 current prompt is done. It is never sent as a steer, because Cursor's steer cancels the prompt that
 is running. Three rules keep notices from feeding themselves:
 
-- A notice comes only from a delegation.
+- An agent notice comes only from a delegation; a shell notice comes only from one explicitly
+  requested run, watched once through its terminal state.
 - A delegation comes only from Home's own two tools, sent to a session that is not a Home (`admit`
   refuses one). Home's turns are never one, and that includes the turns notices start.
 - What Home already knows is not news. A reply its own `wait: true` took is not reported again, and
@@ -674,6 +722,35 @@ the dialog would end or could lose: an agent session, shell or browser pane open
 commits not in the base. It never forces, so uncommitted work stays the user's to discard. A removal
 is a `home:worktree` job too, so it appears in Home's tree as a creation does.
 
+### Native UI and nested event loops
+
+Native menus and file pickers can service webview IPC before returning. No resource
+table, application registry or plugin-state guard may span native presentation,
+`run_on_main_thread`, `with_webview`, a synchronous UI reply wait or a callback that
+can reenter. Clone the owned handles under a short lock, release it, then dispatch.
+
+Tauri 2.11.6's menu `popup` command violates this rule: its worker holds the webview
+resource table while waiting for AppKit's menu tracking loop. A nested resource IPC
+on the main thread then waits for the worker's lock. `native_menu::popup_native_menu`
+replaces that presentation boundary; menu creation and action Channels remain Tauri's.
+An atomic admission flag rejects overlapping tracking without holding another lock.
+The frontend queues openings, discards stale requests, and defers actions until
+tracking ends. A dismissed menu stays alive until the next opening because its action
+Channel may arrive after the popup reply.
+
+The modal audit covered application-menu callbacks (event emission only), pane-window
+creation/close, browser dispatch/snapshot/navigation callbacks, and the pinned
+`tauri-plugin-dialog` 2.7.3 / `rfd` 0.16.0 picker paths. These extract registry state
+before UI calls; dialog scopes are updated after selection, and rfd releases its
+future-state lock before starting the sheet/modal loop. No additional lock-lifetime
+changes were needed in those paths. This is a boundary to preserve in future work,
+not a claim that every native dependency is reentrancy-safe.
+
+The resource callback regression test fails when its guard is moved past the callback.
+Mocked IPC checks queueing and Channel delivery; neither proves AppKit behavior.
+`docs/native-menu-regression.md` describes the isolated old/new native probe and its
+external watchdog. Never run a deliberate hang against the user's working app.
+
 ## 5a. Two things the real repository taught us
 
 Both were found by running against a real repository rather than by reasoning, and both are the kind of
@@ -705,7 +782,11 @@ passwords, SMTP credentials — and the app's job involves displaying that file.
 **Nothing of yours leaves the machine without a direct user action.** Dictation sends recorded audio
 to the compiled-in `api.deepgram.com` host. The database viewer connects only after a config's
 credential-free target has passed the existing content-hash trust gate and the user clicks Connect.
-There is no telemetry, analytics or crash reporting.
+There is no telemetry, analytics or crash reporting. A reviewed shell Run authorizes the displayed
+script's normal user access. Home's explicit, temporary worktree grant (§6f) authorizes subsequent
+commands within the user's task without another per-command click; it is off by default, revocable,
+and never restored. Granting is a direct user action, and the sheet states the filesystem and
+network authority involved.
 
 **There is one request that is not a user action: the update check.** At launch, and at most daily
 after that, wtm asks `api.github.com` for its own latest release. That is a deliberate exception,
@@ -1192,17 +1273,14 @@ session's approvals oldest first, which is the one place arrival order across pa
 `PendingApproval` now carries an arrival counter — a counter, not a time, because replay preserves
 order and no clock is needed.
 
-**Wires are drawn in viewport space, from a log Rust keeps.** When one session hands work to another,
-the prompt and the answer each appear in their own transcript and nothing connected them. Rust now
-records each exchange — prompt, reply or failure, sender, receiver — in a bounded in-memory ring
-(`messages.rs`), announces the whole record when it starts and when it settles, and serves the ring
-to a reloaded window. The turn waiter that settles them (`turns.rs`) replaced the sink `ask_agent`
-used to wrap around its child, because a sink is fixed when a session opens and Home has to wait on
-sessions it did not open; a waiter that gives up still settles its exchange when the turn finally
-ends, so a slow child's wire does not stay drawn in flight. The wires are an SVG over the tree's
-scroll viewport, measured from the rows whenever anything moves, so an end that has scrolled away is
-clamped to the edge with a way back. They are decorative: the Activity list and a chip on the
-receiving row say the same in words, and under reduced motion they hold still.
+**Relationships stay in Activity and In flight.** Rust records each exchange — prompt, reply or
+failure, sender, receiver — in a bounded in-memory ring (`messages.rs`), announces it on start and
+settlement, and serves it to reloaded windows. The turn waiter (`turns.rs`) settles an exchange even
+when its caller stopped waiting. The tree shows location, one aligned status, and a nonshrinking
+session count. It has no wires or per-row message chips; Activity and In flight explain those
+relationships in words. Issue keys stay whole, with the descriptive title alone ellipsized. Full
+branch/path and Home provenance remain in tooltips and selected detail. Shell rows open the actual
+terminal in its worktree, rather than mounting a second transcript or terminal in Peek.
 
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 

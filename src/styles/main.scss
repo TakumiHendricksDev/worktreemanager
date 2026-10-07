@@ -112,6 +112,7 @@
 @use 'components/section-heading';
 @use 'components/settings';
 @use 'components/shell';
+@use 'components/shell-run';
 @use 'components/side-question';
 @use 'components/split-button';
 @use 'components/splitter';
@@ -126,7 +127,6 @@
 @use 'components/trust';
 @use 'components/update';
 @use 'components/usage';
-@use 'components/wire';
 @use 'components/worktree-bar';
 @use 'components/worktree-tab';
 

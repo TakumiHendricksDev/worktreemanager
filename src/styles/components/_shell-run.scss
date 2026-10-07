@@ -1,0 +1,29 @@
+.c-shell-run__review {
+  display: grid;
+  gap: var(--sp-3);
+}
+.c-shell-run__directory {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+  color: var(--fg-muted);
+}
+.c-shell-run__script {
+  font-family: var(--font-mono);
+  white-space: pre;
+  min-height: 160px;
+}
+.c-shell-run__header {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--step--1);
+  max-height: 40%;
+  overflow: auto;
+}
+.c-shell-run__command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  padding-block: var(--sp-2);
+}

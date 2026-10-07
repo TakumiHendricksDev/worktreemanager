@@ -15,6 +15,7 @@
    * Home's own approvals stay in Home's transcript, where the conversation that caused them is. This
    * is the list of everything *else*, which is the thing that had no single place to be answered.
    */
+  import { shellRuns } from '../state/shell-runs.svelte';
   import { APPROVAL_WORD, summarize } from '../approvals';
   import { fleet, type Waiting } from '../state/fleet.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
@@ -76,13 +77,31 @@
   }
 </script>
 
-{#if fleet.needsYou.length > 0}
+{#if fleet.needsYou.length + shellRuns.pending.length > 0}
   <section class="c-inbox" aria-label="Needs you">
     <h2 class="c-inbox__heading">
       <Icon name="inbox" size={14} />
-      Needs you <span class="c-inbox__count">{fleet.needsYou.length}</span>
+      Needs you
+      <span class="c-inbox__count">{fleet.needsYou.length + shellRuns.pending.length}</span>
     </h2>
     <ul class="o-plain-list c-inbox__list" bind:this={listEl}>
+      {#each shellRuns.pending as run (run.id)}
+        <li class="c-inbox__item">
+          <div class="c-inbox__row">
+            <button class="c-inbox__toggle" onclick={() => shellRuns.reviewHome(run)}>
+              <SessionDot status="attention" /><span class="c-inbox__what"
+                >Home command</span
+              >
+              <span class="c-inbox__line" title={run.request.command}
+                >{run.request.command}</span
+              >
+              <span class="c-inbox__who">{run.directory}</span>
+            </button><Button size="sm" onclick={() => shellRuns.reviewHome(run)}
+              >Review</Button
+            >
+          </div>
+        </li>
+      {/each}
       {#each fleet.needsYou as waiting (waiting.approval.id)}
         {@const summary = summarize(waiting.approval.request)}
         {@const expanded = open?.approval.id === waiting.approval.id}

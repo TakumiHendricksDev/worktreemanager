@@ -20,12 +20,19 @@ pub mod dictate;
 pub mod display;
 pub mod handoff;
 pub mod home;
+pub mod home_shells;
 pub mod home_tools;
 pub mod messages;
+pub mod native_menu;
 pub mod notifier;
 pub mod openers;
 pub mod pane_windows;
 pub mod pty_bridge;
+pub mod shell_admission;
+pub mod shell_commands;
+pub mod shell_control;
+pub mod shell_output;
+pub mod shell_runs;
 pub mod turns;
 pub mod update;
 pub mod usage;
@@ -245,6 +252,7 @@ pub fn run() {
         })
         .on_window_event(pane_windows::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            native_menu::popup_native_menu,
             commands::dictation_status,
             commands::set_dictation_key,
             commands::start_dictation,
@@ -287,6 +295,17 @@ pub fn run() {
             commands::pty_resize,
             commands::pty_kill,
             commands::open_terminal,
+            shell_commands::shell_run_target,
+            shell_commands::list_run_shells,
+            shell_commands::prepare_shell_run,
+            shell_commands::list_shell_runs,
+            shell_commands::approve_shell_run,
+            shell_commands::admit_shell_run,
+            shell_commands::deny_shell_run,
+            shell_commands::cancel_shell_run,
+            shell_commands::set_home_shell_grant,
+            shell_commands::list_home_shell_grants,
+            shell_commands::focus_run_shell,
             commands::list_terminals,
             commands::terminal_replay,
             commands::close_terminal,
@@ -399,6 +418,7 @@ pub fn run() {
                 use tauri::Manager;
 
                 if let Some(app) = handle.try_state::<Arc<App>>() {
+                    app.close_shell_runs();
                     let mut pids = app.pty.take_running_pids();
                     pids.extend(app.pipe.take_running_pids());
                     let killed = pids.len();

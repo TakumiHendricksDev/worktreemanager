@@ -334,6 +334,11 @@ class Attention {
     await this.remember();
   }
 
+  /** Operational failures need a visible reply even when no session owns the action. */
+  notice(title: string, detail: string): void {
+    this.push({ kind: 'notice', target: null, title, detail });
+  }
+
   /**
    * Ask about notifications, once, if something has already been missed.
    *

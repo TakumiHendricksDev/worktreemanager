@@ -882,3 +882,40 @@ fn a_home_bridge_refuses_a_worktree_tool_without_reaching_the_app() {
         "{reply}"
     );
 }
+
+#[test]
+fn home_shell_tools_preserve_the_request_and_are_absent_from_a_worktree_bridge() {
+    for tool in [
+        "list_shells",
+        "run_shell_command",
+        "read_shell_output",
+        "close_shell",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("h.sock");
+        let app = fake_app(&socket, handoff::Response::ok("awaiting_approval".into()));
+        let mut bridge = Bridge::wired_home(
+            "claude:Claude Code,codex:Codex,cursor:Cursor Agent",
+            &socket,
+            "home-token",
+        );
+        let args = serde_json::json!({"command":"cat <<'EOF'\n  bytes  \nEOF\n", "request_key":"same-key"});
+        let reply = bridge.call(
+            2,
+            "tools/call",
+            &serde_json::json!({"name":tool,"arguments":args}),
+        );
+        let sent = app.join().unwrap();
+        assert_eq!(sent.action, handoff::Action::Home);
+        assert_eq!(sent.token, "home-token");
+        assert_eq!(sent.home.unwrap().args, args);
+        assert_eq!(reply["result"]["isError"], false);
+        let mut worktree = Bridge::start("claude:Claude Code,codex:Codex,cursor:Cursor Agent");
+        let reply = worktree.call(
+            2,
+            "tools/call",
+            &serde_json::json!({"name":tool,"arguments":args}),
+        );
+        assert_eq!(reply["result"]["isError"], true);
+    }
+}

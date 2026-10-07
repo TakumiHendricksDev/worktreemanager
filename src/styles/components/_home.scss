@@ -88,6 +88,8 @@
   display: grid;
   flex: 0 0 auto;
   grid-auto-rows: minmax(0, auto);
+  /* Long branch metadata must not establish the grid column’s minimum width. */
+  grid-template-columns: minmax(0, 1fr);
   max-height: 45%;
   min-height: 0;
   overflow-y: auto;

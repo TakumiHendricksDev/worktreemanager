@@ -25,11 +25,22 @@
 use std::time::Duration;
 
 use nix::errno::Errno;
-use nix::sys::signal::{Signal, killpg};
+use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::Pid;
 
 /// How long a group gets to exit after `SIGTERM` before `SIGKILL`.
 const GRACE: Duration = Duration::from_millis(400);
+
+/// End a private helper, including one stopped by terminal job control. Its
+/// child group is terminated separately; signalling the helper's group could
+/// reach the interactive parent if a shell put them in the same group.
+pub fn terminate_helper(pid: u32) {
+    if let Ok(raw) = i32::try_from(pid)
+        && raw > 1
+    {
+        let _ = kill(Pid::from_raw(raw), Signal::SIGKILL);
+    }
+}
 
 /// `SIGTERM` the process group led by `pid`, then `SIGKILL` it.
 ///

@@ -299,6 +299,12 @@ impl AgentSink for AgentEventSink {
         // Before the emit, so a caller waiting on this session is released even if the window has
         // gone and the emit fails.
         if let Some(app) = &self.app {
+            app.close_home_runs(session.as_str());
+            for run in app.shell_runs.all() {
+                if run.prepared.source.home() == Some(session.as_str()) {
+                    crate::shell_control::announce(&self.handle, &run);
+                }
+            }
             let settled = app.turns.gone(session.as_str(), &outcome.describe());
             crate::messages::settle_turns(&self.handle, app, &settled);
             crate::home::settled(app, &settled);

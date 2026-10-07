@@ -1,19 +1,8 @@
-/*
- * Home's session tree: every project, its worktrees and their agent sessions, in the sidebar's
- * column while Home is up.
- *
- * Shaped like the sidebar on purpose — the same column, the same filter field (`.c-search`), the
- * same background — because it is the sidebar's job done across every project, and a different
- * look would suggest a different kind of thing.
- *
- * The indent is arithmetic on `--fleet-level`, which each row sets, and `FleetWires` repeats the
- * same arithmetic to find where a wire meets a row: change the 12px lead or the 14px step here and
- * change `LEAD`/`INDENT` there, or the wires will end beside the rows rather than at them.
- */
-
+/* Only the identity column indents or shrinks; status, count and actions keep their place. */
 .c-fleet {
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
   min-height: 0;
   height: 100%;
   background: var(--bg-sidebar);
@@ -23,79 +12,49 @@
     display: none;
   }
 }
-
 .c-fleet__controls {
   display: flex;
   margin: var(--sp-3) var(--sp-3) var(--sp-2);
   flex: 0 0 auto;
 }
-
-.c-fleet__counts {
+.c-fleet__filter {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: var(--sp-1);
   padding: 0 var(--sp-3) var(--sp-2);
-  flex: 0 0 auto;
 }
-
-/* A count that is also a filter: pressed, it narrows the tree to that state. Never narrowed: the
-   strip wraps a whole chip to the next line instead. */
-.c-fleet__count {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
+.c-fleet__select {
+  min-width: 0;
+  flex: 1;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
+  border-radius: var(--r-sm);
+  padding: var(--sp-1);
+  background: var(--bg-sidebar);
   color: var(--fg-muted);
-  font-size: var(--step--2);
-  white-space: nowrap;
-
-  &:hover:enabled {
-    background: var(--bg-hover);
-    color: var(--fg);
-  }
-
-  &:disabled {
-    cursor: default;
-    opacity: 0.55;
-  }
-
-  &.is-pressed {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--fg);
-  }
+  font-size: var(--step--1);
 }
-
-/* Positioned so the wire overlay can lie over the scroll viewport rather than its content. */
 .c-fleet__wrap {
-  position: relative;
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
 }
-
 .c-fleet__scroll {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
 }
-
 .c-fleet__tree {
-  padding: 0 0 var(--sp-3);
+  padding-bottom: var(--sp-3);
 }
-
 .c-fleet__row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) max-content 20px;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 3px var(--sp-2) 3px calc(12px + (var(--fleet-level) - 1) * 14px);
+  column-gap: 4px;
+  min-height: var(--fleet-row-height, 30px);
+  padding: 2px var(--sp-2);
   color: var(--fg);
   font-size: var(--step--1);
   cursor: default;
@@ -103,183 +62,116 @@
   &:hover {
     background: var(--bg-hover);
   }
-
   &.is-selected {
     background: var(--bg-active);
   }
 }
-
-/* Home's own row stays at the top as the list scrolls, so Home's end of a wire is always on screen. */
 .c-fleet__row--home {
-  position: sticky;
-  top: 0;
-  background: var(--bg-sidebar);
   font-weight: 600;
-  border-bottom: 1px solid var(--border);
 }
-
 .c-fleet__row--project {
   margin-top: var(--sp-2);
   font-weight: 600;
 }
-
 .c-fleet__row--idle {
   color: var(--fg-muted);
 }
-
-/* Two or three lines — title, agent, and a chip while a message is waiting — so the dot sits on the
-   first rather than in the middle of all of them. */
-.c-fleet__row--session {
-  align-items: flex-start;
+.c-fleet__marker {
+  display: flex;
+  justify-content: center;
+  color: var(--fg-muted);
 }
-
-.c-fleet__row > .c-dot {
-  flex: 0 0 auto;
+.c-fleet__identity {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-left: min(42px, calc((var(--fleet-level) - 1) * 12px));
 }
-
-.c-fleet__row--session > .c-dot {
-  margin-top: 5px;
-}
-
 .c-fleet__twisty {
   display: inline-flex;
   flex: 0 0 12px;
   width: 12px;
   color: var(--fg-subtle);
 }
-
-.c-fleet__icon {
-  display: inline-flex;
-  color: var(--fg-muted);
-}
-
 .c-fleet__name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/*
- * In a row with a count, the name is the one thing that gives way, and it takes the slack as well,
- * which is what puts the count at the row's end. It used to share the shortfall with the count:
- * both shrank in proportion to their width, so a long name cut "1 idle" to "1 i…" while keeping
- * most of its own length.
- */
-.c-fleet__row > .c-fleet__name {
-  flex: 1 1 auto;
-}
-
-/* "Other worktrees (3)" reads as one phrase, so its count stays beside the name. */
-.c-fleet__row--idle > .c-fleet__name {
-  flex-grow: 0;
-}
-
-.c-fleet__name--quiet {
-  color: var(--fg-muted);
-}
-
-.c-fleet__meta {
-  flex: 0 1 auto;
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
-  color: var(--fg-subtle);
-  font-size: var(--step--2);
-  font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/*
- * A count: "1 running", "2 failed · 4 idle", "7 sessions". Never narrowed, wrapped or cut. Where a
- * row is too narrow for it beside even a short name, FleetTree marks it compact and it shows each
- * count as its dot and number. The words stay in the tag, clipped out of sight but still read
- * aloud and still measured, which is how the tree knows when they fit again.
- */
-.c-fleet__tag {
-  position: relative;
-  display: inline-flex;
+.c-fleet__key {
   flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.c-fleet__provider {
+  flex: 0 0 auto;
+  margin-left: auto;
   color: var(--fg-subtle);
   font-size: var(--step--2);
-  font-weight: 400;
   white-space: nowrap;
-
-  &.is-compact > .c-fleet__tag-full {
-    position: absolute;
-    clip-path: inset(50%);
-    pointer-events: none;
+}
+@container (max-width: 280px) {
+  .c-fleet__provider {
+    display: none;
   }
 }
-
-.c-fleet__tag-part {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.c-fleet__body {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.c-fleet__line {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-}
-
-/* Inside a session row's body the meta is a line of its own, not pushed to the right. */
-.c-fleet__body > .c-fleet__meta {
-  margin-left: 0;
-}
-
-.c-fleet__status {
-  flex: 0 0 auto;
+.c-fleet__tag {
   color: var(--fg-muted);
   font-size: var(--step--2);
-}
-
-.c-fleet__badge {
-  margin-right: 4px;
-  color: var(--accent);
-}
-
-/* What the session was just sent and has not answered yet. The wire's other end. */
-.c-fleet__chip {
-  align-self: flex-start;
-  max-width: 100%;
-  padding: 1px 6px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--fg);
-  font-size: var(--step--2);
-  text-overflow: ellipsis;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
 }
-
-/* Out of the way until the row is pointed at or focused, as the sidebar's star is. */
 .c-fleet__actions {
   display: inline-flex;
-  flex: 0 0 auto;
   opacity: 0;
 }
-
 .c-fleet__row:hover > .c-fleet__actions,
 .c-fleet__row:focus-within > .c-fleet__actions {
   opacity: 1;
 }
-
 .c-fleet__foot {
   flex: 0 0 auto;
   padding: var(--sp-2) var(--sp-3) var(--sp-3);
   border-top: 1px solid var(--border);
+}
+
+/* At large text sizes a whole issue key cannot share a narrow line with the count. The key gets
+   the full row below its controls; it is never scaled down or clipped to make the count fit. */
+@container (max-width: 14rem) {
+  .c-fleet__row.has-key {
+    position: relative;
+  }
+  .c-fleet__row.has-key > .c-fleet__identity {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-left: 0;
+    flex-wrap: wrap;
+  }
+  .c-fleet__row.has-key > .c-fleet__marker {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .c-fleet__row.has-key > .c-fleet__tag {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .c-fleet__row.has-key > .c-fleet__actions {
+    grid-column: 4;
+    grid-row: 1;
+  }
+  .c-fleet__row.has-key .c-fleet__twisty {
+    position: absolute;
+    top: 6px;
+    left: 28px;
+  }
+}
+
+.c-fleet__add-label {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }

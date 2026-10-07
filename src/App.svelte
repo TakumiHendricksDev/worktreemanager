@@ -18,6 +18,9 @@
   import { codeRequests } from './lib/state/code-request.svelte';
   import DatabaseSurface from './lib/components/DatabaseSurface.svelte';
   import Detail from './lib/components/Detail.svelte';
+  import HomeShellPermissions from './lib/components/HomeShellPermissions.svelte';
+  import RunShellDialog from './lib/components/RunShellDialog.svelte';
+  import { shellRuns } from './lib/state/shell-runs.svelte';
   import FleetTree from './lib/components/FleetTree.svelte';
   import HomeAgent from './lib/components/HomeAgent.svelte';
   import HomeSurface from './lib/components/HomeSurface.svelte';
@@ -41,6 +44,8 @@
   import { commands } from './lib/ipc/commands';
   import { errorMessage, type NotificationClick, type Project } from './lib/ipc/types';
   import { attention } from './lib/state/attention.svelte';
+  import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
+  import { treePrefs } from './lib/state/tree-prefs.svelte';
   import { composerPrefs } from './lib/state/composer.svelte';
   import { dictation } from './lib/state/dictate.svelte';
   import { initMainWindow } from './lib/state/pane-windows.svelte';
@@ -79,7 +84,7 @@
    * minutes. Removal stays a modal — a destructive confirmation should block.
    */
   let showAddProject = $state(false);
-  let showRemove = $state(false);
+
   /**
    * The project being removed, captured when the dialog opens.
    *
@@ -103,6 +108,7 @@
   let offWindows: (() => void) | null = null;
   /** The message log Home draws its wires from. Same contract as `offSessions`. */
   let offFleet: (() => void) | null = null;
+  let offShellRuns: (() => void) | null = null;
 
   /**
    * The one navigation recipe. Notification clicks and toast clicks both land here, because
@@ -207,6 +213,7 @@
       // into the moment a pane mounts, and reading this late would send the first Enter of the
       // session under the default rather than the chosen behaviour.
       await composerPrefs.init();
+      await treePrefs.init();
       await sessionAwareness.init();
       await browsers.init();
       await browserTools.init();
@@ -266,6 +273,8 @@
       await workspace.init();
       if (gone) return;
       booted = true;
+      offShellRuns = await shellRuns.init();
+      if (gone) offShellRuns();
 
       // Last, and not awaited: a network round trip must not hold up a window that is otherwise
       // ready, and nothing above depends on its answer.
@@ -428,6 +437,7 @@
       void unlistenHome.then((off) => off());
       void unlistenUsage.then((off) => off());
       void unlistenClicks.then((off) => off());
+      offShellRuns?.();
       offFleet?.();
       offWindows?.();
       offSessions?.();
@@ -448,7 +458,7 @@
    * "no badge", where zero would be a badge reading 0.
    */
   $effect(() => {
-    const waiting = sessions.waitingCount;
+    const waiting = sessions.waitingCount + shellRuns.pending.length;
     void getCurrentWindow()
       .setBadgeCount(waiting > 0 ? waiting : undefined)
       .catch(() => {});
@@ -527,8 +537,7 @@
         <FleetTree
           visible={view.home}
           onhome={() => view.peek(null)}
-          onopenworktree={(projectId, worktreeId) =>
-            void openWorktree(projectId, worktreeId)}
+          onopenworktree={(projectId, worktreeId) => openWorktree(projectId, worktreeId)}
           onnewworktree={(projectId) =>
             void workspace.selectProject(projectId).then(() => view.show('new'))}
           onaddproject={addProject}
@@ -690,7 +699,13 @@
           onsessions={() => view.show('worktree')}
           ondatabase={() => view.show('database')}
           oncode={() => view.show('code')}
-          onremove={() => (showRemove = true)}
+          onremove={() => {
+            if (workspace.activeProjectId && workspace.selected)
+              void worktreeRemoval.request({
+                projectId: workspace.activeProjectId,
+                worktree: workspace.selected,
+              });
+          }}
           oninspect={() => (showInspector = true)}
           onfavorite={() => {
             const id = workspace.selected?.id;
@@ -729,8 +744,7 @@
         <HomeSurface
           visible={booted && view.home}
           onreveal={(pane) => void reveal(pane)}
-          onopenworktree={(projectId, worktreeId) =>
-            void openWorktree(projectId, worktreeId)}
+          onopenworktree={(projectId, worktreeId) => openWorktree(projectId, worktreeId)}
         >
           {#snippet main()}
             <HomeAgent visible={booted && view.home} />
@@ -751,11 +765,11 @@
     />
   {/if}
 
-  {#if showRemove && workspace.selected && workspace.activeProjectId}
+  {#if worktreeRemoval.target}
     <RemoveWorktreeDialog
-      projectId={workspace.activeProjectId}
-      worktree={workspace.selected}
-      onclose={() => (showRemove = false)}
+      projectId={worktreeRemoval.target.projectId}
+      worktree={worktreeRemoval.target.worktree}
+      onclose={() => worktreeRemoval.close()}
     />
   {/if}
 
@@ -786,3 +800,14 @@
   -->
   <Toasts onnavigate={(target) => void goTo(target)} />
 </div>
+
+{#if shellRuns.review}
+  {#key shellRuns.review.id}<RunShellDialog review={shellRuns.review} />{/key}
+{/if}
+
+{#if shellRuns.permissions}
+  <HomeShellPermissions
+    home={shellRuns.permissions}
+    onclose={() => (shellRuns.permissions = null)}
+  />
+{/if}

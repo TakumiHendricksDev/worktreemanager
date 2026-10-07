@@ -112,6 +112,19 @@ impl RemovePipeline {
             return Ok(items);
         }
 
+        if let Some(reason) = &req.worktree.locked {
+            items.push(
+                PreflightItem::error("locked", "This worktree is locked.").with_hint(
+                    if reason.is_empty() {
+                        "Unlock it explicitly before removing it.".into()
+                    } else {
+                        format!("{reason} — unlock it explicitly before removing it.")
+                    },
+                ),
+            );
+            return Ok(items);
+        }
+
         let status = self.git.status(&req.worktree.path).unwrap_or_default();
 
         if project.remove.require_clean && status.dirty_tracked {
@@ -229,17 +242,8 @@ impl RemovePipeline {
         }
     }
 
-    /// Run teardown, remove the worktree, and optionally delete the branch.
-    pub fn execute(
-        &self,
-        req: &RemoveRequest,
-        progress: &dyn ProgressSink,
-        sink: &Arc<dyn PtySink>,
-        cancel: &CancelToken,
-    ) -> Result<RemoveOutcome, WtmError> {
-        let project = &req.project;
-        let mut warnings = Vec::new();
-
+    /// Share the exact refusal rules with callers that must end sessions before teardown.
+    pub fn validate(&self, req: &RemoveRequest) -> Result<(), WtmError> {
         let blocking: Vec<PreflightItem> = self
             .preflight(req)?
             .into_iter()
@@ -251,6 +255,22 @@ impl RemovePipeline {
         if !blocking.is_empty() {
             return Err(WtmError::Preflight(blocking));
         }
+
+        Ok(())
+    }
+
+    /// Run teardown, remove the worktree, and optionally delete the branch.
+    pub fn execute(
+        &self,
+        req: &RemoveRequest,
+        progress: &dyn ProgressSink,
+        sink: &Arc<dyn PtySink>,
+        cancel: &CancelToken,
+    ) -> Result<RemoveOutcome, WtmError> {
+        let project = &req.project;
+        let mut warnings = Vec::new();
+
+        self.validate(req)?;
 
         let ctx = Self::teardown_context(req);
 

@@ -24,6 +24,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 use toml::Value;
@@ -49,6 +50,14 @@ struct CacheEntry {
     fingerprint: Vec<(PathBuf, String)>,
 }
 
+/// A short-lived execution approval cannot outlive a config or trust decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionRevision {
+    layers: Vec<(PathBuf, String)>,
+    trust: String,
+    decision: u64,
+}
+
 /// Filesystem-backed [`ConfigStore`].
 pub struct FileConfigStore {
     paths: AppPaths,
@@ -60,6 +69,7 @@ pub struct FileConfigStore {
     /// or `register_project` calls would otherwise each load, mutate, and save, and
     /// the second write would drop the first.
     user_write: Mutex<()>,
+    trust_revision: AtomicU64,
 }
 
 impl std::fmt::Debug for FileConfigStore {
@@ -85,6 +95,7 @@ impl FileConfigStore {
             clock,
             cache: Mutex::new(BTreeMap::new()),
             user_write: Mutex::new(()),
+            trust_revision: AtomicU64::new(0),
         }
     }
 
@@ -301,6 +312,19 @@ impl FileConfigStore {
                 Some((path, trust::content_hash(source)))
             })
             .collect()
+    }
+
+    /// Recheck trust rather than borrowing `load`'s cached project. The opaque
+    /// value is only for in-memory approvals, never a durable authorization.
+    pub fn execution_revision(&self, repo_root: &Path) -> Result<ExecutionRevision, ConfigError> {
+        let loaded = self.read_layers(repo_root)?;
+        self.enforce_trust(&loaded)?;
+        let trust = read_optional(&self.paths.trust_file)?.unwrap_or_default();
+        Ok(ExecutionRevision {
+            layers: Self::fingerprint(&loaded),
+            trust: trust::content_hash(&trust),
+            decision: self.trust_revision.load(Ordering::Acquire),
+        })
     }
 }
 
@@ -522,6 +546,7 @@ impl ConfigStore for FileConfigStore {
         store.record(path, &source, decision, Some(self.clock.now_iso()));
         self.paths.ensure_dir()?;
         store.save(&self.paths.trust_file)?;
+        self.trust_revision.fetch_add(1, Ordering::AcqRel);
 
         // A decision changes what `load` may do, so drop the cache.
         self.cache.lock().clear();

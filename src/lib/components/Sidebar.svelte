@@ -41,6 +41,10 @@
     type Slot,
   } from '../sidebar';
   import { item, popUp, separator, type MenuEntry } from '../native-menu';
+  import { resolveWorktreeTarget, worktreeActions } from '../worktree-menu';
+  import { attention } from '../state/attention.svelte';
+  import { errorMessage } from '../ipc/types';
+  import { worktreeRemoval } from '../state/worktree-removal.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { inRail, worse, type PaneStatus } from '../status';
@@ -142,6 +146,11 @@
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || hidden) return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('input, textarea, [contenteditable], .cm-editor, .xterm')
+      )
+        return;
       if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
         event.preventDefault();
         searchEl?.focus();
@@ -378,7 +387,26 @@
     return workspace.layout.groups.filter((g) => kindOf(g.id) === 'custom');
   }
 
+  let menuEpoch = 0;
   async function rowMenu(worktreeId: string, at?: { x: number; y: number }) {
+    const epoch = ++menuEpoch;
+    const origin = navItems().find((row) => row.dataset.nav === `row:${worktreeId}`);
+    const projectId = workspace.activeProjectId;
+    if (!projectId) return;
+    let target;
+    try {
+      target = await resolveWorktreeTarget(projectId, worktreeId);
+    } catch (e) {
+      attention.notice('Could not open worktree menu', errorMessage(e));
+      return;
+    }
+    if (
+      epoch !== menuEpoch ||
+      workspace.activeProjectId !== projectId ||
+      hidden ||
+      !origin?.isConnected
+    )
+      return;
     const here = locate(workspace.layout, worktreeId);
     const starred = workspace.isFavorite(worktreeId);
     const ungrouped = workspace.layout.groups.find((g) => g.id === UNGROUPED);
@@ -396,6 +424,8 @@
 
     await popUp(
       [
+        ...worktreeActions(target, (captured) => void worktreeRemoval.request(captured)),
+        separator,
         item(starred ? 'Remove from Favorites' : 'Add to Favorites', () =>
           workspace.toggleFavorite(worktreeId),
         ),
@@ -409,6 +439,7 @@
   }
 
   async function groupMenu(groupId: string, at?: { x: number; y: number }) {
+    menuEpoch += 1;
     const section = sectionOf(groupId);
     if (!section) return;
     const custom = section.kind === 'custom';
@@ -457,7 +488,8 @@
 
   function onRowMenu(event: MouseEvent, worktreeId: string) {
     event.preventDefault();
-    void rowMenu(worktreeId);
+    (event.currentTarget as HTMLElement).focus();
+    void rowMenu(worktreeId, { x: event.clientX, y: event.clientY });
   }
 
   function onGroupMenu(event: MouseEvent, groupId: string) {

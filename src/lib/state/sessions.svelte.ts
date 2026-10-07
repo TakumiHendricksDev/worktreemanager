@@ -1,3 +1,4 @@
+import { tick } from 'svelte';
 /**
  * Every session in every worktree: shells and agent chats, in one list.
  *
@@ -807,6 +808,7 @@ function hostOf(url: string | null): string | null {
 }
 
 class Sessions {
+  private openingShellRuns = new Map<string, string>();
   panes = $state<Pane[]>([]);
   /** One split tree per worktree, keyed by worktree id. */
   layouts = $state<Record<string, Layout | null>>({});
@@ -2703,6 +2705,34 @@ class Sessions {
    *
    * `beside` names the pane the new one lands next to, as in `openAgent`.
    */
+  /** A backend-approved run still needs a real layout leaf before it may spawn. */
+  async admitShellRun(run: import('../shell-script').ShellRun): Promise<void> {
+    if (inPaneWindow || run.phase !== 'awaiting_pane') return;
+    const { projectId, worktreeId } = run.request;
+    if (!this.hasRoom(worktreeId)) {
+      await commands.cancelShellRun(run.id);
+      return;
+    }
+    const pane = this.blank({ kind: 'shell' }, projectId, worktreeId);
+    this.panes = [...this.panes, pane];
+    this.place(worktreeId, pane.id, 'below');
+    this.openingShellRuns.set(pane.id, run.id);
+    try {
+      await tick();
+      if (!this.paneById(pane.id) || !this.openingShellRuns.has(pane.id)) return;
+      const admitted = await commands.admitShellRun(run.id, SPAWN_ROWS, SPAWN_COLS);
+      if (!admitted.session)
+        throw new Error(admitted.problem ?? 'The shell could not be opened.');
+      await this.claimOrClose(pane.id, admitted.session, 'shell');
+    } catch (e) {
+      const live = this.paneById(pane.id);
+      if (live) live.error = errorMessage(e);
+      await commands.cancelShellRun(run.id).catch(() => {});
+    } finally {
+      this.openingShellRuns.delete(pane.id);
+    }
+  }
+
   async openShell(
     projectId: string,
     worktreeId: string,
@@ -3998,6 +4028,13 @@ class Sessions {
     const pane = this.paneById(paneId);
     if (!pane) return;
     this.forgetOut(paneId);
+    const opening = this.openingShellRuns.get(paneId);
+    if (opening) {
+      this.openingShellRuns.delete(paneId);
+      await commands.cancelShellRun(opening).catch((e) => {
+        this.error = errorMessage(e);
+      });
+    }
 
     if (pane.session) {
       try {
@@ -4179,6 +4216,17 @@ class Sessions {
 
   expectWorktree(worktreeId: string): void {
     this.expected.add(worktreeId);
+  }
+
+  /** A successful removal is stronger evidence than a stale listing or an expected-create marker. */
+  forgetWorktree(projectId: string, worktreeId: string): void {
+    this.expected.delete(worktreeId);
+    this.reconcile(
+      projectId,
+      this.panes
+        .filter((pane) => pane.projectId === projectId && pane.worktreeId !== worktreeId)
+        .map((pane) => pane.worktreeId),
+    );
   }
 
   reconcile(projectId: string, ids: string[]): void {

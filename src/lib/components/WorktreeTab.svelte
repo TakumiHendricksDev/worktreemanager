@@ -7,6 +7,7 @@
    * It was a `tab` while the list was flat; a tablist can only contain tabs, which left nowhere to
    * put a heading you can fold.
    */
+  import { worktreeLabel } from '../worktree-label';
   import type { Worktree } from '../ipc/types';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import Icon from './ui/Icon.svelte';
@@ -67,6 +68,8 @@
    * `inRail` admits need an entry, but every one is listed so the record stays total and a new status
    * is a compile error here rather than a missing class at runtime.
    */
+  const identity = $derived(worktreeLabel(worktree));
+
   const TONE: Record<PaneStatus, string> = {
     attention: 'c-status--warn',
     failed: 'c-status--danger',
@@ -113,7 +116,8 @@
     oncontextmenu={onmenu}
   >
     <span class="c-worktree-tab__line">
-      <span class="c-worktree-tab__name" title={worktree.title}>{worktree.title}</span>
+      {#if identity.key}<span class="c-worktree-tab__key">{identity.key}</span>{/if}
+      <span class="c-worktree-tab__name" title={identity.detail}>{identity.name}</span>
       {#if worktree.isMain}
         <span class="c-worktree-tab__pill" title="The main worktree">main</span>
       {/if}

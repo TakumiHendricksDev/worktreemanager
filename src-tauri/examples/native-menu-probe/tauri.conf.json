@@ -1,0 +1,15 @@
+{
+  "productName": "wtm Native Menu Probe",
+  "version": "0.0.0",
+  "identifier": "dev.wtm.native-menu-probe",
+  "build": { "frontendDist": "web" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "capabilities": ["default"],
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": { "active": false, "icon": ["../../icons/icon.png"] }
+}

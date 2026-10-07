@@ -19,8 +19,10 @@
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
-import { anchorOf, arrangeFleet, HOME_KEY, sessionKey, type FleetOnly } from '../fleet';
-import type { FleetJob, FleetSession } from '../fleet';
+import { arrangeFleet, type FleetOnly } from '../fleet';
+import type { FleetJob, FleetSession, FleetWorktree } from '../fleet';
+import { runSettled, runStatus } from '../shell-script';
+import { shellRuns } from './shell-runs.svelte';
 import { HOME_AGENT, isHome } from '../home';
 import { commands } from '../ipc/commands';
 import type { AgentExchange, AgentOption, HomeJob, Worktree } from '../ipc/types';
@@ -30,9 +32,6 @@ import { cachedWorktrees, cacheWorktrees, workspace } from './workspace.svelte';
 
 /** How many exchanges the window keeps. Rust keeps more; the Activity list needs only the recent. */
 const MAX_MESSAGES = 200;
-
-/** How many settled exchanges may still be fading out of the tree at once. */
-const MAX_TRACES = 8;
 
 const FOLDS_KEY = 'wtm.fleet.folds';
 
@@ -52,19 +51,9 @@ export interface Waiting {
   approval: PendingApproval;
 }
 
-/** A line drawn between two rows of the tree, by row key. */
-export interface Wire {
-  id: number;
-  from: string;
-  to: string;
-  state: AgentExchange['state'];
-  /** Settled, and drawn once more as it fades. */
-  trace: boolean;
-}
-
 /** Whether a pane is one the tree lists: an agent, not a side question, not Home itself. */
 function listed(pane: Pane): boolean {
-  return pane.kind.kind === 'agent' && pane.sideOf === null && !isHome(pane.worktreeId);
+  return pane.kind.kind !== 'browser' && pane.sideOf === null && !isHome(pane.worktreeId);
 }
 
 class Fleet {
@@ -73,10 +62,9 @@ class Fleet {
   /** Each project's agents, for a worktree row's "+" menu. Fetched on first use. */
   offered = $state<Record<string, AgentOption[]>>({});
   messages = $state<AgentExchange[]>([]);
-  /** Exchanges that have settled and are still drawn, fading. Dropped by the wire's animation. */
-  traces = $state<number[]>([]);
   folds = $state<Record<string, boolean>>(readFolds());
   query = $state('');
+  focused = $state<string | null>(null);
   only = $state<FleetOnly | null>(null);
   /** Worktrees Home is creating or removing, or did lately. */
   jobs = $state<HomeJob[]>([]);
@@ -113,7 +101,7 @@ class Fleet {
       // Merged rather than assigned: an exchange can have been announced between subscribing and
       // reading, and the record the event carried is at least as new as the one in the snapshot.
       for (const exchange of kept) {
-        if (!this.messages.some((m) => m.id === exchange.id)) this.upsert(exchange, false);
+        if (!this.messages.some((m) => m.id === exchange.id)) this.upsert(exchange);
       }
     } catch {
       /* Nothing to draw yet; live exchanges still arrive. */
@@ -121,18 +109,13 @@ class Fleet {
     return off;
   }
 
-  private upsert(exchange: AgentExchange, live = true): void {
+  private upsert(exchange: AgentExchange): void {
     const at = this.messages.findIndex((m) => m.id === exchange.id);
     const next =
       at < 0
         ? [...this.messages, exchange].sort((a, b) => a.id - b.id)
         : this.messages.map((m) => (m.id === exchange.id ? exchange : m));
     this.messages = next.slice(Math.max(0, next.length - MAX_MESSAGES));
-    // Only a settlement seen live leaves a trace: a reload drawing every recent exchange fading at
-    // once would be a flash of wires about things that ended minutes ago.
-    if (live && exchange.state !== 'in_flight' && !this.traces.includes(exchange.id)) {
-      this.traces = [...this.traces, exchange.id].slice(-MAX_TRACES);
-    }
     // Written down so a quit cannot leave the restored Home waiting on news that will not come.
     if (exchange.from !== null && exchange.from === sessions.homePane?.session) {
       sessions.noteHomeInFlight(this.delegations.map((delegation) => delegation.to));
@@ -190,11 +173,6 @@ class Fleet {
       })),
   );
 
-  /** The wire's fade finished. */
-  dropTrace(id: number): void {
-    if (this.traces.includes(id)) this.traces = this.traces.filter((t) => t !== id);
-  }
-
   /** Fetch every usable project's listing, one at a time. Safe to call as often as Home likes. */
   refresh(): Promise<void> {
     this.refreshing ??= this.fetchAll().finally(() => {
@@ -228,6 +206,18 @@ class Fleet {
     }
   }
 
+  /** A confirmed removal invalidates the exact project's cached tree, including while Home
+   * is looking at another project. Failed refreshes cannot put the deleted row back. */
+  async removed(projectId: string, worktreeId: string): Promise<void> {
+    const current = this.worktreesOf(projectId) ?? cachedWorktrees(projectId) ?? [];
+    const kept = current.filter((w) => w.id !== worktreeId);
+    this.listings = { ...this.listings, [projectId]: kept };
+    cacheWorktrees(projectId, kept);
+    sessions.forgetWorktree(projectId, worktreeId);
+    await workspace.afterRemoval(projectId, worktreeId);
+    if (workspace.activeProjectId !== projectId) await this.fetchOne(projectId);
+  }
+
   /** A project's agents, fetched once and kept until the next focus clears them. */
   async agentsFor(projectId: string): Promise<AgentOption[]> {
     const known = this.offered[projectId];
@@ -251,22 +241,44 @@ class Fleet {
 
   /** Every agent session the tree lists, as structural records. */
   sessions = $derived.by((): FleetSession[] =>
-    sessions.panes.filter(listed).map((pane) => ({
-      id: pane.id,
-      projectId: pane.projectId,
-      worktreeId: pane.worktreeId,
-      session: pane.session,
-      parentSession: pane.parentSession,
-      status: sessions.statusOfPane(pane),
-      title: pane.agentTitle ?? pane.firstPrompt ?? 'No prompt yet',
-      agent: sessions.labelOf(pane),
-      model: pane.model,
-      openedFromHome: pane.openedFromHome,
-    })),
+    sessions.panes.filter(listed).map((pane) => {
+      const shell = pane.kind.kind === 'shell';
+      const run = shell ? shellRuns.forSession(pane.session) : undefined;
+      const label = sessions.labelOf(pane);
+      const status = run
+        ? run.phase === 'interrupted' || (run.outcome && run.outcome.kind !== 'success')
+          ? 'failed'
+          : runSettled(run)
+            ? 'idle'
+            : 'working'
+        : sessions.statusOfPane(pane);
+      const title = shell
+        ? run?.request.command.split('\n')[0] || 'Shell'
+        : (pane.agentTitle ??
+          pane.firstPrompt ??
+          (pane.error
+            ? `Couldn’t ${pane.detached ? 'restore' : 'start'} ${label} session`
+            : `New ${label} session`));
+      return {
+        id: pane.id,
+        projectId: pane.projectId,
+        worktreeId: pane.worktreeId,
+        session: pane.session,
+        parentSession: pane.parentSession,
+        status,
+        title,
+        agent: shell ? 'Shell' : label,
+        model: pane.model,
+        openedFromHome: pane.openedFromHome || run?.requester != null,
+        kind: shell ? 'shell' : 'agent',
+        completed: run ? runSettled(run) : pane.lastTurnFinished,
+        detail: run ? runStatus(run) : (pane.error ?? ''),
+      };
+    }),
   );
 
   arrangement = $derived.by(() => {
-    const worktrees: Record<string, { id: string; title: string; subtitle: string }[]> = {};
+    const worktrees: Record<string, FleetWorktree[]> = {};
     for (const project of workspace.projects) {
       const list = this.worktreesOf(project.id);
       if (list) worktrees[project.id] = list;
@@ -282,7 +294,13 @@ class Fleet {
         sessions: this.sessions,
         jobs: this.shownJobs,
       },
-      { folds: this.folds, peeked: view.peeked, query: this.query, only: this.only },
+      {
+        folds: this.folds,
+        peeked: view.peeked,
+        focused: this.focused,
+        query: this.query,
+        only: this.only,
+      },
     );
   });
 
@@ -303,31 +321,6 @@ class Fleet {
     };
   });
 
-  /** The rows that end a wire for a backend session: Home's own row for Home, else its pane. */
-  private keyOf(session: string | null): string | null {
-    const pane = sessions.paneBySession(session);
-    if (!pane) return null;
-    if (isHome(pane.worktreeId)) return HOME_KEY;
-    return sessionKey(pane.id);
-  }
-
-  /** What to draw: every exchange in flight, and the few that just settled. */
-  wires = $derived.by((): Wire[] => {
-    const out: Wire[] = [];
-    for (const exchange of this.messages) {
-      const trace = this.traces.includes(exchange.id);
-      if (exchange.state !== 'in_flight' && !trace) continue;
-      const fromKey = this.keyOf(exchange.from);
-      const toKey = this.keyOf(exchange.to);
-      if (fromKey === null || toKey === null) continue;
-      const from = anchorOf(this.arrangement, fromKey);
-      const to = anchorOf(this.arrangement, toKey);
-      if (from === null || to === null || from === to) continue;
-      out.push({ id: exchange.id, from, to, state: exchange.state, trace });
-    }
-    return out;
-  });
-
   /**
    * What Home's conversation has handed out and not heard back about, oldest first.
    *
@@ -343,17 +336,6 @@ class Fleet {
       (exchange) => exchange.from === home && exchange.state === 'in_flight',
     );
   });
-
-  /** The newest exchange still waiting on a reply from this pane, for its row's chip. */
-  inboundTo(paneId: string): AgentExchange | null {
-    const pane = sessions.paneById(paneId);
-    if (!pane?.session) return null;
-    for (let index = this.messages.length - 1; index >= 0; index -= 1) {
-      const exchange = this.messages[index]!;
-      if (exchange.to === pane.session && exchange.state === 'in_flight') return exchange;
-    }
-    return null;
-  }
 
   /** A short name for an exchange's end, as Activity and the chips say it. */
   nameOf(session: string | null): string {

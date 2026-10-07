@@ -175,6 +175,10 @@ fn serve_one(handle: &tauri::AppHandle, app: &Arc<App>, stream: UnixStream) {
         return;
     }
 
+    if crate::shell_control::is_private_request(&line) {
+        crate::shell_control::serve(handle, app, &line, reader, stream);
+        return;
+    }
     let response = match serde_json::from_str::<Request>(&line) {
         Ok(request) => handoff::run(handle, app, &request),
         Err(error) => {

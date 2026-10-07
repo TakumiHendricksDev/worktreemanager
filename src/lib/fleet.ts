@@ -10,7 +10,7 @@
  * # Flat rows, not a nested structure
  *
  * The tree is drawn as one list of rows with a level each, because that is what both of its other
- * consumers want. Arrow keys walk rows in screen order, and the wires measure rows by key — a nested
+ * consumers want. Arrow keys walk rows in screen order, and selection follows stable row keys — a nested
  * structure would make each of them flatten it again, and two flattenings can disagree.
  *
  * # What a fold may not hide
@@ -21,6 +21,7 @@
  */
 
 import { worse, type PaneStatus } from './status';
+import type { WorktreeIdentity } from './worktree-label';
 
 /** One agent session, as the tree needs it. `fleet.svelte.ts` builds these from panes. */
 export interface FleetSession {
@@ -38,6 +39,9 @@ export interface FleetSession {
   model: string | null;
   /** Opened into its worktree by Home rather than by hand. */
   openedFromHome: boolean;
+  kind: 'agent' | 'shell';
+  completed: boolean;
+  detail: string;
 }
 
 export interface FleetProject {
@@ -46,7 +50,7 @@ export interface FleetProject {
   usable: boolean;
 }
 
-export interface FleetWorktree {
+export interface FleetWorktree extends WorktreeIdentity {
   id: string;
   title: string;
   subtitle: string;
@@ -99,6 +103,7 @@ export type FleetRow =
       /** Null for a session with no children. */
       expanded: boolean | null;
     }
+  | { kind: 'settled'; key: string; level: number; count: number; expanded: boolean }
   | { kind: 'creation'; key: string; level: 2; projectId: string; job: FleetJob };
 
 /** A worktree Home is creating or removing, as the tree needs it. */
@@ -114,7 +119,7 @@ export interface FleetJob {
 }
 
 /** What the tree can be narrowed to, besides a typed filter. */
-export type FleetOnly = 'attention' | 'working' | 'done';
+export type FleetOnly = 'attention' | 'working' | 'done' | 'failed';
 
 export interface FleetInput {
   projects: readonly FleetProject[];
@@ -130,16 +135,13 @@ export interface FleetOptions {
   folds: Readonly<Record<string, boolean>>;
   /** The pane being peeked at, which no fold may hide. */
   peeked: string | null;
+  focused?: string | null;
   query: string;
   only: FleetOnly | null;
 }
 
 export interface FleetArrangement {
   rows: FleetRow[];
-  /** Every session's ancestors by row key, nearest first, for anchoring a wire to a fold. */
-  ancestry: ReadonlyMap<string, readonly string[]>;
-  /** Which keys are on screen. */
-  visible: ReadonlySet<string>;
 }
 
 export const HOME_KEY = 'home';
@@ -153,7 +155,7 @@ export const jobKey = (id: number) => `creation:${id}`;
 const SETTLED: ReadonlySet<PaneStatus> = new Set(['idle', 'ended', 'done', 'detached']);
 
 function urgent(status: PaneStatus): boolean {
-  return status === 'attention' || status === 'failed';
+  return status === 'attention' || status === 'failed' || status === 'done';
 }
 
 function noCounts(): FleetCounts {
@@ -178,8 +180,13 @@ function rollUp(statuses: readonly PaneStatus[]): PaneStatus | null {
   return found;
 }
 
-function matchesOnly(status: PaneStatus, only: FleetOnly | null): boolean {
+function matchesOnly(session: FleetSession, only: FleetOnly | null): boolean {
+  const status = session.status;
   if (only === null) return true;
+  if (only === 'done')
+    return (
+      status === 'done' || (session.completed && (status === 'idle' || status === 'ended'))
+    );
   if (only === 'working') return status === 'working' || status === 'starting';
   return status === only;
 }
@@ -208,7 +215,6 @@ function basename(path: string): string {
  */
 export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArrangement {
   const rows: FleetRow[] = [{ kind: 'home', key: HOME_KEY, level: 1 }];
-  const ancestry = new Map<string, string[]>();
   const terms = options.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const filtering = terms.length > 0 || options.only !== null;
 
@@ -241,7 +247,7 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
   };
 
   const sessionMatches = (s: FleetSession, place: string): boolean =>
-    matchesOnly(s.status, options.only) &&
+    matchesOnly(s, options.only) &&
     terms.every((term) => textOf(s.title, s.agent, s.model, place).includes(term));
 
   const open = (key: string, fallback: boolean): boolean =>
@@ -257,7 +263,17 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
     const order: FleetWorktree[] = [...listed];
     for (const s of mine) {
       if (!byId.has(s.worktreeId)) {
-        const stray = { id: s.worktreeId, title: basename(s.worktreeId), subtitle: '' };
+        const stray: FleetWorktree = {
+          id: s.worktreeId,
+          title: basename(s.worktreeId),
+          subtitle: '',
+          dirname: basename(s.worktreeId),
+          path: s.worktreeId,
+          branch: null,
+          head: null,
+          issueKey: null,
+          isMain: false,
+        };
         byId.set(stray.id, stray);
         order.push(stray);
       }
@@ -274,7 +290,11 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
     const worktreeMatches = (w: FleetWorktree) =>
       options.only === null &&
       terms.length > 0 &&
-      terms.every((term) => textOf(w.title, w.subtitle, project.name).includes(term));
+      terms.every((term) =>
+        textOf(w.title, w.subtitle, w.path, w.branch, w.issueKey, project.name).includes(
+          term,
+        ),
+      );
     const shownBusy = filtering
       ? busy.filter(
           (w) =>
@@ -282,7 +302,12 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
             mine
               .filter((s) => s.worktreeId === w.id)
               .some((root) =>
-                subtree(root).some((s) => sessionMatches(s, `${w.title} ${project.name}`)),
+                subtree(root).some((s) =>
+                  sessionMatches(
+                    s,
+                    textOf(w.title, w.subtitle, w.path, w.branch, w.issueKey, project.name),
+                  ),
+                ),
               ),
         )
       : busy;
@@ -324,14 +349,21 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
         });
       }
 
-      const place = `${worktree.title} ${project.name}`;
-      const emit = (s: FleetSession, level: number, above: string[], shown: boolean) => {
+      const place = textOf(
+        worktree.title,
+        worktree.subtitle,
+        worktree.path,
+        worktree.branch,
+        worktree.issueKey,
+        project.name,
+      );
+      const emit = (s: FleetSession, level: number, shown: boolean) => {
         const key = sessionKey(s.id);
-        ancestry.set(key, above);
         const below = kids(s);
         const matched = !filtering || subtree(s).some((d) => sessionMatches(d, place));
         if (!matched) return;
-        const kept = shown || urgent(s.status) || s.id === options.peeked;
+        const kept =
+          shown || urgent(s.status) || s.id === options.peeked || s.id === options.focused;
         // A run that is still busy opens itself; a finished one larger than a few rows stays shut.
         const busyBelow = below.some((c) => subtree(c).some((d) => !SETTLED.has(d.status)));
         const sessionOpen = open(key, busyBelow || below.length <= 3);
@@ -344,17 +376,39 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
             expanded: below.length === 0 ? null : sessionOpen,
           });
         }
-        for (const child of below) {
-          emit(
-            child,
-            kept ? level + 1 : level,
-            [key, ...above],
-            kept && shown && sessionOpen,
-          );
+        emitList(below, kept ? level + 1 : level, kept && shown && sessionOpen);
+      };
+      // Consecutive quiet siblings fold in place. Grouping every idle session together would move
+      // rows on each status change, just as someone is reaching for one with the keyboard.
+      const quietTree = (s: FleetSession) =>
+        subtree(s).every((child) => SETTLED.has(child.status) && child.status !== 'done');
+      const emitList = (list: FleetSession[], level: number, shown: boolean) => {
+        for (let at = 0; at < list.length;) {
+          let end = at;
+          if (!filtering && shown && quietTree(list[at]!)) {
+            while (end < list.length && quietTree(list[end]!)) end += 1;
+          }
+          if (end - at >= 3) {
+            const group = list.slice(at, end);
+            const key = `settled:${worktree.id}:${list[at]!.id}`;
+            const expanded = open(key, false);
+            rows.push({
+              kind: 'settled',
+              key,
+              level,
+              expanded,
+              count: group.reduce((n, root) => n + subtree(root).length, 0),
+            });
+            for (const root of group) emit(root, level + 1, expanded);
+            at = end;
+          } else {
+            emit(list[at]!, level, shown);
+            at += 1;
+          }
         }
       };
-      // Under a folded project there is no worktree row, so what the fold keeps sits one level up.
-      for (const root of here) emit(root, projectOpen ? 3 : 2, [wKey, pKey], worktreeOpen);
+      // Under a folded project there is no worktree row, so retained rows sit one level up.
+      emitList(here, projectOpen ? 3 : 2, worktreeOpen);
     }
 
     // What Home is making here, between what is running and what is quiet.
@@ -401,19 +455,5 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
     }
   }
 
-  return { rows, ancestry, visible: new Set(rows.map((row) => row.key)) };
-}
-
-/**
- * Where a wire to `key` should end: the row itself, or the nearest heading folded over it.
- *
- * Null when nothing on the way up is on screen — a project the filter hid entirely — and then no
- * wire is drawn for that end at all, rather than one into empty space.
- */
-export function anchorOf(arrangement: FleetArrangement, key: string): string | null {
-  if (arrangement.visible.has(key)) return key;
-  for (const above of arrangement.ancestry.get(key) ?? []) {
-    if (arrangement.visible.has(above)) return above;
-  }
-  return null;
+  return { rows };
 }

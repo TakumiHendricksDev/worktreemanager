@@ -31,6 +31,7 @@
   import { attention } from '../state/attention.svelte';
   import { composerPrefs, type SendKey } from '../state/composer.svelte';
   import { DESTINATION, dictation, type DictateMode } from '../state/dictate.svelte';
+  import { treePrefs, type TreeDensity } from '../state/tree-prefs.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { updates } from '../state/update.svelte';
   import { browserTools } from '../state/browser-tools.svelte';
@@ -342,6 +343,22 @@
               {mode.label}
             </Choice>
           {/each}
+        </div>
+        <div class="o-stack">
+          <h3 class="c-section-heading">Home tree density</h3>
+          {#each ['standard', 'compact'] as density}
+            <Choice
+              type="radio"
+              name="wtm-tree-density"
+              checked={treePrefs.density === density}
+              onchange={() => void treePrefs.set(density as TreeDensity)}
+            >
+              {density === 'standard' ? 'Standard' : 'Compact'}
+            </Choice>
+          {/each}
+          {#if treePrefs.error}<p class="c-field__help c-status--danger">
+              {treePrefs.error}
+            </p>{/if}
         </div>
       </div>
     {:else if section === 'general'}

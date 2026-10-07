@@ -274,7 +274,7 @@
 
     <OpenInButton {projectId} worktreeId={worktree.id} />
 
-    <LinksButton {projectId} links={worktree.links} />
+    <LinksButton {projectId} worktreeId={worktree.id} links={worktree.links} />
 
     <Button
       variant="quiet"
