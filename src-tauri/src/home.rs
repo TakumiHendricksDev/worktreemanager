@@ -571,6 +571,24 @@ impl Registry {
         Some(job.clone())
     }
 
+    /// Forget a finished job, because the user dismissed it. Whether there was one to forget.
+    ///
+    /// Here rather than only in the window, which reloads and asks [`Self::jobs`] again. A running
+    /// job is refused: its row is the only place a setup that stopped to ask something can be
+    /// answered. The pipeline's last update finds nothing, as it would after an eviction.
+    pub fn dismiss_job(&self, id: u64) -> bool {
+        let mut state = self.state.lock();
+        let Some(index) = state
+            .jobs
+            .iter()
+            .position(|job| job.id == id && job.phase != JobPhase::Running)
+        else {
+            return false;
+        };
+        state.jobs.remove(index);
+        true
+    }
+
     #[must_use]
     pub fn jobs(&self) -> Vec<Job> {
         self.state.lock().jobs.iter().cloned().collect()
@@ -1133,6 +1151,12 @@ pub async fn home_jobs(app: crate::commands::AppState<'_>) -> Reply<Vec<Job>> {
     Ok(app.home.jobs())
 }
 
+/// Take a finished job out of Home's tree. False for one still running, or already gone.
+#[tauri::command]
+pub async fn home_dismiss_job(app: crate::commands::AppState<'_>, id: u64) -> Reply<bool> {
+    Ok(app.home.dismiss_job(id))
+}
+
 /// Make Home's directory, private to this user, if it is not there yet.
 fn ensure_home_dir(app: &App) -> Result<String, ErrorView> {
     let dir = &app.config.paths().home_dir;
@@ -1564,6 +1588,30 @@ mod tests {
         assert!(kept.iter().any(|j| j.id == running.id));
         assert_eq!(kept.len(), MAX_FINISHED_JOBS + MAX_RUNNING_JOBS);
         assert_eq!(home.running_jobs(), 1);
+    }
+
+    #[test]
+    fn a_dismissed_job_is_gone_for_a_reloaded_window_and_a_running_one_cannot_be_dismissed() {
+        let home = Registry::default();
+        let running = home.start_job(job(JobPhase::Running));
+        let created = home.start_job(job(JobPhase::Created));
+        let failed = home.start_job(job(JobPhase::SetupFailed));
+
+        assert!(
+            !home.dismiss_job(running.id),
+            "a running setup may be waiting on an answer only its row can give"
+        );
+        assert!(home.dismiss_job(created.id));
+        assert!(home.dismiss_job(failed.id));
+        assert!(!home.dismiss_job(created.id), "already gone");
+
+        let kept: Vec<u64> = home.jobs().iter().map(|j| j.id).collect();
+        assert_eq!(kept, vec![running.id]);
+        assert!(
+            home.update_job(created.id, |job| job.phase = JobPhase::Failed)
+                .is_none(),
+            "a late update to a dismissed job finds nothing to bring back"
+        );
     }
 
     #[test]

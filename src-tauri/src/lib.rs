@@ -324,6 +324,7 @@ pub fn run() {
             messages::agent_messages,
             home::open_home_session,
             home::home_jobs,
+            home::home_dismiss_job,
             home::home_interrupted,
             code::code_tree,
             code::code_list_dir,

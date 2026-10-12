@@ -9,6 +9,7 @@
    * worktree, for the reason ARCHITECTURE §5 gives, and what to do about it is the user's call in
    * the worktree's own view.
    */
+  import { jobState } from '../fleet';
   import type { HomeJob } from '../ipc/types';
   import { fleet } from '../state/fleet.svelte';
   import Terminal from './Terminal.svelte';
@@ -25,26 +26,8 @@
   } = $props();
 
   const removing = $derived(job.kind === 'remove');
-  const word = $derived(
-    job.phase === 'running'
-      ? removing
-        ? 'removing…'
-        : 'creating…'
-      : job.phase === 'created' || job.phase === 'removed'
-        ? job.phase
-        : job.phase === 'setup_failed'
-          ? 'setup failed'
-          : removing
-            ? 'not removed'
-            : 'not created',
-  );
-  const status = $derived(
-    job.phase === 'running'
-      ? 'starting'
-      : job.phase === 'created' || job.phase === 'removed'
-        ? 'done'
-        : 'failed',
-  );
+  // The tree's words for the same job, so the row and its panel never say it two ways.
+  const words = $derived(jobState(job));
   const verb = $derived(removing ? 'Removing' : 'Creating');
   const name = $derived(job.directory.split('/').filter(Boolean).pop() ?? job.directory);
   const percent = $derived(
@@ -54,12 +37,12 @@
 
 <section class="c-creation" aria-label="{verb} {name}">
   <header class="c-peek__head">
-    <SessionDot {status} />
+    <SessionDot status={words.status} name={words.name} />
     <div class="c-peek__titles">
       <h2 class="c-peek__title">{job.projectName} › {name}</h2>
       <p class="c-peek__where">
         {job.branch ? `branch ${job.branch}` : 'detached'} · asked for by Home ·
-        <span class="c-peek__status">{word}</span>
+        <span class="c-peek__status">{words.word}</span>
       </p>
     </div>
     <span class="c-peek__actions">

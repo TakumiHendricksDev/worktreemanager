@@ -18,6 +18,7 @@
  */
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { untrack } from 'svelte';
 
 import { arrangeFleet, type FleetOnly } from '../fleet';
 import type { FleetJob, FleetSession, FleetWorktree } from '../fleet';
@@ -84,9 +85,16 @@ class Fleet {
     const offJobs = await listen<HomeJob>('home:worktree', (event) => {
       this.upsertJob(event.payload);
     });
+    // Dismissed rather than hidden, so Rust forgets them too and a reload cannot bring them back.
+    const stopArrivals = $effect.root(() => {
+      $effect(() => {
+        for (const id of this.arrived) untrack(() => this.dismissJob(id));
+      });
+    });
     const off = () => {
       offMessages();
       offJobs();
+      stopArrivals();
     };
     void commands
       .homeJobs()
@@ -147,9 +155,17 @@ class Fleet {
     this.jobShown = id;
   }
 
+  /**
+   * Take a finished job out of the tree, for good.
+   *
+   * Rust forgets it too, or the next window load would list it again from `homeJobs`. The local
+   * list still holds the id, so an announcement already on its way cannot put the row back.
+   */
   dismissJob(id: number): void {
+    if (this.jobs.find((job) => job.id === id)?.phase === 'running') return;
     if (!this.dismissed.includes(id)) this.dismissed = [...this.dismissed, id];
     if (this.jobShown === id) this.jobShown = null;
+    void commands.homeDismissJob(id).catch(() => {});
   }
 
   /** Jobs the tree shows: everything not dismissed. */
@@ -161,16 +177,38 @@ class Fleet {
         kind: job.kind,
         projectId: job.projectId,
         title: job.directory.split('/').filter(Boolean).pop() ?? job.branch ?? 'worktree',
+        directory: job.directory,
+        worktree: job.worktree,
         phase: job.phase,
         detail:
           job.phase === 'running'
             ? job.step
               ? `${job.step.label} · ${job.step.index} of ${job.step.total}`
-              : 'Starting…'
-            : job.phase === 'created' || job.phase === 'removed'
-              ? job.phase
-              : (job.error ?? 'failed'),
+              : null
+            : job.error,
       })),
+  );
+
+  /**
+   * Creations that worked and whose worktree the listing now has. Their row has said all it had to:
+   * the worktree's own row is the lasting record, and two rows for one checkout read as two.
+   *
+   * Not the one on show in the peek slot, which would close under whoever is reading its setup.
+   * It goes when they look elsewhere. Running and failed jobs stay until dismissed by hand.
+   */
+  private arrived = $derived.by((): number[] =>
+    this.jobs
+      .filter(
+        (job) =>
+          job.kind === 'create' &&
+          job.phase === 'created' &&
+          job.id !== this.jobShown &&
+          !this.dismissed.includes(job.id) &&
+          (this.worktreesOf(job.projectId) ?? []).some(
+            (w) => w.id === job.worktree || w.path === job.directory,
+          ),
+      )
+      .map((job) => job.id),
   );
 
   /** Fetch every usable project's listing, one at a time. Safe to call as often as Home likes. */
@@ -298,6 +336,7 @@ class Fleet {
         folds: this.folds,
         peeked: view.peeked,
         focused: this.focused,
+        shownJob: this.jobShown,
         query: this.query,
         only: this.only,
       },

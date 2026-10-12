@@ -26,6 +26,8 @@
   const {
     status,
     labelled = false,
+    name,
+    steady = false,
   }: {
     status: PaneStatus;
     /**
@@ -35,13 +37,27 @@
      * word is what a screen reader reads. Set it true only where the dot stands alone.
      */
     labelled?: boolean;
+    /**
+     * The tooltip and accessible name, for a dot that is not a session's. A worktree job borrows a
+     * session state's shape, but "finished, not seen yet" is not what a created worktree is.
+     */
+    name?: string;
+    /**
+     * Held still, for a heading that sums up the rows under it. Each dot's pulse starts when its row
+     * mounts, so two summaries of the same state pulsed out of step and read as two different
+     * colours; the live state is the session's own row, which still pulses.
+     */
+    steady?: boolean;
   } = $props();
+
+  const label = $derived(name ?? STATUS_NAME[status]);
 </script>
 
 <span
   class="c-dot c-dot--{status}"
-  title={STATUS_NAME[status]}
+  class:c-dot--steady={steady}
+  title={label}
   role={labelled ? 'img' : undefined}
-  aria-label={labelled ? STATUS_NAME[status] : undefined}
+  aria-label={labelled ? label : undefined}
   aria-hidden={labelled ? undefined : 'true'}
 ></span>

@@ -78,6 +78,12 @@
   box-shadow: 0 0 0 3px var(--warn-soft);
 }
 
+/* A heading's summary of the rows under it, held still: see `steady` in `SessionDot.svelte`. After the
+   pulsing states, which it overrides at the same specificity. */
+.c-dot--steady {
+  animation: none;
+}
+
 @keyframes c-dot-pulse {
   50% {
     opacity: 0.3;

@@ -69,9 +69,24 @@
 .c-fleet__row--home {
   font-weight: 600;
 }
+/* A hairline above each repository parts the top-level groups: Home, then each repository with
+   everything under it. It sits in the gap the margin already leaves, so it adds no height and never
+   touches the row's text — and it is a pseudo-element because a `role="tree"` may hold only its
+   items, so a real separator element would be an orphan in the accessibility tree. */
 .c-fleet__row--project {
+  position: relative;
   margin-top: var(--sp-2);
   font-weight: 600;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: calc(var(--sp-2) / -2);
+    right: 0;
+    left: 0;
+    border-top: 1px solid var(--border);
+    pointer-events: none;
+  }
 }
 .c-fleet__row--idle {
   color: var(--fg-muted);

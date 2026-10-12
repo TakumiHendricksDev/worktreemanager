@@ -276,6 +276,9 @@ export const commands = {
   /** Worktrees the Home agent is creating or created lately, oldest first. */
   homeJobs: () => invoke<HomeJob[]>('home_jobs'),
 
+  /** Forget a finished job, so a reloaded window does not list it again. False while it runs. */
+  homeDismissJob: (id: number) => invoke<boolean>('home_dismiss_job', { id }),
+
   /**
    * Tell a restored Home conversation, once, that the quit interrupted the work it had out. Each
    * target is a session it had sent work to, with `session` null when that one is not running.

@@ -18,6 +18,7 @@
  * The sidebar's rule (ARCHITECTURE §8), for the same reason: a status dot exists because a blocked
  * session elsewhere was invisible, so a folded project or worktree still shows any session under it
  * that needs you or failed, and the one being peeked at. The fold's own row carries the roll-up.
+ * A worktree Home failed to make or set up counts as a failure here too.
  */
 
 import { worse, type PaneStatus } from './status';
@@ -58,7 +59,10 @@ export interface FleetWorktree extends WorktreeIdentity {
 
 /** How many sessions under a heading are in each state worth counting. */
 export interface FleetCounts {
+  /** Agent sessions and shells together, delegated children included: the number on the row. */
   total: number;
+  /** How many of `total` are shells, so the tooltip can say what the number is made of. */
+  shells: number;
   attention: number;
   working: number;
   done: number;
@@ -75,6 +79,8 @@ export type FleetRow =
       expanded: boolean;
       status: PaneStatus | null;
       counts: FleetCounts;
+      /** Worktree jobs here that failed: part of `status`, but not sessions, so not in `counts`. */
+      failedJobs: number;
     }
   | {
       kind: 'worktree';
@@ -104,7 +110,15 @@ export type FleetRow =
       expanded: boolean | null;
     }
   | { kind: 'settled'; key: string; level: number; count: number; expanded: boolean }
-  | { kind: 'creation'; key: string; level: 2; projectId: string; job: FleetJob };
+  | {
+      kind: 'creation';
+      key: string;
+      level: 2;
+      projectId: string;
+      job: FleetJob;
+      /** The job's worktree once the listing has it, so the row can be named as its row is. */
+      worktree: FleetWorktree | null;
+    };
 
 /** A worktree Home is creating or removing, as the tree needs it. */
 export interface FleetJob {
@@ -113,9 +127,81 @@ export interface FleetJob {
   projectId: string;
   /** The directory's last segment, or the branch. */
   title: string;
+  /** The whole directory, which is the worktree's path once git has made it. */
+  directory: string;
+  /** The worktree's id, once git has made it. */
+  worktree: string | null;
   phase: 'running' | 'created' | 'setup_failed' | 'removed' | 'failed';
-  /** "Running setup · 9 of 10", or the error. */
-  detail: string;
+  /** "Running setup · 9 of 10", or the error; null when the phase says it all. */
+  detail: string | null;
+}
+
+/** A job's dot, the word beside it in its panel, and the dot's own name in the tree. */
+export interface JobState {
+  status: PaneStatus;
+  word: string;
+  name: string;
+}
+
+/**
+ * How a job's state is said, in the tree and in its panel alike.
+ *
+ * Its own words rather than the session ones its dot borrows the shape of: a created worktree drawn
+ * as `done` was announced as "finished, not seen yet", which is a session's news, and the dot's name
+ * is what a screen reader hears for a row whose dot stands alone.
+ */
+export function jobState(job: Pick<FleetJob, 'kind' | 'phase'>): JobState {
+  const removing = job.kind === 'remove';
+  switch (job.phase) {
+    case 'running':
+      return removing
+        ? { status: 'starting', word: 'removing…', name: 'removing the worktree' }
+        : { status: 'starting', word: 'creating…', name: 'creating the worktree' };
+    case 'created':
+      return { status: 'done', word: 'created', name: 'worktree created' };
+    case 'removed':
+      return { status: 'done', word: 'removed', name: 'worktree removed' };
+    case 'setup_failed':
+      return {
+        status: 'failed',
+        word: 'setup failed',
+        name: 'worktree made, setup failed',
+      };
+    case 'failed':
+      return removing
+        ? { status: 'failed', word: 'not removed', name: 'worktree not removed' }
+        : { status: 'failed', word: 'not created', name: 'worktree not created' };
+  }
+}
+
+function jobFailed(job: FleetJob): boolean {
+  return job.phase === 'setup_failed' || job.phase === 'failed';
+}
+
+/** "1 shell", "2 shells". */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * What a heading's number is made of, in words: its tooltip and its accessible name.
+ *
+ * The number totals agent sessions and shells, delegated children included, by design — so a
+ * worktree with two agent rows can say 3, and only the words can reconcile the two. Zero states are
+ * left out: "0 need you" on every heading was the noise the number exists to replace.
+ */
+export function describeCounts(c: FleetCounts): string {
+  const agents = c.total - c.shells;
+  return [
+    agents > 0 || c.shells === 0 ? plural(agents, 'agent session') : null,
+    c.shells > 0 ? plural(c.shells, 'shell') : null,
+    c.attention > 0 ? `${c.attention} ${c.attention === 1 ? 'needs' : 'need'} you` : null,
+    c.working > 0 ? `${c.working} running` : null,
+    c.done > 0 ? plural(c.done, 'unread completion') : null,
+    c.failed > 0 ? `${c.failed} failed` : null,
+  ]
+    .filter((part) => part !== null)
+    .join(' · ');
 }
 
 /** What the tree can be narrowed to, besides a typed filter. */
@@ -136,6 +222,8 @@ export interface FleetOptions {
   /** The pane being peeked at, which no fold may hide. */
   peeked: string | null;
   focused?: string | null;
+  /** The job shown in the peek slot, which no fold may hide either. */
+  shownJob?: number | null;
   query: string;
   only: FleetOnly | null;
 }
@@ -159,11 +247,13 @@ function urgent(status: PaneStatus): boolean {
 }
 
 function noCounts(): FleetCounts {
-  return { total: 0, attention: 0, working: 0, done: 0, failed: 0 };
+  return { total: 0, shells: 0, attention: 0, working: 0, done: 0, failed: 0 };
 }
 
-function count(into: FleetCounts, status: PaneStatus): void {
+function count(into: FleetCounts, session: FleetSession): void {
+  const status = session.status;
   into.total += 1;
+  if (session.kind === 'shell') into.shells += 1;
   if (status === 'attention') into.attention += 1;
   else if (status === 'working' || status === 'starting') into.working += 1;
   else if (status === 'done') into.done += 1;
@@ -284,7 +374,7 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
     const everyone = mine.flatMap(subtree);
 
     const counts = noCounts();
-    for (const s of everyone) count(counts, s.status);
+    for (const s of everyone) count(counts, s);
 
     // While filtering, a project shows only what matches — and nothing at all if nothing does.
     const worktreeMatches = (w: FleetWorktree) =>
@@ -312,9 +402,8 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
         )
       : busy;
     const shownQuiet = filtering ? quiet.filter(worktreeMatches) : quiet;
-    const jobs = filtering
-      ? []
-      : (input.jobs ?? []).filter((j) => j.projectId === project.id);
+    const projectJobs = (input.jobs ?? []).filter((j) => j.projectId === project.id);
+    const jobs = filtering ? [] : projectJobs;
     if (filtering && shownBusy.length === 0 && shownQuiet.length === 0) continue;
 
     const projectOpen = open(pKey, everyone.length > 0 || jobs.length > 0);
@@ -324,8 +413,13 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
       level: 1,
       project,
       expanded: projectOpen,
-      status: rollUp(everyone.map((s) => s.status)),
+      // A setup that failed is a failure here like a session's, whatever the filter shows.
+      status: rollUp([
+        ...everyone.map((s) => s.status),
+        ...projectJobs.filter(jobFailed).map((): PaneStatus => 'failed'),
+      ]),
       counts,
+      failedJobs: projectJobs.filter(jobFailed).length,
     });
 
     for (const worktree of shownBusy) {
@@ -333,7 +427,7 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
       const here = mine.filter((s) => s.worktreeId === worktree.id);
       const all = here.flatMap(subtree);
       const wCounts = noCounts();
-      for (const s of all) count(wCounts, s.status);
+      for (const s of all) count(wCounts, s);
       const worktreeOpen = projectOpen && open(wKey, true);
 
       if (projectOpen) {
@@ -411,17 +505,19 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
       emitList(here, projectOpen ? 3 : 2, worktreeOpen);
     }
 
-    // What Home is making here, between what is running and what is quiet.
-    if (projectOpen) {
-      for (const job of jobs) {
-        rows.push({
-          kind: 'creation',
-          key: jobKey(job.id),
-          level: 2,
-          projectId: project.id,
-          job,
-        });
-      }
+    // What Home is making here, between what is running and what is quiet. A fold keeps a failed
+    // one and the one being shown, as it keeps a failed session.
+    for (const job of jobs) {
+      if (!projectOpen && !jobFailed(job) && job.id !== options.shownJob) continue;
+      rows.push({
+        kind: 'creation',
+        key: jobKey(job.id),
+        level: 2,
+        projectId: project.id,
+        job,
+        worktree:
+          listed.find((w) => w.id === job.worktree || w.path === job.directory) ?? null,
+      });
     }
 
     if (shownQuiet.length > 0 && projectOpen) {

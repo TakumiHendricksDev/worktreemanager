@@ -14,7 +14,14 @@
    */
   import { onMount, tick, untrack } from 'svelte';
 
-  import { HOME_KEY, type FleetRow, type FleetCounts, type FleetOnly } from '../fleet';
+  import {
+    HOME_KEY,
+    describeCounts,
+    jobState,
+    plural,
+    type FleetRow,
+    type FleetOnly,
+  } from '../fleet';
   import { heading, item, popUp, separator, under, type MenuEntry } from '../native-menu';
   import { treePrefs } from '../state/tree-prefs.svelte';
   import { attention } from '../state/attention.svelte';
@@ -113,7 +120,6 @@
   }
 
   function countDetail(row: Extract<FleetRow, { kind: 'project' | 'worktree' }>): string {
-    const c: FleetCounts = row.counts;
     const visibleCount = rows.filter(
       (candidate) =>
         candidate.kind === 'session' &&
@@ -122,19 +128,32 @@
           : candidate.session.worktreeId === row.worktree.id),
     ).length;
     const filtered = fleet.query.trim() !== '' || fleet.only !== null;
-    return `${filtered ? `${visibleCount} of ` : ''}${c.total} sessions · ${c.attention} need you · ${c.working} running · ${c.done} unread completions · ${c.failed} failed`;
+    const shown = filtered ? `${visibleCount} of ${row.counts.total} shown · ` : '';
+    return `${shown}${describeCounts(row.counts)}`;
+  }
+
+  /**
+   * A heading's dot names the session state it rolled up, except a failure that is only a job's:
+   * "session failed" over a repository whose sessions are all fine sends you looking for one.
+   */
+  function summaryName(row: FleetRow): string | undefined {
+    if (row.kind !== 'project' || row.status !== 'failed') return undefined;
+    if (row.counts.failed > 0 || row.failedJobs === 0) return undefined;
+    return `${plural(row.failedJobs, 'worktree job')} failed`;
+  }
+
+  /** A job's row is named as its worktree's row is, once the listing has the worktree. */
+  function jobLabel(row: Extract<FleetRow, { kind: 'creation' }>): string {
+    if (!row.worktree) return row.job.title;
+    const identity = worktreeLabel(row.worktree);
+    return identity.key ? `${identity.key} ${identity.name}` : identity.name;
   }
 
   function statusOf(row: FleetRow): PaneStatus | null {
     if (row.kind === 'session') return row.session.status;
     if (row.kind === 'project') return row.project.usable ? row.status : 'attention';
     if (row.kind === 'worktree') return row.status;
-    if (row.kind === 'creation')
-      return row.job.phase === 'running'
-        ? 'starting'
-        : row.job.phase === 'created' || row.job.phase === 'removed'
-          ? 'done'
-          : 'failed';
+    if (row.kind === 'creation') return jobState(row.job).status;
     return null;
   }
 
@@ -151,9 +170,22 @@
       ]
         .filter(Boolean)
         .join(' · ');
-    if (row.kind === 'creation') return row.job.detail;
-    if (row.kind === 'project')
-      return row.project.usable ? countDetail(row) : 'Repository needs attention';
+    if (row.kind === 'creation') {
+      // The whole name, which the row cuts short, and the whole directory, which it never shows.
+      const { name } = jobState(row.job);
+      return [
+        jobLabel(row),
+        name.charAt(0).toUpperCase() + name.slice(1),
+        row.job.detail,
+        row.job.directory,
+      ]
+        .filter(Boolean)
+        .join('\n');
+    }
+    if (row.kind === 'project') {
+      if (!row.project.usable) return 'Repository needs attention';
+      return [countDetail(row), summaryName(row)].filter(Boolean).join(' · ');
+    }
     return '';
   }
 
@@ -220,6 +252,22 @@
     focusRow(rows.some((row) => row.key === next) ? next : HOME_KEY);
   }
 
+  /**
+   * Take a finished creation or removal out of the tree. No confirmation: it ends nothing, the
+   * worktree keeps its own row, and a setup still running cannot be dismissed at all.
+   *
+   * Focus moves on down the list, as it does after a close, rather than falling out of the tree with
+   * the row that held it. Only when the tree had it, which it does after any click on the row.
+   */
+  function dismiss(row: Extract<FleetRow, { kind: 'creation' }>) {
+    if (row.job.phase === 'running') return;
+    const at = rows.findIndex((candidate) => candidate.key === row.key);
+    const next = rows[at + 1]?.key ?? rows[at - 1]?.key ?? HOME_KEY;
+    const owned = !!treeEl?.contains(document.activeElement);
+    fleet.dismissJob(row.job.id);
+    if (owned) focusRow(next);
+  }
+
   /** Start an agent in a worktree from Home. The pane is tiled there; Home peeks at it. */
   let menuEpoch = 0;
   async function startIn(
@@ -279,6 +327,30 @@
               void workspace
                 .selectProject(row.project.id)
                 .then(() => view.show('worktree')),
+          ),
+        ],
+        under(anchor),
+      );
+      return;
+    }
+    if (row.kind === 'creation') {
+      const { job } = row;
+      const settled = job.phase !== 'running';
+      void popUp(
+        [
+          item('Peek', () => fleet.showJob(job.id)),
+          item(
+            'Open worktree',
+            () => job.worktree && onopenworktree(job.projectId, job.worktree),
+            settled && job.worktree !== null && job.phase !== 'removed',
+          ),
+          separator,
+          // Disabled rather than missing, with the reason in its name: a menu that silently lacks
+          // the item reads as a row that can never be dismissed.
+          item(
+            settled ? 'Dismiss' : 'Dismiss (still running)',
+            () => dismiss(row),
+            settled,
           ),
         ],
         under(anchor),
@@ -376,6 +448,14 @@
       case 'F10':
         if (event.key === 'F10' && !event.shiftKey) return;
         rowMenu(null, row, event.target as Element);
+        break;
+      // A Mac keyboard has no menu key and hides F10 behind fn, so the menu is not a route most
+      // people can take from the keyboard. Only for a job: a session's close ends work, and goes
+      // through its menu and a confirmation instead.
+      case 'Delete':
+      case 'Backspace':
+        if (row.kind !== 'creation' || row.job.phase === 'running') return;
+        dismiss(row);
         break;
       default:
         return;
@@ -476,7 +556,8 @@
             role="treeitem"
             class="c-fleet__row c-fleet__row--{row.kind}"
             class:is-selected={selected(row)}
-            class:has-key={row.kind === 'worktree' && !!row.worktree.issueKey}
+            class:has-key={(row.kind === 'worktree' || row.kind === 'creation') &&
+              !!row.worktree?.issueKey}
             data-nav={row.key}
             title={titleOf(row)}
             aria-describedby={`fleet-detail-${row.key}`}
@@ -508,7 +589,12 @@
             >
             <span class="c-fleet__marker">
               {#if row.kind === 'home'}<Icon name="home" size={14} />
-              {:else if status && status !== 'idle'}<SessionDot {status} labelled />{/if}
+              {:else if status && status !== 'idle'}<SessionDot
+                  {status}
+                  labelled
+                  name={row.kind === 'creation' ? jobState(row.job).name : summaryName(row)}
+                  steady={row.kind === 'project' || row.kind === 'worktree'}
+                />{/if}
             </span>
             <span class="c-fleet__identity">
               {@render twisty(row)}
@@ -524,6 +610,10 @@
                   >Idle / finished</span
                 >
               {:else if row.kind === 'idle'}<span class="c-fleet__name">No sessions</span>
+              {:else if row.kind === 'creation' && row.worktree}
+                {@const identity = worktreeLabel(row.worktree)}
+                {#if identity.key}<span class="c-fleet__key">{identity.key}</span>{/if}
+                <span class="c-fleet__name">{identity.name}</span>
               {:else if row.kind === 'creation'}<span class="c-fleet__name"
                   >{row.job.title}</span
                 >
@@ -541,10 +631,14 @@
                     aria-label={countDetail(row)}>{row.counts.total}</span
                   >{/if}
               {:else if row.kind === 'settled'}<span
-                  aria-label={`${row.count} idle or finished sessions`}>{row.count}</span
+                  title={plural(row.count, 'idle or finished session')}
+                  aria-label={plural(row.count, 'idle or finished session')}
+                  >{row.count}</span
                 >
               {:else if row.kind === 'idle'}<span
-                  aria-label={`${row.count} worktrees without sessions`}>{row.count}</span
+                  title={`${plural(row.count, 'worktree')} without sessions`}
+                  aria-label={`${plural(row.count, 'worktree')} without sessions`}
+                  >{row.count}</span
                 >{/if}
             </span>
             <span class="c-fleet__actions">
@@ -566,6 +660,20 @@
                   }}
                 >
                   <Icon name="more" size={14} />
+                </Button>
+              {:else if row.kind === 'creation' && row.job.phase !== 'running'}
+                <Button
+                  variant="quiet"
+                  icon="sm"
+                  title="Dismiss"
+                  ariaLabel={`Dismiss ${jobLabel(row)}`}
+                  tabindex={-1}
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    dismiss(row);
+                  }}
+                >
+                  <Icon name="close" size={12} />
                 </Button>
               {/if}
             </span>
