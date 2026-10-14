@@ -31,6 +31,8 @@ pub struct Prototype {
     pub feedback: Vec<String>,
     pub review: Option<DesignReview>,
     pub implemented_review: Option<String>,
+    #[serde(default)]
+    pub dismissed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +125,11 @@ pub fn load(
 
 pub fn storage(data_root: &Path) -> PathBuf {
     data_root.join("prototypes")
+}
+
+pub fn dismiss(prototype: &mut Prototype) -> Result<(), ErrorView> {
+    prototype.dismissed = true;
+    save(prototype)
 }
 
 pub fn begin(prototype: &mut Prototype, feedback: &str) -> Result<(), ErrorView> {

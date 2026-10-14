@@ -371,6 +371,7 @@ pub fn run() {
             commands::open_browser,
             prototype_commands::discover_design_context,
             prototype_commands::list_prototypes,
+            prototype_commands::dismiss_prototype,
             prototype_commands::open_prototype_preview,
             prototype_commands::cancel_prototype,
             prototype_commands::implement_prototype,

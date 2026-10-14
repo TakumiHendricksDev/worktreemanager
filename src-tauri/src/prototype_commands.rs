@@ -181,6 +181,7 @@ pub fn prepare(
             feedback: vec![],
             review: None,
             implemented_review: None,
+            dismissed: false,
         }
     };
     prototype.sources = sources;
@@ -283,6 +284,24 @@ pub async fn list_prototypes(app: AppState<'_>, session: String) -> Reply<Vec<Pr
         records.sort_by(|a, b| b.prototype.created.cmp(&a.prototype.created));
         records.truncate(20);
         Ok(records)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn dismiss_prototype(
+    handle: tauri::AppHandle,
+    app: AppState<'_>,
+    session: String,
+    id: String,
+) -> Reply<PrototypeState> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let _guard = MUTATING.lock();
+        let mut prototype = record(&app, &session, &id)?;
+        prototypes::dismiss(&mut prototype)?;
+        announce(&handle, &app, &session, &prototype);
+        Ok(state(&app, prototype))
     })
     .await
 }

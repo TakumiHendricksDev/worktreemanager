@@ -73,6 +73,8 @@ export const commands = {
     invoke<DesignDiscovery>('discover_design_context', { projectId, worktreeId }),
   listPrototypes: (session: string) =>
     invoke<PrototypeState[]>('list_prototypes', { session }),
+  dismissPrototype: (session: string, id: string) =>
+    invoke<PrototypeState>('dismiss_prototype', { session, id }),
   openPrototypePreview: (session: string, id: string, reviewId: string) =>
     invoke<BrowserView>('open_prototype_preview', { session, id, reviewId }),
   implementPrototype: (session: string, id: string, reviewId: string) =>

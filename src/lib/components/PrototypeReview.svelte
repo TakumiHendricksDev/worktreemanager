@@ -15,6 +15,11 @@
   let contextChanged = $state(false);
   const current = $derived(records[0] ?? null);
   const design = $derived(current?.prototype ?? null);
+  const earlier = $derived(
+    records
+      .slice(1)
+      .filter((r) => !r.prototype.implementedReview && !r.prototype.dismissed),
+  );
 
   function accept(state: PrototypeState) {
     records = [state, ...records.filter((r) => r.prototype.id !== state.prototype.id)];
@@ -88,7 +93,7 @@
   }
 </script>
 
-{#if design && current}
+{#if design && current && !design.implementedReview && !design.dismissed}
   <section class="c-design-first" aria-label="Prototype review">
     <div class="c-design-first__heading">
       <div>
@@ -96,6 +101,17 @@
         <h3 class="c-design-first__title">{design.title}</h3>
       </div>
       <span class="c-note" role="status">{design.phase}</span>
+      <Button
+        variant="quiet"
+        size="sm"
+        ariaLabel="Dismiss design review"
+        title="Hide this review card; the saved design is kept"
+        disabled={busy || !pane.session}
+        onclick={() =>
+          void perform(async () =>
+            accept(await commands.dismissPrototype(pane.session!, design.id)),
+          )}>Dismiss</Button
+      >
     </div>
     <p class="c-note">
       Uses {design.sources.filter((s) => s.kind === 'component').length} component references
@@ -150,7 +166,6 @@
             pane.working ||
             current.stale ||
             !design.review.opened ||
-            !!design.implementedReview ||
             feedback.trim().length > 0 ||
             contextChanged ||
             !pane.session ||
@@ -160,7 +175,7 @@
               commands.implementPrototype(pane.session!, design.id, design.review!.id),
             )}
         >
-          {design.implementedReview ? 'Implementation approved' : 'Implement this design'}
+          Implement this design
         </Button>
       </div>
       <p class="c-note">
@@ -213,10 +228,10 @@
         >
       </div>
     {/if}
-    {#if records.length > 1}
+    {#if earlier.length > 0}
       <details>
         <summary>Earlier prototypes in this conversation</summary>
-        {#each records.slice(1) as record}
+        {#each earlier as record}
           <Button
             variant="link"
             size="sm"

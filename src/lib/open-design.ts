@@ -32,6 +32,7 @@ export interface Prototype {
   feedback: string[];
   review: { id: string; fingerprint: string; opened: boolean } | null;
   implementedReview: string | null;
+  dismissed: boolean;
 }
 
 export interface PrototypeState {

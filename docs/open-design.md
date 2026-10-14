@@ -7,6 +7,8 @@ same chat or its review card. **Implement this design** sends the exact reviewed
 revision back to that conversation using its current model and permissions.
 Its preview closes after approval succeeds; **Close** in the preview toolbar also
 dismisses it, and **Show preview** opens it again.
+The in-chat review card stays hidden after approval or **Dismiss**, including on
+reload, while the saved design and conversation are kept.
 
 There is no Open Design CLI, daemon, port, provider login or connection form.
 The optional **New → Design first…** shortcut sends a prototype request into a

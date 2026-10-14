@@ -32,6 +32,7 @@ fn prototype(directory: &Path) -> Prototype {
         feedback: vec![],
         review: None,
         implemented_review: None,
+        dismissed: false,
     }
 }
 const HTML: &str = "<!doctype html><html><body><button class='btn btn-primary project-action'>Export</button></body></html>";
@@ -160,6 +161,66 @@ fn a_failed_implementation_send_keeps_the_preview_open_and_allows_retry() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn dismissing_a_card_persists_only_its_visibility_and_keeps_generation_and_review_available() {
+    for published in [false, true] {
+        let storage = tempfile::tempdir().unwrap();
+        let root = storage.path().canonicalize().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut design = prototype(&root.join(&id));
+        design.id = id.clone();
+        prototypes::begin(&mut design, "initial").unwrap();
+        let revision = design.revision.clone();
+        if published {
+            prototypes::publish(&mut design, &revision, HTML, "Uses Button.vue").unwrap();
+            design.review.as_mut().unwrap().opened = true;
+            prototypes::save(&design).unwrap();
+        }
+        let mut expected = serde_json::to_value(&design).unwrap();
+        expected["dismissed"] = serde_json::json!(true);
+        prototypes::dismiss(&mut design).unwrap();
+        let mut restored = prototypes::load(&root, &id, "/repo", "/repo/topic").unwrap();
+        assert_eq!(serde_json::to_value(&restored).unwrap(), expected);
+        if published {
+            assert!(prototypes::handoff(&restored, &revision).is_ok());
+        } else {
+            prototypes::publish(&mut restored, &revision, HTML, "Uses Button.vue").unwrap();
+            let restored = prototypes::load(&root, &id, "/repo", "/repo/topic").unwrap();
+            assert!(restored.dismissed);
+        }
+        assert_eq!(prototypes::artifact(&restored, &revision).unwrap().0, HTML);
+        assert!(restored.implemented_review.is_none());
+    }
+}
+
+#[test]
+fn existing_saved_records_default_to_an_undismissed_card_without_losing_approval() {
+    let storage = tempfile::tempdir().unwrap();
+    let root = storage.path().canonicalize().unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut design = prototype(&root.join(&id));
+    design.id = id.clone();
+    prototypes::begin(&mut design, "initial").unwrap();
+    let revision = design.revision.clone();
+    prototypes::publish(&mut design, &revision, HTML, "Uses Button.vue").unwrap();
+    design.review.as_mut().unwrap().opened = true;
+    send_implementation(&mut design, &revision, |_| Ok(()), |_| {}).unwrap();
+    let mut legacy = serde_json::to_value(&design).unwrap();
+    legacy.as_object_mut().unwrap().remove("dismissed");
+    std::fs::write(
+        root.join(&id).join("prototype.json"),
+        serde_json::to_vec(&legacy).unwrap(),
+    )
+    .unwrap();
+    let restored = prototypes::load(&root, &id, "/repo", "/repo/topic").unwrap();
+    assert!(!restored.dismissed);
+    assert_eq!(
+        restored.implemented_review.as_deref(),
+        Some(revision.as_str())
+    );
+    assert_eq!(prototypes::artifact(&restored, &revision).unwrap().0, HTML);
 }
 
 #[test]
