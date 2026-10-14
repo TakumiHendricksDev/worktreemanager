@@ -42,13 +42,25 @@
 .c-design-first__heading {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-design-first__identity {
+  min-width: 0;
+}
+
+.c-design-first__meta {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
   gap: var(--sp-2);
 }
 
 .c-design-first__title {
   margin: 0;
   font-size: var(--step-0);
+  overflow-wrap: anywhere;
 }
 .c-design-first__actions {
   display: flex;

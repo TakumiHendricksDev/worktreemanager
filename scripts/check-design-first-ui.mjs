@@ -12,19 +12,28 @@ const fixture = `
 window.checkState={calls:[],listeners:{},callbacks:{},next:0,failPreview:true};
 const state=window.checkState;
 const storageKey='wtm-prototype-probe:'+location.search;
-state.record=JSON.parse(localStorage.getItem(storageKey)||'null')??{prototype:{id:'design-one',projectId:'/project',worktreeId:'/project/topic',root:'/project/topic',session:'same-chat',provider:'codex',conversation:'conversation-one',title:'Registration export',brief:'Prototype the export using our components',created:'2026-10-14',upstream:'pinned',sources:[{path:'src/ui/Button.vue',kind:'component',text:'<button class="btn btn-primary local-button">Export</button>',fingerprint:'source-1'},{path:'src/tokens.css',kind:'tokens',text:':root {--accent:#734399;}',fingerprint:'source-2'}],directory:'/isolated/design-one',revision:'review-one',phase:'ready for review',feedback:[],review:{id:'review-one',fingerprint:'html-1',opened:false},implementedReview:null,dismissed:false},stale:location.search.includes('stale')};
-if(location.search.includes('generating')){state.record.prototype.review=null;state.record.prototype.phase='generating';}
-const persist=()=>localStorage.setItem(storageKey,JSON.stringify(state.record));
+const fresh=()=>({prototype:{id:'design-one',projectId:'/project',worktreeId:'/project/topic',root:'/project/topic',session:'same-chat',provider:'codex',conversation:'conversation-one',title:'Registration export',brief:'Prototype the export using our components',created:'2026-10-14',upstream:'pinned',sources:[{path:'src/ui/Button.vue',kind:'component',text:'<button class="btn btn-primary local-button">Export</button>',fingerprint:'source-1'},{path:'src/tokens.css',kind:'tokens',text:':root {--accent:#734399;}',fingerprint:'source-2'}],directory:'/isolated/design-one',revision:'review-one',phase:'ready for review',feedback:[],review:{id:'review-one',fingerprint:'html-1',opened:false},implementedReview:null,dismissed:false},stale:location.search.includes('stale')});
+const saved=JSON.parse(localStorage.getItem(storageKey)||'null');
+if(location.search.includes('several')){
+ state.record=saved?.record??fresh();
+ state.record.prototype.implementedReview??='review-one';
+ state.older=saved?.older??{prototype:{...fresh().prototype,id:'design-older',title:'Older export',created:'2026-10-13',revision:'review-old',review:{id:'review-old',fingerprint:'html-old',opened:false}},stale:false};
+}else{
+ state.record=saved??fresh();
+ state.older=null;
+ if(location.search.includes('generating')){state.record.prototype.review=null;state.record.prototype.phase='generating';}
+}
+const persist=()=>localStorage.setItem(storageKey,JSON.stringify(location.search.includes('several')?{record:state.record,older:state.older}:state.record));
 state.view={id:'preview',project:'/project',worktree:'/project/topic',url:'about:blank',prototypeId:'design-one/review-one',title:'Prototype review',loading:false,loadError:'The saved prototype could not be displayed. Choose Reload or Show preview to retry. The saved design is unchanged.',canGoBack:false,canGoForward:false,agentAccess:true,openedBy:'same-chat',commentMode:false,agentDriving:null};
 window.emitDesign=()=>{for(const id of Object.values(state.listeners))state.callbacks[id]?.({id,event:'prototype:changed',payload:{session:'same-chat',state:structuredClone(state.record)}})};
 window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main'}},transformCallback:fn=>{const id=++state.next;state.callbacks[id]=fn;return id;},unregisterCallback:id=>delete state.callbacks[id],invoke:async(command,args)=>{
  state.calls.push({command,args});
  if(command==='plugin:event|listen'){state.listeners[args.event]=args.handler;return ++state.next;}
  if(command==='plugin:event|unlisten')return;
- if(command==='list_prototypes')return [structuredClone(state.record)];
+ if(command==='list_prototypes')return location.search.includes('several')?[structuredClone(state.record),structuredClone(state.older)]:[structuredClone(state.record)];
  if(command==='open_prototype_preview'){if(state.failPreview)throw {kind:'preview',message:state.view.loadError};state.record.prototype.review.opened=true;window.emitDesign();return state.view;}
  if(command==='implement_prototype'){state.record.prototype.implementedReview=args.reviewId;persist();window.emitDesign();return;}
- if(command==='dismiss_prototype'){if(state.failDismiss)throw {kind:'preview',message:'Cannot save dismissal. Retry.'};state.record.prototype.dismissed=true;persist();return structuredClone(state.record);}
+ if(command==='dismiss_prototype'){if(state.failDismiss)throw {kind:'preview',message:'Cannot save dismissal. Retry.'};const target=[state.record,state.older].find((item)=>item?.prototype.id===args.id)??state.record;target.prototype.dismissed=true;persist();return structuredClone(target);}
  if(command==='cancel_prototype')return;
  if(command==='close_browser')return;
  if(command.startsWith('browser_'))return;
@@ -99,9 +108,16 @@ try {
     async function assertHiddenOnReload() {
         await page.reload();
         await page.getByRole('button', { name: 'Close preview', exact: true }).waitFor();
-        await page.waitForFunction(() =>
-            window.checkState.calls.some((c) => c.command === 'list_prototypes'),
-        );
+        // The list call is recorded before Svelte applies it. Wait until a frame after
+        // that apply, so an empty first paint cannot pass for a card that comes back.
+        await page.waitForFunction(async () => {
+            if (!window.checkState?.calls.some((c) => c.command === 'list_prototypes'))
+                return false;
+            await new Promise((resolve) =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve)),
+            );
+            return document.querySelector('#card .c-design-first') === null;
+        });
         assert.equal(await card.count(), 0);
         assert(
             !(await calls()).some((c) =>
@@ -275,9 +291,28 @@ try {
         'A finished generation must not resurrect a dismissed card',
     );
     await assertHiddenOnReload();
+    await page.goto(url + '?several');
+    await page.getByRole('heading', { name: 'Older export' }).waitFor();
+    assert.equal(await page.getByRole('heading', { name: 'Registration export' }).count(), 0);
+    await page.getByRole('button', { name: 'Show preview', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Implement this design', exact: true }).waitFor();
+    const beforeOlder = (await calls()).length;
+    await page.getByRole('button', { name: 'Dismiss design review', exact: true }).click();
+    await card.waitFor({ state: 'detached' });
+    assert.deepEqual(
+        (await calls()).slice(beforeOlder),
+        [
+            {
+                command: 'dismiss_prototype',
+                args: { session: 'same-chat', id: 'design-older' },
+            },
+        ],
+        'Dismissing one design must leave the other saved and must not close anything else',
+    );
+    await assertHiddenOnReload();
     assert.deepEqual(errors, []);
     console.log(
-        'PASS: chat review, persisted card dismissal and approval hiding, preview Close and reopen, retryable errors, no action replay, same-chat revisions, exact approval and stale context.',
+        'PASS: chat review, persisted card dismissal and approval hiding, preview Close and reopen, retryable errors, no action replay, same-chat revisions, exact approval, stale context, and a remaining design.',
     );
 } finally {
     await browser?.close();

@@ -13,17 +13,23 @@
   let busy = $state(false);
   let selected = $state<string[]>([]);
   let contextChanged = $state(false);
-  const current = $derived(records[0] ?? null);
-  const design = $derived(current?.prototype ?? null);
-  const earlier = $derived(
-    records
-      .slice(1)
-      .filter((r) => !r.prototype.implementedReview && !r.prototype.dismissed),
+  // Newest design still awaiting review. An approved or dismissed record stays saved,
+  // but it must not hide Show preview and Implement for another design in this chat.
+  const pending = $derived(
+    records.filter((r) => !r.prototype.implementedReview && !r.prototype.dismissed),
   );
+  const current = $derived(pending[0] ?? null);
+  const design = $derived(current?.prototype ?? null);
+  const earlier = $derived(pending.slice(1));
 
   function accept(state: PrototypeState) {
-    records = [state, ...records.filter((r) => r.prototype.id !== state.prototype.id)];
-    selected = state.prototype.sources.map((s) => s.path);
+    const next = [state, ...records.filter((r) => r.prototype.id !== state.prototype.id)];
+    const shown = next.find(
+      (r) => !r.prototype.implementedReview && !r.prototype.dismissed,
+    );
+    if (shown?.prototype.id !== design?.id) feedback = '';
+    records = next;
+    selected = shown?.prototype.sources.map((s) => s.path) ?? [];
     contextChanged = false;
   }
 
@@ -48,7 +54,10 @@
       .then((list) => {
         if (stopped || updated) return;
         records = list;
-        selected = list[0]?.prototype.sources.map((s) => s.path) ?? [];
+        selected =
+          list
+            .find((r) => !r.prototype.implementedReview && !r.prototype.dismissed)
+            ?.prototype.sources.map((s) => s.path) ?? [];
       })
       .catch((e) => {
         if (!stopped) error = errorMessage(e);
@@ -96,22 +105,23 @@
 {#if design && current && !design.implementedReview && !design.dismissed}
   <section class="c-design-first" aria-label="Prototype review">
     <div class="c-design-first__heading">
-      <div>
+      <div class="c-design-first__identity">
         <span class="c-eyebrow">Open Design · this conversation</span>
         <h3 class="c-design-first__title">{design.title}</h3>
       </div>
-      <span class="c-note" role="status">{design.phase}</span>
-      <Button
-        variant="quiet"
-        size="sm"
-        ariaLabel="Dismiss design review"
-        title="Hide this review card; the saved design is kept"
-        disabled={busy || !pane.session}
-        onclick={() =>
-          void perform(async () =>
-            accept(await commands.dismissPrototype(pane.session!, design.id)),
-          )}>Dismiss</Button
-      >
+      <div class="c-design-first__meta">
+        <span class="c-note" role="status">{design.phase}</span>
+        <Button
+          size="sm"
+          ariaLabel="Dismiss design review"
+          title="Hide this review card; the saved design is kept"
+          disabled={busy || !pane.session}
+          onclick={() =>
+            void perform(async () =>
+              accept(await commands.dismissPrototype(pane.session!, design.id)),
+            )}>Dismiss</Button
+        >
+      </div>
     </div>
     <p class="c-note">
       Uses {design.sources.filter((s) => s.kind === 'component').length} component references
