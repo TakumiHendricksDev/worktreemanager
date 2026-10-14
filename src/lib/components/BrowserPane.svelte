@@ -163,6 +163,16 @@
     void commands.openUrl(view.url).catch(() => {});
   }
 
+  async function closePreview(): Promise<void> {
+    if (id === null || !prototype) return;
+    problem = null;
+    try {
+      await commands.closeBrowser(id);
+    } catch (error) {
+      problem = errorMessage(error);
+    }
+  }
+
   // ── comments ──
 
   function setCommenting(on: boolean): void {
@@ -516,6 +526,15 @@
       {#if prototype}
         <span class="c-browser__address">Prototype review · revise in the conversation</span
         >
+        <Button
+          variant="quiet"
+          size="sm"
+          ariaLabel="Close preview"
+          title="Close this prototype preview"
+          onclick={() => void closePreview()}
+        >
+          <Icon name="close" size={12} /> Close
+        </Button>
       {:else}
         <form
           class="c-browser__address"

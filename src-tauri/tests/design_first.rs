@@ -2,8 +2,10 @@
 //! implementation approval without starting another provider or any design daemon.
 #![allow(clippy::unwrap_used)]
 use std::path::Path;
+use wtm_app_lib::prototype_commands::{preview_belongs, send_implementation};
 use wtm_app_lib::prototype_context::{self as context, SourceChoice};
 use wtm_app_lib::prototypes::{self, Prototype};
+use wtm_app_lib::view::BrowserView;
 use wtm_testkit::GitFixture;
 
 fn prototype(directory: &Path) -> Prototype {
@@ -33,6 +35,133 @@ fn prototype(directory: &Path) -> Prototype {
     }
 }
 const HTML: &str = "<!doctype html><html><body><button class='btn btn-primary project-action'>Export</button></body></html>";
+
+fn browser(id: &str, design: &Prototype, identity: Option<String>) -> BrowserView {
+    BrowserView {
+        id: id.to_owned(),
+        project: design.project_id.clone(),
+        worktree: design.worktree_id.clone(),
+        prototype_id: identity,
+        url: "about:blank".to_owned(),
+        title: "Prototype review".to_owned(),
+        loading: false,
+        load_error: None,
+        can_go_back: false,
+        can_go_forward: false,
+        agent_access: true,
+        opened_by: Some(design.session.clone()),
+        comment_mode: false,
+        agent_driving: None,
+    }
+}
+
+#[test]
+fn successful_implementation_closes_only_that_designs_previews_after_saving_and_sending() {
+    let storage = tempfile::tempdir().unwrap();
+    let mut design = prototype(storage.path());
+    prototypes::begin(&mut design, "initial").unwrap();
+    let revision = design.revision.clone();
+    prototypes::publish(&mut design, &revision, HTML, "Uses Button.vue").unwrap();
+    design.review.as_mut().unwrap().opened = true;
+    let preview = browser(
+        "current-preview",
+        &design,
+        Some(format!("{}/{revision}", design.id)),
+    );
+    let mut previous = browser(
+        "previous-preview",
+        &design,
+        Some(format!("{}/previous-review", design.id)),
+    );
+    previous.opened_by = Some("before-chat-was-resumed".to_owned());
+    let live = browser("live-app", &design, None);
+    let other = browser(
+        "other-design",
+        &design,
+        Some(format!("{}-other/{revision}", design.id)),
+    );
+    let mut other_worktree = preview.clone();
+    other_worktree.id = "other-worktree".to_owned();
+    other_worktree.worktree = "/repo/other".to_owned();
+    let mut other_project = preview.clone();
+    other_project.id = "other-project".to_owned();
+    other_project.project = "/other-repo".to_owned();
+    let browsers = [
+        preview,
+        previous,
+        live,
+        other,
+        other_worktree,
+        other_project,
+    ];
+    let saved = Path::new(&design.directory).join("prototype.json");
+    let sent = std::cell::Cell::new(false);
+    let mut closed = Vec::new();
+    send_implementation(
+        &mut design,
+        &revision,
+        |prompt| {
+            let persisted: Prototype =
+                serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
+            assert_eq!(
+                persisted.implemented_review.as_deref(),
+                Some(revision.as_str())
+            );
+            assert!(prompt.contains(&format!("review {revision}")));
+            sent.set(true);
+            Ok(())
+        },
+        |approved| {
+            assert!(sent.get());
+            closed.extend(
+                browsers
+                    .iter()
+                    .filter(|view| preview_belongs(approved, view))
+                    .map(|view| view.id.clone()),
+            );
+        },
+    )
+    .unwrap();
+    assert_eq!(closed, ["current-preview", "previous-preview"]);
+    assert_eq!(design.phase, "implementation approved");
+    // Dismissing a pane does not consume or alter the saved artifact used by Show preview.
+    assert_eq!(prototypes::artifact(&design, &revision).unwrap().0, HTML);
+}
+
+#[test]
+fn a_failed_implementation_send_keeps_the_preview_open_and_allows_retry() {
+    let storage = tempfile::tempdir().unwrap();
+    let mut design = prototype(storage.path());
+    prototypes::begin(&mut design, "initial").unwrap();
+    let revision = design.revision.clone();
+    prototypes::publish(&mut design, &revision, HTML, "Uses Button.vue").unwrap();
+    design.review.as_mut().unwrap().opened = true;
+    let error = send_implementation(
+        &mut design,
+        &revision,
+        |_| Err("Chat is unavailable".to_owned()),
+        |_| panic!("A failed send must not dismiss the preview"),
+    )
+    .unwrap_err();
+    assert!(error.message.contains("You can retry"));
+    let persisted: Prototype = serde_json::from_slice(
+        &std::fs::read(Path::new(&design.directory).join("prototype.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(persisted.implemented_review.is_none());
+    assert_eq!(persisted.phase, "ready for review");
+    assert!(prototypes::handoff(&persisted, &revision).is_ok());
+    assert!(
+        send_implementation(
+            &mut design,
+            "unreviewed-revision",
+            |_| panic!("An invalid review must not send implementation"),
+            |_| panic!("An invalid review must not dismiss the preview"),
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn the_fixed_review_document_contains_only_escaped_snapshot_bytes_and_a_sandboxed_frame() {
     let document = prototypes::review_document("<html><script>parent.test = 1</script></html>");

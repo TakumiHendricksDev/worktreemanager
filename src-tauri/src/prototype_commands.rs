@@ -299,6 +299,38 @@ pub async fn open_prototype_preview(
     blocking(move || preview(&handle, &app, &session, &id, &review_id)).await
 }
 
+pub fn preview_belongs(prototype: &Prototype, browser: &BrowserView) -> bool {
+    browser.project == prototype.project_id
+        && browser.worktree == prototype.worktree_id
+        && browser
+            .prototype_id
+            .as_deref()
+            .and_then(|identity| identity.split_once('/'))
+            .is_some_and(|(id, _)| id == prototype.id)
+}
+
+pub fn send_implementation(
+    prototype: &mut Prototype,
+    review_id: &str,
+    send: impl FnOnce(&str) -> Result<(), String>,
+    close_previews: impl FnOnce(&Prototype),
+) -> Reply<()> {
+    let prompt = prototypes::handoff(prototype, review_id)?;
+    prototype.implemented_review = Some(review_id.to_owned());
+    "implementation approved".clone_into(&mut prototype.phase);
+    prototypes::save(prototype)?;
+    if let Err(error) = send(&prompt) {
+        prototype.implemented_review = None;
+        "ready for review".clone_into(&mut prototype.phase);
+        prototypes::save(prototype)?;
+        return Err(failure(format!(
+            "Implementation was not sent: {error}. You can retry."
+        )));
+    }
+    close_previews(prototype);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn implement_prototype(
     handle: tauri::AppHandle,
@@ -324,18 +356,22 @@ pub async fn implement_prototype(
                 "Project context changed. Ask for a refreshed prototype and review it first.",
             ));
         }
-        let prompt = prototypes::handoff(&prototype, &review_id)?;
-        prototype.implemented_review = Some(review_id);
-        "implementation approved".clone_into(&mut prototype.phase);
-        prototypes::save(&prototype)?;
-        if let Err(error) = app.send_agent_turn(&session, &prompt, &[]) {
-            prototype.implemented_review = None;
-            "ready for review".clone_into(&mut prototype.phase);
-            prototypes::save(&prototype)?;
-            return Err(failure(format!(
-                "Implementation was not sent: {error}. You can retry."
-            )));
-        }
+        send_implementation(
+            &mut prototype,
+            &review_id,
+            |prompt| {
+                app.send_agent_turn(&session, prompt, &[])
+                    .map_err(|error| error.to_string())
+            },
+            |prototype| {
+                // Session ownership alone also includes live app browsers, which must stay open.
+                for browser in app.browsers.list(Some(&prototype.worktree_id)) {
+                    if preview_belongs(prototype, &browser) {
+                        crate::browser::close(&handle, &app, &browser.id);
+                    }
+                }
+            },
+        )?;
         app.note_user_turn(&session);
         announce(&handle, &app, &session, &prototype);
         Ok(())

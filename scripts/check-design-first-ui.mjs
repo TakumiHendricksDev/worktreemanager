@@ -1,4 +1,4 @@
-/** Exercise the actual chat review card and browser error surface with mocked IPC. Native loading
+/** Exercise the actual chat review card and preview controls with mocked IPC. Native loading
  * is covered separately by src-tauri/examples/prototype_preview.rs; this probe spends no credits. */
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
@@ -22,6 +22,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebvie
  if(command==='open_prototype_preview'){if(state.failPreview)throw {kind:'preview',message:state.view.loadError};state.record.prototype.review.opened=true;window.emitDesign();return state.view;}
  if(command==='implement_prototype'){state.record.prototype.implementedReview=args.reviewId;window.emitDesign();return;}
  if(command==='cancel_prototype')return;
+ if(command==='close_browser')return;
  if(command.startsWith('browser_'))return;
  throw new Error('Unexpected IPC '+command);
 }};`;
@@ -117,6 +118,23 @@ try {
     await page.evaluate(() => (window.checkState.failPreview = false));
     await page.getByRole('button', { name: 'Show preview', exact: true }).click();
     await page.waitForFunction(() => window.checkState.record.prototype.review.opened);
+    const beforeClose = (await calls()).length;
+    const close = page.getByRole('button', { name: 'Close preview', exact: true });
+    assert.equal((await close.textContent()).trim(), 'Close');
+    await close.click();
+    assert.deepEqual(
+        (await calls()).slice(beforeClose),
+        [{ command: 'close_browser', args: { id: 'preview' } }],
+        'Closing the preview must not end the originating conversation or ask for confirmation',
+    );
+    const opened = (await calls()).filter(
+        (c) => c.command === 'open_prototype_preview',
+    ).length;
+    await page.getByRole('button', { name: 'Show preview', exact: true }).click();
+    assert.equal(
+        (await calls()).filter((c) => c.command === 'open_prototype_preview').length,
+        opened + 1,
+    );
     await page
         .getByLabel('Feedback for this design', { exact: true })
         .fill('Make the field list compact');
@@ -159,7 +177,7 @@ try {
     await page.getByRole('button', { name: 'Refresh and revise', exact: true }).waitFor();
     assert.deepEqual(errors, []);
     console.log(
-        'PASS: chat review, retryable preview errors, no action replay, same-chat revisions, exact approval and stale context.',
+        'PASS: chat review, preview Close and reopen, retryable preview errors, no action replay, same-chat revisions, exact approval and stale context.',
     );
 } finally {
     await browser?.close();
