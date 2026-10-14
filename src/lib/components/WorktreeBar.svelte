@@ -58,6 +58,7 @@
   import type { Worktree } from '../ipc/types';
   import type { WorktreeView } from '../worktree-view';
   import LinksButton from './LinksButton.svelte';
+  import DesignFirstDialog from './DesignFirstDialog.svelte';
   import OpenInButton from './OpenInButton.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -92,6 +93,8 @@
     /** The sidebar's New worktree button, which is out of reach while it is hidden. */
     onnew: () => void;
   } = $props();
+
+  let designing = $state(false);
 
   /** In the Favorites group. A lookup, since a star is where a worktree sits, not a field on it. */
   const favorite = $derived(workspace.isFavorite(worktree.id));
@@ -147,6 +150,8 @@
   function newMenu(event: MouseEvent) {
     const now = Date.now();
     const entries: MenuEntry[] = [
+      item('Design first…', () => (designing = true)),
+      separator,
       // Available even when the only pane is a shell; starting an agent never has to replace it.
       //
       // Each row carries the agent's tightest usage limit when one is known, because this is the
@@ -289,3 +294,11 @@
     </Button>
   </div>
 </header>
+
+{#if designing}
+  {#key worktree.id}<DesignFirstDialog
+      {projectId}
+      {worktree}
+      onclose={() => (designing = false)}
+    />{/key}
+{/if}

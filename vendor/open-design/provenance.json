@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/nexu-io/open-design",
+  "revision": "7da9a8aaa2d406bf3aa0a1cb9d4e8e1cd24c9095",
+  "version": "0.25.0",
+  "license": "Apache-2.0",
+  "sources": {
+    "apps/daemon/src/prompts/core-slim.ts": "567bad73fe5d36b388c8d006d11c5d84cf7cc673a913d4084e7be2d2b36adea1",
+    "apps/daemon/src/design-systems/token-evidence.ts": "a2c2608be5dc059c02d579f10921e4b5d20394b48f00fd83edc8bf9c4681cbef",
+    "LICENSE": "9d95806a26532623360eb84bb17d298f394b55ef73fb4c0796d99b4319b2b0da"
+  }
+}

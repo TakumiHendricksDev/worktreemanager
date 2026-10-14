@@ -13,6 +13,10 @@
 //! crate is those four calls, plus one more for a gap of a different kind: wry reports a load that
 //! commits and a load that finishes, and never one that fails. See [`Navigation`].
 //!
+//! Fixed prototype previews also need `loadHTMLString`: Tauri exposes URL navigation, but its
+//! initial about:blank does not reliably run the user script that used to populate that document.
+//! Native loading keeps the document in memory and gives it a real, observable load lifecycle.
+//!
 //! # The shape: a borrowed handle, and a receiver that leaves
 //!
 //! Tauri hands the platform webview to a closure on the main thread and takes it back when the
@@ -190,6 +194,15 @@ impl Handle {
     /// Run `js` in `world` and hand back what it returned, which must be a string.
     pub fn evaluate(&self, world: &World, js: &str) -> Reply<String> {
         self.0.evaluate(world, js)
+    }
+
+    /// Load an in-memory document at an opaque `about:blank` origin.
+    ///
+    /// A user script cannot populate the initial blank document reliably: WebKit need not run
+    /// document-start scripts for it. A real HTML load also gives navigation observers a lifecycle.
+    #[must_use]
+    pub fn load_html(&self, html: &str) -> bool {
+        self.0.load_html(html)
     }
 
     /// A PNG of the visible page, or of `rect` within it (in the view's own points).

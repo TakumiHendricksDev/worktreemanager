@@ -16,6 +16,7 @@ pub mod code;
 pub mod code_comments;
 pub mod code_tools;
 pub mod commands;
+pub mod design_evidence;
 pub mod dictate;
 pub mod display;
 pub mod handoff;
@@ -27,6 +28,10 @@ pub mod native_menu;
 pub mod notifier;
 pub mod openers;
 pub mod pane_windows;
+pub mod prototype_commands;
+pub mod prototype_context;
+pub mod prototype_tools;
+pub mod prototypes;
 pub mod pty_bridge;
 pub mod shell_admission;
 pub mod shell_commands;
@@ -178,6 +183,12 @@ fn build_menu<R: tauri::Runtime>(
     MenuBuilder::new(handle)
         .items(&[&app_menu, &edit_menu, &go_menu, &window_menu])
         .build()
+}
+
+/// The shared native application context, including its embedded macOS metadata.
+pub fn application_context() -> tauri::Context<tauri::Wry> {
+    // Native probes share this expansion: two generate_context! calls emit duplicate macOS plists.
+    tauri::generate_context!()
 }
 
 /// Start the application.
@@ -358,6 +369,11 @@ pub fn run() {
             commands::close_agent_session,
             commands::open_url,
             commands::open_browser,
+            prototype_commands::discover_design_context,
+            prototype_commands::list_prototypes,
+            prototype_commands::open_prototype_preview,
+            prototype_commands::cancel_prototype,
+            prototype_commands::implement_prototype,
             commands::close_browser,
             commands::browser_navigate,
             commands::browser_history,
@@ -390,7 +406,7 @@ pub fn run() {
         // `build` then `run`, rather than `Builder::run`. The shorthand is exactly
         // `build(context)?.run(|_, _| {})` — an empty event callback — and this app now needs
         // one.
-        .build(tauri::generate_context!())
+        .build(application_context())
         .expect("build the application")
         .run(|handle, event| {
             // Kill every child session before the process goes.

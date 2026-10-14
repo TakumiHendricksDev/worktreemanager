@@ -36,6 +36,10 @@ impl Handle {
         match *self {}
     }
 
+    pub(crate) fn load_html(&self, _html: &str) -> bool {
+        match *self {}
+    }
+
     pub(crate) fn snapshot(&self, _rect: Option<(f64, f64, f64, f64)>) -> Reply<Vec<u8>> {
         match *self {}
     }

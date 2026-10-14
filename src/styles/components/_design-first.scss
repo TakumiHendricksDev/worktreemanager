@@ -1,0 +1,62 @@
+/* The review sheet uses the same fields and buttons as direct coding; excerpts need bounded space. */
+.c-design-first {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  margin: var(--sp-3) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+
+.c-design-first__sources {
+  max-height: 20rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.c-design-first__source {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-design-first__choice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+.c-design-first__excerpt {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: var(--sp-2);
+  background: var(--bg-code);
+  font-size: var(--step--2);
+}
+
+.c-design-first__heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.c-design-first__title {
+  margin: 0;
+  font-size: var(--step-0);
+}
+.c-design-first__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.c-design-first__feedback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}

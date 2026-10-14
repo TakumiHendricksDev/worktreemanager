@@ -78,12 +78,13 @@ impl Bridge {
 
     /// Start a Home bridge — the one a Home session gets — for listing.
     fn home(agents: &str) -> Self {
-        Self::spawn_flags(agents, None, false, false, true)
+        Self::spawn_flags(agents, None, false, false, true, false)
     }
 
     /// Start a Home bridge wired to a fake app.
     fn wired_home(agents: &str, socket: &std::path::Path, token: &str) -> Self {
-        let mut bridge = Self::spawn_flags(agents, Some((socket, token)), false, false, true);
+        let mut bridge =
+            Self::spawn_flags(agents, Some((socket, token)), false, false, true, false);
         bridge.call(1, "initialize", &serde_json::json!({}));
         bridge
     }
@@ -94,15 +95,17 @@ impl Bridge {
         awareness: bool,
         browser: bool,
     ) -> Self {
-        Self::spawn_flags(agents, wiring, awareness, browser, false)
+        Self::spawn_flags(agents, wiring, awareness, browser, false, false)
     }
 
+    #[allow(clippy::fn_params_excessive_bools)]
     fn spawn_flags(
         agents: &str,
         wiring: Option<(&std::path::Path, &str)>,
         awareness: bool,
         browser: bool,
         home: bool,
+        design: bool,
     ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_wtm"));
         // Every flag cleared first, then the ones this bridge asked for. The runner's own
@@ -114,12 +117,16 @@ impl Bridge {
             .env_remove(handoff::AWARENESS_ENV)
             .env_remove(handoff::BROWSER_TOOLS_ENV)
             .env_remove(handoff::CODE_TOOLS_ENV)
+            .env_remove(wtm_app_lib::prototype_tools::ENV)
             .env_remove(wtm_app_lib::home::HOME_TOOLS_ENV);
         if awareness {
             command.env(handoff::AWARENESS_ENV, "on");
         }
         if browser {
             command.env(handoff::BROWSER_TOOLS_ENV, "on");
+        }
+        if design {
+            command.env(wtm_app_lib::prototype_tools::ENV, "on");
         }
         if home {
             command.env(wtm_app_lib::home::HOME_TOOLS_ENV, "on");
@@ -918,4 +925,35 @@ fn home_shell_tools_preserve_the_request_and_are_absent_from_a_worktree_bridge()
         );
         assert_eq!(reply["result"]["isError"], true);
     }
+}
+
+#[test]
+fn ordinary_chat_design_tools_forward_only_artifacts_and_cannot_approve_implementation() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("bridge.sock");
+    let server = fake_app(&socket, handoff::Response::ok("design-context".to_owned()));
+    let mut bridge = Bridge::spawn_flags(
+        "codex:Codex",
+        Some((&socket, "existing-chat-token")),
+        false,
+        false,
+        false,
+        true,
+    );
+    let tools = bridge.call(1, "tools/list", &serde_json::json!({}));
+    let names = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"prototype_prepare"));
+    assert!(names.contains(&"prototype_publish"));
+    assert!(!names.contains(&"prototype_implement"));
+    let reply = bridge.call(2, "tools/call", &serde_json::json!({"name":"prototype_prepare", "arguments":{"brief":"Prototype this registration export using our components"}}));
+    assert_eq!(reply["result"]["isError"], false);
+    let request = server.join().unwrap();
+    assert_eq!(request.token, "existing-chat-token");
+    assert_eq!(request.action, handoff::Action::Design);
+    assert_eq!(request.design.unwrap().tool, "prototype_prepare");
 }

@@ -106,6 +106,8 @@ pub enum Action {
     Browser,
     /// One of the `code_*` tools, carried in [`Request::code`].
     Code,
+    /// Open Design tools in the caller's existing conversation.
+    Design,
     /// One of the Home tools, carried in [`Request::home`]. Only a Home caller may take it.
     Home,
 }
@@ -173,6 +175,8 @@ pub struct Request {
     /// The code tool call, when `action` is [`Action::Code`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<CodeCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<CodeCall>,
     /// The Home tool call, when `action` is [`Action::Home`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<HomeCall>,
@@ -600,6 +604,12 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
                 None => Response::failed("a browser request has to name a tool"),
             };
         }
+        Action::Design => {
+            return match &request.design {
+                Some(call) => crate::prototype_tools::run(handle, app, &request.token, call),
+                None => Response::failed("a design request has to name a tool"),
+            };
+        }
         Action::Code => {
             return match &request.code {
                 Some(call) => crate::code_tools::run(handle, app, &request.token, call),
@@ -728,6 +738,7 @@ fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Response> {
         Action::ListSessions => "`list_sessions` lists the caller's worktree neighbours",
         Action::Browser => "browser panes belong to a worktree",
         Action::Code => "code comments belong to a worktree",
+        Action::Design => "prototypes belong to a worktree",
         Action::Home => unreachable!("handled above"),
     };
     Some(Response::failed(format!(

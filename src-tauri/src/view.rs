@@ -1050,6 +1050,8 @@ pub struct AgentSessionView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserView {
+    /// Exact prototype/review identity for a fixed, network-blocked preview.
+    pub prototype_id: Option<String>,
     /// The webview label. Starts with `browser::LABEL_PREFIX`; never a session id.
     pub id: String,
     pub project: String,
