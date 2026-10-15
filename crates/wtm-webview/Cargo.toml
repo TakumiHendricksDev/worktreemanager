@@ -12,7 +12,9 @@
 # page world — so this crate calls WebKit directly through objc2, inside the
 # closure Tauri's `with_webview` runs on the main thread. It also hears what wry
 # never reports — a navigation that failed, a page process that quit — through
-# an observer standing in front of wry's navigation delegate.
+# an observer standing in front of wry's navigation delegate. Fixed prototype previews need one
+# more call: loadHTMLString, because Tauri cannot load an in-memory document and the initial
+# about:blank does not reliably execute document-start scripts.
 #
 # The unsafe density is higher than `wtm-notify`'s and it is worth saying so:
 # every objc2-web-kit method is `unsafe fn` in 0.3, so `mac.rs` is a sequence of

@@ -214,6 +214,7 @@ pub fn serve_stdio() {
     let awareness = std::env::var(handoff::AWARENESS_ENV).as_deref() == Ok("on");
     let browser = std::env::var(handoff::BROWSER_TOOLS_ENV).as_deref() == Ok("on");
     let code = std::env::var(handoff::CODE_TOOLS_ENV).as_deref() == Ok("on");
+    let design = std::env::var(crate::prototype_tools::ENV).as_deref() == Ok("on");
     // A Home bridge lists Home's tools *instead of* the worktree ones: Home has no worktree for
     // those to act on, and offering them would only teach the model they are broken.
     let home = std::env::var(crate::home::HOME_TOOLS_ENV).as_deref() == Ok("on");
@@ -242,8 +243,14 @@ pub fn serve_stdio() {
                 &json!({ "tools": crate::home_tools::definitions(&agents) }),
             )),
             "tools/call" if home => Some(result(&id, &call_home(&params))),
-            "tools/list" => Some(result(&id, &tools(&agents, awareness, browser, code))),
-            "tools/call" => Some(result(&id, &call(&params, browser, code))),
+            "tools/list" => {
+                let mut listed = tools(&agents, awareness, browser, code);
+                if design && let Some(entries) = listed["tools"].as_array_mut() {
+                    entries.extend(crate::prototype_tools::definitions());
+                }
+                Some(result(&id, &listed))
+            }
+            "tools/call" => Some(result(&id, &call(&params, browser, code, design))),
             // `ping` is in the spec and costs one line. Everything else gets the standard
             // method-not-found rather than silence, so a client waiting on a reply is not wedged.
             "ping" => Some(result(&id, &json!({}))),
@@ -463,8 +470,17 @@ fn tools(agents: &[(String, String)], awareness: bool, browser: bool, code: bool
 }
 
 /// Run a `tools/call` by asking the app.
-fn call(params: &Value, browser: bool, code: bool) -> Value {
+fn call(params: &Value, browser: bool, code: bool, design: bool) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    if design && name.starts_with(crate::prototype_tools::PREFIX) {
+        return call_design(
+            name,
+            params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        );
+    }
     if code && name.starts_with(crate::code_tools::PREFIX) {
         return call_code(
             name,
@@ -583,6 +599,7 @@ fn call(params: &Value, browser: bool, code: bool) -> Value {
             concurrency,
             browser: None,
             code: None,
+            design: None,
             home: None,
         },
     ) {
@@ -650,6 +667,36 @@ fn call_code(name: &str, arguments: Value) -> Value {
             "isError": false,
         }),
         Ok(response) => tool_error(response.error.as_deref().unwrap_or("the code tool failed")),
+        Err(error) => tool_error(&error),
+    }
+}
+
+fn call_design(name: &str, arguments: Value) -> Value {
+    let Ok(token) = std::env::var(handoff::TOKEN_ENV) else {
+        return tool_error("this bridge was started without a session token");
+    };
+    let socket = std::env::var(handoff::SOCKET_ENV)
+        .map_or_else(|_| socket_path().unwrap_or_default(), PathBuf::from);
+    let request = Request {
+        token,
+        action: handoff::Action::Design,
+        design: Some(handoff::CodeCall {
+            tool: name.to_owned(),
+            args: arguments,
+        }),
+        ..Request::default()
+    };
+    match ask(&socket, &request) {
+        Ok(response) if response.ok => json!({
+            "content": [{ "type": "text", "text": response.text.unwrap_or_default() }],
+            "isError": false,
+        }),
+        Ok(response) => tool_error(
+            response
+                .error
+                .as_deref()
+                .unwrap_or("the prototype tool failed"),
+        ),
         Err(error) => tool_error(&error),
     }
 }
@@ -867,6 +914,7 @@ mod tests {
             &json!({ "name": "code_read_comments", "arguments": {} }),
             false,
             false,
+            false,
         );
         assert_eq!(reply["isError"], true);
         assert!(
@@ -882,6 +930,7 @@ mod tests {
     fn a_browser_tool_is_unknown_to_a_bridge_started_without_the_flag() {
         let reply = call(
             &json!({ "name": "browser_snapshot", "arguments": {} }),
+            false,
             false,
             false,
         );

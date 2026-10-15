@@ -59,10 +59,18 @@ than a networked service. The things worth reporting:
 
 Worth stating because it narrows the surface considerably:
 
-- **No unsolicited network access that carries anything of yours.** There are two user-initiated
-  routes: dictation sends a recording to `api.deepgram.com`, and the database viewer connects to a
+- **No unsolicited network access that carries anything of yours.** User-initiated
+  routes include: dictation sends a recording to `api.deepgram.com`, and the database viewer connects to a
   database target disclosed by an approved config after the user clicks Connect. There is no
-  telemetry, analytics or crash reporting.
+  telemetry, analytics or crash reporting in WTM. Open Design prototyping uses the
+  existing chat provider and its normal authentication and permission handling.
+  Bounded project evidence goes to that provider when the agent prepares a design;
+  no Open Design Cloud, telemetry service or separate provider session is involved.
+  Bundled design guidance/token extraction needs no download or local daemon.
+  Saved HTML is displayed in a capability-isolated native webview with an opaque
+  sandbox frame and network-denying CSP. Design tools write only outside application
+  source; the agent's wait-before-editing rule remains prompt guidance under its
+  existing permission mode. See [the integration boundary](docs/open-design.md).
 
   The one automatic request is the **update check**: at launch and at most daily, a GET to
   `api.github.com` for wtm's latest release, with no body and no header naming the user, the

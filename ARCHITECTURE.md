@@ -890,6 +890,36 @@ needs no real checkout, because the property no longer depends on the data.
 
 ---
 
+## 6g. Open Design in the existing chat
+
+Ordinary worktree chats receive `prototype_prepare` and `prototype_publish` through
+WTM's existing MCP bridge. Appended session guidance selects this flow for explicit
+prototype requests and substantial UI work, leaving backend and trivial work alone.
+The optional New-menu shortcut sends into that conversation. There is no separate
+Open Design provider loop, CLI connection, daemon, download or cloud route.
+
+A bundled subset of Open Design's design/refinement charter and a Rust adaptation
+of its CSS token evidence collector give the existing agent project-aware design
+capabilities. The pinned sources, Apache-2.0 license, source hashes and reproduction
+script are documented in [docs/open-design.md](docs/open-design.md). The model,
+authentication, context and permissions remain the selected chat's. Waiting before
+application edits is prompt guidance under those existing permission boundaries,
+not a new OS sandbox.
+
+Tools write bounded artifacts only under WTM's data root, outside source. The native
+browser loads a fixed wrapper directly from memory, with the saved HTML in an opaque
+sandboxed frame under a network-denying CSP. WebKit's initial blank page cannot prove
+readiness: the isolated runtime must report the artifact frame loaded, or a bounded
+wait exposes a retryable error. Reload uses retained validated bytes. Application
+CSP and browser capabilities stay unchanged; no HTTP service or file URL is needed.
+
+Saved reviews bind both HTML and reuse notes, source fingerprints, the exact worktree
+and provider conversation. Revisions and cancellation invalidate late results and old
+approvals. Restore reads only. **Implement this design** validates the exact reviewed
+revision and current context and sends an approval turn into that same idle chat; it
+cannot start or change a provider. The tools deliberately expose no approval operation
+to the model.
+
 ## 7. Toolchain policy
 
 **Pinned to an exact version** (`1.97.1`) rather than the floating `stable` channel, so `cargo build`

@@ -59,6 +59,7 @@
   const id = $derived(pane.session);
   const view = $derived(browsers.viewOf(pane.session));
   const blank = $derived(id === null);
+  const prototype = $derived(view?.prototypeId != null);
   const loading = $derived(view?.loading ?? false);
   /**
    * Why the page is not there, while it is not. The native view is hidden for as long as this is
@@ -160,6 +161,16 @@
   function openExternally(): void {
     if (!view || shownAddress(view.url) === '') return;
     void commands.openUrl(view.url).catch(() => {});
+  }
+
+  async function closePreview(): Promise<void> {
+    if (id === null || !prototype) return;
+    problem = null;
+    try {
+      await commands.closeBrowser(id);
+    } catch (error) {
+      problem = errorMessage(error);
+    }
   }
 
   // ── comments ──
@@ -470,7 +481,7 @@
           icon="sm"
           title="Back (⌘[)"
           ariaLabel="Back"
-          disabled={blank || !(view?.canGoBack ?? false)}
+          disabled={prototype || blank || !(view?.canGoBack ?? false)}
           onclick={() => history('back')}
         >
           <Icon name="chevron-left" size={13} />
@@ -481,7 +492,7 @@
           icon="sm"
           title="Forward (⌘])"
           ariaLabel="Forward"
-          disabled={blank || !(view?.canGoForward ?? false)}
+          disabled={prototype || blank || !(view?.canGoForward ?? false)}
           onclick={() => history('forward')}
         >
           <Icon name="chevron-right" size={13} />
@@ -512,27 +523,41 @@
         {/if}
       </div>
 
-      <form
-        class="c-browser__address"
-        class:is-editing={editing}
-        onsubmit={(event) => {
-          event.preventDefault();
-          void go();
-        }}
-      >
-        <TextInput
-          mono
-          bind:value={typed}
-          bind:element={address}
-          placeholder="Enter an address (⌘L)"
-          ariaLabel="Address"
-          oninput={() => {
-            editing = true;
-            problem = null;
+      {#if prototype}
+        <span class="c-browser__address">Prototype review · revise in the conversation</span
+        >
+        <Button
+          variant="quiet"
+          size="sm"
+          ariaLabel="Close preview"
+          title="Close this prototype preview"
+          onclick={() => void closePreview()}
+        >
+          <Icon name="close" size={12} /> Close
+        </Button>
+      {:else}
+        <form
+          class="c-browser__address"
+          class:is-editing={editing}
+          onsubmit={(event) => {
+            event.preventDefault();
+            void go();
           }}
-          onblur={() => (editing = false)}
-        />
-      </form>
+        >
+          <TextInput
+            mono
+            bind:value={typed}
+            bind:element={address}
+            placeholder="Enter an address (⌘L)"
+            ariaLabel="Address"
+            oninput={() => {
+              editing = true;
+              problem = null;
+            }}
+            onblur={() => (editing = false)}
+          />
+        </form>
+      {/if}
       {#if problem}
         <span class="c-browser__problem" role="alert">{problem}</span>
       {/if}
@@ -658,7 +683,9 @@
       <div class="c-browser__view" bind:this={box}>
         {#if failure !== null}
           <div class="c-browser__failed" role="alert">
-            <p class="c-browser__failed-title">This page can’t be shown</p>
+            <p class="c-browser__failed-title">
+              {prototype ? 'This prototype can’t be shown' : 'This page can’t be shown'}
+            </p>
             <p class="c-browser__failed-why">{failure}</p>
             {#if shownAddress(view?.url ?? null) !== ''}
               <code class="c-browser__failed-url">{view?.url}</code>
@@ -669,14 +696,16 @@
               <Button variant="accent" size="sm" onclick={() => history('reload')}>
                 <Icon name="restart" size={12} /> Try again
               </Button>
-              <Button
-                variant="neutral"
-                size="sm"
-                title="Open this address in your browser"
-                onclick={openExternally}
-              >
-                <Icon name="external" size={13} /> Open in your browser
-              </Button>
+              {#if !prototype}
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  title="Open this address in your browser"
+                  onclick={openExternally}
+                >
+                  <Icon name="external" size={13} /> Open in your browser
+                </Button>
+              {/if}
             </div>
           </div>
         {:else if frozen}

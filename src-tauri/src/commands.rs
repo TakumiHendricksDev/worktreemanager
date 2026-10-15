@@ -923,6 +923,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn design_tools_use_the_selected_chat_request_without_changing_model_or_permissions() {
+        let repo = wtm_testkit::GitFixture::new();
+        let config = tempfile::tempdir().expect("temporary config");
+        let app =
+            Arc::new(App::with_paths(wtm_config::AppPaths::rooted(config.path())).expect("app"));
+        let canonical = repo.root().canonicalize().expect("canonical root");
+        let root = canonical.to_str().expect("root");
+        let project = app.project(root).expect("project");
+        let worktree = app.worktree(&project, root).expect("worktree");
+        for entry in wtm_agent::CATALOGUE {
+            let request = session_request_for(
+                &app,
+                &project,
+                &wtm_core::model::AgentSpec::default(),
+                entry,
+                &worktree,
+                Some(SessionOptions {
+                    model: Some("chosen-model".to_owned()),
+                    mode: Some("plan".to_owned()),
+                    effort: Some("low".to_owned()),
+                    ..SessionOptions::default()
+                }),
+                None,
+            )
+            .expect("request");
+            assert_eq!(request.model.as_deref(), Some("chosen-model"));
+            assert_eq!(request.mode.as_deref(), Some("plan"));
+            assert_eq!(request.effort.as_deref(), Some("low"));
+            assert!(
+                request
+                    .instructions
+                    .as_deref()
+                    .expect("instructions")
+                    .contains("prototype_prepare")
+            );
+            let bridge = request
+                .mcp
+                .get(crate::handoff::SERVER_NAME)
+                .expect("existing WTM bridge");
+            assert_eq!(
+                bridge
+                    .env
+                    .get(crate::prototype_tools::ENV)
+                    .map(String::as_str),
+                Some("on")
+            );
+            assert!(request.extra_args.is_empty());
+            assert!(!request.env.keys().any(|k| k.starts_with("OD_")));
+        }
+    }
+
     /// A stale `$SHELL` must not be the reason a terminal refuses to open.
     ///
     /// The candidate and the predicate are injected because a test cannot set `$SHELL`:
@@ -2936,6 +2988,7 @@ fn session_instructions(
         parts.push(browser_instructions());
     }
     parts.push(code_instructions());
+    parts.push(crate::prototype_tools::INSTRUCTIONS.to_owned());
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
@@ -3205,6 +3258,7 @@ fn handoff_server(
         env.insert(handoff::BROWSER_TOOLS_ENV.to_owned(), "on".to_owned());
     }
     env.insert(handoff::CODE_TOOLS_ENV.to_owned(), "on".to_owned());
+    env.insert(crate::prototype_tools::ENV.to_owned(), "on".to_owned());
 
     Some(wtm_agent::McpServer {
         command: program.to_string_lossy().into_owned(),

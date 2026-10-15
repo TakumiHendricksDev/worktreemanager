@@ -1058,6 +1058,7 @@ export interface HomeJob {
  * `browser:opened` — one shape, so the frontend mirrors it whole and never merges a delta.
  */
 export interface BrowserView {
+  prototypeId?: string | null;
   /** The webview label, `browser-…`. Never a session id. */
   id: string;
   project: string;

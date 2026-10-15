@@ -1293,6 +1293,13 @@
     return 'queued';
   }
 
+  // A blank main document completing is not a loaded prototype. The artifact lives in an
+  // opaque sandbox; its parent-owned load marker is observed from this isolated world only.
+  addEventListener('load', () => {
+    const frame = document.querySelector('iframe[data-wtm-prototype-preview]');
+    if (frame?.dataset.loaded === 'true') post({ event: 'prototype-ready' });
+  });
+
   globalThis.__wtm = Object.freeze({ dispatch, version: 1 });
   post({ event: 'ready', url: location.href });
 })();

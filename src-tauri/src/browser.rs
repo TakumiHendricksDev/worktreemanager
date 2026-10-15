@@ -223,6 +223,8 @@ pub struct ConsoleEntry {
 struct Entry {
     project: String,
     worktree: String,
+    prototype_id: Option<String>,
+    preview_document: Option<String>,
     url: String,
     title: String,
     loading: bool,
@@ -289,6 +291,7 @@ impl Host {
         BrowserView {
             id: id.to_owned(),
             project: entry.project.clone(),
+            prototype_id: entry.prototype_id.clone(),
             worktree: entry.worktree.clone(),
             url: entry.url.clone(),
             title: entry.title.clone(),
@@ -386,6 +389,8 @@ impl Host {
             id.clone(),
             Entry {
                 project: project.to_owned(),
+                prototype_id: None,
+                preview_document: None,
                 worktree: worktree.to_owned(),
                 url: url.to_owned(),
                 title: String::new(),
@@ -501,6 +506,22 @@ impl Host {
         });
         self.loaded(id);
         view
+    }
+
+    fn prototype_loaded(&self, id: &str) -> Option<BrowserView> {
+        let mut entries = self.entries.lock();
+        let entry = entries.get_mut(id)?;
+        entry.preview_document.as_ref()?;
+        entry.loading = false;
+        entry.load_error = None;
+        Some(Self::view(id, entry))
+    }
+
+    fn prototype_failed(&self, id: &str) -> Option<BrowserView> {
+        self.update(id, |entry| {
+            entry.loading = false;
+            entry.load_error = Some("The saved prototype could not be displayed. Choose Reload or Show preview to retry. The saved design is unchanged.".to_owned());
+        })
     }
 
     /// The page's process is gone: whatever was loading has stopped, and nothing it owed is coming.
@@ -636,6 +657,56 @@ pub fn open(
     url: Option<&str>,
     opened_by: Option<&str>,
 ) -> Result<BrowserView, ErrorView> {
+    open_document(handle, app, project, worktree, url, opened_by, None)
+}
+
+/// A fixed document in the browser's capability-isolated child. No server or file URL is needed.
+pub fn open_prototype(
+    handle: &AppHandle,
+    app: &Arc<App>,
+    project: &str,
+    worktree: &str,
+    document: &str,
+    session: &str,
+    identity: &str,
+) -> Result<BrowserView, ErrorView> {
+    for view in app.browsers.list(Some(worktree)) {
+        if view.prototype_id.as_deref() == Some(identity) {
+            if view.load_error.is_some() {
+                load_prototype(handle, app, &view.id)?;
+            }
+            return app.browsers.view_of(&view.id).ok_or_else(gone);
+        }
+        if view.opened_by.as_deref() == Some(session)
+            && view
+                .prototype_id
+                .as_ref()
+                .is_some_and(|id| id.split('/').next() == identity.split('/').next())
+        {
+            close(handle, app, &view.id);
+        }
+    }
+    open_document(
+        handle,
+        app,
+        project,
+        worktree,
+        None,
+        Some(session),
+        Some((document, identity)),
+    )
+}
+
+fn open_document(
+    handle: &AppHandle,
+    app: &Arc<App>,
+    project: &str,
+    worktree: &str,
+    url: Option<&str>,
+    opened_by: Option<&str>,
+    document: Option<(&str, &str)>,
+) -> Result<BrowserView, ErrorView> {
+    let fixed = document.is_some();
     debug_assert!(
         !wtm_webview::on_main_thread(),
         "browser::open blocks on the main thread and must not be called from it"
@@ -653,14 +724,22 @@ pub fn open(
         .browsers
         .register(project, worktree, target.as_str(), opened_by)?;
 
+    if let Some((html, identity)) = document {
+        app.browsers.update(&id, |entry| {
+            entry.prototype_id = Some(identity.to_owned());
+            entry.preview_document = Some(html.to_owned());
+            entry.loading = true;
+            "Prototype review".clone_into(&mut entry.title);
+        });
+    }
     let new_window_handle = handle.clone();
     let new_window_label = id.clone();
     let builder = WebviewBuilder::new(id.clone(), WebviewUrl::External(blank))
-        .on_navigation(navigation_allowed)
+        .on_navigation(move |url| if fixed { url.scheme() == "about" } else { navigation_allowed(url) })
         // A popup becomes a navigation of this same pane. Tiling a second child for every
         // `target="_blank"` would spend a WebContent process on a link the user can press Back from.
         .on_new_window(move |url, _features| {
-            if navigation_allowed(&url)
+            if !fixed && navigation_allowed(&url)
                 && let Some(webview) = new_window_handle.get_webview(&new_window_label)
                 && let Err(error) = webview.navigate(url)
             {
@@ -670,7 +749,8 @@ pub fn open(
         })
         // Downloads go to the user's browser. The pane has no download UI, no place to put a file,
         // and no business writing to disk on a page's say-so.
-        .on_download(|webview, event| {
+        .on_download(move |webview, event| {
+            if fixed { return false; }
             if let DownloadEvent::Requested { url, .. } = event {
                 hand_to_system_browser(webview.app_handle(), url.clone());
             }
@@ -681,6 +761,12 @@ pub fn open(
                 return;
             };
             let url = payload.url().to_string();
+            if app.browsers.view_of(webview.label()).is_some_and(|v| v.prototype_id.is_some()) {
+                // The isolated runtime settles this load only after the sandboxed artifact frame
+                // has loaded; the webview's initial empty page is not a rendered prototype.
+                return;
+            }
+
             // The blank page a browser is born on loads while the real navigation is still queued.
             // Its events are not the page's; see `Entry::awaiting`.
             if url == BLANK
@@ -755,11 +841,16 @@ pub fn open(
         // bundle id folded to sixteen bytes, so it is the same jar on every launch. Honoured on
         // macOS 14+; wry falls back to the default store below that, which is still a different
         // *origin* from anything the app stores, so nothing leaks either way.
-        .data_store_identifier(data_store_id())
         .zoom_hotkeys_enabled(true)
         .devtools(cfg!(debug_assertions))
         // A hidden pane still answers an agent, so its timers must keep running.
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled);
+
+    let builder = if fixed {
+        builder.incognito(true)
+    } else {
+        builder.data_store_identifier(data_store_id())
+    };
 
     // Born at one pixel and hidden, because the frontend has not yet said where the tile is. The
     // first `set_bounds` shows it.
@@ -779,6 +870,13 @@ pub fn open(
         tracing::debug!(%error, "a new browser could not be hidden before placement");
     }
     install(handle, app, &webview);
+    if fixed {
+        let view = app.browsers.view_of(&id).ok_or_else(gone)?;
+        browser_bridge::announce_opened(handle, &view);
+        load_prototype(handle, app, &id)?;
+        return app.browsers.view_of(&id).ok_or_else(gone);
+    }
+
     if target.as_str() != BLANK {
         // Marked before the navigation is queued, so a caller that waits for the load right after
         // `open` returns finds a load to wait for rather than a blank page that is "done".
@@ -801,6 +899,49 @@ pub fn open(
         browser_bridge::announce_opened(handle, &view);
     }
     Ok(view)
+}
+
+/// A real native load is essential here. WebKit does not reliably run user scripts for its
+/// initial about:blank; an initialization script plus document.write can leave a successful but
+/// empty pane. The retained wrapper keeps Reload independent of any agent or mutable source file.
+fn load_prototype(handle: &AppHandle, app: &Arc<App>, id: &str) -> Result<(), ErrorView> {
+    let html = app
+        .browsers
+        .entries
+        .lock()
+        .get(id)
+        .and_then(|e| e.preview_document.clone())
+        .ok_or_else(gone)?;
+    let webview = webview_of(handle, id)?;
+    if let Some(view) = app.browsers.update(id, |e| {
+        e.loading = true;
+        e.load_error = None;
+    }) {
+        browser_bridge::announce_state(handle, &view);
+    }
+    let (tx, rx) = mpsc::channel();
+    let queued = webview.with_webview(move |platform| {
+        let started = native_handle(&platform).is_some_and(|native| native.load_html(&html));
+        let _ = tx.send(started);
+    });
+    let started = queued.is_ok() && rx.recv_timeout(ACTION_TIMEOUT).unwrap_or(false);
+    if started
+        && wait_for_load(app, id, ACTION_TIMEOUT)
+        && app
+            .browsers
+            .view_of(id)
+            .is_some_and(|v| v.load_error.is_none())
+    {
+        return Ok(());
+    }
+    if let Some(view) = app.browsers.prototype_failed(id) {
+        browser_bridge::announce_state(handle, &view);
+        return Err(ErrorView::new(
+            "preview",
+            view.load_error.unwrap_or_default(),
+        ));
+    }
+    Err(gone())
 }
 
 /// Put the two scripts and the two message handlers into a webview that was just created.
@@ -951,6 +1092,13 @@ fn on_runtime_message(handle: &AppHandle, app: &Arc<App>, id: &str, message: &Me
         return;
     }
     match body.get("event").and_then(Value::as_str) {
+        Some("prototype-ready") => {
+            if let Some(view) = app.browsers.prototype_loaded(id) {
+                app.browsers.loaded(id);
+                browser_bridge::announce_state(handle, &view);
+            }
+        }
+
         Some("focus") => browser_bridge::announce_shortcut(handle, id, "focus"),
         Some("shortcut") => {
             if let Some(action) = body.get("action").and_then(Value::as_str) {
@@ -1238,6 +1386,16 @@ pub fn navigate(
     id: &str,
     raw: &str,
 ) -> Result<BrowserView, ErrorView> {
+    if app
+        .browsers
+        .view_of(id)
+        .is_some_and(|v| v.prototype_id.is_some())
+    {
+        return Err(ErrorView::new(
+            "preview",
+            "A prototype review is fixed. Open a regular browser pane to navigate.",
+        ));
+    }
     let url = parse_target(raw)?;
     let webview = webview_of(handle, id)?;
     webview
@@ -1262,6 +1420,14 @@ pub fn history(
     id: &str,
     action: HistoryAction,
 ) -> Result<(), ErrorView> {
+    if matches!(action, HistoryAction::Reload)
+        && app
+            .browsers
+            .view_of(id)
+            .is_some_and(|v| v.prototype_id.is_some())
+    {
+        return load_prototype(handle, app, id);
+    }
     let webview = webview_of(handle, id)?;
     match action {
         // After a failure, the address that failed rather than WebKit's reload. WKWebView reloads
@@ -1666,6 +1832,35 @@ mod tests {
     }
 
     #[test]
+    fn a_fixed_preview_only_becomes_ready_after_its_artifact_frame_loads() {
+        let host = Host::default();
+        let regular = host.register("p", "wt", BLANK, None).unwrap();
+        assert!(host.prototype_loaded(&regular).is_none());
+        let id = host.register("p", "wt", BLANK, None).unwrap();
+        host.update(&id, |entry| {
+            entry.prototype_id = Some("prototype/review".to_owned());
+            entry.preview_document = Some("trusted wrapper".to_owned());
+            entry.loading = true;
+        });
+        assert!(host.view_of(&id).unwrap().loading);
+        let failed = host.prototype_failed(&id).unwrap();
+        assert!(!failed.loading);
+        assert!(
+            failed
+                .load_error
+                .as_deref()
+                .unwrap()
+                .contains("Show preview")
+        );
+        let ready = host.prototype_loaded(&id).unwrap();
+        assert!(!ready.loading);
+        assert!(ready.load_error.is_none());
+        assert_eq!(ready.prototype_id.as_deref(), Some("prototype/review"));
+        host.forget(&id);
+        assert!(host.prototype_loaded(&id).is_none());
+    }
+
+    #[test]
     fn a_browser_label_carries_the_prefix_and_is_never_a_session_id() {
         let host = Host::default();
         let id = host.register("p", "wt", BLANK, Some("sess-1")).unwrap();
@@ -1839,7 +2034,7 @@ mod tests {
         host.update(&id, |entry| {
             entry.loading = true;
             entry.awaiting = true;
-            entry.url = "http://localhost:5173/".to_owned();
+            "http://localhost:5173/".clone_into(&mut entry.url);
         });
         let (tx, rx) = mpsc::channel();
         host.load_waiters

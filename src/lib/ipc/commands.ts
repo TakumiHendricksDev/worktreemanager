@@ -7,6 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import type { DesignDiscovery, PrototypeState } from '../open-design';
 import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 
 import type {
@@ -68,6 +69,18 @@ import type {
 } from './types';
 
 export const commands = {
+  discoverDesignContext: (projectId: string, worktreeId: string) =>
+    invoke<DesignDiscovery>('discover_design_context', { projectId, worktreeId }),
+  listPrototypes: (session: string) =>
+    invoke<PrototypeState[]>('list_prototypes', { session }),
+  dismissPrototype: (session: string, id: string) =>
+    invoke<PrototypeState>('dismiss_prototype', { session, id }),
+  openPrototypePreview: (session: string, id: string, reviewId: string) =>
+    invoke<BrowserView>('open_prototype_preview', { session, id, reviewId }),
+  implementPrototype: (session: string, id: string, reviewId: string) =>
+    invoke<void>('implement_prototype', { session, id, reviewId }),
+  cancelPrototype: (session: string, id: string) =>
+    invoke<void>('cancel_prototype', { session, id }),
   shellRunTarget: (projectId: string, worktreeId: string) =>
     invoke<string>('shell_run_target', { projectId, worktreeId }),
   listRunShells: (projectId: string, worktreeId: string) =>

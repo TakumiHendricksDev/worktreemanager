@@ -120,6 +120,17 @@ impl Handle {
         }
     }
 
+    pub(crate) fn load_html(&self, html: &str) -> bool {
+        // SAFETY: the retained view and Foundation objects are live on the main thread. The base
+        // is deliberately about:blank, never a file URL or the app's capability-bearing origin.
+        unsafe {
+            let base = NSURL::URLWithString(&NSString::from_str("about:blank"));
+            self.view
+                .loadHTMLString_baseURL(&NSString::from_str(html), base.as_deref())
+                .is_some()
+        }
+    }
+
     pub(crate) fn add_message_handler(&self, world: &World, name: &str, on: OnMessage) {
         let world = self.world(world);
         let handler = Handler::new(self.mtm, on);

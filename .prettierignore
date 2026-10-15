@@ -1,0 +1,2 @@
+# Keep the reference byte-identical to the pinned upstream source for provenance checks.
+vendor/open-design/token-evidence.ts

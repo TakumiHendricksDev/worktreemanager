@@ -33,6 +33,7 @@
   import { usage } from '../state/usage.svelte';
   import { workspace } from '../state/workspace.svelte';
   import AgentTranscript from './AgentTranscript.svelte';
+  import PrototypeReview from './PrototypeReview.svelte';
   import BrowserPane from './BrowserPane.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import ComposerQueue from './ComposerQueue.svelte';
@@ -1614,6 +1615,8 @@
               : (sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}
             {codeLink}
           />
+
+          {#if !atHome}<PrototypeReview {pane} />{/if}
 
           {#if blocking}
             <!--
