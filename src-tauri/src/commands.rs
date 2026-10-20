@@ -2793,7 +2793,8 @@ fn probe_cursor(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Stri
 /// to one an agent opened — a difference nothing in the UI would explain.
 ///
 /// For a handoff, `options` is what the delegating model asked for, and its mode has already been
-/// admitted by `handoff::mode_refusal` — this function layers settings, it does not police them.
+/// admitted by `handoff::mode_refusal`, or put there by `handoff::unrequested_mode` when the model
+/// named none — this function layers settings, it does not police them.
 /// `inherited` is how that route gets an effort the model did not name: the calling session's own,
 /// already translated into this target's vocabulary by [`wtm_agent::carried_effort`].
 ///

@@ -44,7 +44,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use wtm_core::model::SessionId;
+use wtm_core::model::{ModeRisk, SessionId};
 
 use crate::app::{App, SessionScope};
 
@@ -728,6 +728,9 @@ const MAX_DELEGATED: usize = 20;
 /// rest opened, and an "Agent failed" section for the one that was not — is a *successful* tool
 /// result, which a model can read past. A refusal is an error it has to answer. `open_pane` checks
 /// again, because it is where every route to a session passes.
+///
+/// A task that names no mode is never refused here. Its default is capped instead, in `open_pane`,
+/// by [`unrequested_mode`]: nothing was asked, so there is nothing to answer for.
 pub(crate) fn delegated_tasks(app: &App, request: &Request) -> Result<Vec<Task>, Response> {
     let tasks = if request.tasks.is_empty() {
         vec![Task {
@@ -796,10 +799,9 @@ pub(crate) fn delegated_tasks(app: &App, request: &Request) -> Result<Vec<Task>,
     }
 }
 
-/// Why a model may not open a `target` session in the mode it `requested`, or `None` if it may.
+/// The most a session in `caller_mode` may hand a session it opens: its own tier, below the top.
 ///
-/// The mode is the model's to choose because a read-only reviewer is a reasonable thing to ask
-/// for. What it may not do is choose its way past an approval, and two rules say what that means:
+/// Two rules, and [`mode_refusal`] explains both to the model that broke one:
 ///
 /// - **No further than the caller.** A session cannot hand out more than it has. A caller in
 ///   `plan` that could open a child in `auto` would have a way out of plan mode that never asked
@@ -807,14 +809,40 @@ pub(crate) fn delegated_tasks(app: &App, request: &Request) -> Result<Vec<Task>,
 ///   comparable with a Codex one. A caller whose mode is unknown, or is one this build cannot rate,
 ///   is rated at the bottom, because the opposite guess is the one that opens a door.
 /// - **Never to the top.** A mode with nothing between the model and the machine —
-///   `bypassPermissions`, `full-access`, Cursor's Auto — is refused even to a caller in one itself.
-///   A person put that pane there, looking at it; a model multiplying it into children nobody
-///   chose is a different act.
+///   `bypassPermissions`, `full-access`, Cursor's Auto — is not handed out even by a caller in one
+///   itself. A person put that pane there, looking at it; a model multiplying it into children
+///   nobody chose is a different act.
+fn ceiling(caller_provider: &str, caller_mode: Option<&str>) -> ModeRisk {
+    caller_mode
+        .and_then(|mode| wtm_agent::mode_latitude(caller_provider, mode))
+        .unwrap_or(ModeRisk::Normal)
+        .min(ModeRisk::Elevated)
+}
+
+/// Whether a session in `caller_mode` may open a `target` session in `mode`: within its
+/// [`ceiling`], or the repository's own `[agent.<id>] mode`.
 ///
-/// Both give way to the repository's own `[agent.<id>] mode`. That is the mode the child gets when
-/// the request says nothing, so asking for it by name changes nothing, and refusing it would only
-/// teach the model to stop saying what it wants. It is also the one way to let a model choose a
-/// top mode: a line in `wtm.toml` is a decision somebody made for that repository.
+/// The repository's line is let through whatever the ceiling, because it is a decision somebody
+/// made for that repository, and the one way to let a delegated session have a top mode.
+fn may_hand_out(
+    caller_provider: &str,
+    caller_mode: Option<&str>,
+    target: &str,
+    mode: &str,
+    repository: Option<&str>,
+) -> bool {
+    repository == Some(mode)
+        || wtm_agent::mode_latitude(target, mode)
+            .is_some_and(|latitude| latitude <= ceiling(caller_provider, caller_mode))
+}
+
+/// Why a model may not open a `target` session in the mode it `requested`, or `None` if it may.
+///
+/// The mode is the model's to choose because a read-only reviewer is a reasonable thing to ask
+/// for. What it may not do is choose its way past an approval — see [`ceiling`] for what that
+/// means. The repository's own mode is admitted however the caller is rated: it is the mode the
+/// child gets when the request says nothing, so asking for it by name changes nothing, and refusing
+/// it would only teach the model to stop saying what it wants.
 ///
 /// # Why a refusal and not a downgrade
 ///
@@ -822,10 +850,11 @@ pub(crate) fn delegated_tasks(app: &App, request: &Request) -> Result<Vec<Task>,
 /// has, and Codex's `expand_mode` reads a mode it does not know as its cautious middle preset. Both
 /// handle a value nobody chose for *this* session — inherited from a caller, or left in a stale
 /// `wtm.toml` — where there is nobody to tell. Here a model asked, in this call, and is waiting
-/// for the answer. A child asked to apply a fix and opened read-only instead fails at its first
+/// for the answer. A child asked to apply a fix and opened read-only instead stops at its first
 /// edit, in a pane already on screen, and a model told nothing concludes the other agent is broken.
 /// So it gets what a model-authored value gets everywhere else in wtm — `offers_agent`, or a Home
-/// form value outside its list: a refusal saying why, and what it may ask for instead.
+/// form value outside its list: a refusal saying why, and what it may ask for instead. A mode
+/// nobody named is the other kind of value, and [`unrequested_mode`] clamps it.
 pub(crate) fn mode_refusal(
     caller_provider: &str,
     caller_mode: Option<&str>,
@@ -833,31 +862,21 @@ pub(crate) fn mode_refusal(
     requested: &str,
     repository: Option<&str>,
 ) -> Option<String> {
-    use wtm_core::model::ModeRisk;
-
-    if repository == Some(requested) {
+    if may_hand_out(caller_provider, caller_mode, target, requested, repository) {
         return None;
     }
-    let ceiling = caller_mode
-        .and_then(|mode| wtm_agent::mode_latitude(caller_provider, mode))
-        .unwrap_or(ModeRisk::Normal);
     let label = wtm_agent::entry(target).map_or(target, |entry| entry.label);
-    let instead = || {
-        // The top tier is never on this list, whatever the ceiling: only the repository's own line
-        // can name one, and that is added separately.
-        let mut ids: Vec<String> = wtm_agent::compiled_modes(target)
-            .into_iter()
-            .filter(|mode| {
-                wtm_agent::mode_latitude(target, &mode.id)
-                    .is_some_and(|latitude| latitude <= ceiling.min(ModeRisk::Elevated))
-            })
-            .map(|mode| format!("`{}`", mode.id))
-            .collect();
-        if let Some(own) = repository {
-            ids.push(format!("`{own}` (this repository's own setting)"));
-        }
-        ids.join(", ")
-    };
+    // Exactly what `may_hand_out` admits, so no mode offered here is refused on the next call. The
+    // top tier is never on the list, because no ceiling reaches it: only the repository's own line
+    // can name one, and that is added separately.
+    let mut instead: Vec<String> = wtm_agent::compiled_modes(target)
+        .into_iter()
+        .filter(|mode| may_hand_out(caller_provider, caller_mode, target, &mode.id, None))
+        .map(|mode| format!("`{}`", mode.id))
+        .collect();
+    if let Some(own) = repository {
+        instead.push(format!("`{own}` (this repository's own setting)"));
+    }
     let why = match wtm_agent::mode_latitude(target, requested) {
         None => format!(
             "`{requested}` is not a {label} mode this build of wtm knows, so it cannot tell what \
@@ -868,7 +887,7 @@ pub(crate) fn mode_refusal(
              choose that: only this repository's `wtm.toml` can, with \
              `[agent.{target}] mode = \"{requested}\"`."
         ),
-        Some(latitude) if latitude > ceiling => format!(
+        Some(_) => format!(
             "`{requested}` would let the {label} session do more without asking than this session \
              may in {}, and a session cannot hand out more than it has.",
             caller_mode.map_or_else(
@@ -876,9 +895,46 @@ pub(crate) fn mode_refusal(
                 |m| format!("`{m}`")
             )
         ),
-        Some(_) => return None,
     };
-    Some(format!("{why} Modes you may ask for: {}.", instead()))
+    Some(format!(
+        "{why} Modes you may ask for: {}.",
+        instead.join(", ")
+    ))
+}
+
+/// The mode a `target` session opens in when the request named none, if not the `default` it would
+/// otherwise get — or `None` to leave that default alone.
+///
+/// The default is the repository's `[agent.<id>] mode`, a model's implied mode, or the compiled
+/// Auto, and the compiled Auto is the case this is for: left alone, a caller in `plan` that may not
+/// *ask* for an `auto` child gets one by not asking, and every Cursor child gets wtm approving
+/// everything, which [`mode_refusal`] would refuse by name. So a default the caller could not have
+/// asked for is replaced by the most it could have — [`wtm_agent::mode_within`] its [`ceiling`] —
+/// and a default it could have asked for, the repository's own above all, is kept.
+///
+/// # Why a downgrade here and a refusal there
+///
+/// [`mode_refusal`] refuses rather than clamps because a model asked, in this call, and is owed
+/// the truth about what it got. Nobody chose this one. It is the case this codebase clamps
+/// everywhere else, an inherited effort or an unknown Codex mode, and the mode it is clamped to
+/// still does the work, with each step past reading put to the user — all but Cursor's `ask`,
+/// which answers and edits nothing, because Cursor has nothing between that and a mode that acts.
+/// And the model is not left believing anything false: the tool description says what an omitted
+/// mode becomes.
+pub(crate) fn unrequested_mode(
+    caller_provider: &str,
+    caller_mode: Option<&str>,
+    target: &str,
+    default: Option<&str>,
+    repository: Option<&str>,
+) -> Option<&'static str> {
+    // No default at all is "let the CLI decide", which is a mode nobody here can rate.
+    if default
+        .is_some_and(|mode| may_hand_out(caller_provider, caller_mode, target, mode, repository))
+    {
+        return None;
+    }
+    wtm_agent::mode_within(target, ceiling(caller_provider, caller_mode))
 }
 
 /// What every tool that opens a session says about its `mode` argument.
@@ -887,10 +943,12 @@ pub(crate) fn mode_refusal(
 /// [`mode_refusal`] enforces and three copies would drift from it. The modes are listed from the
 /// same tables the rule rates them by, per agent `agents` offers, without the top tier: a model
 /// that is never offered `bypassPermissions` is less likely to spend a call learning it is refused.
+///
+/// What an omitted mode becomes is listed from [`wtm_agent::mode_within`] for the same reason, and
+/// per tier rather than for this caller: the text is written once, when the tools are listed, and
+/// the caller's mode changes after that.
 #[must_use]
 pub fn mode_description(agents: &[(String, String)]) -> String {
-    use wtm_core::model::ModeRisk;
-
     let modes = agents
         .iter()
         .map(|(id, label)| {
@@ -912,11 +970,31 @@ pub fn mode_description(agents: &[(String, String)]) -> String {
     } else {
         format!(" — {modes}")
     };
+    let within = |ceiling| {
+        agents
+            .iter()
+            .filter_map(|(id, label)| {
+                wtm_agent::mode_within(id, ceiling).map(|mode| format!("{label} `{mode}`"))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let omitted = if agents.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " If the repository sets none, the new session gets the most you may hand out: {} \
+             while you are in a mode that acts without asking, and {} while you are in one that \
+             asks first, such as `plan` or `read-only`.",
+            within(ModeRisk::Elevated),
+            within(ModeRisk::Normal)
+        )
+    };
     format!(
         "Optional permission mode for the new session, in that agent's own spelling{modes}. \
-         Usually left out, so the repository's own setting applies; give one to ask for a \
-         stricter mode, such as `read-only` or `plan` for a review. A mode that would let the new \
-         session do more without asking than you can is refused, and so is one that approves \
+         Usually left out, so the repository's own setting applies.{omitted} Give one to ask for \
+         a stricter mode, such as `read-only` or `plan` for a review. A mode that would let the \
+         new session do more without asking than you can is refused, and so is one that approves \
          everything — Claude `bypassPermissions`, Codex `full-access`, Cursor `auto` — unless \
          the repository's `wtm.toml` sets that mode for that agent."
     )
@@ -1194,13 +1272,46 @@ pub(crate) fn pane_request(
         return Err(refusal);
     }
 
+    // And the mode nobody asked for, here for the same reason — a model leaves `mode` out far more
+    // often than it names one. The default is resolved by the layering the session will get it by,
+    // so a model's implied mode and the repository's line count exactly as they would apply.
+    let mode = task.mode.clone().or_else(|| {
+        let default = crate::commands::session_choices(
+            &spec,
+            entry,
+            Some(crate::commands::SessionOptions {
+                model: task.model.clone(),
+                ..crate::commands::SessionOptions::default()
+            }),
+            None,
+        )
+        .mode;
+        let capped = unrequested_mode(
+            placement.caller_provider,
+            placement.caller_mode,
+            target,
+            default.as_deref(),
+            spec.mode.as_deref(),
+        )?;
+        tracing::debug!(
+            from = %placement.caller_provider,
+            to = target,
+            caller_mode = ?placement.caller_mode,
+            default = ?default,
+            capped,
+            "handoff capping a mode nobody asked for"
+        );
+        Some(capped.to_owned())
+    });
+
     /*
      * The caller's effort, in the target's own vocabulary.
      *
      * What the model asked for rides in `options` and outranks it — model, effort, and the mode
-     * just admitted. When it asked for nothing, effort is the one setting of the caller's worth
-     * carrying, and the only one that *can* be: it is a shared word ladder, where a model id is not
-     * (`opus` means nothing to Codex) and a mode is provider vocabulary (`acceptEdits` likewise).
+     * just admitted or capped. When it asked for nothing, effort is the one setting of the caller's
+     * worth carrying, and the only one that *can* be: it is a shared word ladder, where a model id
+     * is not (`opus` means nothing to Codex) and a mode is provider vocabulary (`acceptEdits`
+     * likewise).
      * Someone who set a session to `max` before asking it for a second opinion meant the second
      * opinion to be considered too, and taking the target's interactive default instead quietly
      * ignored that.
@@ -1231,7 +1342,9 @@ pub(crate) fn pane_request(
         Some(crate::commands::SessionOptions {
             model: task.model.clone(),
             effort: task.effort.clone(),
-            mode: task.mode.clone(),
+            // Into `options` rather than patched onto the request afterwards, so the child's own
+            // token is issued with it and the child's children are capped by it in turn.
+            mode,
             resume: None,
             // Deliberately **not** carried from the caller, unlike effort just above.
             //
@@ -2020,6 +2133,136 @@ mod tests {
         assert_eq!(hub.resolve(&token).unwrap().mode.as_deref(), Some("plan"));
     }
 
+    // ── The mode nobody asked for ─────────────────────────────────────────────────────────────
+    //
+    // A model usually leaves `mode` out, and the default it then gets is Auto on every provider.
+    // Left alone, that is a way past every rule above that needs no argument at all: a caller in
+    // `plan` that may not ask for an `auto` child gets one by not asking, and a Cursor child gets wtm
+    // approving everything. These pin `unrequested_mode` on its own, then the routes again below.
+
+    #[test]
+    fn a_mode_nobody_asked_for_is_capped_at_the_most_the_caller_could_have_asked_for() {
+        // A Claude session planning, asking for a review without naming a mode: the reviewer it
+        // gets is the one that asks first, which it could have asked for, not the Auto it could not.
+        for (target, capped) in [
+            ("codex", "read-only"),
+            ("claude", "manual"),
+            ("cursor", "ask"),
+        ] {
+            assert_eq!(
+                unrequested_mode("claude", Some("plan"), target, Some("auto"), None),
+                Some(capped),
+                "{target}"
+            );
+        }
+        assert_eq!(
+            unrequested_mode("codex", Some("read-only"), "claude", Some("auto"), None),
+            Some("manual")
+        );
+    }
+
+    #[test]
+    fn cursor_is_never_opened_in_its_auto_unasked_whatever_the_caller_is_in() {
+        // Its Auto is wtm answering every prompt with allow-once, which no caller may hand out by
+        // name. Not naming it must not be the way round that.
+        for caller_mode in ["auto", "acceptEdits", "bypassPermissions"] {
+            assert_eq!(
+                unrequested_mode("claude", Some(caller_mode), "cursor", Some("auto"), None),
+                Some("agent"),
+                "a Claude caller in `{caller_mode}`"
+            );
+        }
+        assert_eq!(
+            unrequested_mode("cursor", Some("auto"), "cursor", Some("auto"), None),
+            Some("agent")
+        );
+    }
+
+    #[test]
+    fn a_default_the_caller_could_have_asked_for_is_left_as_it_is() {
+        for (provider, mode, target, default) in [
+            // The usual delegation, which this must not change: Auto handing out Auto.
+            ("claude", "auto", "codex", "auto"),
+            ("claude", "auto", "claude", "auto"),
+            ("codex", "auto", "claude", "auto"),
+            // `opusplan`'s implied mode, which asks first whoever is asking.
+            ("claude", "plan", "claude", "plan"),
+            ("codex", "read-only", "claude", "plan"),
+        ] {
+            assert_eq!(
+                unrequested_mode(provider, Some(mode), target, Some(default), None),
+                None,
+                "{provider} in `{mode}` opening {target} in `{default}`"
+            );
+        }
+    }
+
+    #[test]
+    fn the_repositorys_own_mode_is_never_capped() {
+        // `[agent.cursor] mode = "auto"` is how a repository keeps the Cursor it had before this.
+        assert_eq!(
+            unrequested_mode("claude", Some("plan"), "cursor", Some("auto"), Some("auto")),
+            None
+        );
+        assert_eq!(
+            unrequested_mode(
+                "claude",
+                Some("plan"),
+                "codex",
+                Some("full-access"),
+                Some("full-access")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_default_wtm_cannot_rate_is_capped_like_one_it_can() {
+        // No default is "let the CLI decide", and a mode only the live CLI knows is one nobody here
+        // has read the meaning of. Either could be anything.
+        for default in [None, Some("debug")] {
+            assert_eq!(
+                unrequested_mode("claude", Some("auto"), "cursor", default, None),
+                Some("agent"),
+                "{default:?}"
+            );
+            assert_eq!(
+                unrequested_mode("claude", Some("plan"), "codex", default, None),
+                Some("read-only"),
+                "{default:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_capped_mode_is_one_the_caller_could_have_asked_for_by_name() {
+        // The two rules are one rule. A cap that opened a child in a mode `mode_refusal` would have
+        // refused the same caller would be the hole this closes, moved somewhere else.
+        let callers = [
+            ("claude", Some("plan")),
+            ("claude", Some("auto")),
+            ("claude", Some("bypassPermissions")),
+            ("codex", Some("read-only")),
+            ("codex", Some("full-access")),
+            ("cursor", Some("ask")),
+            ("cursor", Some("auto")),
+            ("claude", None),
+        ];
+        for (provider, mode) in callers {
+            for target in ["claude", "codex", "cursor"] {
+                for default in [None, Some("auto"), Some("plan"), Some("not-a-mode")] {
+                    if let Some(capped) = unrequested_mode(provider, mode, target, default, None) {
+                        assert_eq!(
+                            mode_refusal(provider, mode, target, capped, None),
+                            None,
+                            "{provider} {mode:?} opening {target} from {default:?} got `{capped}`"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// A real repository the app knows, with `wtm_toml` as its config, and the app.
     struct Repo {
         app: Arc<App>,
@@ -2079,6 +2322,14 @@ mod tests {
             effort: None,
             mode: Some(mode.to_owned()),
             prompt: "Review the change on this branch.".to_owned(),
+        }
+    }
+
+    /// [`task`] with no mode named, which is how a model usually asks.
+    fn unnamed(title: &str, agent: &str) -> Task {
+        Task {
+            mode: None,
+            ..task(title, agent, "")
         }
     }
 
@@ -2192,5 +2443,98 @@ mod tests {
             repo.pane("auto", &task("Fixer", "claude", "bypassPermissions"))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_plan_callers_reviewer_with_no_mode_named_opens_read_only() {
+        // The flow this changes most: planning, asking Codex for a review, `mode` left out.
+        let repo = Repo::new("");
+        let req = repo
+            .pane("plan", &unnamed("Reviewer", "codex"))
+            .expect("nothing was asked, so nothing is refused");
+        assert_eq!(req.mode.as_deref(), Some("read-only"));
+
+        // And the flow it must not change: from Auto, the reviewer is in Auto as it was.
+        let req = repo
+            .pane("auto", &unnamed("Reviewer", "codex"))
+            .expect("opens");
+        assert_eq!(req.mode.as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn spawn_agents_naming_no_modes_is_not_refused_and_each_child_opens_capped() {
+        let repo = Repo::new("");
+        let request = Request {
+            token: repo.caller("claude", "plan"),
+            tasks: vec![
+                unnamed("Reviewer", "codex"),
+                unnamed("Investigator", "claude"),
+                unnamed("Asker", "cursor"),
+            ],
+            ..Request::default()
+        };
+        let tasks = delegated_tasks(&repo.app, &request).expect("no mode was named to refuse");
+        let opened: Vec<Option<String>> = tasks
+            .iter()
+            .map(|task| repo.pane("plan", task).expect("opens").mode)
+            .collect();
+        assert_eq!(
+            opened,
+            [
+                Some("read-only".to_owned()),
+                Some("manual".to_owned()),
+                Some("ask".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cursor_child_with_no_mode_named_asks_unless_its_repository_chose_auto() {
+        let repo = Repo::new("");
+        let req = repo
+            .pane("auto", &unnamed("Sweeper", "cursor"))
+            .expect("opens");
+        assert_eq!(req.mode.as_deref(), Some("agent"));
+
+        let repo = Repo::new("[agent.cursor]\nmode = \"auto\"\n");
+        let req = repo
+            .pane("plan", &unnamed("Sweeper", "cursor"))
+            .expect("opens");
+        assert_eq!(req.mode.as_deref(), Some("auto"), "the repository chose it");
+    }
+
+    #[test]
+    fn a_models_implied_mode_is_kept_when_no_mode_is_named() {
+        // `opusplan` means plan mode, which asks first; capping it would only change the model.
+        let repo = Repo::new("");
+        let planner = Task {
+            model: Some("opusplan".to_owned()),
+            ..unnamed("Planner", "claude")
+        };
+        for caller_mode in ["plan", "auto"] {
+            let req = repo.pane(caller_mode, &planner).expect("opens");
+            assert_eq!(
+                req.mode.as_deref(),
+                Some("plan"),
+                "a caller in `{caller_mode}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_capped_childs_own_token_carries_the_capped_mode_so_its_children_are_capped_too() {
+        // A mode patched onto the request after the token was issued would leave the child rated by
+        // the Auto it never got, and free to hand that Auto to a child of its own.
+        let repo = Repo::new("");
+        let req = repo
+            .pane("plan", &unnamed("Reviewer", "codex"))
+            .expect("opens");
+        let token = req
+            .mcp
+            .get(SERVER_NAME)
+            .and_then(|server| server.env.get(TOKEN_ENV))
+            .expect("the child is issued a token");
+        let child = repo.app.handoff.resolve(token).expect("the token resolves");
+        assert_eq!(child.mode.as_deref(), Some("read-only"));
     }
 }

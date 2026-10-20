@@ -50,7 +50,7 @@ pub mod skills;
 
 pub use capability::{
     carried_effort, claude_capability, codex_modes, compiled_modes, implied_mode, mode_latitude,
-    prefer_effort,
+    mode_within, prefer_effort,
 };
 pub use catalogue::{CATALOGUE, ProviderEntry, entry};
 pub use provider::{McpServer, Provider, ProviderId, SessionRequest, Step};
