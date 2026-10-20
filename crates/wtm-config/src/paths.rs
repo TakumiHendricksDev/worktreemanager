@@ -50,6 +50,9 @@ pub const FLOW_DB_FILENAME: &str = "flow.db";
 /// One directory per flow, under the data root, for the files its database rows point at.
 pub const FLOW_DIRNAME: &str = "flow";
 
+/// The empty `gh` config directory workflow runs point `GH_CONFIG_DIR` at, under the data root.
+pub const RUN_GH_CONFIG_DIRNAME: &str = "run-gh-config";
+
 /// Resolved application paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
@@ -82,6 +85,11 @@ pub struct AppPaths {
     ///
     /// Beside the database because its rows hold these files' hashes and paths relative to here.
     pub flow_dir: PathBuf,
+    /// What a workflow run's `GH_CONFIG_DIR` names: a directory with nothing in it, so `gh` finds no
+    /// account rather than the user's. The app keeps it empty; see `src-tauri/src/run_profile.rs`.
+    ///
+    /// Under the data root for Home's reasons: it is state the app owns, and nobody's dotfiles.
+    pub run_gh_config_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -123,6 +131,7 @@ impl AppPaths {
             home_dir: data_dir.join(HOME_DIRNAME),
             flow_db: data_dir.join(FLOW_DB_FILENAME),
             flow_dir: data_dir.join(FLOW_DIRNAME),
+            run_gh_config_dir: data_dir.join(RUN_GH_CONFIG_DIRNAME),
         }
     }
 

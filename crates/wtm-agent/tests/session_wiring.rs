@@ -131,6 +131,41 @@ fn a_repositorys_agent_environment_reaches_the_child_but_cannot_turn_colour_back
 }
 
 #[test]
+fn a_pane_a_person_opens_is_spawned_with_no_scrub_at_all() {
+    // Manual panes keep the environment they always had, keys and `[agent.<id>.env]` included.
+    // The scrub is for workflow runs only.
+    let (_session, fake, _rec) = session();
+    assert!(fake.spawned()[0].scrub.is_empty());
+}
+
+#[test]
+fn a_run_sessions_scrub_reaches_the_spawn_alongside_the_repositorys_environment() {
+    // The host applies the scrub after `env`, so carrying both is what lets the scrub win. That
+    // ordering is proved against a real child in `src-tauri/tests/run_profile.rs`.
+    let fake = Arc::new(FakePipe::new());
+    let sink: Arc<dyn AgentSink> = Arc::new(Recorder::default());
+    let scrub = wtm_agent::run_profile::scrub(std::path::Path::new("/empty/gh"));
+    let _session = AgentSession::open(
+        &Codex,
+        &SessionRequest {
+            cwd: "/tmp/worktree".to_owned(),
+            env: [("OPENAI_API_KEY".to_owned(), "from-the-repo".to_owned())].into(),
+            scrub: scrub.clone(),
+            ..SessionRequest::default()
+        },
+        Arc::clone(&fake) as Arc<dyn PipeHost>,
+        &sink,
+        60_000,
+        Some("/tmp/worktree"),
+    )
+    .expect("the fake always spawns");
+
+    let spawned = &fake.spawned()[0];
+    assert_eq!(spawned.scrub, scrub);
+    assert!(spawned.scrub.removes("OPENAI_API_KEY"));
+}
+
+#[test]
 fn a_line_from_the_child_drives_the_driver_and_its_frames_reach_the_pipe() {
     let (_session, fake, rec) = session();
     handshake(&fake);

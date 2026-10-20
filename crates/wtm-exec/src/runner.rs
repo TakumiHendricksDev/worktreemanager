@@ -118,8 +118,7 @@ impl Runner {
                     searched: self.path.value.clone(),
                 })?;
 
-        let mut env = self.path.child_env();
-        env.extend(inv.env.clone());
+        let env = self.path.env_for(inv);
 
         // The single sanctioned spawn site. See the module docs.
         #[allow(clippy::disallowed_methods)]
@@ -737,6 +736,31 @@ mod tests {
             .insert("WTM_TEST_VAR".to_owned(), "from-invocation".to_owned());
         let out = runner().run(&command, &CancelToken::new()).unwrap();
         assert_eq!(out.stdout, "from-invocation");
+    }
+
+    #[test]
+    fn a_scrubbed_variable_never_reaches_the_child_even_when_the_invocation_sets_it() {
+        // `HOME` because it is the one variable this process is sure to have inherited, so the
+        // scrub is proved against the base layer as well as against the invocation's own.
+        let mut command = inv(
+            &[
+                "sh",
+                "-c",
+                "printf '%s|%s|%s' \"${HOME-unset}\" \"${WTM_TEST_KEY-unset}\" \"$WTM_TEST_SET\"",
+            ],
+            5_000,
+        )
+        .with_scrub(
+            wtm_core::ports::EnvScrub::default()
+                .remove("HOME")
+                .remove_prefix("WTM_TEST_")
+                .set("WTM_TEST_SET", "chosen"),
+        );
+        command
+            .env
+            .insert("WTM_TEST_KEY".to_owned(), "from-invocation".to_owned());
+        let out = runner().run(&command, &CancelToken::new()).unwrap();
+        assert_eq!(out.stdout, "unset|unset|chosen");
     }
 
     #[test]

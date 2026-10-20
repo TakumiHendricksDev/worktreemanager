@@ -74,9 +74,16 @@
   grid-column: 1 / -1;
 }
 
+.c-usage__signin,
 .c-usage__note,
 .c-usage__error {
   margin: 0;
+}
+
+/* How the account is signed in. Muted rather than subtle: it is a fact about the account, read as
+   often as the figures, where a note is an aside. */
+.c-usage__signin {
+  color: var(--fg-muted);
 }
 
 .c-usage__note {
