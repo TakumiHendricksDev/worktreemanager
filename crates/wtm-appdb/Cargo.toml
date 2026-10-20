@@ -1,0 +1,34 @@
+[package]
+name        = "wtm-appdb"
+description = "The app's own SQLite store for work items and flows. impl FlowStore"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# `rusqlite` with SQLite bundled is the one concretion this crate wraps, and it adds nothing to the
+# build: `wtm-db` already compiles the same version, bundled the same way, for the Database viewer.
+# Bundled rather than the system library so the SQL these migrations rely on (partial indexes,
+# `VACUUM INTO`) does not depend on which macOS a user runs.
+#
+# `fallible_uint` lets a `u64` (every timestamp, sequence number and pull request number in the
+# domain) bind and read directly, failing on a value past `i64::MAX` instead of wrapping. It is a
+# few trait impls inside rusqlite and adds no dependency.
+[dependencies]
+wtm-core    = { workspace = true }
+rusqlite    = { workspace = true, features = ["fallible_uint"] }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+parking_lot = { workspace = true }
+thiserror   = { workspace = true }
+tracing     = { workspace = true }
+
+[dev-dependencies]
+tempfile          = { workspace = true }
+pretty_assertions = { workspace = true }
