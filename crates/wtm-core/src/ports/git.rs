@@ -169,6 +169,70 @@ pub trait Git: Send + Sync {
     fn is_merged(&self, repo_root: &Path, branch: &BranchRef, base: &str)
     -> Result<bool, GitError>;
 
+    /// Everything in the worktree right now, untracked files included and ignored ones not, as a
+    /// tree object. Returns the tree's id.
+    ///
+    /// # Objects only
+    ///
+    /// A scratch index at `scratch_index` is seeded from the worktree's own index, `git add -A`
+    /// runs against it, and `git write-tree` reads it back. That writes blobs and trees into the
+    /// object store and nothing else: no ref moves, and neither the working tree nor the worktree's
+    /// real index is touched, so a review can take one while you keep typing. ARCHITECTURE §5
+    /// records this as a relaxation of the no-mutation boundary.
+    ///
+    /// # Why seeded, not empty
+    ///
+    /// An empty index would make `add -A` decide every path from scratch, and get some wrong: a
+    /// sparse checkout's skip-worktree entries are absent from disk and would be recorded as
+    /// deleted, and a file force-added despite `.gitignore` would vanish from the tree. A copy of
+    /// the real index keeps both, and its stat data spares re-hashing every unchanged file.
+    ///
+    /// The scratch index is removed afterwards, whether or not git succeeded.
+    fn snapshot_tree(&self, worktree_path: &Path, scratch_index: &Path)
+    -> Result<String, GitError>;
+
+    /// A commit of `tree` whose parent is `parent`, referenced by nothing, so a detached checkout
+    /// has something to stand on. Never signed and never runs a hook.
+    fn commit_tree(
+        &self,
+        worktree_path: &Path,
+        tree: &str,
+        parent: &CommitId,
+    ) -> Result<CommitId, GitError>;
+
+    /// `git diff --binary` from `from` to `to`, two tree-ish revisions, written to `out`.
+    ///
+    /// Written by git to a file rather than captured, because a patch is bytes and captured
+    /// output is decoded as UTF-8: a Latin-1 source file would come back corrupted, and the patch
+    /// would no longer apply. Creates `out`'s directory, and replaces `out` whole or not at all.
+    fn write_binary_diff(
+        &self,
+        worktree_path: &Path,
+        from: &str,
+        to: &str,
+        out: &Path,
+    ) -> Result<(), GitError>;
+
+    /// Paths that differ between two tree-ish revisions. A rename is both of its paths.
+    fn tree_changes(
+        &self,
+        worktree_path: &Path,
+        from: &str,
+        to: &str,
+    ) -> Result<PathList, GitError>;
+
+    /// A detached checkout of `commit` at `path`, for roles that read a snapshot.
+    ///
+    /// Unlike [`Self::add_worktree`], hooks are off. A `post-checkout` hook is the repository's
+    /// code, and this checkout is the app's, made with nobody watching and outside any sandbox.
+    /// A hook directory inside the worktree is one a writer role can edit.
+    fn add_snapshot_checkout(
+        &self,
+        worktree_path: &Path,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<(), GitError>;
+
     /// The argv a given [`AddOptions`] will produce, without running it.
     ///
     /// Exists so the review screen can show the exact command before stage 8, and
@@ -281,6 +345,21 @@ mod tests {
             unused!()
         }
         fn is_merged(&self, _: &Path, _: &BranchRef, _: &str) -> Result<bool, GitError> {
+            unused!()
+        }
+        fn snapshot_tree(&self, _: &Path, _: &Path) -> Result<String, GitError> {
+            unused!()
+        }
+        fn commit_tree(&self, _: &Path, _: &str, _: &CommitId) -> Result<CommitId, GitError> {
+            unused!()
+        }
+        fn write_binary_diff(&self, _: &Path, _: &str, _: &str, _: &Path) -> Result<(), GitError> {
+            unused!()
+        }
+        fn tree_changes(&self, _: &Path, _: &str, _: &str) -> Result<PathList, GitError> {
+            unused!()
+        }
+        fn add_snapshot_checkout(&self, _: &Path, _: &Path, _: &CommitId) -> Result<(), GitError> {
             unused!()
         }
     }

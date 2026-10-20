@@ -66,6 +66,7 @@ pub fn validate(
     check_commands(project, origin)?;
     check_templates(project, engine, origin)?;
     check_guards(project, origin)?;
+    check_workflow(project, origin)?;
     Ok(())
 }
 
@@ -549,6 +550,18 @@ fn compile_rules<'a>(
             })
         })
         .collect()
+}
+
+/// `[workflow]`'s rules live beside its types in `wtm_core::flow::recipe`, so the engine that runs
+/// a recipe and the config check that admitted it cannot disagree. This only says which file and
+/// key the mistake is in.
+pub fn check_workflow(project: &Project, origin: &Origin) -> Result<(), ConfigError> {
+    let Some(workflow) = &project.workflow else {
+        return Ok(());
+    };
+    workflow
+        .validate()
+        .map_err(|error| origin.invalid(&format!("workflow.{}", error.key), error.message))
 }
 
 fn check_guards(project: &Project, origin: &Origin) -> Result<(), ConfigError> {

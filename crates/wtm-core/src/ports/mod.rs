@@ -44,7 +44,7 @@ pub use database::{DatabaseConnection, DatabaseHost, DatabaseSession};
 pub use dictate::{DictateError, Utterance};
 pub use exec::{CancelToken, CommandRunner, Invocation, Output};
 pub use flow::{FlowStore, FlowStoreError};
-pub use fs::FileStore;
+pub use fs::{FileDigest, FileStore};
 pub use git::{AddOptions, BranchFilter, Git};
 pub use pipe::{PipeHost, PipeSession, PipeSink};
 pub use progress::{ProgressEvent, ProgressSink};

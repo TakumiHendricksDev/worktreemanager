@@ -15,7 +15,7 @@ use wtm_core::model::{
 };
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation, Output};
-use wtm_core::ports::fs::FileStore;
+use wtm_core::ports::fs::{FileDigest, FileStore};
 use wtm_core::ports::git::{AddOptions, BranchFilter, Git};
 use wtm_core::ports::progress::{ProgressEvent, ProgressSink};
 
@@ -277,6 +277,23 @@ impl FileStore for FakeFileStore {
 
     fn absolutize(&self, path: &Path) -> Result<PathBuf, ConfigError> {
         Ok(normalize(path))
+    }
+
+    fn digest(&self, path: &Path) -> Result<FileDigest, ConfigError> {
+        use sha2::{Digest, Sha256};
+        let contents = self.read_to_string(path)?;
+        let sha256 = Sha256::digest(contents.as_bytes()).iter().fold(
+            String::with_capacity(64),
+            |mut out, byte| {
+                use std::fmt::Write;
+                let _ = write!(out, "{byte:02x}");
+                out
+            },
+        );
+        Ok(FileDigest {
+            sha256,
+            bytes: contents.len() as u64,
+        })
     }
 }
 
@@ -692,7 +709,70 @@ impl Git for FakeGit {
     ) -> Result<bool, GitError> {
         Ok(self.merged.lock().unwrap_or(true))
     }
+
+    // Snapshots are tested against a real `git`, because everything they promise is about git's
+    // own behaviour: which files land in the tree, that the patch applies, that no ref moves. These
+    // answer just enough for code that only passes a snapshot along.
+    fn snapshot_tree(
+        &self,
+        _worktree_path: &Path,
+        _scratch_index: &Path,
+    ) -> Result<String, GitError> {
+        Ok(EMPTY_TREE.to_owned())
+    }
+
+    fn commit_tree(
+        &self,
+        _worktree_path: &Path,
+        _tree: &str,
+        _parent: &CommitId,
+    ) -> Result<CommitId, GitError> {
+        Ok(CommitId::new("5555555555555555555555555555555555555555"))
+    }
+
+    fn write_binary_diff(
+        &self,
+        _worktree_path: &Path,
+        from: &str,
+        to: &str,
+        out: &Path,
+    ) -> Result<(), GitError> {
+        self.note(format!("write_binary_diff {from} {to} {}", out.display()));
+        Ok(())
+    }
+
+    fn tree_changes(
+        &self,
+        _worktree_path: &Path,
+        _from: &str,
+        _to: &str,
+    ) -> Result<PathList, GitError> {
+        Ok(PathList::default())
+    }
+
+    fn add_snapshot_checkout(
+        &self,
+        _worktree_path: &Path,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<(), GitError> {
+        self.note(format!("add_snapshot_checkout {}", path.display()));
+        self.worktrees.lock().push(Worktree {
+            id: WorktreeId::from_path(path),
+            path: path.to_path_buf(),
+            head: Some(commit.clone()),
+            checkout: Checkout::Detached,
+            is_main: false,
+            is_bare: false,
+            locked: None,
+            prunable: None,
+        });
+        Ok(())
+    }
 }
+
+/// git's id for the tree with nothing in it, the same in every SHA-1 repository.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 // ─────────────────────────────── ProgressSink ───────────────────────────────
 

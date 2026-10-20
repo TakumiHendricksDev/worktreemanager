@@ -30,9 +30,9 @@
 //! # What is here, and what is not yet
 //!
 //! This is the skeleton the Work view is built on: the types and the rules that are already
-//! decided. Recipes, consolidation, rule retrieval and the engine arrive with the backlog items that
-//! first need them, and so do the store tables for questions, approvals, findings, rules and
-//! operations.
+//! decided, plus recipes and their planning, and snapshot staleness. Consolidation, rule retrieval
+//! and the engine arrive with the backlog items that first need them, and so do the store tables
+//! for snapshots, questions, approvals, findings, rules and operations.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -55,10 +55,14 @@ macro_rules! id {
 
 pub mod approval;
 pub mod event;
+pub mod glob;
 pub mod outbox;
+pub mod plan;
 pub mod question;
+pub mod recipe;
 pub mod review;
 pub mod rule;
+pub mod snapshot;
 pub mod state;
 pub mod work;
 
@@ -69,7 +73,13 @@ pub use event::{FlowEvent, RecordedEvent};
 pub use outbox::{
     Operation, OperationId, OperationKey, OperationKind, OperationState, OutboxError,
 };
+pub use plan::{PlanError, PlannedRole, PlannedStage, RecipePlan, SkipReason, SkippedRole, plan};
 pub use question::{Answer, ContextLink, Question, QuestionError, QuestionId};
+pub use recipe::{
+    Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleProfile, RoleProvider,
+    RoleSpec, SkillCatalog, SkillError, SkillProblem, StageSpec, WorkflowError, WorkflowSpec,
+    Workspace,
+};
 pub use review::{
     BlobRef, Dismissal, Finding, FindingClass, FindingId, Location, Severity, Snapshot,
 };
@@ -77,6 +87,7 @@ pub use rule::{
     Rule, RuleApproval, RuleDraft, RuleError, RuleId, RuleKind, RuleOrigin, RuleRevision,
     RuleScope, RuleStatus,
 };
+pub use snapshot::{FlowDir, ScratchLabel, TreeCheck};
 pub use state::{
     BlockCause, End, Flow, FlowId, FlowKind, FlowState, Hold, HoldKind, InterruptCause, Phase,
     Status, TransitionError,

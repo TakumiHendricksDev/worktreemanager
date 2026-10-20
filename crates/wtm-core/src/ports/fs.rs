@@ -42,4 +42,19 @@ pub trait FileStore: Send + Sync {
     /// during planning, before anything is created. Should therefore normalize
     /// lexically (resolving `.` and `..`) rather than calling `canonicalize`.
     fn absolutize(&self, path: &Path) -> Result<PathBuf, ConfigError>;
+
+    /// The SHA-256 and length of a file's bytes.
+    ///
+    /// A read, so it fits the boundary above. It is how the domain records which blob it stored —
+    /// a snapshot's patch, say — without hashing anything itself, which would need a crypto
+    /// dependency in the crate that is meant to have none.
+    fn digest(&self, path: &Path) -> Result<FileDigest, ConfigError>;
+}
+
+/// What [`FileStore::digest`] reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDigest {
+    /// Lowercase hex, as `shasum -a 256` prints it.
+    pub sha256: String,
+    pub bytes: u64,
 }
