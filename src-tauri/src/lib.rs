@@ -102,6 +102,14 @@ pub const CHECK_UPDATES_EVENT: &str = "wtm:check-updates";
 /// the convention for "go to the place everything else hangs off". ⌘H stays Hide.
 pub const HOME_EVENT: &str = "wtm:home";
 
+/// The event the Go › Work menu item fires. `App.svelte` listens for it and toggles the Work view.
+///
+/// No accelerator, unlike Home. `AppKit` takes a menu's chord before the page sees it, so any chord
+/// bound here is taken from the terminal and the editors too, and there is no Finder convention to
+/// borrow for "Work" the way ⇧⌘H is borrowed for Home. ⇧⌘W was the obvious letter and is Close for
+/// half the apps on a Mac. The title bar's view switch is one click; the menu item is for finding it.
+pub const WORK_EVENT: &str = "wtm:work";
+
 /// The application menu.
 ///
 /// # This exists to add one item, and most of it is not that item
@@ -120,10 +128,18 @@ pub const HOME_EVENT: &str = "wtm:home";
 /// Every item here compiles everywhere — the four macOS-specific ones (`services`, `hide`,
 /// `hide_others`, `show_all`) are documented as unsupported rather than gated, so they
 /// no-op elsewhere. What is genuinely macOS-only is *installing* the result, which is a
-/// runtime check in [`run`] rather than a `#[cfg]`, so this function is reachable from a
+/// runtime check in [`install_menu`] rather than a `#[cfg]`, so this function is reachable from a
 /// plain unit test instead of only from a real app launch.
+///
+/// # Go › Work comes and goes with its preference
+///
+/// `work_view` is [`app::WORK_VIEW_PREF`]. A menu item cannot be hidden, only disabled, and a greyed
+/// Work under Go would advertise a view the user has not turned on. So the menu is rebuilt whole
+/// when the preference changes — see [`install_menu`] — which is cheaper to reason about than
+/// splicing one item in and out of a live submenu.
 fn build_menu<R: tauri::Runtime>(
     handle: &tauri::AppHandle<R>,
+    work_view: bool,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
     use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 
@@ -172,7 +188,12 @@ fn build_menu<R: tauri::Runtime>(
         .id(HOME_EVENT)
         .accelerator("CmdOrCtrl+Shift+H")
         .build(handle)?;
-    let go_menu = SubmenuBuilder::new(handle, "Go").item(&home).build()?;
+    let mut go_menu = SubmenuBuilder::new(handle, "Go").item(&home);
+    if work_view {
+        let work = MenuItemBuilder::new("Work").id(WORK_EVENT).build(handle)?;
+        go_menu = go_menu.item(&work);
+    }
+    let go_menu = go_menu.build()?;
 
     let window_menu = SubmenuBuilder::new(handle, "Window")
         .minimize()
@@ -183,6 +204,25 @@ fn build_menu<R: tauri::Runtime>(
     MenuBuilder::new(handle)
         .items(&[&app_menu, &edit_menu, &go_menu, &window_menu])
         .build()
+}
+
+/// Install the application menu, on the platform that has one.
+///
+/// A runtime check rather than `#[cfg]`, the same way `platform_plugin` reads
+/// `std::env::consts::OS`: both arms compile, so `build_menu` is reachable from a unit test. See
+/// `tests/platform_seams.rs` for why that is a rule here.
+///
+/// Only the *install* is conditional, and it stays conditional even though wtm now ships on macOS
+/// alone: an application menu is a macOS concept, and the title bar's gear is the affordance that
+/// does not assume one.
+pub(crate) fn install_menu<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    work_view: bool,
+) -> tauri::Result<()> {
+    if std::env::consts::OS == "macos" {
+        handle.set_menu(build_menu(handle, work_view)?)?;
+    }
+    Ok(())
 }
 
 /// The shared native application context, including its embedded macOS metadata.
@@ -217,15 +257,10 @@ pub fn run() {
         // daemon.
         .plugin(tauri_plugin_notification::init())
         .setup(|handle| {
-            // A runtime check rather than `#[cfg]`, the same way `platform_plugin` reads
-            // `std::env::consts::OS`: both arms compile, so `build_menu` is reachable from a
-            // unit test. See `tests/platform_seams.rs` for why that is a rule here.
-            //
-            // Only the *install* is conditional, and it stays conditional even though wtm
-            // now ships on macOS alone: an application menu is a macOS concept, and the
-            // title bar's gear is the affordance that does not assume one.
-            if std::env::consts::OS == "macos" {
-                handle.set_menu(build_menu(handle.handle())?)?;
+            {
+                use tauri::Manager;
+                let work_view = handle.state::<Arc<App>>().work_view_enabled();
+                install_menu(handle.handle(), work_view)?;
             }
 
             // The socket an agent's MCP bridge calls home on. Started here rather than before
@@ -256,7 +291,11 @@ pub fn run() {
             // A failed emit means the webview is gone, which is not something a menu
             // handler can do anything about.
             let id = event.id().as_ref();
-            if id == SETTINGS_EVENT || id == CHECK_UPDATES_EVENT || id == HOME_EVENT {
+            if id == SETTINGS_EVENT
+                || id == CHECK_UPDATES_EVENT
+                || id == HOME_EVENT
+                || id == WORK_EVENT
+            {
                 let _ = pane_windows::focus(handle, None);
                 let _ = handle.emit_to(pane_windows::MAIN_WINDOW, id, ());
             }
@@ -284,6 +323,7 @@ pub fn run() {
             commands::set_config_trust,
             commands::get_pref,
             commands::set_pref,
+            commands::set_work_view,
             commands::doctor,
             commands::list_palettes,
             commands::reveal_env_value,

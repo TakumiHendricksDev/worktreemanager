@@ -86,6 +86,13 @@ pub const SESSION_AWARENESS_PREF: &str = "ui.session_awareness";
 /// user can see, pause per pane, or close. See ARCHITECTURE §6c.
 pub const BROWSER_TOOLS_PREF: &str = "ui.browser_tools";
 
+/// Whether the Work view exists: the title bar's view switch and Go › Work. Off unless set to `on`.
+///
+/// Opt-in because the view arrives in slices, a shell first and review runs later, and a window
+/// that grew a third view nobody asked for would be the surprise. Read here as well as by the
+/// window, because the application menu is built in Rust before any window has read anything.
+pub const WORK_VIEW_PREF: &str = "ui.work_view";
+
 /// One terminal-dock shell and what it belongs to.
 struct ShellEntry {
     project: String,
@@ -2075,6 +2082,17 @@ impl App {
             == Some("on")
     }
 
+    /// Whether the Work view is turned on. See [`WORK_VIEW_PREF`].
+    #[must_use]
+    pub fn work_view_enabled(&self) -> bool {
+        self.config
+            .user_pref(WORK_VIEW_PREF)
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("on")
+    }
+
     /// Whether agents in this app get the `browser_*` tools. See [`BROWSER_TOOLS_PREF`].
     pub fn browser_tools_enabled(&self) -> bool {
         self.config
@@ -2897,6 +2915,24 @@ mod tests {
             .set_user_pref(SESSION_AWARENESS_PREF, "on")
             .expect("the preference should save");
         assert!(app.session_awareness_enabled());
+    }
+
+    #[test]
+    fn the_work_view_stays_off_until_it_is_turned_on_and_off_again_after() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let app = App::with_paths(AppPaths::rooted(dir.path())).expect("app should build");
+
+        assert!(!app.work_view_enabled());
+        app.config
+            .set_user_pref(WORK_VIEW_PREF, "on")
+            .expect("the preference should save");
+        assert!(app.work_view_enabled());
+        // The window writes `off` rather than removing the key, and that has to read as off, not as
+        // "anything but missing".
+        app.config
+            .set_user_pref(WORK_VIEW_PREF, "off")
+            .expect("the preference should save");
+        assert!(!app.work_view_enabled());
     }
 
     #[test]

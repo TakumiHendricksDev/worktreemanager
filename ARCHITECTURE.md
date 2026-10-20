@@ -1312,6 +1312,25 @@ relationships in words. Issue keys stay whole, with the descriptive title alone 
 branch/path and Home provenance remain in tooltips and selected detail. Shell rows open the actual
 terminal in its worktree, rather than mounting a second transcript or terminal in Peek.
 
+**Work is a sixth view, and it does not exist until `ui.work_view` is on.** It is where review runs
+will live, and it arrives in slices, a shell first. Off means absent rather than disabled: the title
+bar keeps its Home button, Go has no Work item, and `view.show('work')` refuses, so a remembered
+Work view whose preference was turned off by hand opens the worktree view instead. On, the Home
+button becomes a Worktrees · Home · Work switch, because with three views a toggle no longer says
+where it goes. The Go menu is built in Rust before any window has read anything, so Rust reads the
+preference too, and `set_work_view` saves it and rebuilds the menu whole. A menu item can be
+disabled but not hidden, and a greyed Work would advertise a view nobody turned on. Go › Work has
+no chord. AppKit takes a menu's chord before the page sees it, and nothing was free that did not
+belong to a terminal, an editor or another app's Close.
+
+It follows Home's shape where Home's reasons hold. The queue takes the sidebar's column, mounted the
+first time Work is shown and hidden afterwards. Unlike Home it keeps the project picker, because its
+queue is one project's worktrees. The queue keeps **its own pick** rather than driving
+`workspace.select`. Selecting a worktree is what the session surface hangs its refreshes on, and
+the plan's queue holds work items, which have no sidebar row. Work draws no session pane, so
+`attention.offScreen` is true for every pane while it is up. Unlike Home it summarises no sessions,
+so toasts still fire there.
+
 ## 8a. CSS: SCSS, ITCSS layers, BEMIT names
 
 **All styles are global, in `src/styles/`. No component has a `<style>` block.** `src/main.ts` imports

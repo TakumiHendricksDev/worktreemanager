@@ -37,6 +37,13 @@
    * is the dock badge's: approvals waiting anywhere, which is the reason to go there. While Home is
    * up the project picker gives way to what Home is about, since the project it names is not what
    * is on screen.
+   *
+   * # And becomes a view switch once Work is turned on
+   *
+   * With a third view a toggle no longer says where it goes, so the Home button gives way to
+   * Worktrees · Home · Work in the same place, the count riding on Home. Only then: with
+   * `ui.work_view` off this strip is exactly what it was. Work keeps the project picker, because its
+   * queue is the project's — the same reason the worktree view keeps it.
    */
   import { fleet } from '../state/fleet.svelte';
   import { sessions } from '../state/sessions.svelte';
@@ -50,7 +57,10 @@
   const {
     sidebarCollapsed,
     home,
+    work,
+    workEnabled,
     ontogglehome,
+    onshow,
     ontogglesidebar,
     onaddproject,
     onremoveproject,
@@ -60,7 +70,13 @@
     sidebarCollapsed: boolean;
     /** Whether Home is the view on screen. */
     home: boolean;
+    /** Whether Work is the view on screen. */
+    work: boolean;
+    /** Whether the Work view exists: `ui.work_view`. Off, the strip keeps its Home button. */
+    workEnabled: boolean;
     ontogglehome: () => void;
+    /** A segment of the view switch was chosen. Only fired while `workEnabled`. */
+    onshow: (place: 'worktrees' | 'home' | 'work') => void;
     ontogglesidebar: () => void;
     onaddproject: () => void;
     onremoveproject: () => void;
@@ -78,7 +94,7 @@
     document.documentElement.dataset.platform === 'linux' ? null : '⌃⌘S';
 
   const sidebarLabel = $derived(
-    `${sidebarCollapsed ? 'Show' : 'Hide'} ${home ? 'session tree' : 'worktree sidebar'}${SIDEBAR_SHORTCUT ? ` (${SIDEBAR_SHORTCUT})` : ''}`,
+    `${sidebarCollapsed ? 'Show' : 'Hide'} ${home ? 'session tree' : work ? 'work queue' : 'worktree sidebar'}${SIDEBAR_SHORTCUT ? ` (${SIDEBAR_SHORTCUT})` : ''}`,
   );
 
   /** The app menu's Go › Home chord, which `lib.rs` binds. None on Linux, which has no app menu. */
@@ -90,6 +106,13 @@
     const what = home ? 'Leave Home' : 'Home';
     const count = waiting > 0 ? ` — ${waiting} waiting on you` : '';
     return `${what}${count}${HOME_SHORTCUT ? ` (${HOME_SHORTCUT})` : ''}`;
+  });
+
+  /** The Home segment's name: no "Leave", since choosing the segment you are on goes nowhere. */
+  const homeSegmentLabel = $derived.by(() => {
+    const waiting = sessions.waitingCount;
+    const count = waiting > 0 ? ` — ${waiting} waiting on you` : '';
+    return `Home${count}${HOME_SHORTCUT ? ` (${HOME_SHORTCUT})` : ''}`;
   });
 
   const themeIcons: Record<ThemeChoice, IconName> = {
@@ -159,22 +182,63 @@
     <Icon name="sidebar" />
   </Button>
 
-  <span class="c-titlebar__home">
-    <Button
-      variant="quiet"
-      icon="md"
-      onclick={ontogglehome}
-      title={homeLabel}
-      ariaLabel={homeLabel}
-      ariaPressed={home}
-    >
-      <Icon name="home" />
-    </Button>
-    {#if sessions.waitingCount > 0}
-      <!-- The number is in the button's name too; this copy is for the eye. -->
-      <span class="c-titlebar__count" aria-hidden="true">{sessions.waitingCount}</span>
-    {/if}
-  </span>
+  {#if workEnabled}
+    <!--
+      Buttons marked `aria-current` in a `nav`, not a radio group: each one goes somewhere, the
+      way a link does, and Tab reaching all three is what a title bar's other controls do too.
+    -->
+    <nav class="c-view-switch" aria-label="Views">
+      <button
+        class="c-view-switch__option"
+        class:is-selected={!home && !work}
+        aria-current={!home && !work ? 'page' : undefined}
+        onclick={() => onshow('worktrees')}
+      >
+        Worktrees
+      </button>
+      <button
+        class="c-view-switch__option"
+        class:is-selected={home}
+        aria-current={home ? 'page' : undefined}
+        aria-label={homeSegmentLabel}
+        title={homeSegmentLabel}
+        onclick={() => onshow('home')}
+      >
+        Home
+        {#if sessions.waitingCount > 0}
+          <!-- The number is in the button's name too; this copy is for the eye. -->
+          <span class="c-view-switch__count" aria-hidden="true"
+            >{sessions.waitingCount}</span
+          >
+        {/if}
+      </button>
+      <button
+        class="c-view-switch__option"
+        class:is-selected={work}
+        aria-current={work ? 'page' : undefined}
+        onclick={() => onshow('work')}
+      >
+        Work
+      </button>
+    </nav>
+  {:else}
+    <span class="c-titlebar__home">
+      <Button
+        variant="quiet"
+        icon="md"
+        onclick={ontogglehome}
+        title={homeLabel}
+        ariaLabel={homeLabel}
+        ariaPressed={home}
+      >
+        <Icon name="home" />
+      </Button>
+      {#if sessions.waitingCount > 0}
+        <!-- The number is in the button's name too; this copy is for the eye. -->
+        <span class="c-titlebar__count" aria-hidden="true">{sessions.waitingCount}</span>
+      {/if}
+    </span>
+  {/if}
 
   <!--
     Drag region on the container, not just the text: the path may be short, and the empty

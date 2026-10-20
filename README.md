@@ -83,7 +83,8 @@ project's convention. With the variable unset the tests skip.
 ## Contents
 
 [Install](#install) · [Updating](#updating-an-install-you-already-have) ·
-[The window](#the-window) · [Home](#home) · [Agent sessions](#agent-sessions) ·
+[The window](#the-window) · [Home](#home) · [Work (preview)](#work-preview) ·
+[Agent sessions](#agent-sessions) ·
 [Worktrees](#worktrees) ·
 [Registering a project](#registering-a-project) · [Writing wtm.toml](#writing-wtmtoml) ·
 [Database viewer](#database-viewer) · [Code tab](#code-tab) · [Browser panes](#browser-panes) ·
@@ -300,6 +301,23 @@ Home is a view that isn't any one worktree. Open it with the house in the title 
   since. If it had work out when wtm quit, wtm tells it once, in a *From wtm* note, which sessions
   that work was interrupted in and whether they came back. The note asks it to check with you before
   sending the work again.
+
+## Work (preview)
+
+A third view beside Worktrees and Home, for reviewing work. It is off until you turn on **Show
+the Work view** in Settings → General (`ui.work_view = "on"`); until then nothing in the window
+changes. On, the title bar's house becomes **Worktrees · Home · Work** and the Go menu gains
+**Work**. wtm reopens on Work if you quit from it.
+
+- **The queue** takes the sidebar's place. **My worktrees** lists the project's worktrees, bare and
+  missing ones left out. **Reviews** is where pull requests waiting on your review will go.
+- **The workspace** shows the worktree picked in the queue: its branch and working-tree state, an
+  **Overview** of the listing's facts, and **Reviews**. **Open in Worktrees** goes to its sessions.
+- **The inbox** is where review runs' questions, approvals and failures will wait for you.
+
+This is the view's first slice. Review runs are not in it yet, so every worktree reads *Not
+reviewed*, Run Review is disabled, and Reviews and the inbox are empty. Sessions' own approvals stay
+in Home and on their panes, and their notifications and toasts reach you in Work as anywhere else.
 
 ## Agent sessions
 
@@ -938,7 +956,7 @@ the transcription key.
 | Section | What is in it |
 | --- | --- |
 | Appearance | Colour palette, and light / dark / follow the system |
-| General | Whether ⌘↵ or ↵ sends a message. Which tool **Open in …** defaults to. Whether agent sessions are restored when wtm opens. The automatic update check. **Agent coordination**: whether agents may use browser panes, and session awareness (beta). **Dictation**: on or off, hold-to-talk or tap, and words to listen for |
+| General | Whether ⌘↵ or ↵ sends a message. Which tool **Open in …** defaults to. Whether agent sessions are restored when wtm opens. The [Work view](#work-preview) (preview). The automatic update check. **Agent coordination**: whether agents may use browser panes, and session awareness (beta). **Dictation**: on or off, hold-to-talk or tap, and words to listen for |
 | Notifications | Whether wtm notifies you when a session needs attention, and what macOS says about it |
 | Advanced | The `PATH` override, and the Deepgram key, kept in the macOS Keychain. Plus read-only diagnostics: the PATH wtm actually resolved and where it came from, the config directory, and which of the common tools it can find |
 
