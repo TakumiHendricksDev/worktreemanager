@@ -26,11 +26,17 @@ serde_json_path = { workspace = true }
 thiserror  = { workspace = true }
 
 [dev-dependencies]
-# Dev-only, and deliberately cyclic: both of these depend on wtm-core. Cargo permits a
+# Dev-only, and deliberately cyclic: all of these depend on wtm-core. Cargo permits a
 # dev-dependency cycle, and it is what lets the domain's integration tests use the real
-# template engine and the shared fakes rather than reimplementing either.
+# template engine and the shared fakes rather than reimplementing either. The git, exec and
+# config adapters are here for the snapshot tests, whose every promise is about what a real
+# `git` does to a real repository.
 wtm-render        = { workspace = true }
 wtm-testkit       = { workspace = true }
+wtm-git           = { workspace = true }
+wtm-exec          = { workspace = true }
+wtm-config        = { workspace = true }
+tempfile          = { workspace = true }
 insta             = { workspace = true }
 pretty_assertions = { workspace = true }
 rstest            = { workspace = true }

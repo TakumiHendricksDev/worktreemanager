@@ -8,8 +8,9 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use sha2::{Digest, Sha256};
 use wtm_core::error::ConfigError;
-use wtm_core::ports::fs::FileStore;
+use wtm_core::ports::fs::{FileDigest, FileStore};
 
 /// Filesystem-backed [`FileStore`].
 #[derive(Debug, Clone, Default)]
@@ -53,6 +54,28 @@ impl FileStore for RealFileStore {
 
     fn absolutize(&self, path: &Path) -> Result<PathBuf, ConfigError> {
         absolutize(path)
+    }
+
+    fn digest(&self, path: &Path) -> Result<FileDigest, ConfigError> {
+        use std::io::Read;
+        // Streamed, because the file may be a patch of a change that added a large binary, and
+        // reading it whole to hash it would hold all of it in memory for nothing.
+        let mut file = std::fs::File::open(path).map_err(|e| io_err(path, &e))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0; 64 * 1024];
+        let mut bytes = 0_u64;
+        loop {
+            let read = file.read(&mut buffer).map_err(|e| io_err(path, &e))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            bytes += read as u64;
+        }
+        Ok(FileDigest {
+            sha256: crate::trust::hex(&hasher.finalize()),
+            bytes,
+        })
     }
 }
 

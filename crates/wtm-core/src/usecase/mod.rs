@@ -8,11 +8,14 @@
 //! - [`create`] — the ten-stage create pipeline, built around the rule that stages 1–6
 //!   mutate nothing.
 //! - [`remove`] — teardown, then `git worktree remove`, then optionally the branch.
+//! - [`snapshot`] — what a review read: a tree, a patch, and a detached checkout of it.
 
 pub mod create;
 pub mod remove;
 pub mod slug;
+pub mod snapshot;
 
 pub use create::{CreatePipeline, CreateRequest, SetupRequest};
 pub use remove::{RemoveOutcome, RemovePipeline, RemoveRequest, TeardownStep};
 pub use slug::slugify;
+pub use snapshot::{SnapshotCheckout, SnapshotError, Snapshots};

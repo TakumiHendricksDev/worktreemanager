@@ -47,6 +47,9 @@ pub const HOME_DIRNAME: &str = "home";
 /// The app's own database, under the data root. See `wtm-appdb`.
 pub const FLOW_DB_FILENAME: &str = "flow.db";
 
+/// One directory per flow, under the data root, for the files its database rows point at.
+pub const FLOW_DIRNAME: &str = "flow";
+
 /// The empty `gh` config directory workflow runs point `GH_CONFIG_DIR` at, under the data root.
 pub const RUN_GH_CONFIG_DIRNAME: &str = "run-gh-config";
 
@@ -77,6 +80,11 @@ pub struct AppPaths {
     /// one machine's worktree paths and pending writes to another. Its pre-migration backups are
     /// written beside it.
     pub flow_db: PathBuf,
+    /// Each flow's files, in a directory named after its id: snapshot patches, and the detached
+    /// checkouts static reviewers read while a stage runs. `wtm_core::flow::FlowDir` lays it out.
+    ///
+    /// Beside the database because its rows hold these files' hashes and paths relative to here.
+    pub flow_dir: PathBuf,
     /// What a workflow run's `GH_CONFIG_DIR` names: a directory with nothing in it, so `gh` finds no
     /// account rather than the user's. The app keeps it empty; see `src-tauri/src/run_profile.rs`.
     ///
@@ -122,6 +130,7 @@ impl AppPaths {
             handles_file: config_dir.join(HANDLES_FILENAME),
             home_dir: data_dir.join(HOME_DIRNAME),
             flow_db: data_dir.join(FLOW_DB_FILENAME),
+            flow_dir: data_dir.join(FLOW_DIRNAME),
             run_gh_config_dir: data_dir.join(RUN_GH_CONFIG_DIRNAME),
         }
     }
@@ -187,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn the_flow_database_lives_in_the_data_directory() {
+    fn the_flow_database_and_its_files_live_in_the_data_directory() {
         let paths = AppPaths::from_bases(
             Path::new("/Users/me/.config/wtm"),
             Path::new("/Users/me/.local/share/wtm"),
@@ -197,6 +206,10 @@ mod tests {
             PathBuf::from("/Users/me/.local/share/wtm/flow.db")
         );
         assert!(!paths.flow_db.starts_with(&paths.config_dir));
+        assert_eq!(
+            paths.flow_dir,
+            PathBuf::from("/Users/me/.local/share/wtm/flow")
+        );
     }
 
     #[test]

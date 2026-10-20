@@ -21,3 +21,6 @@ wtm-core    = { workspace = true }
 parking_lot = { workspace = true }
 tempfile    = { workspace = true }
 serde_json  = { workspace = true }
+# The fake file store hashes for real, so a digest a test compares is the one the real store
+# would report.
+sha2        = { workspace = true }

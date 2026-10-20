@@ -62,9 +62,14 @@ pub struct TrustStore {
 /// Hex SHA-256 of `contents`.
 #[must_use]
 pub fn content_hash(contents: &str) -> String {
-    let digest = Sha256::digest(contents.as_bytes());
-    // Hex rather than base64: it is what a user would get from `shasum -a 256`, so a
-    // suspicious value is verifiable by hand.
+    hex(&Sha256::digest(contents.as_bytes()))
+}
+
+/// Lowercase hex of a digest.
+///
+/// Hex rather than base64: it is what a user would get from `shasum -a 256`, so a suspicious
+/// value is verifiable by hand.
+pub(crate) fn hex(digest: &[u8]) -> String {
     digest
         .iter()
         .fold(String::with_capacity(64), |mut out, byte| {

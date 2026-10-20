@@ -224,6 +224,11 @@ pub enum GitError {
 
     #[error("{0} is not a valid ref")]
     BadRef(String),
+
+    /// A file the adapter handles beside git, such as a snapshot's scratch index or patch, could
+    /// not be read or written.
+    #[error("{}: {message}", path.display())]
+    Io { path: PathBuf, message: String },
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]

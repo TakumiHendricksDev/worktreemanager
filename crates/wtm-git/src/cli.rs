@@ -19,8 +19,10 @@
 //! `git` can prompt (for credentials, for a passphrase), and a prompt with no
 //! deadline is a hang.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use wtm_core::error::{ExecError, GitError};
 use wtm_core::model::{
@@ -91,6 +93,17 @@ impl GitCli {
         Ok(self.run(cwd, args, timeout_ms, true)?.code)
     }
 
+    /// Run `git` in `cwd` with `env` over the runner's environment, requiring success.
+    fn git_with_env(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+        timeout_ms: u64,
+    ) -> Result<String, GitError> {
+        Ok(self.run_with_env(cwd, args, env, timeout_ms, false)?.stdout)
+    }
+
     fn run(
         &self,
         cwd: &Path,
@@ -98,11 +111,26 @@ impl GitCli {
         timeout_ms: u64,
         allow_failure: bool,
     ) -> Result<wtm_core::ports::exec::Output, GitError> {
+        self.run_with_env(cwd, args, &[], timeout_ms, allow_failure)
+    }
+
+    fn run_with_env(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+        timeout_ms: u64,
+        allow_failure: bool,
+    ) -> Result<wtm_core::ports::exec::Output, GitError> {
         let mut command = Vec::with_capacity(args.len() + 1);
         command.push("git".to_owned());
         command.extend(args.iter().map(|a| (*a).to_owned()));
 
-        let inv = Invocation::new(command, cwd, timeout_ms);
+        let inv = Invocation::new(command, cwd, timeout_ms).with_env(
+            env.iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect::<BTreeMap<_, _>>(),
+        );
         let cancel = CancelToken::new();
 
         let result = if allow_failure {
@@ -490,6 +518,226 @@ impl Git for GitCli {
         // resolved, in which case "not merged" is the safe answer: it makes the UI
         // warn before deleting rather than stay quiet.
         Ok(code == 0)
+    }
+
+    fn snapshot_tree(
+        &self,
+        worktree_path: &Path,
+        scratch_index: &Path,
+    ) -> Result<String, GitError> {
+        // `--git-path`, not `<git-dir>/index`: a linked worktree's index lives under the common
+        // directory's `worktrees/<name>/`, and the answer may be relative to the worktree.
+        let real = self.git(
+            worktree_path,
+            &["rev-parse", "--git-path", "index"],
+            QUERY_TIMEOUT,
+        )?;
+        let real = worktree_path.join(real.trim());
+
+        let scratch = Scratch::new(scratch_index);
+        if let Some(parent) = scratch_index.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_error(parent, &e))?;
+        }
+        // A lock left by a run that crashed holding it, and nobody else's: the label in the name
+        // belongs to one operation of one flow.
+        scratch.clear();
+        match std::fs::copy(&real, scratch_index) {
+            Ok(_) => {}
+            // A repository nothing has ever been staged in has no index. `add -A` starts one.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_error(&real, &e)),
+        }
+
+        let index = scratch_index.to_string_lossy();
+        let env = [("GIT_INDEX_FILE", index.as_ref())];
+        // Hashing every new untracked file is the slow part, so this gets the mutation deadline.
+        self.git_with_env(worktree_path, &["add", "-A"], &env, MUTATE_TIMEOUT)?;
+        let tree = self.git_with_env(worktree_path, &["write-tree"], &env, QUERY_TIMEOUT)?;
+        Ok(tree.trim().to_owned())
+    }
+
+    fn commit_tree(
+        &self,
+        worktree_path: &Path,
+        tree: &str,
+        parent: &CommitId,
+    ) -> Result<CommitId, GitError> {
+        // `--no-gpg-sign` because a signing setup can prompt (a Touch ID sheet, here) and this
+        // commit is the app's scaffolding, not something you are vouching for.
+        let out = self.git_with_env(
+            worktree_path,
+            &[
+                "commit-tree",
+                "--no-gpg-sign",
+                "-p",
+                parent.as_str(),
+                "-m",
+                "wtm snapshot",
+                "--end-of-options",
+                tree,
+            ],
+            &SNAPSHOT_IDENTITY,
+            QUERY_TIMEOUT,
+        )?;
+        Ok(CommitId::new(out.trim()))
+    }
+
+    fn write_binary_diff(
+        &self,
+        worktree_path: &Path,
+        from: &str,
+        to: &str,
+        out: &Path,
+    ) -> Result<(), GitError> {
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_error(parent, &e))?;
+        }
+        let partial = partial_path(out);
+        let output = format!("--output={}", partial.to_string_lossy());
+        // Every flag pins something a setting in your git config could otherwise change: prefixes
+        // (`diff.noprefix` breaks `git apply`), colour, a relative diff, an external driver, a
+        // textconv filter, or submodule changes left out. The patch is evidence, so it has to be
+        // the same patch whoever's config wrote it.
+        let written = self.git(
+            worktree_path,
+            &[
+                "diff",
+                "--binary",
+                "-M",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-relative",
+                "--ignore-submodules=none",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                &output,
+                "--end-of-options",
+                from,
+                to,
+                "--",
+            ],
+            QUERY_TIMEOUT,
+        );
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&partial);
+            return Err(error);
+        }
+        std::fs::rename(&partial, out).map_err(|e| io_error(out, &e))
+    }
+
+    fn tree_changes(
+        &self,
+        worktree_path: &Path,
+        from: &str,
+        to: &str,
+    ) -> Result<PathList, GitError> {
+        // Plumbing, so no diff setting in your config can filter the list, and `--no-renames` so a
+        // rename reports both paths: a finding in the old one is as stale as one in the new.
+        let out = self.git(
+            worktree_path,
+            &[
+                "diff-tree",
+                "-r",
+                "-z",
+                "--name-only",
+                "--no-renames",
+                "--end-of-options",
+                from,
+                to,
+            ],
+            QUERY_TIMEOUT,
+        )?;
+        Ok(porcelain::parse_path_list(&out))
+    }
+
+    fn add_snapshot_checkout(
+        &self,
+        worktree_path: &Path,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<(), GitError> {
+        let target = path.to_string_lossy();
+        self.git(
+            worktree_path,
+            &[
+                "-c",
+                "core.hooksPath=/dev/null",
+                "worktree",
+                "add",
+                "--detach",
+                "--",
+                &target,
+                commit.as_str(),
+            ],
+            MUTATE_TIMEOUT,
+        )?;
+        Ok(())
+    }
+}
+
+/// Who and when every snapshot commit says it is.
+///
+/// Fixed, so a snapshot commit is a function of its tree and parent alone: opening the checkout
+/// for the same snapshot again, after a crash say, makes the same object rather than a new one.
+/// And set here rather than read from your config, because `commit-tree` refuses to run without
+/// an identity, and this commit is not yours.
+const SNAPSHOT_IDENTITY: [(&str, &str); 6] = [
+    ("GIT_AUTHOR_NAME", "wtm"),
+    ("GIT_AUTHOR_EMAIL", "snapshot@wtm.invalid"),
+    ("GIT_AUTHOR_DATE", "@0 +0000"),
+    ("GIT_COMMITTER_NAME", "wtm"),
+    ("GIT_COMMITTER_EMAIL", "snapshot@wtm.invalid"),
+    ("GIT_COMMITTER_DATE", "@0 +0000"),
+];
+
+/// A scratch index, removed with its lock file when this goes out of scope.
+struct Scratch<'a> {
+    index: &'a Path,
+}
+
+impl<'a> Scratch<'a> {
+    fn new(index: &'a Path) -> Self {
+        Self { index }
+    }
+
+    fn clear(&self) {
+        let _ = std::fs::remove_file(self.index);
+        let _ = std::fs::remove_file(lock_path(self.index));
+    }
+}
+
+impl Drop for Scratch<'_> {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+fn lock_path(index: &Path) -> PathBuf {
+    let mut name = index.as_os_str().to_owned();
+    name.push(".lock");
+    PathBuf::from(name)
+}
+
+/// Where a patch is written before it is renamed into place.
+///
+/// Unique per call, so two writers of the same patch never share a half-written file, and on the
+/// same filesystem as `out`, so the rename is atomic.
+fn partial_path(out: &Path) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut name = out.as_os_str().to_owned();
+    name.push(format!(
+        ".{}-{}.partial",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    PathBuf::from(name)
+}
+
+fn io_error(path: &Path, error: &std::io::Error) -> GitError {
+    GitError::Io {
+        path: path.to_path_buf(),
+        message: error.to_string(),
     }
 }
 

@@ -231,6 +231,34 @@ unlocks one. Confirmed removal invalidates the named project's caches and reconc
 worktree's panes, even when another project is active. Managed run children and ordinary process
 groups are signalled together, with one grace period and no app/run lock held while waiting.
 
+### The relaxation: a snapshot writes objects, never refs
+
+A review in the Work view reads a snapshot of the worktree rather than the worktree, so you can
+keep editing while reviewers work (`wtm_core::usecase::snapshot`). Taking one is not free of
+writes, and this says exactly which, because "nothing happens to your repository until you press
+a button" is what the rule above exists to keep true.
+
+- **The snapshot itself writes objects and nothing else.** A scratch index, seeded from the
+  worktree's own and kept under the flow's data directory, has `git add -A` and `git write-tree`
+  run against it. Blobs and trees land in the object store. No ref moves, the worktree's files
+  and its real index are untouched, and nothing `git status`, `git log` or `git stash list`
+  shows is different afterwards.
+- **The evidence is a patch, not the tree.** Nothing refers to the tree, so `git gc` will
+  eventually collect it. What a review read is recorded as a `git diff --binary` file under
+  `~/.local/share/wtm/flow/<flow>/`, whose hash goes in the database.
+- **A detached checkout exists only while a stage runs.** Roles that read rather than run the
+  code get one: `git commit-tree` (unsigned, with a fixed identity, referenced by nothing), then
+  `git worktree add --detach` under the same data directory, with hooks off, because a hook is
+  the repository's code and this checkout is made with nobody watching. While it exists, git keeps
+  an administrative entry for it in the common directory, holding the checkout's own detached
+  `HEAD`. Removing the checkout removes both. That entry is the only thing in `.git` besides
+  objects, and it is never a ref under `refs/`.
+
+`a_snapshot_writes_no_ref_and_leaves_the_reviewed_worktree_and_its_index_alone` in
+`crates/wtm-core/tests/snapshots.rs` holds this in place. It compares every ref, the reflog, the
+stash, the worktree's index byte for byte, its status and the worktree list from before a
+snapshot's whole life with what is there after it.
+
 ## 6. Trust
 
 `wtm.toml` is arbitrary code execution by a file that lives inside a repository. Cloning a hostile repo
@@ -253,6 +281,12 @@ for those two now, and the typed copy is gone, so there is one list to keep curr
 when `[agent.<id>.env]` started reaching the process — it had been parsed and never applied, which is
 the only reason it was not on the list already. An environment runs code as surely as an argument:
 `NODE_OPTIONS` loads a script into any CLI written in Node.
+
+The Work view's recipes and roles are refused in a repository's `wtm.toml` outright, not
+trust-gated. A role is authority rather than a command: it chooses which of your MCP servers and
+plugins a run session may load and which provider account it spends. The prompt shows commands to
+approve, so approving a role would mean clicking yes to something the prompt never showed. Roles
+live in your own config, or in the untracked local layer, which is also yours.
 
 ---
 

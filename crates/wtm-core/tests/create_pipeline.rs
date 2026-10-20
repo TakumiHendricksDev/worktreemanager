@@ -71,6 +71,7 @@ fn project() -> Project {
         database: std::collections::BTreeMap::new(),
         actions: vec![],
         agent: std::collections::BTreeMap::new(),
+        workflow: None,
         guards: wtm_core::model::GuardSpec::default(),
     }
 }

@@ -25,6 +25,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::flow::WorkflowSpec;
+
 /// Highest `schema_version` this build understands.
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 
@@ -126,6 +128,14 @@ pub struct Project {
     /// agents are independent of each other in a way form fields are not.
     #[serde(default)]
     pub agent: BTreeMap<String, AgentSpec>,
+
+    /// The `[workflow]` table: the Work view's recipes and roles. See [`WorkflowSpec`].
+    ///
+    /// An `Option` so a project with no workflow is distinguishable from one with an empty table.
+    /// Read from your own config only; `wtm-config` refuses roles and recipes in a repository's
+    /// `wtm.toml`, and `WorkflowSpec`'s module docs say why.
+    #[serde(default)]
+    pub workflow: Option<WorkflowSpec>,
 
     #[serde(default)]
     pub guards: GuardSpec,
@@ -1123,6 +1133,7 @@ mod tests {
             database: BTreeMap::new(),
             actions: Vec::new(),
             agent: BTreeMap::new(),
+            workflow: None,
             guards: GuardSpec::default(),
         }
     }

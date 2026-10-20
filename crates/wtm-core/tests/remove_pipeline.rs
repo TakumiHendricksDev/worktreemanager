@@ -49,6 +49,7 @@ fn project() -> Project {
         database: BTreeMap::new(),
         actions: vec![],
         agent: BTreeMap::new(),
+        workflow: None,
         guards: wtm_core::model::GuardSpec::default(),
     }
 }

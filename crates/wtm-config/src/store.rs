@@ -282,6 +282,7 @@ impl FileConfigStore {
         repo_root: &Path,
         merged: Value,
         origin: &Origin,
+        workflow_origin: &Origin,
     ) -> Result<Project, ConfigError> {
         let mut project: Project = merged.try_into().map_err(|e: toml::de::Error| {
             let span = e.span();
@@ -298,6 +299,9 @@ impl FileConfigStore {
         project.id = ProjectId::from_root(repo_root);
         project.root = repo_root.to_path_buf();
 
+        // First, against its own file. `validate` checks it again for callers with only one
+        // origin to offer, and finds nothing new.
+        validate::check_workflow(&project, workflow_origin)?;
         validate::validate(&project, self.engine.as_ref(), origin)?;
         Ok(project)
     }
@@ -326,6 +330,58 @@ impl FileConfigStore {
             decision: self.trust_revision.load(Ordering::Acquire),
         })
     }
+}
+
+/// The most specific on-disk layer whose value satisfies `declares`, or the built-in layer.
+fn most_specific(loaded: &[LoadedLayer], declares: impl Fn(&Value) -> bool) -> Origin {
+    loaded
+        .iter()
+        .rev()
+        .filter(|layer| declares(&layer.value))
+        .find_map(|layer| {
+            layer.path.clone().map(|path| Origin {
+                path,
+                layer: layer.layer,
+            })
+        })
+        .unwrap_or_else(|| Origin {
+            path: PathBuf::from("<built-in>"),
+            layer: ConfigLayer::BuiltIn,
+        })
+}
+
+/// Refuse recipes and roles declared in a repository's `wtm.toml`.
+///
+/// A role chooses which of your MCP servers and plugins a run session may load and which provider
+/// account it spends, so it is authority, and a committed file is written by whoever can push to the
+/// branch. The trust prompt is the wrong tool here: it shows commands to approve, and a role is not
+/// a command, so approving one would be a click on something the prompt never showed. Your own
+/// config and the untracked local layer are yours, so both may declare them.
+fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
+    for layer in loaded
+        .iter()
+        .filter(|layer| layer.layer == ConfigLayer::Repo)
+    {
+        let Some(workflow) = layer.value.get("workflow") else {
+            continue;
+        };
+        for table in ["role", "recipe"] {
+            if workflow.get(table).is_some() {
+                return Err(ConfigError::Invalid {
+                    path: layer.path.clone().unwrap_or_default(),
+                    layer: ConfigLayer::Repo,
+                    line: None,
+                    column: None,
+                    key: Some(format!("workflow.{table}")),
+                    message: "recipes and roles belong in your own config \
+                              (~/.config/wtm/config.toml), not in a repository's wtm.toml: a role \
+                              decides which of your MCP servers, plugins and accounts a run uses"
+                        .to_owned(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>, ConfigError> {
@@ -495,24 +551,21 @@ impl ConfigStore for FileConfigStore {
         }
 
         self.enforce_trust(&loaded)?;
+        refuse_repository_roles(&loaded)?;
 
         // Report errors against the most specific file that contributed, since that is
         // the one most likely to hold the mistake.
-        let origin = loaded
-            .iter()
-            .rev()
-            .find_map(|l| {
-                l.path.clone().map(|path| Origin {
-                    path,
-                    layer: l.layer,
-                })
-            })
-            .unwrap_or_else(|| Origin {
-                path: PathBuf::from("<built-in>"),
-                layer: ConfigLayer::BuiltIn,
-            });
+        let origin = most_specific(&loaded, |_| true);
+        // Except for `[workflow]`, whose mistakes are in the file that declares it. That is seldom
+        // the most specific one, because a repository's `wtm.toml` may not declare roles at all.
+        let workflow_origin = most_specific(&loaded, |value| value.get("workflow").is_some());
 
-        let project = self.finish(repo_root, layers::merge_all(&loaded), &origin)?;
+        let project = self.finish(
+            repo_root,
+            layers::merge_all(&loaded),
+            &origin,
+            &workflow_origin,
+        )?;
 
         self.cache.lock().insert(
             repo_root.to_path_buf(),
@@ -641,6 +694,10 @@ mod tests {
 
         fn write_local_config(&self, contents: &str) {
             std::fs::write(self.repo.join(".git/wtm.local.toml"), contents).unwrap();
+        }
+
+        fn write_user_config(&self, contents: &str) {
+            std::fs::write(&self.store.paths().config_file, contents).unwrap();
         }
 
         fn approve(&self, filename: &str) {
@@ -1197,5 +1254,126 @@ mod tests {
     fn a_project_with_no_config_file_reads_as_an_empty_layout() {
         let h = Harness::new();
         assert!(h.store.sidebar_layout(&h.repo).unwrap().is_empty());
+    }
+
+    /// The review recipe the Work view's first slice runs, as you would write it in your own
+    /// config. TOML rather than structs so the table shapes are what is under test.
+    const RECIPE: &str = r#"
+[defaults.workflow.role.conventions]
+objective = "Check the change against the instruction sources and rules"
+provider = "claude"
+model = "opus"
+inputs = ["diff", "instructions", "rules"]
+fallback = "conventions-codex"
+
+[defaults.workflow.role.conventions-codex]
+objective = "The same check, on Codex"
+provider = "codex"
+inputs = ["diff", "instructions", "rules"]
+
+[defaults.workflow.role.correctness]
+objective = "Find bugs the change introduces"
+provider = "codex"
+effort = "high"
+skills = ["/team-review"]
+inputs = ["diff"]
+
+[[defaults.workflow.recipe.review.stage]]
+roles = ["conventions", "correctness"]
+"#;
+
+    #[test]
+    fn recipes_and_roles_in_your_own_config_reach_the_project() {
+        let h = Harness::new();
+        h.write_user_config(RECIPE);
+
+        let project = h.store.load(&h.repo).unwrap();
+        let workflow = project.workflow.expect("the [workflow] table");
+        assert_eq!(
+            workflow.recipe["review"].stages[0].roles,
+            vec!["conventions", "correctness"]
+        );
+        assert_eq!(
+            workflow.role["conventions"].fallback,
+            wtm_core::flow::Fallback::Role("conventions-codex".to_owned())
+        );
+        assert_eq!(
+            workflow.role["correctness"]
+                .skill_names()
+                .collect::<Vec<_>>(),
+            vec!["team-review"]
+        );
+    }
+
+    #[test]
+    fn a_project_without_a_workflow_table_has_none() {
+        let h = Harness::new();
+        assert!(h.store.load(&h.repo).unwrap().workflow.is_none());
+    }
+
+    #[test]
+    fn one_project_can_change_one_role_without_restating_the_others() {
+        // Keyed tables merge per key, which is the reason roles are not an array of tables.
+        let h = Harness::new();
+        let project_key = h.repo.to_string_lossy().replace('\\', "\\\\");
+        h.write_user_config(&format!(
+            "{RECIPE}\n[projects.\"{project_key}\".config.workflow.role.correctness]\nmodel = \"gpt-6\"\n"
+        ));
+
+        let workflow = h.store.load(&h.repo).unwrap().workflow.unwrap();
+        assert_eq!(workflow.role["correctness"].model.as_deref(), Some("gpt-6"));
+        assert_eq!(workflow.role["correctness"].effort.as_deref(), Some("high"));
+        assert!(workflow.role.contains_key("conventions"));
+    }
+
+    #[test]
+    fn a_repository_cannot_declare_roles_or_recipes() {
+        let h = Harness::new();
+        h.write_repo_config(
+            "[workflow.role.sneaky]\nobjective = 'x'\nprovider = 'claude'\n\
+             inputs = ['diff']\nmcp = ['slack']\n",
+        );
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid {
+                path, layer, key, ..
+            } => {
+                assert_eq!(path, h.repo.join("wtm.toml"));
+                assert_eq!(layer, ConfigLayer::Repo);
+                assert_eq!(key.as_deref(), Some("workflow.role"));
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_local_layer_may_declare_roles_because_it_is_yours() {
+        let h = Harness::new();
+        h.write_local_config(&RECIPE.replace("defaults.", ""));
+        let workflow = h.store.load(&h.repo).unwrap().workflow.unwrap();
+        assert!(workflow.recipe.contains_key("review"));
+    }
+
+    #[test]
+    fn a_workflow_mistake_names_your_config_even_when_the_repository_has_a_wtm_toml() {
+        let h = Harness::new();
+        h.write_repo_config("[naming]\nbranch = 'ok'\n");
+        h.write_user_config(&RECIPE.replace("\"conventions-codex\"\n\n", "\"nobody\"\n\n"));
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid {
+                path,
+                layer,
+                key,
+                message,
+                ..
+            } => {
+                assert_eq!(path, h.store.paths().config_file);
+                assert_eq!(layer, ConfigLayer::User);
+                assert_eq!(key.as_deref(), Some("workflow.role.conventions.fallback"));
+                assert!(message.contains("nobody"), "{message}");
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
     }
 }

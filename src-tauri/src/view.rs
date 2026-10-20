@@ -940,6 +940,7 @@ mod tests {
             database: std::collections::BTreeMap::new(),
             actions: vec![],
             agent: std::collections::BTreeMap::new(),
+            workflow: None,
             guards: wtm_core::model::GuardSpec::default(),
             browser: wtm_core::model::BrowserSpec::default(),
         };
