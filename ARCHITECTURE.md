@@ -7,8 +7,8 @@ that were considered and rejected — those are the parts that get re-litigated 
 
 ## 1. The requirement that drives everything
 
-wtm must be **project agnostic**: no knowledge of `just`, Jira, Docker, or any particular repo in the
-Rust. But it must also be **flexible enough to drive a heavily-customized worktree setup**. The case
+wtm must be **project agnostic**: it knows _tools_, never _projects_, and no particular repo appears in
+the Rust. But it must also be **flexible enough to drive a heavily-customized worktree setup**. The case
 it was designed against allocates a dozen Docker host ports per worktree, clones a Postgres volume,
 generates a `.env`, symlinks shared directories, and derives its branch name from a live issue-tracker
 lookup — all through a 1,200-line bash script with an interactive stdin picker.
@@ -27,6 +27,22 @@ There is a test for it, not just a claim: `repo_hygiene.rs` scans every tracked 
 belonging to a specific project or machine and fails `just check` if any appear. The design held; the
 _fixtures_ did not, until that lint existed.
 
+### Tools, not projects
+
+This rule was first written as "no knowledge of `just`, Jira or Docker", and the code had already
+outgrown that wording. Claude, Codex and Cursor are compiled-in drivers in `wtm-agent`, because
+speaking a CLI's protocol is code and cannot be declared in TOML. The Work view, an optional
+issue-to-pull-request workflow, will compile in its forge and tracker adapters for the same reason:
+`wtm-forge` over `gh` and `wtm-tracker` over `acli`. The line that holds is between a _tool_, which
+wtm may know, and a _project_, which it may not.
+
+So everything a project decides stays configuration: whether it has a workflow at all, which tracker
+and forge it uses, its status names and how they map onto the workflow's, its custom fields, its
+integration branches, its checks, and the query that fills its queue. That is a `[workflow]` table,
+and adopting a team's statuses is still zero code changes. A project without the table gets no Work
+view and causes no tracker or forge call. `repo_hygiene.rs` keeps guarding the project side: no real
+project's name, ticket key or path may appear in the source.
+
 ---
 
 ## 2. Crate layout and the dependency rule
@@ -38,6 +54,7 @@ wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl 
 wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl both
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
+wtm-appdb    the app's own SQLite store for work items and flows (§9).     impl FlowStore
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
 ```
@@ -274,10 +291,10 @@ is built, and the token resolves to a worktree.
 
 Delegation is on for every session with no key to enable it, and that default is a judgement worth
 recording. The blast radius is not new: the target comes from the compiled catalogue rather than from
-config, it runs in the caller's own worktree, it is refused unless the repository offers it, and the new
-session's approval mode is the repository's own. An agent that can already run `bash` here is not
-meaningfully constrained by being unable to open a sibling pane — and unlike a subprocess, a handoff is
-_visible_.
+config, it runs in the caller's own worktree, it is refused unless the repository offers it, and its
+mode is capped, whether the model names one or not, as below. An agent that can already run `bash`
+here is not meaningfully constrained by being unable to open a sibling pane — and unlike a
+subprocess, a handoff is _visible_.
 
 There are three MCP tools over the same path. `ask_agent` is one child and preserves the original
 handoff behavior. `spawn_agents` accepts up to twenty self-contained tasks, each with its own provider,
@@ -288,6 +305,63 @@ inspection, and can be opened in an explicit split. The sessions remain ordinary
 sessions after their first result is returned. Children share one worktree; the tool description says
 so explicitly and steers parallel swarms toward read-only review because concurrent writers can
 conflict.
+
+**A model may choose a child's mode, but not its way past an approval.** Asking for a read-only
+reviewer is reasonable; a session in `plan` opening a child in `auto` is a way out of plan mode that
+nobody approved, and a child in `bypassPermissions` is one nobody watches. Both are model-authored
+arguments, so the rule lives in Rust, in `handoff::mode_refusal`, not in a prompt:
+
+- A requested mode may not be rated above the caller's own. The rating is `wtm_agent::mode_latitude`:
+  the picker's `ModeRisk` tier, which is already provider-independent, so a Claude mode compares with
+  a Codex one. There is no finer order to use — within a tier, Claude's `dontAsk` refuses what
+  `acceptEdits` would ask about and `acceptEdits` writes what `dontAsk` refuses. A caller whose mode is
+  unknown, or is one only the live CLI advertised, is rated at the bottom.
+- The top tier — `bypassPermissions`, Codex `full-access`, and Cursor's Auto — is never the model's to
+  choose, even for a caller in one: a person put that pane there, and a model multiplying it is a
+  different act. Cursor's Auto is rated top here although the picker colours it `Elevated`, because it
+  is wtm answering every permission prompt with allow-once; nothing reviews anything.
+- Both give way to the repository's own `[agent.<id>] mode`. That is what the child gets when the
+  request names no mode, so naming it changes nothing — and it is the one way to let a model choose a
+  top mode, because a line in `wtm.toml` is somebody's decision for that repository.
+
+A breach is refused with the reason and the modes that would be admitted, never quietly downgraded.
+wtm does clamp an inherited effort and read an unknown Codex mode as its cautious preset, but those
+are values nobody chose for this session; here a model asked in this call, and a child opened
+read-only when it was asked to apply a fix fails at its first edit, in a pane already on screen. The
+check runs twice: `delegated_tasks` refuses a whole `spawn_agents` run before any child opens — the
+alternative is a successful result with one "Agent failed" section a model can read past — and
+`open_pane` checks again, because every route to a session passes it. The caller's mode rides on its
+token like its effort and follows the session: a picker change through `configure_session`, and the
+mode the provider reports, which matters because Claude drops a mode it cannot keep and says so only
+on a `status` line.
+
+**A request that names no mode is capped, not refused.** The default it would get is the compiled
+Auto on every provider, and left alone that is a way past both rules that needs no argument at all:
+a caller in `plan` that may not ask for an `auto` child gets one by not asking, and every Cursor child
+gets wtm approving everything. So `handoff::unrequested_mode`, in the same `open_pane`, replaces a
+default the caller could not have asked for by name with the most it could have, from a fixed table
+per provider in `wtm_agent::mode_within`:
+
+| Caller                                         | Claude   | Codex       | Cursor  |
+| ---------------------------------------------- | -------- | ----------- | ------- |
+| acts without asking (`auto`, `acceptEdits`, …) | `auto`   | `auto`      | `agent` |
+| asks first (`plan`, `read-only`, `ask`, …)     | `manual` | `read-only` | `ask`   |
+
+A table rather than the highest mode in the tier, because within a tier the modes do not compare
+and the choice is about what the child then does. No plan mode is on it: a plan mode answers a task
+with a proposal instead of the work, and approving the proposal carries it on in Auto. The
+repository's own mode and a model's implied one (`opusplan` is plan) are kept, so
+`[agent.cursor] mode = "auto"` is how a repository keeps the Cursor it had. The capped mode goes in
+before the child's token is issued, so the child is rated by what it got and its own children are
+capped by that in turn.
+
+This is a downgrade where a named mode gets a refusal, and the difference is who chose. A model that
+named a mode in this call is owed the truth about what it got; nobody chose a default, which is the
+case wtm clamps everywhere else, like an inherited effort. And each mode on the table still does the
+work: a step past reading waits for the user rather than failing, except Cursor's `ask`, which
+cannot edit at all. The tool descriptions say what an omitted mode becomes. The common delegation is
+unchanged — a caller in Auto still gets a Claude or Codex child in Auto — and what changes is a
+stricter caller's children and every Cursor child.
 
 `close_agents` is the third, and it exists because the second one's best property is also a leak.
 A child keeps its process and its conversation after it answers — deliberately, since the point was
@@ -581,7 +655,10 @@ tools take targets, which none of §6b's do. What keeps it narrow:
   and the highest handle its own transcript mentions.
 - Every gate a click passes, Home passes. Opening a session goes through the same `open_pane` a
   delegation does: the repository's trust, `offers_agent`, the guards on a rendered MCP argv, and the
-  worktree existing on disk.
+  worktree existing on disk. So does §6b's mode rule: `open_session` may not ask for a mode rated
+  above Home's own, nor for an approve-everything one unless the *target* repository's `wtm.toml`
+  sets it — Home has no repository of its own to consent with — and a session it names no mode for
+  is capped the same way, which from Home's usual Auto changes only Cursor, to `agent`.
 - It cannot decide for the user. No tool answers an approval, changes a session's mode, or steers a
   running turn, and a session that is busy or waiting on the user is refused rather than queued into.
   Closing is limited to sessions Home opened that are idle and that the user has never written to —
@@ -786,11 +863,12 @@ There is no telemetry, analytics or crash reporting. A reviewed shell Run author
 script's normal user access. Home's explicit, temporary worktree grant (§6f) authorizes subsequent
 commands within the user's task without another per-command click; it is off by default, revocable,
 and never restored. Granting is a direct user action, and the sheet states the filesystem and
-network authority involved.
+network authority involved. Enabling a project's workflow and starting a flow are direct actions
+too; what they go on to send without another click is set out below.
 
-**There is one request that is not a user action: the update check.** At launch, and at most daily
-after that, wtm asks `api.github.com` for its own latest release. That is a deliberate exception,
-and the argument for it is the shape of the request rather than its usefulness:
+**There is one request that no user action or setting asked for: the update check.** At launch,
+and at most daily after that, wtm asks `api.github.com` for its own latest release. That is a
+deliberate exception, and the argument for it is the shape of the request rather than its usefulness:
 
 - **It sends nothing.** A GET with no body, and no header about the user, the machine or the
   installation — not even a `User-Agent` of wtm's own, so the running version stays local. The
@@ -814,6 +892,27 @@ again. While wtm was unsigned there was a second reason: the cask's quarantine s
 upgraded app open at all, and a second installer would have had to re-implement that Gatekeeper
 bypass. Releases are notarized now, so only the first reason is left, and it is enough on its own.
 `wtm-update`'s module docs have the rest, including why the download runs *before* the app quits.
+
+**Workflow egress goes through the user's own `gh` and `acli`, and only for projects that enable
+it.** The Work view (§1) reads a project's tracker and forge: its issue queue, pull requests, checks
+and reviews. Behind approvals, it also writes to them. Every one of those requests is made by the
+user's own `gh` or `acli`, spawned through `wtm-exec` like any other subprocess and authenticated by
+the credentials those tools already hold, so it goes wherever those CLIs are configured to go,
+exactly as it would from a terminal. wtm stores no token for them and links no HTTP client.
+
+It is a category of its own rather than a variation on the routes above, for three reasons:
+
+- **It is opt-in per project.** A project without a `[workflow]` table causes none of it, and
+  enabling one is the setting that asks for the rest.
+- **Some reads are not a click.** Sync runs on demand and on window focus, as the worktree list
+  does, and after the app's own writes. §8's polling ban stands, and a timer would need a decision
+  of its own.
+- **Some writes are not a click either, and they are narrow.** A flow you started pushes its own
+  task branch and keeps its own draft pull request current without asking each time. Publishing a
+  review, posting a comment, marking a pull request ready, moving an issue and merging each wait for
+  an approval bound to the exact head or text, and merging has no agent tool at all.
+
+Neither `wtm-forge` nor `wtm-tracker` exists yet. This is the boundary they will be held to.
 
 **The egress is in Rust, and that placement is the whole design.** A `fetch` from the webview
 would have been fewer lines and would have widened `connect-src` — after which "the frontend
@@ -1370,8 +1469,35 @@ decision, and it belongs written down rather than discovered in eighteen months.
   `git2`'s worktree support is incomplete besides.
 - **A plugin or WASM extension system.** TOML + argv + minijinja already satisfies "no code changes for
   a new convention." A plugin host would be an order of magnitude more code for a case that doesn't exist.
-- **A database.** The projects list, trust store, and window state are one JSON file written atomically
-  (temp + rename).
+- **A database for configuration.** The config, the trust store, the resume list and Home's handles
+  are TOML files, each written atomically (temp + rename): readable, hand-editable, diffable, and kept
+  in a dotfiles repo by the people who keep one. That has not changed.
+
+  This entry used to say "a database" outright. The Work view's state is why it no longer does: work
+  items, flows and their append-only history, questions, approvals bound to exact revisions,
+  findings, rule revisions, and an outbox of writes to the forge and the tracker. That lives in
+  SQLite, at `~/.local/share/wtm/flow.db`, because files fail it in three specific places:
+
+  - **Uniqueness across records.** One work item per issue and one open flow of each kind per work
+    item are what make a double click start one flow. A check-then-write over files loses that
+    race; a `UNIQUE` constraint and a partial index cannot.
+  - **Atomicity across records.** A flow event and the flow it changes, or an outbox operation and
+    the step that queued it, must commit together or not at all. Temp + rename is atomic for one
+    file.
+  - **Queries.** The inbox, the queue and staleness are joins across all of it, which a directory
+    of JSON can only answer by reading everything.
+
+  SQLite because it is one file the app owns, with no server, and because `rusqlite` with SQLite
+  bundled was already in the build for the Database viewer, so the store added no dependency and
+  no licence. The alternative worth naming is an embedded key-value store (`redb`, `sled`), which
+  would have meant writing the constraints and the queries in Rust, on top of a new dependency.
+  Moving the TOML files into the database is not part of this: it would trade hand-editing for
+  nothing.
+
+  The shape follows §2. The rules (phases and holds, approval staleness, outbox states) are
+  `wtm-core::flow`, pure and covered by the `wasm32` check, not a domain crate of their own, which
+  §2 already rejected. `wtm-appdb` is one adapter behind its `FlowStore` port. Every schema change
+  is a numbered migration, preceded by a copy of the database.
 - **`--move-changes`** (stash/pop across worktrees). The one `create` feature with genuinely nasty
   failure modes — a pop conflict in a brand-new worktree — and rarely used. Config can express it later
   as a post-create step.

@@ -33,6 +33,7 @@ pub mod prototype_context;
 pub mod prototype_tools;
 pub mod prototypes;
 pub mod pty_bridge;
+pub mod run_profile;
 pub mod shell_admission;
 pub mod shell_commands;
 pub mod shell_control;

@@ -807,6 +807,32 @@ export interface AccountUsage {
   askedAt: number | null;
   /** Why the last direct ask failed, in the CLI's words. The last good figures are kept. */
   error: string | null;
+  /** How the provider is signed in, asked the way a workflow run would. `null` until asked. */
+  auth: AuthCheck | null;
+}
+
+/**
+ * How a provider's CLI is signed in. Mirrors `wtm_core::model::AuthMethod`.
+ *
+ * Nothing of a key ever crosses: `api_key` names where the key came from, never the key.
+ */
+export type AuthMethod =
+  | { kind: 'subscription'; service: string }
+  | { kind: 'api_key'; source: string | null }
+  | { kind: 'other'; method: string }
+  | { kind: 'signed_out' }
+  | { kind: 'unreadable' };
+
+/** The subscription preflight's answer for one provider. Mirrors `wtm_core::model::AuthCheck`. */
+export interface AuthCheck {
+  provider: string;
+  method: AuthMethod;
+  /** "Signed in with claude.ai": the method, worded in Rust so the view and a refusal agree. */
+  summary: string;
+  /** Why a workflow run on this provider would refuse to start, or `null` when it may. */
+  refusal: string | null;
+  /** Names of billing variables in wtm's own environment. Panes inherit them; runs do not. */
+  inherited: string[];
 }
 
 export interface AgentAttachment {

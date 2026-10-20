@@ -339,6 +339,10 @@ fn tools(agents: &[(String, String)], awareness: bool, browser: bool, code: bool
     }
 
     let task_agent_schema = agent_schema.clone();
+    let mode_schema = json!({
+        "type": "string",
+        "description": handoff::mode_description(agents),
+    });
     let mut listed = json!({
         "tools": [{
             "name": TOOL,
@@ -368,10 +372,7 @@ fn tools(agents: &[(String, String)], awareness: bool, browser: bool, code: bool
                         "type": "string",
                         "description": "Optional reasoning or thought level supported by that model.",
                     },
-                    "mode": {
-                        "type": "string",
-                        "description": "Optional provider mode, such as agent, plan, ask, or read-only.",
-                    },
+                    "mode": mode_schema.clone(),
                     "prompt": {
                         "type": "string",
                         "description":
@@ -412,7 +413,7 @@ fn tools(agents: &[(String, String)], awareness: bool, browser: bool, code: bool
                                     "description": "Optional exact provider model id. Omit unless already known.",
                                 },
                                 "effort": { "type": "string" },
-                                "mode": { "type": "string" },
+                                "mode": mode_schema,
                                 "prompt": {
                                     "type": "string",
                                     "description": "A complete, self-contained task for this child.",
@@ -823,6 +824,67 @@ mod tests {
             entries[1]["inputSchema"]["properties"]["concurrency"]["maximum"],
             20
         );
+    }
+
+    #[test]
+    fn every_tool_that_opens_a_session_states_the_mode_rule_and_offers_no_top_mode() {
+        // The rule is enforced in `handoff::mode_refusal` whatever the description says; this is
+        // so a model reads it before its first call rather than learning it from a refusal.
+        let agents = [
+            ("claude".to_owned(), "Claude Code".to_owned()),
+            ("codex".to_owned(), "Codex".to_owned()),
+            ("cursor".to_owned(), "Cursor Agent".to_owned()),
+        ];
+        let listed = tools(&agents, false, false, false);
+        let home = crate::home_tools::definitions(&agents);
+        let open_session = home
+            .iter()
+            .find(|tool| tool["name"] == "open_session")
+            .expect("Home can open a session");
+        for (tool, description) in [
+            (
+                TOOL,
+                &listed["tools"][0]["inputSchema"]["properties"]["mode"],
+            ),
+            (
+                SPAWN_TOOL,
+                &listed["tools"][1]["inputSchema"]["properties"]["tasks"]["items"]["properties"]["mode"],
+            ),
+            (
+                "open_session",
+                &open_session["inputSchema"]["properties"]["mode"],
+            ),
+        ] {
+            let text = description["description"].as_str().unwrap_or_default();
+            assert!(
+                text.contains("than you can is refused") && text.contains("`wtm.toml`"),
+                "{tool}: {text}"
+            );
+            let (offered, rest) = text.split_once(". Usually").expect("a mode list");
+            // Exact lists, so Cursor's `auto` cannot slip in between `agent` and `plan`.
+            assert!(
+                offered.contains("Codex: `read-only`, `auto`;")
+                    && offered.ends_with("Cursor Agent: `agent`, `plan`, `ask`"),
+                "{tool}: {offered}"
+            );
+            for top in ["bypassPermissions", "full-access"] {
+                assert!(!offered.contains(top), "{tool} offers {top}: {offered}");
+            }
+            // What leaving it out gets, so a model in `plan` is not surprised by a read-only
+            // reviewer, and none of it Cursor's `auto`.
+            let (omitted, _) = rest.split_once(" Give one").expect("the omitted default");
+            assert!(
+                omitted.contains("Codex `auto`, Cursor Agent `agent` while you are in a mode that acts")
+                    && omitted.contains(
+                        "Claude Code `manual`, Codex `read-only`, Cursor Agent `ask` while you are in one that asks first"
+                    ),
+                "{tool}: {omitted}"
+            );
+            assert!(
+                !omitted.contains("Cursor Agent `auto`"),
+                "{tool}: {omitted}"
+            );
+        }
     }
 
     #[test]

@@ -24,6 +24,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod error;
+pub mod flow;
 pub mod model;
 pub mod ports;
 pub mod usecase;

@@ -9,6 +9,7 @@ members = [
   "crates/wtm-dictate",
   "crates/wtm-update",
   "crates/wtm-db",
+  "crates/wtm-appdb",
   "crates/wtm-code",
   "crates/wtm-render",
   "crates/wtm-notify",
@@ -47,6 +48,7 @@ wtm-agent   = { path = "crates/wtm-agent" }
 wtm-dictate = { path = "crates/wtm-dictate" }
 wtm-update  = { path = "crates/wtm-update" }
 wtm-db      = { path = "crates/wtm-db" }
+wtm-appdb   = { path = "crates/wtm-appdb" }
 wtm-code    = { path = "crates/wtm-code" }
 wtm-render  = { path = "crates/wtm-render" }
 wtm-notify  = { path = "crates/wtm-notify" }

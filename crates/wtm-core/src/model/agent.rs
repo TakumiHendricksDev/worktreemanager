@@ -457,7 +457,10 @@ pub struct AgentSkill {
 /// anything at all". The UI colours the mode control from this, so the tiers have to be the
 /// provider-independent question — *how surprised could I be by what this does* — rather than a
 /// mirror of either CLI's vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Declared weakest first, and the derived order is load-bearing: a delegated session may not be
+/// opened further up it than the session that asked for it — see `wtm_agent::mode_latitude`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModeRisk {
     /// Asks before anything that changes the world.

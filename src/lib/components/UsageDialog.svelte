@@ -15,6 +15,14 @@
    * Opening it is the "on demand" in ARCHITECTURE §8's rule. Each provider is asked separately and
    * fills in as it answers, because Codex starts an app server and Claude reads a file, and the
    * fast ones should not wait for the slow one.
+   *
+   * # Why the sign-in is here
+   *
+   * Which account pays is the other half of "how much is left", and a workflow run refuses anything
+   * but a plan's sign-in. The line under each heading is that preflight's answer, asked with a run's
+   * environment, so the method a run would bill is on screen before a run exists to refuse it. Its
+   * third line names billing variables in wtm's own environment, because the preflight cannot see
+   * them: it removes them first, while every pane opened from wtm still inherits them.
    */
   import { onMount } from 'svelte';
 
@@ -56,6 +64,22 @@
               <span class="c-usage__plan">{account.limits.plan}</span>
             {/if}
           </h3>
+          {#if account?.auth}
+            {@const auth = account.auth}
+            <p class="c-usage__signin">{auth.summary}.</p>
+            {#if auth.refusal}
+              <p class="c-usage__error">{auth.refusal}</p>
+            {/if}
+            {#if auth.inherited.length > 0}
+              {@const them = auth.inherited.length === 1 ? 'it' : 'them'}
+              <p class="c-usage__note">
+                wtm's environment sets
+                {#each auth.inherited as name, i (name)}{i > 0 ? ', ' : ''}<code
+                    >{name}</code
+                  >{/each}. Panes opened from wtm inherit {them}; workflow runs remove {them}.
+              </p>
+            {/if}
+          {/if}
           <LimitMeters
             provider={agent.id}
             label={agent.label}

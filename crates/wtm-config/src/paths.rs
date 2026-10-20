@@ -44,6 +44,12 @@ pub const HANDLES_FILENAME: &str = "home_handles.toml";
 /// The Home agent's working directory, under the data root.
 pub const HOME_DIRNAME: &str = "home";
 
+/// The app's own database, under the data root. See `wtm-appdb`.
+pub const FLOW_DB_FILENAME: &str = "flow.db";
+
+/// The empty `gh` config directory workflow runs point `GH_CONFIG_DIR` at, under the data root.
+pub const RUN_GH_CONFIG_DIRNAME: &str = "run-gh-config";
+
 /// Resolved application paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
@@ -64,6 +70,18 @@ pub struct AppPaths {
     /// state the app owns, which is what this is. It is also stable, which matters: Claude Code
     /// resumes a conversation by its working directory.
     pub home_dir: PathBuf,
+    /// The SQLite database holding work items and flows.
+    ///
+    /// In the data directory for the reason [`Self::home_dir`] is, and also because it is not a
+    /// file anyone edits: copying it between machines along with someone's dotfiles would carry
+    /// one machine's worktree paths and pending writes to another. Its pre-migration backups are
+    /// written beside it.
+    pub flow_db: PathBuf,
+    /// What a workflow run's `GH_CONFIG_DIR` names: a directory with nothing in it, so `gh` finds no
+    /// account rather than the user's. The app keeps it empty; see `src-tauri/src/run_profile.rs`.
+    ///
+    /// Under the data root for Home's reasons: it is state the app owns, and nobody's dotfiles.
+    pub run_gh_config_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -103,6 +121,8 @@ impl AppPaths {
             sessions_file: config_dir.join(SESSIONS_FILENAME),
             handles_file: config_dir.join(HANDLES_FILENAME),
             home_dir: data_dir.join(HOME_DIRNAME),
+            flow_db: data_dir.join(FLOW_DB_FILENAME),
+            run_gh_config_dir: data_dir.join(RUN_GH_CONFIG_DIRNAME),
         }
     }
 
@@ -164,6 +184,19 @@ mod tests {
             "got {}",
             discovered.home_dir.display()
         );
+    }
+
+    #[test]
+    fn the_flow_database_lives_in_the_data_directory() {
+        let paths = AppPaths::from_bases(
+            Path::new("/Users/me/.config/wtm"),
+            Path::new("/Users/me/.local/share/wtm"),
+        );
+        assert_eq!(
+            paths.flow_db,
+            PathBuf::from("/Users/me/.local/share/wtm/flow.db")
+        );
+        assert!(!paths.flow_db.starts_with(&paths.config_dir));
     }
 
     #[test]

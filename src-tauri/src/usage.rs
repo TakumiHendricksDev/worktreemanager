@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use wtm_core::model::UsageLimits;
+use wtm_core::model::{AuthCheck, UsageLimits};
 use wtm_core::ports::{CancelToken, Invocation};
 
 use crate::app::App;
@@ -70,6 +70,11 @@ pub struct AccountUsage {
     pub asked_at: Option<u64>,
     /// Why the last ask failed, in the CLI's own words. Cleared by the next one that works.
     pub error: Option<String>,
+    /// How the provider is signed in, asked the way a workflow run would ask, at the last ask.
+    ///
+    /// `None` until asked, and for a provider runs cannot use. Beside the figures because both are
+    /// about the account, and the dialog that shows the one is where a person looks for the other.
+    pub auth: Option<AuthCheck>,
 }
 
 impl AccountUsage {
@@ -80,6 +85,7 @@ impl AccountUsage {
             reported_at: None,
             asked_at: None,
             error: None,
+            auth: None,
         }
     }
 }
@@ -130,6 +136,19 @@ impl Registry {
             }
             Err(error) => account.error = Some(error),
         }
+        account.clone()
+    }
+
+    /// Replace what is known about how `provider` is signed in, and return its record.
+    ///
+    /// Replaced rather than kept when the new answer is `None`: a CLI that has gone missing since
+    /// the last ask should not go on showing the sign-in it had.
+    pub fn signed_in(&self, provider: &str, auth: Option<AuthCheck>) -> AccountUsage {
+        let mut accounts = self.accounts.lock();
+        let account = accounts
+            .entry(provider.to_owned())
+            .or_insert_with(|| AccountUsage::new(provider));
+        account.auth = auth;
         account.clone()
     }
 
@@ -253,6 +272,10 @@ pub async fn usage_limits(app: AppState<'_>) -> Reply<Vec<AccountUsage>> {
 
 /// Ask one provider directly, fold its answer in, and return its record.
 ///
+/// Also asks how the provider is signed in, with a workflow run's environment, so the sign-in a run
+/// would use is on screen before any run exists to refuse it. That ask is a local status command,
+/// about a second, and needs no network.
+///
 /// One provider per call rather than all of them, because their speeds differ: Codex has to start
 /// an app server, which starts its MCP servers, while Claude answers from a file. The view asks each
 /// in parallel and fills each section in as it lands.
@@ -274,7 +297,9 @@ pub async fn refresh_usage_limits(
             ));
         }
         let answer = ask(&app, &agent_id);
-        let account = app.usage.answer(&agent_id, answer, app.clock.now_unix_ms());
+        let auth = crate::run_profile::check(&app, &agent_id);
+        app.usage.answer(&agent_id, answer, app.clock.now_unix_ms());
+        let account = app.usage.signed_in(&agent_id, auth);
         announce(&handle, &account);
         Ok(account)
     })
@@ -339,6 +364,31 @@ mod tests {
 
         let recovered = registry.answer("codex", Ok((weekly(7.0), true)), 3_000);
         assert_eq!(recovered.error, None);
+    }
+
+    #[test]
+    fn a_sign_in_that_can_no_longer_be_read_is_cleared_rather_than_left_showing() {
+        let registry = Registry::default();
+        let signed_in = AuthCheck {
+            provider: "codex".to_owned(),
+            method: wtm_core::model::AuthMethod::Subscription {
+                service: "ChatGPT".to_owned(),
+            },
+            summary: "Signed in with ChatGPT".to_owned(),
+            refusal: None,
+            inherited: Vec::new(),
+        };
+        registry.answer("codex", Ok((weekly(6.0), true)), 1_000);
+        let account = registry.signed_in("codex", Some(signed_in));
+        assert!(account.auth.is_some());
+        assert_eq!(
+            account.limits.windows,
+            weekly(6.0).windows,
+            "figures are kept"
+        );
+
+        let gone = registry.signed_in("codex", None);
+        assert_eq!(gone.auth, None);
     }
 
     #[test]
