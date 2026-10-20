@@ -274,10 +274,10 @@ is built, and the token resolves to a worktree.
 
 Delegation is on for every session with no key to enable it, and that default is a judgement worth
 recording. The blast radius is not new: the target comes from the compiled catalogue rather than from
-config, it runs in the caller's own worktree, it is refused unless the repository offers it, and the new
-session's approval mode is the repository's own. An agent that can already run `bash` here is not
-meaningfully constrained by being unable to open a sibling pane — and unlike a subprocess, a handoff is
-_visible_.
+config, it runs in the caller's own worktree, it is refused unless the repository offers it, and its
+mode is capped, whether the model names one or not, as below. An agent that can already run `bash`
+here is not meaningfully constrained by being unable to open a sibling pane — and unlike a
+subprocess, a handoff is _visible_.
 
 There are three MCP tools over the same path. `ask_agent` is one child and preserves the original
 handoff behavior. `spawn_agents` accepts up to twenty self-contained tasks, each with its own provider,
@@ -288,6 +288,63 @@ inspection, and can be opened in an explicit split. The sessions remain ordinary
 sessions after their first result is returned. Children share one worktree; the tool description says
 so explicitly and steers parallel swarms toward read-only review because concurrent writers can
 conflict.
+
+**A model may choose a child's mode, but not its way past an approval.** Asking for a read-only
+reviewer is reasonable; a session in `plan` opening a child in `auto` is a way out of plan mode that
+nobody approved, and a child in `bypassPermissions` is one nobody watches. Both are model-authored
+arguments, so the rule lives in Rust, in `handoff::mode_refusal`, not in a prompt:
+
+- A requested mode may not be rated above the caller's own. The rating is `wtm_agent::mode_latitude`:
+  the picker's `ModeRisk` tier, which is already provider-independent, so a Claude mode compares with
+  a Codex one. There is no finer order to use — within a tier, Claude's `dontAsk` refuses what
+  `acceptEdits` would ask about and `acceptEdits` writes what `dontAsk` refuses. A caller whose mode is
+  unknown, or is one only the live CLI advertised, is rated at the bottom.
+- The top tier — `bypassPermissions`, Codex `full-access`, and Cursor's Auto — is never the model's to
+  choose, even for a caller in one: a person put that pane there, and a model multiplying it is a
+  different act. Cursor's Auto is rated top here although the picker colours it `Elevated`, because it
+  is wtm answering every permission prompt with allow-once; nothing reviews anything.
+- Both give way to the repository's own `[agent.<id>] mode`. That is what the child gets when the
+  request names no mode, so naming it changes nothing — and it is the one way to let a model choose a
+  top mode, because a line in `wtm.toml` is somebody's decision for that repository.
+
+A breach is refused with the reason and the modes that would be admitted, never quietly downgraded.
+wtm does clamp an inherited effort and read an unknown Codex mode as its cautious preset, but those
+are values nobody chose for this session; here a model asked in this call, and a child opened
+read-only when it was asked to apply a fix fails at its first edit, in a pane already on screen. The
+check runs twice: `delegated_tasks` refuses a whole `spawn_agents` run before any child opens — the
+alternative is a successful result with one "Agent failed" section a model can read past — and
+`open_pane` checks again, because every route to a session passes it. The caller's mode rides on its
+token like its effort and follows the session: a picker change through `configure_session`, and the
+mode the provider reports, which matters because Claude drops a mode it cannot keep and says so only
+on a `status` line.
+
+**A request that names no mode is capped, not refused.** The default it would get is the compiled
+Auto on every provider, and left alone that is a way past both rules that needs no argument at all:
+a caller in `plan` that may not ask for an `auto` child gets one by not asking, and every Cursor child
+gets wtm approving everything. So `handoff::unrequested_mode`, in the same `open_pane`, replaces a
+default the caller could not have asked for by name with the most it could have, from a fixed table
+per provider in `wtm_agent::mode_within`:
+
+| Caller                                         | Claude   | Codex       | Cursor  |
+| ---------------------------------------------- | -------- | ----------- | ------- |
+| acts without asking (`auto`, `acceptEdits`, …) | `auto`   | `auto`      | `agent` |
+| asks first (`plan`, `read-only`, `ask`, …)     | `manual` | `read-only` | `ask`   |
+
+A table rather than the highest mode in the tier, because within a tier the modes do not compare
+and the choice is about what the child then does. No plan mode is on it: a plan mode answers a task
+with a proposal instead of the work, and approving the proposal carries it on in Auto. The
+repository's own mode and a model's implied one (`opusplan` is plan) are kept, so
+`[agent.cursor] mode = "auto"` is how a repository keeps the Cursor it had. The capped mode goes in
+before the child's token is issued, so the child is rated by what it got and its own children are
+capped by that in turn.
+
+This is a downgrade where a named mode gets a refusal, and the difference is who chose. A model that
+named a mode in this call is owed the truth about what it got; nobody chose a default, which is the
+case wtm clamps everywhere else, like an inherited effort. And each mode on the table still does the
+work: a step past reading waits for the user rather than failing, except Cursor's `ask`, which
+cannot edit at all. The tool descriptions say what an omitted mode becomes. The common delegation is
+unchanged — a caller in Auto still gets a Claude or Codex child in Auto — and what changes is a
+stricter caller's children and every Cursor child.
 
 `close_agents` is the third, and it exists because the second one's best property is also a leak.
 A child keeps its process and its conversation after it answers — deliberately, since the point was
@@ -581,7 +638,10 @@ tools take targets, which none of §6b's do. What keeps it narrow:
   and the highest handle its own transcript mentions.
 - Every gate a click passes, Home passes. Opening a session goes through the same `open_pane` a
   delegation does: the repository's trust, `offers_agent`, the guards on a rendered MCP argv, and the
-  worktree existing on disk.
+  worktree existing on disk. So does §6b's mode rule: `open_session` may not ask for a mode rated
+  above Home's own, nor for an approve-everything one unless the *target* repository's `wtm.toml`
+  sets it — Home has no repository of its own to consent with — and a session it names no mode for
+  is capped the same way, which from Home's usual Auto changes only Cursor, to `agent`.
 - It cannot decide for the user. No tool answers an approval, changes a session's mode, or steers a
   running turn, and a session that is busy or waiting on the user is refused rather than queued into.
   Closing is limited to sessions Home opened that are idle and that the user has never written to —

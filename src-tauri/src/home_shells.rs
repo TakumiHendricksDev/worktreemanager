@@ -371,6 +371,7 @@ mod tests {
             session: "home".into(),
             provider: "codex".into(),
             effort: None,
+            mode: None,
         };
         assert!(
             read(&app, &home, &json!({"run":name}))

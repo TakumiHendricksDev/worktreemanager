@@ -92,6 +92,7 @@ impl Setup {
             session: "home".to_owned(),
             provider: "claude".to_owned(),
             effort: None,
+            mode: None,
         };
         home_tools::preview_removal(
             &self.app,
