@@ -691,7 +691,7 @@ fn describe(problems: &[SkillProblem]) -> String {
         .join("; ")
 }
 
-/// A skill as both CLIs list it. People write `/canopy-review` because that is how they type it.
+/// A skill as both CLIs list it. People write `/team-review` because that is how they type it.
 fn skill_name(raw: &str) -> &str {
     raw.trim().trim_start_matches('/')
 }
