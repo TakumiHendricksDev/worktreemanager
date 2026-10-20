@@ -2,12 +2,19 @@
 //!
 //! # Why this exists when the CLIs report their own
 //!
-//! Because of *when* they report it. Claude Code emits nothing at all until it receives a turn —
-//! its `system`/`init` line, which carries `slash_commands` and `skills`, arrives as the first line
-//! *after* a user message. So on a fresh pane the composer's `/` menu had no session list to merge
-//! and fell back entirely to the compiled catalogue of built-ins, which is exactly when somebody
-//! wants `/ship` or `/team-review`: before they have typed anything. In a repository with
-//! fifty-five skills in `.claude/skills/`, none of them appeared.
+//! Because of *when* they report it. Claude Code's `system`/`init` line, which carries
+//! `slash_commands` and `skills`, arrives as the first line *after* a user message. So on a fresh
+//! pane the composer's `/` menu had no session list to merge and fell back entirely to the compiled
+//! catalogue of built-ins, which is exactly when somebody wants `/ship` or `/team-review`: before
+//! they have typed anything. In a repository with fifty-five skills in `.claude/skills/`, none of
+//! them appeared.
+//!
+//! This is the first paint, not the whole answer. `ClaudeProtocol::open` also asks the CLI for its
+//! commands, which it answers without a turn and which covers what no directory here does — a
+//! plugin's skills — so for Claude the seed is what shows in the moment before that reply, and
+//! what stays if the CLI is too old to give one. Codex answers `skills/list` once its thread is
+//! open, plugin skills included and no turn needed (checked on 0.160.1); Cursor delivers its list as
+//! an ACP `available_commands_update`.
 //!
 //! # Why duplicating another program's discovery rules is acceptable here and would not be
 //!

@@ -247,9 +247,9 @@ pub trait Provider: Send + Sync {
     /// Skills this CLI would find on disk for `req.cwd`, before it has said anything itself.
     ///
     /// A **seed**, not an answer: whatever the session later reports is merged over it. It exists
-    /// because Claude Code emits nothing until it receives a turn, so a fresh pane's `/` menu had
-    /// no list at all — see [`crate::skills`] for why duplicating another program's discovery rules
-    /// is acceptable at that strength and would not be at any other.
+    /// because a fresh pane's `/` menu had no list at all before the CLI said anything — and Claude
+    /// Code's `init` line only comes after a turn. See [`crate::skills`] for why duplicating another
+    /// program's discovery rules is acceptable at that strength and would not be at any other.
     ///
     /// Defaulted to nothing, so a provider that reports its own promptly needs no opinion here.
     fn seed_skills(&self, req: &SessionRequest) -> Vec<wtm_core::model::AgentSkill> {

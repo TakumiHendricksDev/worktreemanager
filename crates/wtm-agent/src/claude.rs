@@ -78,6 +78,27 @@ const ULTRACODE_KEY: &str = "ultracode";
 /// without the overlay cannot be talked into fast mode afterwards.
 const FAST_MODE_KEY: &str = "fastMode";
 
+/// The id of the `initialize` request written the moment a session opens.
+///
+/// # Why a session asks this before anyone has typed anything
+///
+/// The `init` line that lists a session's commands arrives only *after* the first turn, so a fresh
+/// pane's `/` menu had nothing from the CLI until somebody sent a message — and a plugin's skills
+/// (`acme-review:acme-review`, `engineering:code-review`) are in no directory this crate reads,
+/// so the disk seed in [`crate::skills`] could never have shown them. The CLI will tell us, though:
+/// `initialize` is answered with no turn and no model call, and its `commands` array is the
+/// complete list, built-ins and bundled skills and plugins and MCP prompts, each with a
+/// description, resolved for this worktree. Asking is therefore not another copy of the CLI's
+/// discovery rules, which is what reading plugin manifests off disk would have been: which plugins
+/// are enabled for which project is layered across three settings files and a per-project install
+/// record, and the CLI has already worked it out.
+///
+/// Captured on 2.1.296 from a worktree with project-scoped plugins, with this crate's own argv:
+/// the answer listed the plugins installed for that project, and `commands_changed` followed three
+/// times as MCP prompts finished loading. A fixed id, because the CLI is a fresh process per
+/// session and nothing else on this channel is asking.
+const COMMANDS_REQUEST: &str = "wtm-commands";
+
 /// Why fast mode is off, in words, given the CLI's own `fast_mode_disabled_reason` token.
 ///
 /// # Mirrored strings, and the fallback that makes drift harmless
@@ -699,9 +720,33 @@ struct ClaudeProtocol {
     fast_wanted: bool,
     /// The last fast-mode refusal already reported, so a standing one is said once and not per turn.
     fast_refusal: Option<String>,
+    /// Every command the CLI has described, by name, from the last list it gave with descriptions.
+    ///
+    /// Kept because the `init` line that opens the first turn names commands and nothing else, and
+    /// the composer replaces its list wholesale with each `SkillsListed`. Without this, the first
+    /// message a user sent would strip every description the pane had been showing.
+    described: BTreeMap<String, AgentSkill>,
 }
 
 impl ClaudeProtocol {
+    /// The composer's `/` list out of a `commands` array the CLI described itself, remembered for
+    /// the `init` line that will later name the same commands without their descriptions.
+    ///
+    /// Nothing is emitted for a missing or empty array, for the reason `init` emits nothing for an
+    /// empty `slash_commands`: a `SkillsListed` of nothing would replace the disk seed with a blank
+    /// menu.
+    fn learn(&mut self, commands: Option<&Value>) -> Vec<Step> {
+        let skills = described_commands(commands);
+        if skills.is_empty() {
+            return Vec::new();
+        }
+        self.described = skills
+            .iter()
+            .map(|skill| (skill.name.clone(), skill.clone()))
+            .collect();
+        vec![Step::Emit(AgentEvent::SkillsListed { skills })]
+    }
+
     /// A stable-enough turn label. Claude reports no turn id of its own, so this counts them.
     fn turn_label(&self) -> String {
         self.turn.to_string()
@@ -1140,22 +1185,38 @@ impl ClaudeProtocol {
 
 impl Protocol for ClaudeProtocol {
     fn open(&mut self) -> Vec<Step> {
-        // Ready at once, and no handshake to send.
+        // Ready at once, and no handshake that readiness waits on.
         //
-        // This CLI emits **nothing at all** until it receives a turn — verified by waiting sixty
-        // seconds for a `system`/`init` that never came, then seeing it arrive as the first line
-        // after a user message. So readiness here means "the process is up and will accept a
-        // turn", which is true immediately, and gating on `init` would leave a pane saying
-        // "starting…" until someone typed into it.
+        // This CLI sends no `system`/`init` until it receives a turn — verified by waiting sixty
+        // seconds for one that never came, then seeing it arrive as the first line after a user
+        // message. So readiness here means "the process is up and will accept a turn", which is
+        // true immediately, and gating on `init` would leave a pane saying "starting…" until
+        // someone typed into it.
         //
         // The opposite of the app server, where `initialize` and `thread/start` are two round
         // trips that must complete first. Two providers, two honest answers to the same question,
         // which is the reason `Step::Ready` is a step a provider chooses rather than something the
         // session layer infers.
+        //
+        // The one thing written is the question behind the composer's `/` menu — see
+        // [`COMMANDS_REQUEST`]. It is written *ahead of* `Ready`, so it is the first thing in the
+        // pipe, and nothing waits on its answer: a CLI that never replies leaves the disk seed and
+        // the built-in catalogue in place. A `/btw` side session has no composer to fill, and
+        // starts with `--strict-mcp-config` to stay light, so it does not ask.
         let mut steps = std::mem::take(&mut self.history)
             .into_iter()
             .map(Step::Emit)
             .collect::<Vec<_>>();
+        if !self.side {
+            steps.push(Step::Write(
+                json!({
+                    "type": "control_request",
+                    "request_id": COMMANDS_REQUEST,
+                    "request": { "subtype": "initialize" },
+                })
+                .to_string(),
+            ));
+        }
         steps.push(Step::Ready);
         steps
     }
@@ -1204,15 +1265,24 @@ impl Protocol for ClaudeProtocol {
                     // from a built-in, which is the whole ordering rule in `commandsFor`: with ~110
                     // built-ins in the catalogue, a menu that cannot tell them apart buries the
                     // fifty-five somebody actually typed `/` to reach.
+                    //
+                    // A command already described by an `initialize` answer keeps that entry: this
+                    // line is the one that carries names alone, and the list it produces replaces
+                    // the richer one in the composer.
                     let own = names("skills")
                         .into_iter()
                         .collect::<std::collections::BTreeSet<_>>();
                     let skills = names("slash_commands")
                         .into_iter()
-                        .map(|name| AgentSkill {
-                            scope: own.contains(&name).then(|| "skill".to_owned()),
-                            name,
-                            description: None,
+                        .map(|name| {
+                            self.described
+                                .get(&name)
+                                .cloned()
+                                .unwrap_or_else(|| AgentSkill {
+                                    scope: own.contains(&name).then(|| "skill".to_owned()),
+                                    name,
+                                    description: None,
+                                })
                         })
                         .collect::<Vec<_>>();
 
@@ -1264,6 +1334,12 @@ impl Protocol for ClaudeProtocol {
                     })
                     .into_iter()
                     .collect(),
+                // The CLI saying its command list changed — plugins and MCP prompts finish loading
+                // after the process is up, so it follows `initialize`'s answer, and it is the
+                // complete list again rather than what was added. Captured as 88, 92 and 95 entries
+                // against an answer of 85. It used to fall through to `Raw`, a collapsed row in the
+                // transcript for something that is only ever the `/` menu's business.
+                Some("commands_changed") => self.learn(message.get("commands")),
                 // Recognised, and deliberately not shown.
                 //
                 // `thinking_tokens` is a running estimate emitted many times a second — a real turn
@@ -1357,6 +1433,17 @@ impl Protocol for ClaudeProtocol {
             // available for a control that says "bypass permissions".
             "control_response" => {
                 let response = message.get("response").unwrap_or(&Value::Null);
+                // The answer to the question written at open, handled first and by id, because its
+                // failure is not a refused settings change: an older CLI that does not know the
+                // subtype leaves the `/` menu as the disk seed made it, and saying so would be a
+                // warning about something nobody asked for.
+                if response.get("request_id").and_then(Value::as_str) == Some(COMMANDS_REQUEST) {
+                    return if response.get("subtype").and_then(Value::as_str) == Some("success") {
+                        self.learn(response.pointer("/response/commands"))
+                    } else {
+                        Vec::new()
+                    };
+                }
                 match response.get("subtype").and_then(Value::as_str) {
                     Some("error") => vec![Step::Emit(AgentEvent::Notice {
                         level: NoticeLevel::Warn,
@@ -1625,6 +1712,38 @@ impl Protocol for ClaudeProtocol {
             })
             .collect()
     }
+}
+
+/// Every command in a `commands` array: `{name, description, argumentHint, builtin?, aliases?}`.
+///
+/// `builtin` becomes the `built-in` scope the composer sorts last — the CLI's own flag, so it
+/// replaces the compiled catalogue's idea of which names those are — and everything else is a
+/// `skill`, the scope `init`'s `skills` array already gives. A plugin's skill, a bundled one and a
+/// user's own are not told apart, because nothing downstream does: the menu orders by built-in or
+/// not. Aliases and the argument hint are left out, since an `AgentSkill` has nowhere to put them.
+fn described_commands(commands: Option<&Value>) -> Vec<AgentSkill> {
+    commands
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|command| {
+            let name = command.get("name").and_then(Value::as_str)?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let builtin = command.get("builtin").and_then(Value::as_bool) == Some(true);
+            Some(AgentSkill {
+                name: name.to_owned(),
+                description: command
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|d| !d.is_empty())
+                    .map(str::to_owned),
+                scope: Some(if builtin { "built-in" } else { "skill" }.to_owned()),
+            })
+        })
+        .collect()
 }
 
 /// The transcript's copy of a user message: its attachments, then its text.

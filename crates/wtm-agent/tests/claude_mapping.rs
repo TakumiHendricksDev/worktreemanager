@@ -190,9 +190,9 @@ fn a_side_question_goes_out_behind_its_frame_but_is_echoed_as_the_user_typed_it(
 #[test]
 fn the_init_message_makes_the_session_ready_and_reports_the_id_the_cli_chose() {
     let mut d = driver();
-    // Ready at once: this CLI emits nothing until it is sent a turn, so gating readiness on `init`
+    // Ready at once: this CLI sends no `init` until it is sent a turn, so gating readiness on it
     // would leave a pane saying "starting…" until someone typed into it.
-    assert_eq!(d.open(), vec![Step::Ready]);
+    assert_eq!(d.open().last(), Some(&Step::Ready));
 
     let steps = d.on_line(
         r#"{"type":"system","subtype":"init","cwd":"/tmp/worktree","session_id":"e8581508-0000-4000-8000-06a0e8581508","tools":["Bash","Read","Write"],"mcp_servers":[{"name":"pycharm-debugger","status":"failed"}],"model":"claude-haiku-4-5-20251001","permissionMode":"default","slash_commands":["review"]}"#,
@@ -1498,6 +1498,146 @@ fn a_session_with_no_slash_commands_emits_no_empty_skill_row() {
         !events(&steps)
             .iter()
             .any(|e| matches!(e, AgentEvent::SkillsListed { .. }))
+    );
+}
+
+// What `initialize` answered on 2.1.296 from a worktree with project-scoped plugins, cut down: a plugin skill with its
+// namespace, a user skill, a built-in, and an entry with no description at all.
+const COMMANDS_ANSWER: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"wtm-commands","response":{"commands":[{"name":"acme-review:acme-review","description":"Review a PR against the team checklist","argumentHint":"<PR>"},{"name":"notes","description":"Look things up in the team notes","argumentHint":""},{"name":"compact","description":"Free up context","argumentHint":"","builtin":true},{"name":"bare","description":"","argumentHint":""}],"agents":[]}}}"#;
+
+#[test]
+fn opening_a_session_asks_the_cli_for_its_commands_before_anything_is_typed() {
+    // The `init` line that lists commands arrives only after the first turn, and a plugin's
+    // skills are in no directory wtm reads. `initialize` is answered with no turn, so this is the
+    // only way the `/` menu can show them on a pane nobody has spoken to.
+    let mut d = driver();
+    let steps = d.open();
+
+    let sent = writes(&steps);
+    assert_eq!(sent.len(), 1, "one question, and no other handshake");
+    assert_eq!(sent[0]["type"], "control_request");
+    assert_eq!(sent[0]["request_id"], "wtm-commands");
+    assert_eq!(sent[0]["request"]["subtype"], "initialize");
+    // Written ahead of `Ready` and not waited on: a CLI that never answers still has a usable pane.
+    assert_eq!(steps.last(), Some(&Step::Ready));
+}
+
+#[test]
+fn a_side_session_does_not_ask_for_commands_it_has_no_menu_to_show() {
+    let mut d = Claude.protocol(&SessionRequest {
+        cwd: "/tmp/worktree".to_owned(),
+        fork: Some("e8581508-0000-4000-8000-06a0e8581508".to_owned()),
+        ephemeral: true,
+        ..SessionRequest::default()
+    });
+    assert!(writes(&d.open()).is_empty());
+}
+
+#[test]
+fn the_commands_answer_becomes_the_composers_skill_list_with_descriptions_and_built_ins_marked() {
+    let mut d = driver();
+    let _ = d.open();
+
+    let steps = d.on_line(COMMANDS_ANSWER);
+
+    let listed = events(&steps)
+        .into_iter()
+        .find_map(|e| match e {
+            AgentEvent::SkillsListed { skills } => Some(skills),
+            _ => None,
+        })
+        .expect("SkillsListed");
+    let names: Vec<&str> = listed.iter().map(|s| s.name.as_str()).collect();
+    // The plugin's namespaced name, as the CLI spells it and as the user types it.
+    assert_eq!(
+        names,
+        ["acme-review:acme-review", "notes", "compact", "bare"]
+    );
+    assert_eq!(
+        listed[0].description.as_deref(),
+        Some("Review a PR against the team checklist")
+    );
+    // The CLI's own flag decides which are built in, and that is what sorts them last.
+    assert_eq!(listed[0].scope.as_deref(), Some("skill"));
+    assert_eq!(listed[2].scope.as_deref(), Some("built-in"));
+    // An empty description is no description, so the composer shows one column for it.
+    assert_eq!(listed[3].description, None);
+    // Nothing else in the answer is a transcript event.
+    assert_eq!(events(&steps).len(), 1);
+}
+
+#[test]
+fn a_commands_changed_line_replaces_the_list_instead_of_becoming_a_raw_row() {
+    // Plugins and MCP prompts finish loading after the process is up, so the list grows: 85
+    // entries in the answer and 95 by the third of these, on the CLI this was captured from.
+    let mut d = driver();
+    let _ = d.open();
+    let _ = d.on_line(COMMANDS_ANSWER);
+
+    let steps = d.on_line(
+        r#"{"type":"system","subtype":"commands_changed","commands":[{"name":"notes","description":"Look things up in the team notes","argumentHint":""},{"name":"claude.ai Calendar:plan_week (MCP)","description":"Plan the week","argumentHint":""}],"uuid":"u","session_id":"s"}"#,
+    );
+
+    let shown = events(&steps);
+    assert_eq!(shown.len(), 1);
+    match shown[0] {
+        AgentEvent::SkillsListed { skills } => {
+            let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+            assert_eq!(names, ["notes", "claude.ai Calendar:plan_week (MCP)"]);
+        }
+        other => panic!("expected SkillsListed, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_first_turns_init_line_keeps_the_descriptions_the_commands_answer_gave() {
+    // `init` names commands and nothing else, and the composer replaces its list wholesale with
+    // each one, so without this the first message sent would blank every description.
+    let mut d = driver();
+    let _ = d.open();
+    let _ = d.on_line(COMMANDS_ANSWER);
+
+    let steps = d.on_line(
+        r#"{"type":"system","subtype":"init","session_id":"e8581508-0000-4000-8000-06a0e8581508","tools":[],"model":"claude-haiku-4-5-20251001","slash_commands":["acme-review:acme-review","compact","newcomer"],"skills":["acme-review:acme-review","newcomer"]}"#,
+    );
+
+    let listed = events(&steps)
+        .into_iter()
+        .find_map(|e| match e {
+            AgentEvent::SkillsListed { skills } => Some(skills),
+            _ => None,
+        })
+        .expect("SkillsListed");
+    assert_eq!(
+        listed[0].description.as_deref(),
+        Some("Review a PR against the team checklist")
+    );
+    assert_eq!(listed[1].scope.as_deref(), Some("built-in"));
+    // A command the answer never described is still listed, the way `init` always listed it.
+    assert_eq!(listed[2].name, "newcomer");
+    assert_eq!(listed[2].description, None);
+    assert_eq!(listed[2].scope.as_deref(), Some("skill"));
+}
+
+#[test]
+fn a_refused_commands_request_says_nothing_rather_than_blaming_a_settings_change() {
+    // An older CLI that does not know the subtype answers with an error, and the disk seed is
+    // already in the menu. The error arm's "refused a settings change" would be about something
+    // the user never touched.
+    let mut d = driver();
+    let _ = d.open();
+
+    let steps = d.on_line(
+        r#"{"type":"control_response","response":{"subtype":"error","request_id":"wtm-commands","error":"Unknown request"}}"#,
+    );
+    assert!(steps.is_empty());
+
+    // And an empty or missing list never replaces a seeded menu with a blank one.
+    assert!(
+        d.on_line(
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"wtm-commands","response":{"commands":[]}}}"#,
+        )
+        .is_empty()
     );
 }
 

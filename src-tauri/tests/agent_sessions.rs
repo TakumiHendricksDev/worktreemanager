@@ -180,6 +180,67 @@ fn a_codex_session_completes_its_handshake_against_the_real_app_server() {
 }
 
 #[test]
+fn a_claude_session_lists_its_commands_before_any_turn_is_sent() {
+    // No turn is sent, so no credit is spent: `initialize` is answered by the CLI alone. What this
+    // pins is that the question `ClaudeProtocol::open` writes is still one the installed CLI
+    // answers, which the recorded lines in `wtm-agent`'s mapping tests cannot say. A CLI that
+    // stopped answering would look like the old bug — plugin skills missing until the first
+    // message — with no error anywhere.
+    let Some((entry, host)) = installed("claude") else {
+        return;
+    };
+
+    let recorder = Arc::new(Recorder::default());
+    let sink: Arc<dyn AgentSink> = Arc::clone(&recorder) as Arc<dyn AgentSink>;
+    let host: Arc<dyn PipeHost> = Arc::new(host);
+
+    let session =
+        wtm_agent::AgentSession::open(entry.provider, &request(), host, &sink, WEEK_MS, None)
+            .expect("the CLI should spawn");
+
+    // The disk seed lands at once and never marks anything built in, so a built-in in a list is
+    // the CLI's own answer rather than the seed.
+    let answered = settle(|| {
+        recorder.events.lock().iter().any(|e| match e {
+            AgentEvent::SkillsListed { skills } => skills
+                .iter()
+                .any(|s| s.scope.as_deref() == Some("built-in")),
+            _ => false,
+        })
+    });
+    assert!(
+        answered,
+        "the CLI never listed its commands without a turn. The session said: {}",
+        recorder.diagnosis()
+    );
+
+    let events = recorder.events.lock();
+    let listed = events
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            AgentEvent::SkillsListed { skills } => Some(skills),
+            _ => None,
+        })
+        .expect("a list");
+    assert!(
+        listed.iter().any(|s| s.description.is_some()),
+        "the answer carries descriptions, which the `init` line never does"
+    );
+    // And nothing about it reached the transcript as an unrecognised row.
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            AgentEvent::Raw { event, .. } if event.contains("commands_changed")
+        )),
+        "a `commands_changed` line should be the menu's business, not a transcript row"
+    );
+    drop(events);
+
+    session.close().expect("close");
+}
+
+#[test]
 fn two_sessions_in_one_worktree_are_independent() {
     // Keyed by worktree, the second would evict the first and its messages would go somewhere
     // else. This is the shape difference from the terminal dock, where a worktree has one shell.

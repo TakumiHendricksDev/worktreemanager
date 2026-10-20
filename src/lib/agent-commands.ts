@@ -3,10 +3,11 @@ import type { AgentSkill } from './ipc/types';
 /**
  * Provider-owned commands that are not included in the machine-readable capability handshake.
  *
- * Claude reports installed skills and commands only after its first turn; Codex app-server reports
- * skills but leaves TUI commands to its client. Keeping the documented built-ins here makes `/`
- * useful from the first prompt. Live discoveries are merged over this list, so repository skills,
- * plugins and future provider additions still win without an app release.
+ * Claude's `init` line lists them only after its first turn, and the list wtm asks it for at open is
+ * a process start away; Codex app-server reports skills but leaves TUI commands to its client.
+ * Keeping the documented built-ins here makes `/` useful from the first prompt. Live discoveries
+ * are merged over this list, so repository skills, plugins and future provider additions still win
+ * without an app release.
  */
 const CODEX: ReadonlyArray<readonly [string, string]> = [
   ['permissions', 'Change approval and sandbox permissions'],
