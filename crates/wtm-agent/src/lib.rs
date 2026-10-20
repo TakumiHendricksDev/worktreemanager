@@ -48,7 +48,10 @@ pub mod provider;
 pub mod session;
 pub mod skills;
 
-pub use capability::{carried_effort, claude_capability, codex_modes, implied_mode, prefer_effort};
+pub use capability::{
+    carried_effort, claude_capability, codex_modes, compiled_modes, implied_mode, mode_latitude,
+    mode_within, prefer_effort,
+};
 pub use catalogue::{CATALOGUE, ProviderEntry, entry};
 pub use provider::{McpServer, Provider, ProviderId, SessionRequest, Step};
 pub use session::AgentSession;

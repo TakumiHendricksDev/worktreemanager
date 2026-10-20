@@ -378,6 +378,18 @@ fn note_activity(entry: &mut AgentEntry, event: &AgentEvent) {
     }
 }
 
+/// The mode a provider says its session is in, from the two events that say so.
+///
+/// For the session's handoff token, whose mode is the ceiling on what it may delegate — see
+/// `handoff::Caller::mode`. Not kept on [`AgentEntry`]: the token is what the socket thread reads.
+fn reported_mode(event: &AgentEvent) -> Option<&str> {
+    match event {
+        AgentEvent::SessionReady { mode, .. } => mode.as_deref(),
+        AgentEvent::ModeChanged { mode } => Some(mode),
+        _ => None,
+    }
+}
+
 /// What an approval asks, in a few words: the kind, and for a command the command itself.
 ///
 /// For Home's session list, which says what a session is waiting on. Cut short, because a command
@@ -1907,6 +1919,12 @@ impl App {
         for event in early.iter() {
             note_activity(&mut agent, event);
         }
+        // And the mode it would have given the token, applied once the token is bound below.
+        let reported = early
+            .iter()
+            .filter_map(reported_mode)
+            .last()
+            .map(str::to_owned);
         agent.replay = early;
         agents.insert(id.clone(), agent);
         trim_global_replay(&mut agents, &id);
@@ -1916,6 +1934,9 @@ impl App {
             .and_then(|server| server.env.get(crate::handoff::TOKEN_ENV))
         {
             self.handoff.bind_session(token, id.as_str());
+            if let Some(mode) = &reported {
+                self.handoff.update_mode(id.as_str(), mode);
+            }
         }
         Ok(id)
     }
@@ -2577,6 +2598,9 @@ impl App {
             return early.entry(id).or_default().push(event);
         };
         note_activity(entry, event);
+        if let Some(mode) = reported_mode(event) {
+            self.handoff.update_mode(session, mode);
+        }
         let seq = entry.replay.push(event);
         trim_global_replay(&mut agents, &id);
         seq
@@ -2852,6 +2876,33 @@ pub(crate) fn expand_tilde(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_provider_reporting_its_mode_is_what_moves_a_tokens_mode_ceiling() {
+        // `ModeChanged` is the one that matters: it is how Claude says it dropped a mode it could
+        // not keep, and a token left on the old one would let the session hand out what it lost.
+        let ready = |mode: Option<&str>| AgentEvent::SessionReady {
+            provider_session_id: "p".to_owned(),
+            model: None,
+            effort: None,
+            mode: mode.map(str::to_owned),
+            tools: Vec::new(),
+        };
+        assert_eq!(reported_mode(&ready(Some("auto"))), Some("auto"));
+        assert_eq!(reported_mode(&ready(None)), None);
+        assert_eq!(
+            reported_mode(&AgentEvent::ModeChanged {
+                mode: "manual".to_owned()
+            }),
+            Some("manual")
+        );
+        assert_eq!(
+            reported_mode(&AgentEvent::TurnStarted {
+                turn: "t".to_owned()
+            }),
+            None
+        );
+    }
 
     #[test]
     fn only_direct_children_of_the_staging_directory_are_owned_by_a_session() {

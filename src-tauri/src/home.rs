@@ -1179,6 +1179,7 @@ fn home_server(
     app: &Arc<App>,
     provider: &str,
     effort: Option<&str>,
+    mode: Option<&str>,
 ) -> Option<wtm_agent::McpServer> {
     let socket = crate::bridge::socket_path().ok()?;
     let program = std::env::current_exe().ok()?;
@@ -1196,6 +1197,7 @@ fn home_server(
         scope: SessionScope::Home,
         provider: provider.to_owned(),
         effort: effort.map(str::to_owned),
+        mode: mode.map(str::to_owned),
         session: None,
     });
 
@@ -1318,7 +1320,12 @@ pub fn session_request(
         None,
     );
     let mut mcp = BTreeMap::new();
-    if let Some(server) = home_server(app, entry.id, choices.effort.as_deref()) {
+    if let Some(server) = home_server(
+        app,
+        entry.id,
+        choices.effort.as_deref(),
+        choices.mode.as_deref(),
+    ) {
         mcp.insert(handoff::SERVER_NAME.to_owned(), server);
     }
     Ok(wtm_agent::SessionRequest {

@@ -298,6 +298,87 @@ pub fn codex_modes() -> Vec<AgentMode> {
     ]
 }
 
+/// A provider's modes as this build compiled them, or nothing for a provider it does not know.
+///
+/// Compiled on purpose, even for Cursor, whose live answer can list more: what a mode lets a
+/// session do is decided where its meaning is known, and a mode that only arrived over the wire has
+/// a meaning nobody here has read. See [`mode_latitude`].
+#[must_use]
+pub fn compiled_modes(provider: &str) -> Vec<AgentMode> {
+    match provider {
+        crate::claude::ID => claude_capability().modes,
+        crate::codex::ID => codex_modes(),
+        crate::cursor::ID => crate::cursor::cursor_modes(),
+        _ => Vec::new(),
+    }
+}
+
+/// How much `mode` lets a `provider` session do without a person, for comparing two sessions' modes
+/// — including across providers, which is the usual case for a handoff.
+///
+/// `None` for a mode this build's tables do not have. The caller decides what that means, and the
+/// only caller treats it as the strictest answer: a mode nobody here can rate must not be the
+/// reason a delegated session gets more.
+///
+/// # Why this is the picker's tier, and where it is not
+///
+/// [`ModeRisk`] is already the provider-independent answer — it was made that rather than a mirror
+/// of either CLI's vocabulary so the picker could colour any provider's control — and a finer order
+/// does not exist to be had. Within one tier the modes are not even comparable with each other:
+/// Claude's `dontAsk` refuses what `acceptEdits` would have asked about, and `acceptEdits` writes
+/// what `dontAsk` would refuse.
+///
+/// The one correction is Cursor's Auto, which the picker rates [`ModeRisk::Elevated`] and this
+/// rates [`ModeRisk::Unsandboxed`]. The other providers' Auto puts a reviewer between the model and
+/// the machine; Cursor's is wtm answering every permission prompt with allow-once — see
+/// `CursorProtocol::auto_approve` — so as far as approval goes nothing is there at all, which is
+/// the property the top tier is about. The picker keeps its colour because there it is the user
+/// choosing for a pane they are looking at; here it is a model choosing for one it opens.
+#[must_use]
+pub fn mode_latitude(provider: &str, mode: &str) -> Option<ModeRisk> {
+    let risk = compiled_modes(provider)
+        .into_iter()
+        .find(|known| known.id == mode)?
+        .risk;
+    if provider == crate::cursor::ID && mode == "auto" {
+        return Some(ModeRisk::Unsandboxed);
+    }
+    Some(risk)
+}
+
+/// The mode wtm opens a `provider` session in when wtm is the one choosing and may go no further
+/// than `ceiling`, or `None` for a provider this build does not know.
+///
+/// The case is a delegated session whose request named no mode, from a caller that may not hand
+/// out the provider's default — see `handoff::unrequested_mode` in `src-tauri`. A fixed answer per
+/// tier rather than the highest mode within it, because within a tier the modes are not comparable
+/// (see [`mode_latitude`]), and what decides between them is what the session then *does*, which
+/// no rating says:
+///
+/// - **No plan mode, at either tier.** A session in plan mode answers a task with a proposal instead
+///   of the work, and approving the proposal carries it on in [`PLAN_APPROVED_MODE`], which for
+///   Cursor is the top tier this was keeping it out of.
+/// - **The one that asks.** Claude's `manual` and Codex's `read-only` both get on with the task and
+///   put each step past reading in front of the user, so a child told to apply a fix stops at a card
+///   rather than failing. Cursor has no mode in the bottom tier that edits at all, so `ask` answers
+///   and goes no further.
+/// - **Never the top tier, whatever the ceiling.** That is why Cursor's answer one tier up is
+///   `agent`, which asks when Cursor requires approval, and not wtm's Auto, which never does.
+#[must_use]
+pub fn mode_within(provider: &str, ceiling: ModeRisk) -> Option<&'static str> {
+    let (asks_first, acts) = match provider {
+        crate::claude::ID => ("manual", "auto"),
+        crate::codex::ID => ("read-only", "auto"),
+        crate::cursor::ID => ("ask", "agent"),
+        _ => return None,
+    };
+    Some(if ceiling >= ModeRisk::Elevated {
+        acts
+    } else {
+        asks_first
+    })
+}
+
 /// The rungs every Codex model supports, weakest first.
 ///
 /// A compiled floor, and the only thing [`carried_effort`] can honestly use. Asking the real
