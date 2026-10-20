@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 
 use wtm_core::model::{AgentAttachment, AgentEvent, ApprovalAnswer, Effort};
+use wtm_core::ports::exec::EnvScrub;
 
 /// Which provider. A newtype over a string rather than an enum, because the set is a compiled
 /// catalogue that grows, and an enum would put every provider's name in `wtm-core`'s vocabulary
@@ -82,6 +83,13 @@ pub struct SessionRequest {
     /// this field's absence is how `[agent.<id>.env]` came to be parsed, documented and then dropped
     /// on the floor: there was nowhere to put it.
     pub env: BTreeMap<String, String>,
+    /// Removed from the CLI's environment after [`Self::env`], for a workflow run session.
+    ///
+    /// Empty for every pane a person opens, which keep the environment they have always had. A run
+    /// session gets [`crate::run_profile::scrub`]. Applied at spawn by
+    /// [`crate::session::AgentSession`], like `env`, and last, so a repository's
+    /// `[agent.<id>.env]` cannot put back what it removes.
+    pub scrub: EnvScrub,
     /// A session to resume rather than start. The provider's own id.
     pub resume: Option<String>,
     /// A conversation to fork into a separate side session. The provider's own id.

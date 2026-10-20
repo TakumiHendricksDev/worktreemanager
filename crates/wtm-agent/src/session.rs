@@ -92,6 +92,7 @@ impl AgentSession {
         // After the repository's env, so it cannot be turned off: colour on the protocol pipe is
         // not a preference, it is a transcript full of escape codes.
         inv.env.insert("NO_COLOR".to_owned(), "1".to_owned());
+        inv.scrub = req.scrub.clone();
         let spawned = host.spawn(&inv, worktree, relay as Arc<dyn PipeSink>)?;
 
         let session = spawned.session;

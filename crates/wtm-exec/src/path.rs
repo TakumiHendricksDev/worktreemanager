@@ -36,6 +36,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use wtm_core::ports::exec::Invocation;
+
 /// How long to wait for the login shell to report its `PATH`.
 ///
 /// Generous enough for a profile that initializes a version manager, short enough
@@ -241,12 +243,49 @@ impl ResolvedPath {
     /// actively harmful to inherit are removed.
     #[must_use]
     pub fn child_env(&self) -> BTreeMap<String, String> {
-        let mut env: BTreeMap<String, String> =
-            std::env::vars().filter(|(k, _)| !is_stripped(k)).collect();
+        self.child_env_over(std::env::vars())
+    }
+
+    /// [`Self::child_env`] built from `parent` rather than this process's own environment.
+    fn child_env_over(
+        &self,
+        parent: impl IntoIterator<Item = (String, String)>,
+    ) -> BTreeMap<String, String> {
+        let mut env: BTreeMap<String, String> = parent
+            .into_iter()
+            .filter(|(k, _)| !is_stripped(k))
+            .collect();
         env.insert("PATH".to_owned(), self.value.clone());
         // Exposed as `{{ env.LOGIN_PATH }}` so a config can pass the resolved PATH
         // through to a nested shell explicitly.
         env.insert("LOGIN_PATH".to_owned(), self.value.clone());
+        env
+    }
+
+    /// The whole environment `inv` runs with: [`Self::child_env`], then `inv.env`, then `inv.scrub`.
+    ///
+    /// Every host builds a child's environment here, so the order cannot differ between a captured
+    /// command, a pipe session and a terminal. That order is what makes a scrub mean anything: see
+    /// [`EnvScrub`](wtm_core::ports::EnvScrub).
+    #[must_use]
+    pub fn env_for(&self, inv: &Invocation) -> BTreeMap<String, String> {
+        self.env_over(std::env::vars(), inv)
+    }
+
+    /// [`Self::env_for`] with `parent` standing in for this process's environment.
+    ///
+    /// Public because the property worth testing is what a child gets when the app was started
+    /// with credentials in its environment, and a test cannot put them there: `set_var` is
+    /// `unsafe` in edition 2024, and `unsafe` is forbidden here.
+    #[must_use]
+    pub fn env_over(
+        &self,
+        parent: impl IntoIterator<Item = (String, String)>,
+        inv: &Invocation,
+    ) -> BTreeMap<String, String> {
+        let mut env = self.child_env_over(parent);
+        env.extend(inv.env.clone());
+        inv.scrub.apply(&mut env);
         env
     }
 }
@@ -658,6 +697,39 @@ mod tests {
         if std::env::var_os("HOME").is_some() {
             assert!(env.contains_key("HOME"), "HOME must be inherited");
         }
+    }
+
+    #[test]
+    fn a_childs_environment_is_the_base_then_the_invocation_then_the_scrub() {
+        let resolved = ResolvedPath::resolve(Some("/custom/bin"));
+        let parent = [
+            ("HOME", "/Users/someone"),
+            ("GH_TOKEN", "inherited"),
+            ("CARGO", "/stripped/by/the/base"),
+        ]
+        .map(|(k, v)| (k.to_owned(), v.to_owned()));
+        let mut inv = Invocation::new(vec!["true".to_owned()], "/", 1).with_scrub(
+            wtm_core::ports::EnvScrub::default()
+                .remove_prefix("GH_")
+                .set("GH_CONFIG_DIR", "/empty"),
+        );
+        inv.env
+            .insert("GH_TOKEN".to_owned(), "from-the-repo".to_owned());
+        inv.env.insert("EXTRA".to_owned(), "kept".to_owned());
+
+        let env = resolved.env_over(parent, &inv);
+
+        let expected: BTreeMap<String, String> = [
+            ("EXTRA", "kept"),
+            ("GH_CONFIG_DIR", "/empty"),
+            ("HOME", "/Users/someone"),
+            ("LOGIN_PATH", "/custom/bin"),
+            ("PATH", "/custom/bin"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        assert_eq!(env, expected);
     }
 
     #[test]

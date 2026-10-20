@@ -341,8 +341,7 @@ impl PtyHost for PtyHostImpl {
         }
         cmd.cwd(&inv.cwd);
         cmd.env_clear();
-        let mut env = self.path.child_env();
-        env.extend(inv.env.clone());
+        let mut env = self.path.env_for(inv);
         // Without a TERM the child may refuse colour or, worse, fall back to a
         // dumb mode that redraws badly in xterm.js.
         env.entry("TERM".to_owned())

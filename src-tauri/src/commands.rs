@@ -2843,6 +2843,9 @@ pub fn session_request_for(
         ephemeral: false,
         extra_args: spec.extra_args.clone(),
         env: agent_env_for(app, project, spec)?,
+        // A pane a person opens keeps the environment it always had. Only a workflow run's session
+        // is scrubbed; see `run_profile.rs`.
+        scrub: wtm_core::ports::EnvScrub::default(),
         mcp,
         instructions: session_instructions(app, project, entry.id),
         effort,

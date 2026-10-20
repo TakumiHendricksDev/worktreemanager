@@ -1479,6 +1479,15 @@ fn snapshot_plan(snapshot: &Value) -> Option<String> {
     Some(label.to_owned())
 }
 
+/// The argv that asks the CLI how it is signed in, without starting an app server.
+///
+/// `program` is the resolved executable, as for Claude's `auth_status_argv`. Read by
+/// [`crate::run_profile::read_codex_status`].
+#[must_use]
+pub fn login_status_argv(program: &str) -> Vec<String> {
+    vec![program.to_owned(), "login".to_owned(), "status".to_owned()]
+}
+
 /// The account's limits out of an `account/rateLimits/read` reply.
 ///
 /// Reads `rateLimitsByLimitId` when the reply has it, because that is the view with every bucket
