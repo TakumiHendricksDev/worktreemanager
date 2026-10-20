@@ -226,8 +226,14 @@ class Attention {
    * worktree rather than by pane. Inside Home no worktree is, the selected one included: what Home
    * shows is its own conversation and, at most, the one pane it is peeking at. So a turn finishing
    * in the selected worktree while Home is up is news, which is exactly what Home's tree is for.
+   *
+   * Inside Work no pane is on screen at all. Its workspace names a worktree, but it draws that
+   * worktree's facts and reviews, never its sessions, so a turn finishing there is as unseen as one
+   * anywhere else — and, unlike Home, nothing in Work summarises sessions, which is why `announce`
+   * still toasts while it is up.
    */
   offScreen(worktreeId: string, paneId?: string): boolean {
+    if (view.work) return true;
     if (view.home) {
       return !isHome(worktreeId) && (paneId === undefined || paneId !== view.peeked);
     }

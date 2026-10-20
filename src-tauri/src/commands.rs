@@ -394,6 +394,41 @@ pub async fn set_pref(
     .await
 }
 
+/// Turn the Work view on or off: the preference, and the Go › Work item that follows it.
+///
+/// Its own command rather than `set_pref` noticing one key, because the menu is the half the window
+/// cannot do. A `set_pref` that quietly rebuilt menus for some keys would be a side effect nobody
+/// reading a call to it could see.
+#[tauri::command]
+pub async fn set_work_view(
+    app: AppState<'_>,
+    handle: tauri::AppHandle,
+    enabled: bool,
+) -> Reply<()> {
+    use tauri::Emitter;
+
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let value = if enabled { "on" } else { "off" };
+        app.config
+            .set_user_pref(crate::app::WORK_VIEW_PREF, value)?;
+        let _ = handle.emit(
+            PREF_CHANGED_EVENT,
+            PrefChanged {
+                key: crate::app::WORK_VIEW_PREF.to_owned(),
+                value: value.to_owned(),
+            },
+        );
+        // Saved is what matters. A menu that could not be rebuilt is right again at the next
+        // launch, which builds it from the preference, and the title bar never depended on it.
+        if let Err(error) = crate::install_menu(&handle, enabled) {
+            tracing::warn!(%error, "could not rebuild the application menu");
+        }
+        Ok(())
+    })
+    .await
+}
+
 // ─────────────────────────────── dictation ───────────────────────────────
 
 /// Whether dictation can be offered, and what is missing if not.

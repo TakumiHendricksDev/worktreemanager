@@ -1,0 +1,58 @@
+/*
+ * Worktrees · Home · Work, in the title bar once the Work view is turned on.
+ *
+ * A segmented control sized to sit beside the title bar's 24px buttons. The chosen segment is
+ * marked by its ground and colour, not its weight: a bolder label is a wider one, and the project
+ * picker beside this would shift every time the view changed.
+ */
+
+.c-view-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.c-view-switch__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  &.is-selected {
+    background: var(--bg-active);
+    color: var(--fg);
+  }
+}
+
+/* `.c-titlebar__count`'s look, inline in the segment rather than pinned to a corner: a segment
+   has room for it, and a badge hanging over the switch's border would read as part of the next. */
+.c-view-switch__count {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border: 1.5px solid var(--warn);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+  text-align: center;
+}

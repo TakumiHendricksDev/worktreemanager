@@ -37,6 +37,7 @@
   import { browserTools } from '../state/browser-tools.svelte';
   import { restoreSessions } from '../state/restore-sessions.svelte';
   import { sessionAwareness } from '../state/session-awareness.svelte';
+  import { view } from '../state/view.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -417,6 +418,28 @@
             quit stopped says so, and queued messages wait for you. Turned off, panes come
             back in place and each worktree's agents resume when you first open it. Applies
             from the next launch.
+          </p>
+        </div>
+
+        <!--
+          Off unless turned on, like session awareness: the view arrives in slices, and a third view
+          in the title bar is not something to find there unasked. Applies at once, including the
+          Go menu, which Rust rebuilds as the preference is saved.
+        -->
+        <div class="o-stack">
+          <h3 class="c-section-heading">Work view</h3>
+          <Choice
+            type="checkbox"
+            checked={view.workEnabled}
+            onchange={(enabled) => void view.setWorkEnabled(enabled)}
+          >
+            Show the Work view <span class="c-badge c-badge--accent">Preview</span>
+          </Choice>
+          <p class="c-field__help">
+            Adds Work beside Worktrees and Home in the title bar, and to the Go menu: a
+            queue of this project’s worktrees, a workspace for reviewing one, and an inbox.
+            Review runs are not in this build yet, so every worktree reads Not reviewed and
+            the inbox stays empty.
           </p>
         </div>
 

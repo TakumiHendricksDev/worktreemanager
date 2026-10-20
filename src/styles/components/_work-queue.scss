@@ -1,0 +1,132 @@
+/*
+ * The Work view's queue: the left column while Work is up, in the sidebar's place.
+ *
+ * Shaped like `.c-sidebar` and `.c-fleet` — the same ground, the same right border, hidden rather
+ * than unmounted — because it is the same column wearing a different list, and a column that
+ * changed its own chrome when the view changed would read as a different window.
+ *
+ * The rows are `.c-worktree-tab__button`'s size and states without its star, so a worktree looks
+ * like itself in either list. They are their own block rather than a variant of that one because
+ * the sidebar row is a tree item with a drag handle and a menu, and none of that applies here.
+ */
+
+.c-work-queue {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+
+  &.is-hidden {
+    display: none;
+  }
+}
+
+.c-work-queue__title {
+  flex: 0 0 auto;
+  margin: var(--sp-3) var(--sp-3) var(--sp-2);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-work-queue__scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+  padding: 0 var(--sp-2) var(--sp-3);
+  overflow-y: auto;
+}
+
+.c-work-queue__section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* `.c-section-heading`'s look at the queue's density: the column is narrow and holds several. */
+.c-work-queue__heading {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 var(--sp-2) var(--sp-1);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* In figures that do not shift as they change, and without the heading's tracking. */
+.c-work-queue__count {
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.c-work-queue__empty {
+  margin: 0 var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.45;
+}
+
+.c-work-queue__foot {
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.c-work-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-selected {
+    background: var(--bg-active);
+  }
+}
+
+/* Dropped to the first line's centre: a `c-dot` sits on the baseline, and this row's first line
+   is a name at `--step--1`, so the offset is half its line box less half the dot. */
+.c-work-row__mark {
+  flex: 0 0 auto;
+  margin-top: 5px;
+}
+
+.c-work-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.c-work-row__name {
+  overflow: hidden;
+  font-size: var(--step--1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-work-row__key {
+  font-weight: 600;
+}
+
+.c-work-row__status {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
