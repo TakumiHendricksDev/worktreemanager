@@ -296,8 +296,7 @@ impl PipeHost for PipeHostImpl {
                     searched: self.path.value.clone(),
                 })?;
 
-        let mut env = self.path.child_env();
-        env.extend(inv.env.clone());
+        let env = self.path.env_for(inv);
 
         // A sanctioned spawn site. See this crate's module docs.
         #[allow(clippy::disallowed_methods)]

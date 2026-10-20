@@ -45,6 +45,7 @@ pub mod codex;
 pub mod cursor;
 mod limits;
 pub mod provider;
+pub mod run_profile;
 pub mod session;
 pub mod skills;
 

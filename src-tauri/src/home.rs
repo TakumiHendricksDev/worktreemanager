@@ -1337,6 +1337,8 @@ pub fn session_request(
         fast: choices.fast,
         extra_args: Vec::new(),
         env: BTreeMap::new(),
+        // Home is driven by a person at its prompt, like a pane, so it keeps the app's environment.
+        scrub: wtm_core::ports::EnvScrub::default(),
         resume: choices.resume,
         fork: None,
         ephemeral: false,

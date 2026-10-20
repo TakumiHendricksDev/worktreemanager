@@ -10,6 +10,7 @@
 //! - [`plan`] — what we intend to do, and what happened.
 //! - [`agent`] — what an agent session reports, normalized across providers.
 //! - [`limits`] — what a provider *account* has left, which outlives any one session.
+//! - [`billing`] — how that account pays for tokens, which a workflow run checks before it starts.
 //! - [`files`] — what git lists inside one worktree, for the Code tab.
 //!
 //! Note that [`plan`] owns the name `Plan` and has since v0.1, for the create pipeline's
@@ -18,6 +19,7 @@
 //! disambiguation smell `ProjectMeta` exists to avoid.
 
 pub mod agent;
+pub mod billing;
 pub mod files;
 pub mod limits;
 pub mod naming;
@@ -31,6 +33,7 @@ pub use agent::{
     AgentSkill, ApprovalAnswer, ApprovalRequest, Effort, EffortOption, ModeRisk, NoticeLevel,
     Usage, UserInputOption, UserInputQuestion,
 };
+pub use billing::{AuthCheck, AuthMethod};
 pub use files::{ChangeKind, FileChange, Hunk, PathList};
 pub use limits::{LimitWindow, UsageLimits};
 pub use naming::{RESERVED_PREFIXES, TokenScope, TokenSet, namespace_of, shadows_reserved_prefix};

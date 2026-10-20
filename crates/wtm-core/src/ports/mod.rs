@@ -42,7 +42,7 @@ pub use clock::Clock;
 pub use config::{ConfigStore, TrustDecision};
 pub use database::{DatabaseConnection, DatabaseHost, DatabaseSession};
 pub use dictate::{DictateError, Utterance};
-pub use exec::{CancelToken, CommandRunner, Invocation, Output};
+pub use exec::{CancelToken, CommandRunner, EnvScrub, Invocation, Output};
 pub use flow::{FlowStore, FlowStoreError};
 pub use fs::FileStore;
 pub use git::{AddOptions, BranchFilter, Git};
