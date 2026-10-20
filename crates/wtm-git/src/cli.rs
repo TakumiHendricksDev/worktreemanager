@@ -50,12 +50,15 @@ pub struct GitCli {
     runner: Arc<dyn CommandRunner>,
     /// Remote used when listing remote branches and adopting remote-only ones.
     remote: String,
+    /// See [`Self::without_worktrees_under`].
+    left_out: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for GitCli {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GitCli")
             .field("remote", &self.remote)
+            .field("left_out", &self.left_out)
             .finish_non_exhaustive()
     }
 }
@@ -63,10 +66,7 @@ impl std::fmt::Debug for GitCli {
 impl GitCli {
     #[must_use]
     pub fn new(runner: Arc<dyn CommandRunner>) -> Self {
-        Self {
-            runner,
-            remote: "origin".to_owned(),
-        }
+        Self::with_remote(runner, "origin")
     }
 
     #[must_use]
@@ -74,7 +74,25 @@ impl GitCli {
         Self {
             runner,
             remote: remote.into(),
+            left_out: None,
         }
+    }
+
+    /// Leave every worktree under `dir` out of [`Git::list_worktrees`].
+    ///
+    /// For the checkouts the app makes for itself. A review reads its snapshot from a detached
+    /// checkout under the flow directory, and git lists that beside your own worktrees: without
+    /// this it would be in the sidebar, in Home and in the Work view's queue, and every route that
+    /// finds a worktree by id would offer panes, sessions and removal in it. Leaving it out here,
+    /// rather than in each of those, is what stops a caller written later from showing it.
+    ///
+    /// The create pipeline reads the same list and needs nothing it loses. Whether the target
+    /// directory is free is asked of the filesystem, and a detached checkout holds no branch that
+    /// could be "already checked out".
+    #[must_use]
+    pub fn without_worktrees_under(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.left_out = Some(dir.into());
+        self
     }
 
     #[must_use]
@@ -193,7 +211,14 @@ impl Git for GitCli {
             &["worktree", "list", "--porcelain", "-z"],
             QUERY_TIMEOUT,
         )?;
-        porcelain::parse_worktree_list(&out)
+        let mut worktrees = porcelain::parse_worktree_list(&out)?;
+        if let Some(dir) = &self.left_out {
+            // Resolved on every call rather than once when built: the flow directory is made by
+            // the first snapshot, after the app has started.
+            let dir = resolved(dir);
+            worktrees.retain(|worktree| !resolved(&worktree.path).starts_with(&dir));
+        }
+        Ok(worktrees)
     }
 
     fn prune_worktrees(&self, repo_root: &Path) -> Result<(), GitError> {
@@ -754,6 +779,33 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
+    }
+}
+
+/// `path` with the symlinks in its longest existing ancestor resolved.
+///
+/// For a containment test that [`paths_equal`]'s reason applies to: git may record a worktree's
+/// path resolved while the app spells a directory the way its environment did. Not plain
+/// `canonicalize`, which fails for a path that does not exist, and both sides can be missing: the
+/// flow directory before the first snapshot, or after somebody clears the app's data with a
+/// checkout open, which git then keeps listing until a prune.
+fn resolved(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            return missing
+                .into_iter()
+                .rev()
+                .fold(real, |real, name| real.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
     }
 }
 

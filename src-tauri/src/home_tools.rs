@@ -495,7 +495,8 @@ fn target(app: &App, home: &HomeCaller, args: &Value) -> Result<(String, AgentOv
     Ok((handle.trim().to_owned(), overview))
 }
 
-fn list_projects(app: &App) -> String {
+/// `list_projects`: every project, with each worktree as the sidebar shows it.
+pub fn list_projects(app: &App) -> String {
     let sessions = app.overview();
     let projects = match app.projects() {
         Ok(projects) => projects,

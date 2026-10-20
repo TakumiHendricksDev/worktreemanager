@@ -65,6 +65,10 @@ pub trait Git: Send + Sync {
     ///
     /// Must be implemented over `--porcelain -z`. The human-readable form has
     /// elastic column widths and cannot represent a path containing a space.
+    ///
+    /// The app's own checkouts, the ones [`Self::add_snapshot_checkout`] makes under the flow
+    /// directory, are left out by the adapter the app builds: they are not yours to open, remove
+    /// or start a session in.
     fn list_worktrees(&self, repo_root: &Path) -> Result<Vec<Worktree>, GitError>;
 
     /// Drop admin entries for worktrees whose directories are gone.

@@ -194,6 +194,8 @@ impl CreatePipeline {
         // Drop worktrees whose directories are already gone so a hand-deleted checkout
         // cannot raise a non-overridable `branch_in_use` that blocks re-create forever.
         let _ = self.git.prune_worktrees(&project.root);
+        // Without the app's snapshot checkouts, and preflight needs none of them: it asks the
+        // filesystem whether the directory is free, and a detached checkout holds no branch.
         let worktrees = self.git.list_worktrees(&project.root)?;
         let base_commit = self.git.rev_parse(&project.root, &base_ref)?;
 

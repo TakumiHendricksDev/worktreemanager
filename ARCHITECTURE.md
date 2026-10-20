@@ -252,7 +252,10 @@ a button" is what the rule above exists to keep true.
   the repository's code and this checkout is made with nobody watching. While it exists, git keeps
   an administrative entry for it in the common directory, holding the checkout's own detached
   `HEAD`. Removing the checkout removes both. That entry is the only thing in `.git` besides
-  objects, and it is never a ref under `refs/`.
+  objects, and it is never a ref under `refs/`. It also puts the checkout in `git worktree list`,
+  so the `GitCli` the app builds leaves out everything under the flow directory
+  (`without_worktrees_under`). No list the app shows, and no lookup by id, offers it as one of
+  yours; `src-tauri/tests/snapshot_checkouts.rs` checks that.
 
 `a_snapshot_writes_no_ref_and_leaves_the_reviewed_worktree_and_its_index_alone` in
 `crates/wtm-core/tests/snapshots.rs` holds this in place. It compares every ref, the reflog, the
