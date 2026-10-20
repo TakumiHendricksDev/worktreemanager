@@ -525,6 +525,8 @@ export const commands = {
   // ── preferences ──
   getPref: (key: string) => invoke<string | null>('get_pref', { key }),
   setPref: (key: string, value: string) => invoke<void>('set_pref', { key, value }),
+  /** `ui.work_view`, and the Go › Work menu item that only exists while it is on. */
+  setWorkView: (enabled: boolean) => invoke<void>('set_work_view', { enabled }),
   /** Palettes the user declared in `[ui.palettes]`. The built-in nine are not included. */
   listPalettes: () => invoke<Palette[]>('list_palettes'),
 

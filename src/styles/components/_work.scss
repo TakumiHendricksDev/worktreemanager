@@ -1,0 +1,175 @@
+/*
+ * The Work view's main column: the workspace for one queue row, and the inbox beside it.
+ *
+ * Hidden rather than unmounted, like `.c-surface` and `.c-home`. The inbox drops below the
+ * workspace when Work is narrower than the two need side by side — a container query rather than
+ * `HomeSurface`'s measured width, because only the layout changes here and not which panels
+ * exist. `.c-work` is the container, so the rule is written against `.c-work__columns`.
+ */
+
+.c-work {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  container-type: inline-size;
+
+  &.is-hidden {
+    display: none;
+  }
+}
+
+.c-work__columns {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.c-work__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-work__header {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+}
+
+.c-work__heading {
+  display: flex;
+  flex: 1 1 280px;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.c-work__title {
+  overflow: hidden;
+  font-size: var(--step-2);
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Branch on one line and the working tree's state on the next. A branch name is often most of a
+   line by itself, and two facts joined by a dot wrapped onto a line that began with the dot. */
+.c-work__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.c-work__panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--sp-5);
+  overflow-y: auto;
+}
+
+.c-work__inbox {
+  display: flex;
+  flex: 0 0 280px;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 0;
+  padding: var(--sp-3);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+}
+
+.c-work__inbox-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-work__count {
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.c-work__hint {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+@container (max-width: 720px) {
+  .c-work__columns {
+    flex-direction: column;
+  }
+
+  .c-work__inbox {
+    flex: 0 0 auto;
+    max-height: 40%;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
+
+/*
+ * One state of a review, as the Reviews tab draws it: what the state is, what it means, and the
+ * one thing to do about it. Only "Not reviewed yet" exists so far; the design's other states —
+ * running, waiting for capacity, interrupted, failed, stale, clean — are the same block.
+ */
+.c-work-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 640px;
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+}
+
+.c-work-state__eyebrow {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-work-state__title {
+  font-size: var(--step-1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-work-state__prose {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-work-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-1);
+}
+
+.c-work-state__note {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}

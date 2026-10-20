@@ -36,6 +36,8 @@
   import Toasts from './lib/components/Toasts.svelte';
   import TrustBanner from './lib/components/TrustBanner.svelte';
   import UpdateDialog from './lib/components/UpdateDialog.svelte';
+  import WorkQueue from './lib/components/WorkQueue.svelte';
+  import WorkSurface from './lib/components/WorkSurface.svelte';
   import Banner from './lib/components/ui/Banner.svelte';
   import Button from './lib/components/ui/Button.svelte';
   import Icon from './lib/components/ui/Icon.svelte';
@@ -219,6 +221,9 @@
       await browserTools.init();
       // Before `sessions.init`, which reads it once to decide whether to restore the last run.
       await restoreSessions.init();
+      // Before `booted`, so a remembered Work view that has since been turned off is left before
+      // any surface shows it.
+      await view.initWork();
       await dictation.init();
       if (gone) return;
 
@@ -292,8 +297,8 @@
        * seen a thing you were looking at.
        */
       // Not while Home is up, where the selected worktree is no more on screen than any other —
-      // `HomeSurface` marks what Home shows instead.
-      if (!view.home) sessions.markSeen(workspace.selectedWorktreeId);
+      // `HomeSurface` marks what Home shows instead — and not while Work is, which shows no pane.
+      if (view.worktree) sessions.markSeen(workspace.selectedWorktreeId);
       // At most daily, and only once the launch check has answered. See `update.svelte.ts`.
       updates.onFocus();
     };
@@ -312,6 +317,10 @@
     /* Go › Home from the same menu, by the same route: AppKit keeps ⇧⌘H for itself. */
     const unlistenHome = listen('wtm:home', () => {
       if (booted) view.toggleHome();
+    });
+    /* Go › Work, by the same route. The item only exists while Work is on, and `show` checks again. */
+    const unlistenWork = listen('wtm:work', () => {
+      if (booted) view.toggleWork();
     });
     /*
      * The usage registry. Independent of everything above, so not in the boot chain: the figures
@@ -376,8 +385,9 @@
           !document.querySelector('[aria-modal="true"]')
         ) {
           event.preventDefault();
-          // Home has no worktree in view, so there is nothing for the dialog to describe.
-          if (workspace.selected && !view.home) showInspector = true;
+          // Home has no worktree in view, so there is nothing for the dialog to describe. Work names
+          // one, but its own pick rather than the selection this dialog would describe.
+          if (workspace.selected && view.worktree) showInspector = true;
         }
       }
 
@@ -417,8 +427,8 @@
     const onCodeChord = (event: KeyboardEvent) => {
       const chord = chordOf(event);
       if (!chord || !booted || !workspace.selected) return;
-      // From Home a chord would open a worktree's Code tab you are not looking at.
-      if (view.home) return;
+      // From Home or Work a chord would open a worktree's Code tab you are not looking at.
+      if (!view.worktree) return;
       if (document.querySelector('[aria-modal="true"]')) return;
       event.preventDefault();
       event.stopPropagation();
@@ -435,6 +445,7 @@
       void unlistenSettings.then((off) => off());
       void unlistenUpdates.then((off) => off());
       void unlistenHome.then((off) => off());
+      void unlistenWork.then((off) => off());
       void unlistenUsage.then((off) => off());
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
@@ -507,7 +518,10 @@
   <TitleBar
     {sidebarCollapsed}
     home={view.home}
+    work={view.work}
+    workEnabled={view.workEnabled}
     ontogglehome={() => view.toggleHome()}
+    onshow={(place) => (place === 'worktrees' ? view.showWorktrees() : view.show(place))}
     ontogglesidebar={toggleSidebar}
     onaddproject={addProject}
     onremoveproject={() => (removingProject = workspace.activeProject)}
@@ -525,10 +539,10 @@
         In Home the session tree takes the sidebar's place rather than sitting beside it: one lists a
         project's worktrees, the other every project's, and two trees of the same checkouts side by
         side would be one too many. The sidebar stays mounted underneath, hidden, so its scroll and
-        its folds are where they were when you come back.
+        its folds are where they were when you come back. Work's queue takes it the same way.
       -->
       <Sidebar
-        hidden={view.home}
+        hidden={!view.worktree}
         onnew={() => view.show('new')}
         onselectworktree={() => view.show('worktree')}
         detailId={view.current === 'new' ? null : 'worktree-detail'}
@@ -542,6 +556,9 @@
             void workspace.selectProject(projectId).then(() => view.show('new'))}
           onaddproject={addProject}
         />
+      {/if}
+      {#if view.workMounted}
+        <WorkQueue visible={view.work} onnewworktree={() => view.show('new')} />
       {/if}
     </aside>
 
@@ -667,12 +684,12 @@
 
       {#if !booted}
         <div class="c-placeholder"><p>Starting…</p></div>
-      {:else if view.home}
-        <!-- Home draws itself, below; nothing from the worktree chain shows over it. -->
+      {:else if !view.worktree}
+        <!-- Home and Work draw themselves, below; nothing from the worktree chain shows over them. -->
       {:else if view.current === 'new' && workspace.activeProjectId}
         <NewWorktreePane
           projectId={workspace.activeProjectId}
-          onclose={() => view.show(view.previous === 'home' ? 'home' : 'worktree')}
+          onclose={() => view.closeCreate()}
         />
       {:else if workspace.projects.length === 0}
         <div class="c-placeholder">
@@ -750,6 +767,15 @@
             <HomeAgent visible={booted && view.home} />
           {/snippet}
         </HomeSurface>
+      {/if}
+      {#if view.workMounted}
+        <WorkSurface
+          visible={booted && view.work}
+          onopenworktree={(worktreeId) => {
+            if (workspace.activeProjectId)
+              void openWorktree(workspace.activeProjectId, worktreeId);
+          }}
+        />
       {/if}
     </main>
   </div>
