@@ -3580,7 +3580,7 @@ mod tests {
         wtm_toml: &str,
         home_mode: &str,
         agent: &str,
-        mode: &str,
+        mode: Option<&str>,
     ) -> Result<wtm_agent::SessionRequest, String> {
         let fixture = wtm_testkit::GitFixture::new();
         fixture.commit("wtm.toml", wtm_toml, "add wtm config");
@@ -3618,7 +3618,7 @@ mod tests {
             ("codex", "full-access"),
             ("cursor", "auto"),
         ] {
-            let refusal = open_from_home("", "auto", agent, mode)
+            let refusal = open_from_home("", "auto", agent, Some(mode))
                 .expect_err("a model cannot choose a top mode for a session it opens");
             assert!(
                 refusal.contains(&format!("[agent.{agent}] mode = \"{mode}\"")),
@@ -3629,7 +3629,8 @@ mod tests {
 
     #[test]
     fn home_cannot_open_a_session_further_up_than_home_itself_is() {
-        let refusal = open_from_home("", "plan", "codex", "auto").expect_err("Home is in plan");
+        let refusal =
+            open_from_home("", "plan", "codex", Some("auto")).expect_err("Home is in plan");
         assert!(refusal.contains("`plan`"), "{refusal}");
     }
 
@@ -3640,7 +3641,7 @@ mod tests {
             ("auto", "auto"),
             ("plan", "read-only"),
         ] {
-            let req = open_from_home("", home_mode, "codex", mode).expect("admitted");
+            let req = open_from_home("", home_mode, "codex", Some(mode)).expect("admitted");
             assert_eq!(req.mode.as_deref(), Some(mode));
         }
     }
@@ -3652,9 +3653,28 @@ mod tests {
             "[agent.claude]\nmode = \"bypassPermissions\"\n",
             "plan",
             "claude",
-            "bypassPermissions",
+            Some("bypassPermissions"),
         )
         .expect("the repository chose it");
         assert_eq!(req.mode.as_deref(), Some("bypassPermissions"));
+    }
+
+    #[test]
+    fn home_caps_the_mode_of_a_session_it_named_none_for() {
+        // Home itself is in Auto by default, so of its usual openings only Cursor's changes: it asks
+        // where it used to have wtm approve everything.
+        for (home_mode, agent, mode) in [
+            ("auto", "codex", "auto"),
+            ("auto", "claude", "auto"),
+            ("auto", "cursor", "agent"),
+            ("plan", "codex", "read-only"),
+        ] {
+            let req = open_from_home("", home_mode, agent, None).expect("not refused");
+            assert_eq!(
+                req.mode.as_deref(),
+                Some(mode),
+                "Home in `{home_mode}` opening {agent}"
+            );
+        }
     }
 }

@@ -346,6 +346,39 @@ pub fn mode_latitude(provider: &str, mode: &str) -> Option<ModeRisk> {
     Some(risk)
 }
 
+/// The mode wtm opens a `provider` session in when wtm is the one choosing and may go no further
+/// than `ceiling`, or `None` for a provider this build does not know.
+///
+/// The case is a delegated session whose request named no mode, from a caller that may not hand
+/// out the provider's default — see `handoff::unrequested_mode` in `src-tauri`. A fixed answer per
+/// tier rather than the highest mode within it, because within a tier the modes are not comparable
+/// (see [`mode_latitude`]), and what decides between them is what the session then *does*, which
+/// no rating says:
+///
+/// - **No plan mode, at either tier.** A session in plan mode answers a task with a proposal instead
+///   of the work, and approving the proposal carries it on in [`PLAN_APPROVED_MODE`], which for
+///   Cursor is the top tier this was keeping it out of.
+/// - **The one that asks.** Claude's `manual` and Codex's `read-only` both get on with the task and
+///   put each step past reading in front of the user, so a child told to apply a fix stops at a card
+///   rather than failing. Cursor has no mode in the bottom tier that edits at all, so `ask` answers
+///   and goes no further.
+/// - **Never the top tier, whatever the ceiling.** That is why Cursor's answer one tier up is
+///   `agent`, which asks when Cursor requires approval, and not wtm's Auto, which never does.
+#[must_use]
+pub fn mode_within(provider: &str, ceiling: ModeRisk) -> Option<&'static str> {
+    let (asks_first, acts) = match provider {
+        crate::claude::ID => ("manual", "auto"),
+        crate::codex::ID => ("read-only", "auto"),
+        crate::cursor::ID => ("ask", "agent"),
+        _ => return None,
+    };
+    Some(if ceiling >= ModeRisk::Elevated {
+        acts
+    } else {
+        asks_first
+    })
+}
+
 /// The rungs every Codex model supports, weakest first.
 ///
 /// A compiled floor, and the only thing [`carried_effort`] can honestly use. Asking the real

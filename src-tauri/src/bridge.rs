@@ -860,7 +860,7 @@ mod tests {
                 text.contains("than you can is refused") && text.contains("`wtm.toml`"),
                 "{tool}: {text}"
             );
-            let (offered, _) = text.split_once(". Usually").expect("a mode list");
+            let (offered, rest) = text.split_once(". Usually").expect("a mode list");
             // Exact lists, so Cursor's `auto` cannot slip in between `agent` and `plan`.
             assert!(
                 offered.contains("Codex: `read-only`, `auto`;")
@@ -870,6 +870,20 @@ mod tests {
             for top in ["bypassPermissions", "full-access"] {
                 assert!(!offered.contains(top), "{tool} offers {top}: {offered}");
             }
+            // What leaving it out gets, so a model in `plan` is not surprised by a read-only
+            // reviewer, and none of it Cursor's `auto`.
+            let (omitted, _) = rest.split_once(" Give one").expect("the omitted default");
+            assert!(
+                omitted.contains("Codex `auto`, Cursor Agent `agent` while you are in a mode that acts")
+                    && omitted.contains(
+                        "Claude Code `manual`, Codex `read-only`, Cursor Agent `ask` while you are in one that asks first"
+                    ),
+                "{tool}: {omitted}"
+            );
+            assert!(
+                !omitted.contains("Cursor Agent `auto`"),
+                "{tool}: {omitted}"
+            );
         }
     }
 
