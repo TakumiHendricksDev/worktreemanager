@@ -7,8 +7,8 @@ that were considered and rejected — those are the parts that get re-litigated 
 
 ## 1. The requirement that drives everything
 
-wtm must be **project agnostic**: no knowledge of `just`, Jira, Docker, or any particular repo in the
-Rust. But it must also be **flexible enough to drive a heavily-customized worktree setup**. The case
+wtm must be **project agnostic**: it knows _tools_, never _projects_, and no particular repo appears in
+the Rust. But it must also be **flexible enough to drive a heavily-customized worktree setup**. The case
 it was designed against allocates a dozen Docker host ports per worktree, clones a Postgres volume,
 generates a `.env`, symlinks shared directories, and derives its branch name from a live issue-tracker
 lookup — all through a 1,200-line bash script with an interactive stdin picker.
@@ -27,6 +27,22 @@ There is a test for it, not just a claim: `repo_hygiene.rs` scans every tracked 
 belonging to a specific project or machine and fails `just check` if any appear. The design held; the
 _fixtures_ did not, until that lint existed.
 
+### Tools, not projects
+
+This rule was first written as "no knowledge of `just`, Jira or Docker", and the code had already
+outgrown that wording. Claude, Codex and Cursor are compiled-in drivers in `wtm-agent`, because
+speaking a CLI's protocol is code and cannot be declared in TOML. The Work view, an optional
+issue-to-pull-request workflow, will compile in its forge and tracker adapters for the same reason:
+`wtm-forge` over `gh` and `wtm-tracker` over `acli`. The line that holds is between a _tool_, which
+wtm may know, and a _project_, which it may not.
+
+So everything a project decides stays configuration: whether it has a workflow at all, which tracker
+and forge it uses, its status names and how they map onto the workflow's, its custom fields, its
+integration branches, its checks, and the query that fills its queue. That is a `[workflow]` table,
+and adopting a team's statuses is still zero code changes. A project without the table gets no Work
+view and causes no tracker or forge call. `repo_hygiene.rs` keeps guarding the project side: no real
+project's name, ticket key or path may appear in the source.
+
 ---
 
 ## 2. Crate layout and the dependency rule
@@ -38,6 +54,7 @@ wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl 
 wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl both
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
+wtm-appdb    the app's own SQLite store for work items and flows (§9).     impl FlowStore
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
 ```
@@ -846,11 +863,12 @@ There is no telemetry, analytics or crash reporting. A reviewed shell Run author
 script's normal user access. Home's explicit, temporary worktree grant (§6f) authorizes subsequent
 commands within the user's task without another per-command click; it is off by default, revocable,
 and never restored. Granting is a direct user action, and the sheet states the filesystem and
-network authority involved.
+network authority involved. Enabling a project's workflow and starting a flow are direct actions
+too; what they go on to send without another click is set out below.
 
-**There is one request that is not a user action: the update check.** At launch, and at most daily
-after that, wtm asks `api.github.com` for its own latest release. That is a deliberate exception,
-and the argument for it is the shape of the request rather than its usefulness:
+**There is one request that no user action or setting asked for: the update check.** At launch,
+and at most daily after that, wtm asks `api.github.com` for its own latest release. That is a
+deliberate exception, and the argument for it is the shape of the request rather than its usefulness:
 
 - **It sends nothing.** A GET with no body, and no header about the user, the machine or the
   installation — not even a `User-Agent` of wtm's own, so the running version stays local. The
@@ -874,6 +892,27 @@ again. While wtm was unsigned there was a second reason: the cask's quarantine s
 upgraded app open at all, and a second installer would have had to re-implement that Gatekeeper
 bypass. Releases are notarized now, so only the first reason is left, and it is enough on its own.
 `wtm-update`'s module docs have the rest, including why the download runs *before* the app quits.
+
+**Workflow egress goes through the user's own `gh` and `acli`, and only for projects that enable
+it.** The Work view (§1) reads a project's tracker and forge: its issue queue, pull requests, checks
+and reviews. Behind approvals, it also writes to them. Every one of those requests is made by the
+user's own `gh` or `acli`, spawned through `wtm-exec` like any other subprocess and authenticated by
+the credentials those tools already hold, so it goes wherever those CLIs are configured to go,
+exactly as it would from a terminal. wtm stores no token for them and links no HTTP client.
+
+It is a category of its own rather than a variation on the routes above, for three reasons:
+
+- **It is opt-in per project.** A project without a `[workflow]` table causes none of it, and
+  enabling one is the setting that asks for the rest.
+- **Some reads are not a click.** Sync runs on demand and on window focus, as the worktree list
+  does, and after the app's own writes. §8's polling ban stands, and a timer would need a decision
+  of its own.
+- **Some writes are not a click either, and they are narrow.** A flow you started pushes its own
+  task branch and keeps its own draft pull request current without asking each time. Publishing a
+  review, posting a comment, marking a pull request ready, moving an issue and merging each wait for
+  an approval bound to the exact head or text, and merging has no agent tool at all.
+
+Neither `wtm-forge` nor `wtm-tracker` exists yet. This is the boundary they will be held to.
 
 **The egress is in Rust, and that placement is the whole design.** A `fetch` from the webview
 would have been fewer lines and would have widened `connect-src` — after which "the frontend
@@ -1411,8 +1450,35 @@ decision, and it belongs written down rather than discovered in eighteen months.
   `git2`'s worktree support is incomplete besides.
 - **A plugin or WASM extension system.** TOML + argv + minijinja already satisfies "no code changes for
   a new convention." A plugin host would be an order of magnitude more code for a case that doesn't exist.
-- **A database.** The projects list, trust store, and window state are one JSON file written atomically
-  (temp + rename).
+- **A database for configuration.** The config, the trust store, the resume list and Home's handles
+  are TOML files, each written atomically (temp + rename): readable, hand-editable, diffable, and kept
+  in a dotfiles repo by the people who keep one. That has not changed.
+
+  This entry used to say "a database" outright. The Work view's state is why it no longer does: work
+  items, flows and their append-only history, questions, approvals bound to exact revisions,
+  findings, rule revisions, and an outbox of writes to the forge and the tracker. That lives in
+  SQLite, at `~/.local/share/wtm/flow.db`, because files fail it in three specific places:
+
+  - **Uniqueness across records.** One work item per issue and one open flow of each kind per work
+    item are what make a double click start one flow. A check-then-write over files loses that
+    race; a `UNIQUE` constraint and a partial index cannot.
+  - **Atomicity across records.** A flow event and the flow it changes, or an outbox operation and
+    the step that queued it, must commit together or not at all. Temp + rename is atomic for one
+    file.
+  - **Queries.** The inbox, the queue and staleness are joins across all of it, which a directory
+    of JSON can only answer by reading everything.
+
+  SQLite because it is one file the app owns, with no server, and because `rusqlite` with SQLite
+  bundled was already in the build for the Database viewer, so the store added no dependency and
+  no licence. The alternative worth naming is an embedded key-value store (`redb`, `sled`), which
+  would have meant writing the constraints and the queries in Rust, on top of a new dependency.
+  Moving the TOML files into the database is not part of this: it would trade hand-editing for
+  nothing.
+
+  The shape follows §2. The rules (phases and holds, approval staleness, outbox states) are
+  `wtm-core::flow`, pure and covered by the `wasm32` check, not a domain crate of their own, which
+  §2 already rejected. `wtm-appdb` is one adapter behind its `FlowStore` port. Every schema change
+  is a numbered migration, preceded by a copy of the database.
 - **`--move-changes`** (stash/pop across worktrees). The one `create` feature with genuinely nasty
   failure modes — a pop conflict in a brand-new worktree — and rarely used. Config can express it later
   as a post-create step.

@@ -5854,6 +5854,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "wtm-appdb"
+version = "4.1.1"
+dependencies = [
+ "parking_lot",
+ "pretty_assertions",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "wtm-core",
+]
+
+[[package]]
 name = "wtm-code"
 version = "4.1.1"
 dependencies = [

@@ -45,6 +45,7 @@ doc-valid-idents = [
   "IntelliJ",
   "JetBrains",
   "PyCharm",
+  "SQLite",
   "WebStorm",
   "ToDesktop",
   "WezTerm",
