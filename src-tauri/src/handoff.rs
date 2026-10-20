@@ -279,6 +279,15 @@ pub struct Caller {
     /// `AgentEntry` keeps the `SessionRequest`, so asking "what effort is that pane on" from the
     /// socket thread has no answer — hence riding it on the token rather than looking it up.
     pub effort: Option<String>,
+    /// The permission mode the calling session is in, in its provider's spelling.
+    ///
+    /// The ceiling on any mode this caller asks a delegated session for — see [`mode_refusal`].
+    /// Starts as the mode it was opened with, for `effort`'s reason, and follows the session from
+    /// then on: a picker change through `configure_session`, and the mode the provider itself
+    /// reports, through `App::record_agent_event`. The provider's report matters in the strict
+    /// direction — Claude drops a mode it cannot keep and says so only on a `status` line, and a
+    /// caller that went on being rated by the mode it asked for would be handing out one it lost.
+    pub mode: Option<String>,
     /// Wtm's live session id, bound immediately after the provider process starts.
     pub session: Option<String>,
 }
@@ -372,6 +381,15 @@ impl Hub {
         for caller in self.tokens.lock().values_mut() {
             if caller.session.as_deref() == Some(session) {
                 caller.effort = Some(effort.to_owned());
+            }
+        }
+    }
+
+    /// Keep a caller's mode ceiling on the mode its session is actually in. See [`Caller::mode`].
+    pub fn update_mode(&self, session: &str, mode: &str) {
+        for caller in self.tokens.lock().values_mut() {
+            if caller.session.as_deref() == Some(session) {
+                caller.mode = Some(mode.to_owned());
             }
         }
     }
@@ -587,7 +605,6 @@ fn collect_all(children: &BTreeMap<String, Vec<Child>>, parent: &str) -> Vec<Chi
 /// oversight: the user asked to see what the other agent did, and closing the pane the moment the
 /// caller got its answer would destroy the transcript they wanted to read.
 pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Response {
-    const MAX_TASKS: usize = 20;
     // An unknown token falls through to each handler's own message, so no refusal text changes
     // for the callers that existed before scopes did.
     if let Some(caller) = app.handoff.resolve(&request.token)
@@ -624,26 +641,10 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
         }
         Action::Delegate => {}
     }
-    let tasks = if request.tasks.is_empty() {
-        vec![Task {
-            title: None,
-            agent: request.agent.clone(),
-            model: request.model.clone(),
-            effort: request.effort.clone(),
-            mode: request.mode.clone(),
-            prompt: request.prompt.clone(),
-        }]
-    } else {
-        request.tasks.clone()
+    let tasks = match delegated_tasks(app, request) {
+        Ok(tasks) => tasks,
+        Err(refusal) => return refusal,
     };
-    if tasks.len() > MAX_TASKS {
-        return Response::failed(format!(
-            "one orchestration run may start at most {MAX_TASKS} agents"
-        ));
-    }
-    if tasks.iter().any(|task| task.prompt.trim().is_empty()) {
-        return Response::failed("every agent task needs a non-empty prompt");
-    }
 
     let run_id = uuid::Uuid::new_v4().to_string();
     if tasks.len() == 1 {
@@ -657,7 +658,7 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
         );
     }
 
-    let concurrency = request.concurrency.unwrap_or(4).clamp(1, MAX_TASKS);
+    let concurrency = request.concurrency.unwrap_or(4).clamp(1, MAX_DELEGATED);
     let mut results = Vec::with_capacity(tasks.len());
     for wave in tasks.chunks(concurrency) {
         let mut workers = Vec::with_capacity(wave.len());
@@ -711,6 +712,214 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
         .collect::<Vec<_>>()
         .join("\n\n");
     Response::ok(text)
+}
+
+/// How many children one delegation may open.
+const MAX_DELEGATED: usize = 20;
+
+/// The children a delegation asks for, or the refusal to send instead of opening any of them.
+///
+/// `ask_agent` names one agent at the top level and `spawn_agents` sends a list, and both become
+/// the same list here, so nothing after this has to tell them apart. Free of the window handle so
+/// the route can be tested without one.
+///
+/// Every task's mode is checked before the first child opens, so a run with one refused mode opens
+/// none. The fault is in what was asked rather than in what happened, and the alternative — the
+/// rest opened, and an "Agent failed" section for the one that was not — is a *successful* tool
+/// result, which a model can read past. A refusal is an error it has to answer. `open_pane` checks
+/// again, because it is where every route to a session passes.
+pub(crate) fn delegated_tasks(app: &App, request: &Request) -> Result<Vec<Task>, Response> {
+    let tasks = if request.tasks.is_empty() {
+        vec![Task {
+            title: None,
+            agent: request.agent.clone(),
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            mode: request.mode.clone(),
+            prompt: request.prompt.clone(),
+        }]
+    } else {
+        request.tasks.clone()
+    };
+    if tasks.len() > MAX_DELEGATED {
+        return Err(Response::failed(format!(
+            "one orchestration run may start at most {MAX_DELEGATED} agents"
+        )));
+    }
+    if tasks.iter().any(|task| task.prompt.trim().is_empty()) {
+        return Err(Response::failed(
+            "every agent task needs a non-empty prompt",
+        ));
+    }
+
+    // Each of these leaves the task to `run_task`, which refuses it with the message it already had.
+    let Some(caller) = app.handoff.resolve(&request.token) else {
+        return Ok(tasks);
+    };
+    let Some(project) = caller
+        .scope
+        .place()
+        .and_then(|(project, _)| app.project(project).ok())
+    else {
+        return Ok(tasks);
+    };
+    let several = tasks.len() > 1;
+    let refusals: Vec<String> = tasks
+        .iter()
+        .filter_map(|task| {
+            let requested = task.mode.as_deref()?;
+            let target = task.agent.trim();
+            // An agent this build does not have is `open_pane`'s to refuse, by name.
+            wtm_agent::entry(target)?;
+            let refusal = mode_refusal(
+                &caller.provider,
+                caller.mode.as_deref(),
+                target,
+                requested,
+                project.agent_spec(target).mode.as_deref(),
+            )?;
+            Some(if several {
+                format!("{}: {refusal}", task.title.as_deref().unwrap_or(target))
+            } else {
+                refusal
+            })
+        })
+        .collect();
+    if refusals.is_empty() {
+        Ok(tasks)
+    } else {
+        Err(Response::failed(if several {
+            format!("No agent was started.\n{}", refusals.join("\n"))
+        } else {
+            refusals.concat()
+        }))
+    }
+}
+
+/// Why a model may not open a `target` session in the mode it `requested`, or `None` if it may.
+///
+/// The mode is the model's to choose because a read-only reviewer is a reasonable thing to ask
+/// for. What it may not do is choose its way past an approval, and two rules say what that means:
+///
+/// - **No further than the caller.** A session cannot hand out more than it has. A caller in
+///   `plan` that could open a child in `auto` would have a way out of plan mode that never asked
+///   anybody. Measured by [`wtm_agent::mode_latitude`], which is what makes a Claude mode
+///   comparable with a Codex one. A caller whose mode is unknown, or is one this build cannot rate,
+///   is rated at the bottom, because the opposite guess is the one that opens a door.
+/// - **Never to the top.** A mode with nothing between the model and the machine —
+///   `bypassPermissions`, `full-access`, Cursor's Auto — is refused even to a caller in one itself.
+///   A person put that pane there, looking at it; a model multiplying it into children nobody
+///   chose is a different act.
+///
+/// Both give way to the repository's own `[agent.<id>] mode`. That is the mode the child gets when
+/// the request says nothing, so asking for it by name changes nothing, and refusing it would only
+/// teach the model to stop saying what it wants. It is also the one way to let a model choose a
+/// top mode: a line in `wtm.toml` is a decision somebody made for that repository.
+///
+/// # Why a refusal and not a downgrade
+///
+/// This codebase does clamp: [`wtm_agent::carried_effort`] steps an effort down to a rung the target
+/// has, and Codex's `expand_mode` reads a mode it does not know as its cautious middle preset. Both
+/// handle a value nobody chose for *this* session — inherited from a caller, or left in a stale
+/// `wtm.toml` — where there is nobody to tell. Here a model asked, in this call, and is waiting
+/// for the answer. A child asked to apply a fix and opened read-only instead fails at its first
+/// edit, in a pane already on screen, and a model told nothing concludes the other agent is broken.
+/// So it gets what a model-authored value gets everywhere else in wtm — `offers_agent`, or a Home
+/// form value outside its list: a refusal saying why, and what it may ask for instead.
+pub(crate) fn mode_refusal(
+    caller_provider: &str,
+    caller_mode: Option<&str>,
+    target: &str,
+    requested: &str,
+    repository: Option<&str>,
+) -> Option<String> {
+    use wtm_core::model::ModeRisk;
+
+    if repository == Some(requested) {
+        return None;
+    }
+    let ceiling = caller_mode
+        .and_then(|mode| wtm_agent::mode_latitude(caller_provider, mode))
+        .unwrap_or(ModeRisk::Normal);
+    let label = wtm_agent::entry(target).map_or(target, |entry| entry.label);
+    let instead = || {
+        // The top tier is never on this list, whatever the ceiling: only the repository's own line
+        // can name one, and that is added separately.
+        let mut ids: Vec<String> = wtm_agent::compiled_modes(target)
+            .into_iter()
+            .filter(|mode| {
+                wtm_agent::mode_latitude(target, &mode.id)
+                    .is_some_and(|latitude| latitude <= ceiling.min(ModeRisk::Elevated))
+            })
+            .map(|mode| format!("`{}`", mode.id))
+            .collect();
+        if let Some(own) = repository {
+            ids.push(format!("`{own}` (this repository's own setting)"));
+        }
+        ids.join(", ")
+    };
+    let why = match wtm_agent::mode_latitude(target, requested) {
+        None => format!(
+            "`{requested}` is not a {label} mode this build of wtm knows, so it cannot tell what \
+             it would allow."
+        ),
+        Some(ModeRisk::Unsandboxed) => format!(
+            "`{requested}` lets a {label} session act with no approval at all, and a model cannot \
+             choose that: only this repository's `wtm.toml` can, with \
+             `[agent.{target}] mode = \"{requested}\"`."
+        ),
+        Some(latitude) if latitude > ceiling => format!(
+            "`{requested}` would let the {label} session do more without asking than this session \
+             may in {}, and a session cannot hand out more than it has.",
+            caller_mode.map_or_else(
+                || "a mode wtm does not know".to_owned(),
+                |m| format!("`{m}`")
+            )
+        ),
+        Some(_) => return None,
+    };
+    Some(format!("{why} Modes you may ask for: {}.", instead()))
+}
+
+/// What every tool that opens a session says about its `mode` argument.
+///
+/// One text for `ask_agent`, `spawn_agents` and Home's `open_session`, because it states the rule
+/// [`mode_refusal`] enforces and three copies would drift from it. The modes are listed from the
+/// same tables the rule rates them by, per agent `agents` offers, without the top tier: a model
+/// that is never offered `bypassPermissions` is less likely to spend a call learning it is refused.
+#[must_use]
+pub fn mode_description(agents: &[(String, String)]) -> String {
+    use wtm_core::model::ModeRisk;
+
+    let modes = agents
+        .iter()
+        .map(|(id, label)| {
+            let ids = wtm_agent::compiled_modes(id)
+                .into_iter()
+                .filter(|mode| {
+                    wtm_agent::mode_latitude(id, &mode.id)
+                        .is_some_and(|latitude| latitude < ModeRisk::Unsandboxed)
+                })
+                .map(|mode| format!("`{}`", mode.id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{label}: {ids}")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let modes = if modes.is_empty() {
+        String::new()
+    } else {
+        format!(" — {modes}")
+    };
+    format!(
+        "Optional permission mode for the new session, in that agent's own spelling{modes}. \
+         Usually left out, so the repository's own setting applies; give one to ask for a \
+         stricter mode, such as `read-only` or `plan` for a review. A mode that would let the new \
+         session do more without asking than you can is refused, and so is one that approves \
+         everything — Claude `bypassPermissions`, Codex `full-access`, Cursor `auto` — unless \
+         the repository's `wtm.toml` sets that mode for that agent."
+    )
 }
 
 /// Why a caller of this scope may not take this action, or `None` if it may.
@@ -830,6 +1039,7 @@ fn run_task(
         opened_by: None,
         caller_provider: &caller.provider,
         caller_effort: caller.effort.as_deref(),
+        caller_mode: caller.mode.as_deref(),
         run: Some(run_id),
     };
     let session = match open_pane(handle, app, &placement, target, task) {
@@ -907,20 +1117,30 @@ pub(crate) struct Placement<'a> {
     pub parent_session: Option<&'a str>,
     /// The Home session that opened it. Set, the pane is tiled in its worktree.
     pub opened_by: Option<&'a str>,
-    /// Who is asking, for carrying their effort across.
+    /// Who is asking, for carrying their effort across and for capping the mode they may ask for.
     pub caller_provider: &'a str,
     pub caller_effort: Option<&'a str>,
+    /// The mode the asking session is in now. See [`Caller::mode`].
+    pub caller_mode: Option<&'a str>,
     pub run: Option<&'a str>,
 }
 
-/// Open a session for a handoff or for Home, and tell the frontend to adopt it.
-pub(crate) fn open_pane(
-    handle: &tauri::AppHandle,
+/// A session `open_pane` has cleared to open, and the request it will open it with.
+pub(crate) struct PaneRequest {
+    pub entry: &'static wtm_agent::ProviderEntry,
+    pub req: wtm_agent::SessionRequest,
+}
+
+/// Every refusal `open_pane` makes, and the request it would open, without opening anything.
+///
+/// Its own function so the refusals can be tested without a window: this half needs only the app,
+/// where the other half needs the handle the new pane is announced on.
+pub(crate) fn pane_request(
     app: &Arc<App>,
     placement: &Placement<'_>,
     target: &str,
     task: &Task,
-) -> Result<SessionId, String> {
+) -> Result<PaneRequest, String> {
     let (project_id, worktree_id) = (placement.project, placement.worktree);
     let project = app
         .project(project_id)
@@ -952,15 +1172,38 @@ pub(crate) fn open_pane(
 
     let spec = project.agent_spec(target);
 
+    // Here and not only where each tool reads its arguments, because this is the one place every
+    // route to a session passes: `ask_agent`, `spawn_agents` and Home's `open_session` today, and
+    // whatever is added next without anybody remembering this rule.
+    if let Some(requested) = task.mode.as_deref()
+        && let Some(refusal) = mode_refusal(
+            placement.caller_provider,
+            placement.caller_mode,
+            target,
+            requested,
+            spec.mode.as_deref(),
+        )
+    {
+        tracing::warn!(
+            from = %placement.caller_provider,
+            to = target,
+            requested,
+            caller_mode = ?placement.caller_mode,
+            "refused a delegated session's mode"
+        );
+        return Err(refusal);
+    }
+
     /*
      * The caller's effort, in the target's own vocabulary.
      *
-     * `options` stays `None` — there is no picker on this route, so model and mode still come from
-     * the repository and the compiled defaults. Effort is the one setting worth carrying, and the
-     * only one that *can* be: it is a shared word ladder, where a model id is not (`opus` means
-     * nothing to Codex) and a mode is provider vocabulary (`acceptEdits` likewise). Someone who set
-     * a session to `max` before asking it for a second opinion meant the second opinion to be
-     * considered too, and taking the target's interactive default instead quietly ignored that.
+     * What the model asked for rides in `options` and outranks it — model, effort, and the mode
+     * just admitted. When it asked for nothing, effort is the one setting of the caller's worth
+     * carrying, and the only one that *can* be: it is a shared word ladder, where a model id is not
+     * (`opus` means nothing to Codex) and a mode is provider vocabulary (`acceptEdits` likewise).
+     * Someone who set a session to `max` before asking it for a second opinion meant the second
+     * opinion to be considered too, and taking the target's interactive default instead quietly
+     * ignored that.
      *
      * `carried_effort` owns the translation, including the two top rungs that must not cross. It
      * returns `None` when nothing sensible carries, which falls through to the layers
@@ -1004,6 +1247,19 @@ pub(crate) fn open_pane(
         inherited.as_deref(),
     )
     .map_err(|e| e.message)?;
+    Ok(PaneRequest { entry, req })
+}
+
+/// Open a session for a handoff or for Home, and tell the frontend to adopt it.
+pub(crate) fn open_pane(
+    handle: &tauri::AppHandle,
+    app: &Arc<App>,
+    placement: &Placement<'_>,
+    target: &str,
+    task: &Task,
+) -> Result<SessionId, String> {
+    let PaneRequest { entry, req } = pane_request(app, placement, target, task)?;
+    let (project_id, worktree_id) = (placement.project, placement.worktree);
 
     let sink: Arc<dyn wtm_agent::session::AgentSink> =
         crate::agent_bridge::AgentEventSink::new(handle.clone());
@@ -1117,6 +1373,7 @@ mod tests {
             scope: SessionScope::worktree("/repo", worktree),
             provider: "claude".to_owned(),
             effort: Some("max".to_owned()),
+            mode: None,
             session: None,
         }
     }
@@ -1230,6 +1487,7 @@ mod tests {
             scope: SessionScope::Home,
             provider: "claude".to_owned(),
             effort: None,
+            mode: None,
             session: None,
         });
         let worktree = hub.issue(caller("wt-a"));
@@ -1492,6 +1750,7 @@ mod tests {
             scope: SessionScope::worktree("p", "wt-a"),
             provider: "claude".to_owned(),
             effort: None,
+            mode: None,
             session: None,
         });
         hub.record_child_for(&token, child("orphan", "wt-a"));
@@ -1511,6 +1770,7 @@ mod tests {
             scope: SessionScope::worktree("p", "wt-a"),
             provider: "claude".to_owned(),
             effort: None,
+            mode: None,
             session: None,
         });
         hub.forget_unbound(&token);
@@ -1579,5 +1839,358 @@ mod tests {
         let back: Response = serde_json::from_str(&json).unwrap();
         assert!(back.ok);
         assert_eq!(back.mime.as_deref(), Some("image/png"));
+    }
+
+    // ── The mode a model may ask a delegated session for ──────────────────────────────────────
+    //
+    // A model choosing a child's mode is how a session in `plan` could get work done in `auto`, or
+    // any session could get a child that skips the user entirely. These pin `mode_refusal` on its
+    // own, then the two routes that reach it — `ask_agent` and `spawn_agents`, through
+    // `delegated_tasks` — and `open_pane`'s own check behind them, against a real repository.
+
+    /// The modes a refusal offers instead, as the ids between its backticks.
+    fn offered(refusal: &str) -> Vec<String> {
+        let (_, list) = refusal
+            .split_once("Modes you may ask for: ")
+            .unwrap_or_else(|| panic!("no alternatives in: {refusal}"));
+        list.split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn a_delegated_session_may_not_be_opened_further_up_than_the_session_asking() {
+        // A Claude session in plan mode asking Codex to just make the change: its way out of plan
+        // mode, had this been accepted, would have been one nobody approved.
+        let refusal = mode_refusal("claude", Some("plan"), "codex", "auto", None)
+            .expect("plan cannot hand out auto");
+        assert!(refusal.contains("`plan`"), "{refusal}");
+        assert_eq!(offered(&refusal), ["read-only"]);
+
+        let refusal = mode_refusal("codex", Some("read-only"), "claude", "acceptEdits", None)
+            .expect("read-only cannot hand out accept-edits");
+        assert_eq!(offered(&refusal), ["manual", "plan"]);
+    }
+
+    #[test]
+    fn a_mode_no_more_permissive_than_the_callers_is_admitted() {
+        for (provider, mode, target, requested) in [
+            // Equal, across providers and within one.
+            ("claude", "auto", "codex", "auto"),
+            ("codex", "auto", "claude", "auto"),
+            ("claude", "acceptEdits", "claude", "dontAsk"),
+            ("claude", "plan", "cursor", "ask"),
+            // Stricter.
+            ("claude", "auto", "codex", "read-only"),
+            ("codex", "auto", "cursor", "plan"),
+            ("claude", "bypassPermissions", "codex", "auto"),
+            ("cursor", "auto", "claude", "acceptEdits"),
+        ] {
+            assert_eq!(
+                mode_refusal(provider, Some(mode), target, requested, None),
+                None,
+                "{provider} in `{mode}` asking for {target} in `{requested}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mode_that_approves_everything_is_refused_even_to_a_caller_in_one() {
+        // A person put the caller there; a model multiplying it into children nobody chose is not
+        // the same decision, so the caller's own mode is no ceiling for these.
+        for (target, requested) in [
+            ("claude", "bypassPermissions"),
+            ("codex", "full-access"),
+            ("cursor", "auto"),
+        ] {
+            let refusal =
+                mode_refusal("claude", Some("bypassPermissions"), target, requested, None)
+                    .unwrap_or_else(|| panic!("{target} `{requested}` should be refused"));
+            assert!(
+                refusal.contains(&format!("[agent.{target}] mode = \"{requested}\"")),
+                "the refusal should say what would allow it: {refusal}"
+            );
+            assert!(!offered(&refusal).contains(&requested.to_owned()));
+        }
+    }
+
+    #[test]
+    fn the_repositorys_own_mode_is_admitted_whoever_asks_for_it() {
+        // It is what the child would get with no `mode` at all, so naming it changes nothing.
+        assert_eq!(
+            mode_refusal(
+                "claude",
+                Some("plan"),
+                "codex",
+                "full-access",
+                Some("full-access")
+            ),
+            None
+        );
+        assert_eq!(
+            mode_refusal("codex", None, "cursor", "auto", Some("auto")),
+            None
+        );
+        // Only that one: the repository setting one mode is not consent to another.
+        assert!(
+            mode_refusal(
+                "claude",
+                Some("auto"),
+                "claude",
+                "bypassPermissions",
+                Some("acceptEdits")
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn a_mode_wtm_cannot_rate_is_refused_and_a_caller_it_cannot_rate_is_rated_at_the_bottom() {
+        let refusal = mode_refusal("claude", Some("auto"), "codex", "danger-full-access", None)
+            .expect("Codex's own spelling of its top sandbox is not a wtm mode");
+        assert!(
+            refusal.starts_with("`danger-full-access` is not a Codex mode this build of wtm knows"),
+            "{refusal}"
+        );
+        assert_eq!(offered(&refusal), ["read-only", "auto"]);
+
+        // A caller whose mode is missing, or is one only the live CLI advertised, may hand out only
+        // what asks first.
+        for caller_mode in [None, Some("debug")] {
+            assert!(mode_refusal("cursor", caller_mode, "codex", "auto", None).is_some());
+            assert_eq!(
+                mode_refusal("cursor", caller_mode, "codex", "read-only", None),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn every_mode_a_refusal_offers_instead_would_itself_be_admitted() {
+        // The list is the model's way forward. Offering a mode the next call refuses again would
+        // be a loop, and offering a top one would be a hole.
+        let callers = [
+            ("claude", Some("plan")),
+            ("claude", Some("auto")),
+            ("claude", Some("bypassPermissions")),
+            ("codex", Some("read-only")),
+            ("cursor", Some("auto")),
+            ("claude", None),
+        ];
+        for (provider, mode) in callers {
+            for target in ["claude", "codex", "cursor"] {
+                for repository in [None, Some("plan")] {
+                    let Some(refusal) =
+                        mode_refusal(provider, mode, target, "not-a-mode", repository)
+                    else {
+                        panic!("an unknown mode is always refused");
+                    };
+                    let offered = offered(&refusal);
+                    assert!(!offered.is_empty(), "{refusal}");
+                    for alternative in offered {
+                        assert_eq!(
+                            mode_refusal(provider, mode, target, &alternative, repository),
+                            None,
+                            "{provider} {mode:?} was offered {target} `{alternative}`"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bound_tokens_mode_tracks_the_mode_its_session_is_in() {
+        let hub = Hub::default();
+        let token = hub.issue(Caller {
+            mode: Some("auto".to_owned()),
+            ..caller("wt-a")
+        });
+        hub.update_mode("session-a", "plan");
+        assert_eq!(
+            hub.resolve(&token).unwrap().mode.as_deref(),
+            Some("auto"),
+            "an unbound token belongs to no session yet"
+        );
+
+        hub.bind_session(&token, "session-a");
+        hub.update_mode("session-a", "plan");
+        assert_eq!(hub.resolve(&token).unwrap().mode.as_deref(), Some("plan"));
+    }
+
+    /// A real repository the app knows, with `wtm_toml` as its config, and the app.
+    struct Repo {
+        app: Arc<App>,
+        root: String,
+        _fixture: wtm_testkit::GitFixture,
+        _config: tempfile::TempDir,
+    }
+
+    impl Repo {
+        fn new(wtm_toml: &str) -> Self {
+            let fixture = wtm_testkit::GitFixture::new();
+            fixture.commit("wtm.toml", wtm_toml, "add wtm config");
+            let config = tempfile::tempdir().unwrap();
+            let app =
+                Arc::new(App::with_paths(wtm_config::AppPaths::rooted(config.path())).unwrap());
+            let root = app.register(fixture.root()).unwrap();
+            Self {
+                app,
+                root: root.to_string_lossy().into_owned(),
+                _fixture: fixture,
+                _config: config,
+            }
+        }
+
+        /// A token for a `provider` session in `mode`, in this repository's main checkout.
+        fn caller(&self, provider: &str, mode: &str) -> String {
+            self.app.handoff.issue(Caller {
+                scope: SessionScope::worktree(&self.root, &self.root),
+                provider: provider.to_owned(),
+                effort: None,
+                mode: Some(mode.to_owned()),
+                session: Some("caller".to_owned()),
+            })
+        }
+
+        /// The request `open_pane` would open `task` with, for a Claude caller in `mode`.
+        fn pane(&self, mode: &str, task: &Task) -> Result<wtm_agent::SessionRequest, String> {
+            let placement = Placement {
+                project: &self.root,
+                worktree: &self.root,
+                parent_session: Some("caller"),
+                opened_by: None,
+                caller_provider: "claude",
+                caller_effort: None,
+                caller_mode: Some(mode),
+                run: None,
+            };
+            pane_request(&self.app, &placement, &task.agent, task).map(|pane| pane.req)
+        }
+    }
+
+    fn task(title: &str, agent: &str, mode: &str) -> Task {
+        Task {
+            title: Some(title.to_owned()),
+            agent: agent.to_owned(),
+            model: None,
+            effort: None,
+            mode: Some(mode.to_owned()),
+            prompt: "Review the change on this branch.".to_owned(),
+        }
+    }
+
+    #[test]
+    fn ask_agent_refuses_a_mode_the_model_may_not_choose_before_anything_opens() {
+        let repo = Repo::new("");
+        let ask = |mode: &str| Request {
+            token: repo.caller("claude", "auto"),
+            agent: "codex".to_owned(),
+            prompt: "Apply the fix.".to_owned(),
+            mode: Some(mode.to_owned()),
+            ..Request::default()
+        };
+
+        let refusal = delegated_tasks(&repo.app, &ask("full-access")).expect_err("refused");
+        assert!(!refusal.ok);
+        let error = refusal.error.unwrap();
+        assert!(
+            error.starts_with("`full-access` lets a Codex session act with no approval"),
+            "{error}"
+        );
+
+        let admitted = delegated_tasks(&repo.app, &ask("read-only")).expect("admitted");
+        assert_eq!(admitted[0].mode.as_deref(), Some("read-only"));
+    }
+
+    #[test]
+    fn spawn_agents_refuses_the_whole_run_when_any_child_asks_for_too_much() {
+        let repo = Repo::new("");
+        let request = Request {
+            token: repo.caller("claude", "plan"),
+            tasks: vec![
+                task("Reviewer", "codex", "read-only"),
+                task("Fixer", "codex", "auto"),
+                task("Sweeper", "cursor", "auto"),
+            ],
+            ..Request::default()
+        };
+
+        let error = delegated_tasks(&repo.app, &request)
+            .expect_err("one child over the line refuses the run")
+            .error
+            .unwrap();
+        assert!(error.starts_with("No agent was started."), "{error}");
+        assert!(error.contains("\nFixer: `auto` would let the Codex session"));
+        assert!(error.contains("\nSweeper: `auto` lets a Cursor Agent session"));
+        assert!(!error.contains("Reviewer"), "{error}");
+
+        // Equal or stricter is fine, which is every task in a read-only review swarm.
+        let review = Request {
+            token: repo.caller("claude", "plan"),
+            tasks: vec![
+                task("Reviewer", "codex", "read-only"),
+                task("Planner", "claude", "plan"),
+                task("Asker", "cursor", "ask"),
+            ],
+            ..Request::default()
+        };
+        assert_eq!(delegated_tasks(&repo.app, &review).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn open_pane_refuses_the_same_modes_whichever_route_reached_it() {
+        // The check every route passes, including one added later that forgets the rule.
+        let repo = Repo::new("");
+        let refusal = repo
+            .pane("auto", &task("Fixer", "claude", "bypassPermissions"))
+            .expect_err("refused at open_pane too");
+        assert!(refusal.contains("[agent.claude] mode"), "{refusal}");
+
+        let refusal = repo
+            .pane("plan", &task("Fixer", "codex", "auto"))
+            .expect_err("refused at open_pane too");
+        assert!(refusal.contains("`plan`"), "{refusal}");
+    }
+
+    #[test]
+    fn an_admitted_mode_reaches_the_session_unchanged() {
+        // No quiet downgrade: what the model was told it would get is what the child is opened in.
+        let repo = Repo::new("");
+        for (mode, child) in [
+            ("auto", "read-only"),
+            ("auto", "auto"),
+            ("plan", "read-only"),
+        ] {
+            let req = repo
+                .pane(mode, &task("Reviewer", "codex", child))
+                .expect("admitted");
+            assert_eq!(req.mode.as_deref(), Some(child));
+        }
+    }
+
+    #[test]
+    fn a_top_mode_the_repository_set_for_that_agent_may_be_asked_for() {
+        let repo = Repo::new("[agent.codex]\nmode = \"full-access\"\n");
+        let request = Request {
+            token: repo.caller("claude", "plan"),
+            agent: "codex".to_owned(),
+            prompt: "Run the migration.".to_owned(),
+            mode: Some("full-access".to_owned()),
+            ..Request::default()
+        };
+        assert!(delegated_tasks(&repo.app, &request).is_ok());
+        let req = repo
+            .pane("plan", &task("Migrator", "codex", "full-access"))
+            .expect("the repository chose it");
+        assert_eq!(req.mode.as_deref(), Some("full-access"));
+
+        // That line is about Codex. Claude's top mode is still not the model's to choose.
+        assert!(
+            repo.pane("auto", &task("Fixer", "claude", "bypassPermissions"))
+                .is_err()
+        );
     }
 }

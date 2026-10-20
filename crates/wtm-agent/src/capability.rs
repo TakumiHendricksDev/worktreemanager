@@ -298,6 +298,54 @@ pub fn codex_modes() -> Vec<AgentMode> {
     ]
 }
 
+/// A provider's modes as this build compiled them, or nothing for a provider it does not know.
+///
+/// Compiled on purpose, even for Cursor, whose live answer can list more: what a mode lets a
+/// session do is decided where its meaning is known, and a mode that only arrived over the wire has
+/// a meaning nobody here has read. See [`mode_latitude`].
+#[must_use]
+pub fn compiled_modes(provider: &str) -> Vec<AgentMode> {
+    match provider {
+        crate::claude::ID => claude_capability().modes,
+        crate::codex::ID => codex_modes(),
+        crate::cursor::ID => crate::cursor::cursor_modes(),
+        _ => Vec::new(),
+    }
+}
+
+/// How much `mode` lets a `provider` session do without a person, for comparing two sessions' modes
+/// — including across providers, which is the usual case for a handoff.
+///
+/// `None` for a mode this build's tables do not have. The caller decides what that means, and the
+/// only caller treats it as the strictest answer: a mode nobody here can rate must not be the
+/// reason a delegated session gets more.
+///
+/// # Why this is the picker's tier, and where it is not
+///
+/// [`ModeRisk`] is already the provider-independent answer — it was made that rather than a mirror
+/// of either CLI's vocabulary so the picker could colour any provider's control — and a finer order
+/// does not exist to be had. Within one tier the modes are not even comparable with each other:
+/// Claude's `dontAsk` refuses what `acceptEdits` would have asked about, and `acceptEdits` writes
+/// what `dontAsk` would refuse.
+///
+/// The one correction is Cursor's Auto, which the picker rates [`ModeRisk::Elevated`] and this
+/// rates [`ModeRisk::Unsandboxed`]. The other providers' Auto puts a reviewer between the model and
+/// the machine; Cursor's is wtm answering every permission prompt with allow-once — see
+/// `CursorProtocol::auto_approve` — so as far as approval goes nothing is there at all, which is
+/// the property the top tier is about. The picker keeps its colour because there it is the user
+/// choosing for a pane they are looking at; here it is a model choosing for one it opens.
+#[must_use]
+pub fn mode_latitude(provider: &str, mode: &str) -> Option<ModeRisk> {
+    let risk = compiled_modes(provider)
+        .into_iter()
+        .find(|known| known.id == mode)?
+        .risk;
+    if provider == crate::cursor::ID && mode == "auto" {
+        return Some(ModeRisk::Unsandboxed);
+    }
+    Some(risk)
+}
+
 /// The rungs every Codex model supports, weakest first.
 ///
 /// A compiled floor, and the only thing [`carried_effort`] can honestly use. Asking the real

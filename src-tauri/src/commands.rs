@@ -2313,6 +2313,9 @@ pub async fn configure_session(
         if let Some(effort) = effort.as_deref() {
             app.handoff.update_effort(&session, effort);
         }
+        if let Some(mode) = mode.as_deref() {
+            app.handoff.update_mode(&session, mode);
+        }
         Ok(())
     })
     .await
@@ -2789,9 +2792,10 @@ fn probe_cursor(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Stri
 /// its `[agent.*.mcp.*]` servers, or its mode default would apply to a pane the user opened and not
 /// to one an agent opened — a difference nothing in the UI would explain.
 ///
-/// `options` is `None` for a handoff, which has no picker to express a preference with. `inherited`
-/// is how that route still gets an effort: the calling session's own, already translated into this
-/// target's vocabulary by [`wtm_agent::carried_effort`].
+/// For a handoff, `options` is what the delegating model asked for, and its mode has already been
+/// admitted by `handoff::mode_refusal` — this function layers settings, it does not police them.
+/// `inherited` is how that route gets an effort the model did not name: the calling session's own,
+/// already translated into this target's vocabulary by [`wtm_agent::carried_effort`].
 ///
 /// # Errors
 ///
@@ -2814,6 +2818,18 @@ pub fn session_request_for(
         fast,
     } = session_choices(spec, entry, options, inherited);
 
+    // The resolved effort and mode, not the caller's — so a session's handoff token carries what it
+    // is actually running at. See `handoff::Caller::effort` and `handoff::Caller::mode`.
+    let mcp = mcp_servers_for(
+        app,
+        project,
+        spec,
+        worktree,
+        entry.id,
+        effort.as_deref(),
+        mode.as_deref(),
+    )?;
+
     Ok(wtm_agent::SessionRequest {
         cwd: worktree.path.to_string_lossy().into_owned(),
         // Machine discovery belongs to `App::open_agent`, immediately before spawn, so a CLI
@@ -2826,9 +2842,7 @@ pub fn session_request_for(
         ephemeral: false,
         extra_args: spec.extra_args.clone(),
         env: agent_env_for(app, project, spec)?,
-        // The resolved effort, not the caller's — so a session's handoff token offers the rung it is
-        // actually running at. See `handoff::Caller::effort`.
-        mcp: mcp_servers_for(app, project, spec, worktree, entry.id, effort.as_deref())?,
+        mcp,
         instructions: session_instructions(app, project, entry.id),
         effort,
         fast,
@@ -3144,10 +3158,11 @@ fn mcp_servers_for(
     worktree: &wtm_core::model::Worktree,
     provider: &str,
     effort: Option<&str>,
+    mode: Option<&str>,
 ) -> Result<BTreeMap<String, wtm_agent::McpServer>, ErrorView> {
     let mut servers = BTreeMap::new();
 
-    if let Some(bridge) = handoff_server(app, project, worktree, provider, effort) {
+    if let Some(bridge) = handoff_server(app, project, worktree, provider, effort, mode) {
         servers.insert(handoff::SERVER_NAME.to_owned(), bridge);
     }
 
@@ -3211,16 +3226,18 @@ fn mcp_servers_for(
 ///
 /// Every session gets one, and that default is deliberate. The blast radius is not new: the target
 /// comes from the compiled catalogue rather than from config, it runs in the *caller's own* worktree,
-/// it is refused unless the repository offers it, and its own approval mode applies exactly as it
-/// would to a hand-opened pane. An agent that can already run `bash` in this directory is not
-/// meaningfully further constrained by being unable to open a sibling pane — and a handoff is visible
-/// on screen, which a subprocess is not.
+/// it is refused unless the repository offers it, and the mode it may be asked to open in is capped
+/// at this session's own and kept off the approve-everything modes — see `handoff::mode_refusal`.
+/// An agent that can already run `bash` in this directory is not meaningfully further constrained
+/// by being unable to open a sibling pane — and a handoff is visible on screen, which a subprocess
+/// is not.
 fn handoff_server(
     app: &Arc<App>,
     project: &wtm_core::model::Project,
     worktree: &wtm_core::model::Worktree,
     provider: &str,
     effort: Option<&str>,
+    mode: Option<&str>,
 ) -> Option<wtm_agent::McpServer> {
     let socket = crate::bridge::socket_path().ok()?;
     // `current_exe` rather than a bundled sidecar. See `main.rs`.
@@ -3239,6 +3256,7 @@ fn handoff_server(
         scope: crate::app::SessionScope::worktree(project.id.as_str(), worktree.id.as_str()),
         provider: provider.to_owned(),
         effort: effort.map(str::to_owned),
+        mode: mode.map(str::to_owned),
         session: None,
     });
 
