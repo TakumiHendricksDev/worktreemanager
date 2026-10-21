@@ -90,6 +90,14 @@ pub struct SessionRequest {
     /// [`crate::session::AgentSession`], like `env`, and last, so a repository's
     /// `[agent.<id>.env]` cannot put back what it removes.
     pub scrub: EnvScrub,
+    /// The authority profile of a workflow run session, or `None` for every pane a person opens.
+    ///
+    /// When set, it is the whole of what the session may do, and the provider builds its argv from
+    /// it and from nothing a repository wrote: `extra_args` are not appended, `mode` is replaced by
+    /// the profile's, and `mcp` is not put on the argv, because a run's bridge token goes in a file
+    /// rather than in a process listing. `mcp` still carries the bridge, so the app can bind the
+    /// token it issued to the session that started. See [`crate::authority`].
+    pub run: Option<crate::authority::RunAuthority>,
     /// A session to resume rather than start. The provider's own id.
     pub resume: Option<String>,
     /// A conversation to fork into a separate side session. The provider's own id.

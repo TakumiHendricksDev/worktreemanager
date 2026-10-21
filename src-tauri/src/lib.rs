@@ -19,6 +19,8 @@ pub mod commands;
 pub mod design_evidence;
 pub mod dictate;
 pub mod display;
+pub mod flow_session;
+pub mod flow_tools;
 pub mod handoff;
 pub mod home;
 pub mod home_shells;

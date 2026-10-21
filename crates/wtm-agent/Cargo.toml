@@ -34,3 +34,5 @@ pretty_assertions = { workspace = true }
 # For `skills.rs`, which is the one module here that reads the filesystem — it reads a provider's
 # own skill directories, so its tests need real ones.
 tempfile         = { workspace = true }
+# To prove the Codex home `authority` generates is TOML Codex can read, by reading it back.
+toml             = { workspace = true }

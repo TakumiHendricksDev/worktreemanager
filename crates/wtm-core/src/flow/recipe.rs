@@ -141,6 +141,17 @@ pub enum RoleProfile {
     Writer,
 }
 
+impl RoleProfile {
+    /// The config spelling, which is also what a run session's bridge is told it is.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reviewer => "reviewer",
+            Self::Writer => "writer",
+        }
+    }
+}
+
 /// Which files a role reads while it works.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

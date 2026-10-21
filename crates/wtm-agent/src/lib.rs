@@ -38,6 +38,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+pub mod authority;
 pub mod capability;
 pub mod catalogue;
 pub mod claude;

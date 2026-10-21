@@ -827,10 +827,12 @@ mod tests {
             project: "/x".to_owned(),
             provider: "codex".to_owned(),
             provider_session: "019fd37c".to_owned(),
+            flow: None,
         };
         assert_eq!(
             keys_of(&serde_json::to_value(&session).unwrap()),
             [
+                "flow",
                 "project",
                 "provider",
                 "providerSession",
@@ -1046,6 +1048,9 @@ pub struct AgentSessionView {
     pub provider: String,
     /// Empty until the provider's handshake has named the conversation.
     pub provider_session: String,
+    /// A workflow run's role, so a reloaded window puts its pane back behind the run's rail rather
+    /// than tiling a session nobody opened by hand.
+    pub flow: Option<crate::app::FlowRole>,
 }
 
 /// One browser pane, as the window sees it.

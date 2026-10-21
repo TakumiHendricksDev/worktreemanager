@@ -73,6 +73,10 @@ pub struct SpawnedSession {
     /// pane. `parent_session` is then `None`: a Home-opened pane is not a delegation child, and
     /// the frontend's close cascade and rail must not treat it as one.
     pub opened_by: Option<String>,
+    /// The run and role of a workflow run's session. Set, the window keeps the pane behind the
+    /// run's rail and never tiles it, though `parent_session` is `None`: a run session is
+    /// nobody's delegation, and the close cascade must not treat it as one either.
+    pub flow: Option<crate::app::FlowRole>,
 }
 
 /// Event name for sessions Rust closed on its own initiative.

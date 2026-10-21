@@ -133,8 +133,33 @@ pub const HOME_KEY: &str = "@home";
 /// does: which sessions belong where is a concern of this app, not of the domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionScope {
-    Worktree { project: String, worktree: String },
+    Worktree {
+        project: String,
+        worktree: String,
+        /// Set for a workflow run's session, and then the whole of what its bridge may do.
+        ///
+        /// A field on the worktree scope rather than a third variant, because a run session *is* in
+        /// a worktree — its pane, its resume key, its removal with the worktree are all a worktree
+        /// session's, and every caller of [`Self::place`] is right to treat it as one. What differs
+        /// is authority, and that is decided in exactly two places: the bridge lists only the run
+        /// tools for such a token, and `handoff::run` refuses it everything else at the socket.
+        flow: Option<FlowRole>,
+    },
     Home,
+}
+
+/// Which run, and which role in it, a session's token speaks for.
+///
+/// The token is scoped to the pair, so a role's tools act on its own run and nothing a model writes
+/// can name another. `authority` rides along because `flow_checkpoint` is a writer's and the check
+/// is made per call, from the token, not from what the bridge chose to list.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowRole {
+    pub flow: wtm_core::flow::FlowId,
+    /// The role's name in its recipe.
+    pub role: String,
+    pub authority: wtm_agent::authority::Authority,
 }
 
 impl SessionScope {
@@ -143,6 +168,17 @@ impl SessionScope {
         Self::Worktree {
             project: project.to_owned(),
             worktree: worktree.to_owned(),
+            flow: None,
+        }
+    }
+
+    /// A workflow run session's scope: a worktree, and the run role it holds there.
+    #[must_use]
+    pub fn run(project: &str, worktree: &str, role: FlowRole) -> Self {
+        Self::Worktree {
+            project: project.to_owned(),
+            worktree: worktree.to_owned(),
+            flow: Some(role),
         }
     }
 
@@ -150,7 +186,18 @@ impl SessionScope {
     #[must_use]
     pub fn place(&self) -> Option<(&str, &str)> {
         match self {
-            Self::Worktree { project, worktree } => Some((project, worktree)),
+            Self::Worktree {
+                project, worktree, ..
+            } => Some((project, worktree)),
+            Self::Home => None,
+        }
+    }
+
+    /// The run role, for a workflow run's session.
+    #[must_use]
+    pub fn flow(&self) -> Option<&FlowRole> {
+        match self {
+            Self::Worktree { flow, .. } => flow.as_ref(),
             Self::Home => None,
         }
     }
@@ -906,6 +953,8 @@ pub struct App {
     /// minted while a session's config is built — and read on the socket thread. One owner for both
     /// is what keeps that from needing a channel.
     pub handoff: crate::handoff::Hub,
+    /// What each workflow run's roles have said through their run tools. See `flow_tools.rs`.
+    pub flow_ledger: crate::flow_tools::Ledger,
     /// Browser panes. Its own struct, like `handoff`, because it is consulted from the main thread's
     /// page-load callbacks as well as from commands — see `browser.rs` for the lock discipline.
     pub browsers: crate::browser::Host,
@@ -1052,6 +1101,7 @@ impl App {
             terminal_replay: parking_lot::Mutex::new(BTreeMap::new()),
             pane_windows: crate::pane_windows::Registry::default(),
             handoff: crate::handoff::Hub::default(),
+            flow_ledger: crate::flow_tools::Ledger::default(),
             browsers: crate::browser::Host::default(),
             code_comments: crate::code_comments::Store::default(),
             usage: crate::usage::Registry::default(),

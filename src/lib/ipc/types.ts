@@ -718,6 +718,20 @@ export interface AgentSession {
    * What a re-attaching window matches a live session against, so it lands in the pane it was in.
    */
   providerSession: string;
+  /** Set for a workflow run's session, which a re-attaching window keeps off the tiles. */
+  flow: FlowRole | null;
+}
+
+/**
+ * Which run, and which role in it, a workflow run's session holds. Mirrors Rust's `FlowRole`.
+ *
+ * The authority is a union, not a string, so a typo in a comparison is a type error here rather
+ * than a writer treated as a reviewer.
+ */
+export interface FlowRole {
+  flow: number;
+  role: string;
+  authority: 'reviewer' | 'writer';
 }
 
 export interface EffortOption {
@@ -1156,6 +1170,11 @@ export interface SpawnedSession {
    * pane. `parentSession` is then null: it is not a delegation child behind a rail.
    */
   openedBy: string | null;
+  /**
+   * A workflow run's session. `parentSession` is null for these too, and they are never tiled:
+   * they sit behind their run's rail, grouped by `run`.
+   */
+  flow: FlowRole | null;
 }
 
 /**

@@ -39,6 +39,7 @@ use wtm_core::model::{
     UserInputQuestion,
 };
 
+use crate::authority::{CodexRun, RunAuthority};
 use crate::provider::{McpServer, Protocol, Provider, ProviderId, SessionRequest, Step};
 
 pub const ID: &str = "codex";
@@ -79,8 +80,14 @@ impl Provider for Codex {
             // cannot silently move this onto a socket.
             "--stdio".to_owned(),
         ];
-        argv.extend(mcp_overrides(&req.mcp));
-        argv.extend(req.extra_args.iter().cloned());
+        // A run session's bridge is in the config of its own Codex home, written at 0600, rather
+        // than here: a `-c` value is in every process listing on the machine, and the bridge
+        // carries the session's token. Nor does a run take a repository's argv. See
+        // `SessionRequest::run`.
+        if req.run.is_none() {
+            argv.extend(mcp_overrides(&req.mcp));
+            argv.extend(req.extra_args.iter().cloned());
+        }
         argv
     }
 
@@ -389,6 +396,14 @@ impl CodexProtocol {
         }
     }
 
+    /// This session's run profile, when it is a workflow run's.
+    fn run(&self) -> Option<&CodexRun> {
+        match &self.req.run {
+            Some(RunAuthority::Codex(run)) => Some(run),
+            _ => None,
+        }
+    }
+
     fn take_id(&mut self) -> i64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -415,7 +430,14 @@ impl CodexProtocol {
         if let Some(model) = &self.req.model {
             params["model"] = json!(model);
         }
-        if let Some(mode) = &self.req.mode {
+        if let Some(run) = self.run() {
+            // The profile's, in place of a mode's, and on every frame that opens a thread so a
+            // resume cannot come back with less. The generated home says the same; see
+            // `authority::codex_config`.
+            params["approvalPolicy"] = json!(run.approval_policy);
+            params["approvalsReviewer"] = json!(run.approvals_reviewer);
+            params["sandbox"] = json!(run.sandbox);
+        } else if let Some(mode) = &self.req.mode {
             let (approval, reviewer, sandbox, _) = expand_mode(mode);
             params["approvalPolicy"] = json!(approval);
             params["approvalsReviewer"] = json!(reviewer);
@@ -475,7 +497,12 @@ impl CodexProtocol {
         // change its mode. Note the key *and the type*: `turn/start` takes `sandboxPolicy`, a
         // tagged object, where `thread/start` takes `sandbox`, a plain string. Sending the string
         // to both is what broke every turn on this provider once; see `expand_mode`.
-        if let Some(mode) = &self.req.mode {
+        if let Some(run) = self.run() {
+            // The object form, which is where the network is spelled out: `networkAccess: false`.
+            params["approvalPolicy"] = json!(run.approval_policy);
+            params["approvalsReviewer"] = json!(run.approvals_reviewer);
+            params["sandboxPolicy"] = run.sandbox_policy.clone();
+        } else if let Some(mode) = &self.req.mode {
             let (approval, reviewer, _, policy) = expand_mode(mode);
             params["approvalPolicy"] = json!(approval);
             params["approvalsReviewer"] = json!(reviewer);
@@ -1085,6 +1112,9 @@ impl Protocol for CodexProtocol {
         // never offers the control and this is always `None`. See `AgentCapability::supports_fast`.
         _fast: Option<bool>,
     ) -> Vec<Step> {
+        // A run's sandbox is its authority profile, not a picker setting; see `ClaudeProtocol`'s
+        // `locked_mode` for why this ignores rather than refuses.
+        let mode = mode.filter(|_| self.req.run.is_none());
         let Some(thread) = self.thread_id.clone() else {
             if let Some(model) = model {
                 self.req.model = Some(model.to_owned());
@@ -2089,6 +2119,31 @@ pub fn probe_frames(method: &str) -> Vec<String> {
 
 /// The JSON-RPC id a [`probe_frames`] question is answered on.
 pub const PROBE_ID: i64 = 3;
+
+/// Frames for a throwaway app server that runs one command in a sandbox and nothing else.
+///
+/// `command/exec` runs an argv under the `sandboxPolicy` it is given "without creating a thread or
+/// turn" (the 0.160.1 schema's words), so a run's canary costs no model call and leaves no thread.
+/// The reply is on [`PROBE_ID`], with `exitCode`, `stdout` and `stderr`.
+#[must_use]
+pub fn exec_frames(command: &[String], cwd: &str, sandbox_policy: &Value) -> Vec<String> {
+    let mut frames = probe_frames("command/exec");
+    if let Some(last) = frames.last_mut() {
+        *last = json!({
+            "jsonrpc": "2.0",
+            "id": PROBE_ID,
+            "method": "command/exec",
+            "params": {
+                "command": command,
+                "cwd": cwd,
+                "sandboxPolicy": sandbox_policy,
+                "timeoutMs": 10_000,
+            },
+        })
+        .to_string();
+    }
+    frames
+}
 
 /// The frames that ask the app server for its model catalogue.
 ///
