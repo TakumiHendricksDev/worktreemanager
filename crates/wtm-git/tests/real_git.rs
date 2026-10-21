@@ -145,6 +145,80 @@ fn a_deleted_worktree_directory_is_reported_prunable_then_pruned_away() {
     );
 }
 
+fn listed(git: &GitCli, fixture: &GitFixture) -> Vec<String> {
+    git.list_worktrees(fixture.root())
+        .unwrap()
+        .iter()
+        .map(|w| w.dirname().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_worktree_under_a_left_out_directory_is_not_listed_and_a_detached_one_elsewhere_is() {
+    let fixture = GitFixture::new();
+    fixture.add_detached_worktree("flow/1/checkouts/snapshot");
+    fixture.add_detached_worktree("yours");
+    assert_eq!(listed(&git_cli(), &fixture), ["repo", "snapshot", "yours"]);
+
+    let git = git_cli().without_worktrees_under(fixture.parent().join("flow"));
+    assert_eq!(
+        listed(&git, &fixture),
+        ["repo", "yours"],
+        "left out by where it is, not by being detached"
+    );
+}
+
+#[test]
+fn a_left_out_directory_hides_its_worktrees_whichever_way_a_symlink_spells_either_path() {
+    // macOS reaches every temporary directory through `/var`, a symlink to `/private/var`, and git
+    // records the resolved path. The app's data directory can be reached through a symlink of its
+    // own. So a checkout made through a link, and a directory named through one, are both here.
+    let fixture = GitFixture::new();
+    std::fs::create_dir(fixture.parent().join("data")).unwrap();
+    let link = fixture.parent().join("data-link");
+    std::os::unix::fs::symlink(fixture.parent().join("data"), &link).unwrap();
+    fixture.add_detached_worktree("data/flow/1/checkouts/direct");
+    fixture.add_detached_worktree("data-link/flow/1/checkouts/linked");
+
+    for named in [fixture.parent().join("data/flow"), link.join("flow")] {
+        let git = git_cli().without_worktrees_under(&named);
+        assert_eq!(
+            listed(&git, &fixture),
+            ["repo"],
+            "named {}",
+            named.display()
+        );
+    }
+}
+
+#[test]
+fn a_checkout_stays_hidden_after_its_whole_left_out_directory_is_deleted_by_hand() {
+    // Somebody cleared the app's data while a review had a checkout open, and git lists the
+    // checkout until a prune. Neither path exists now, so only their nearest existing ancestors
+    // can be resolved, and here the directory is named through a symlink, as `/var` is on macOS.
+    let fixture = GitFixture::new();
+    std::fs::create_dir(fixture.parent().join("data")).unwrap();
+    let link = fixture.parent().join("data-link");
+    std::os::unix::fs::symlink(fixture.parent().join("data"), &link).unwrap();
+    fixture.add_detached_worktree("data/flow/1/checkouts/snapshot");
+    fixture.orphan_worktree(&fixture.parent().join("data/flow"));
+    assert_eq!(listed(&git_cli(), &fixture), ["repo", "snapshot"]);
+
+    let git = git_cli().without_worktrees_under(link.join("flow"));
+    assert_eq!(listed(&git, &fixture), ["repo"]);
+}
+
+#[test]
+fn a_worktree_whose_name_only_begins_like_the_left_out_directory_is_still_listed() {
+    // Containment is by whole components. A string prefix would hide `flower` along with `flow`.
+    // The directory does not exist yet either, as it does not until the first snapshot.
+    let fixture = GitFixture::new();
+    fixture.add_detached_worktree("flower");
+
+    let git = git_cli().without_worktrees_under(fixture.parent().join("flow"));
+    assert_eq!(listed(&git, &fixture), ["repo", "flower"]);
+}
+
 #[test]
 fn repo_root_and_git_common_dir_are_stable_from_inside_a_linked_worktree() {
     // The reason `git_common_dir` exists: inside a linked worktree `.git` is a file

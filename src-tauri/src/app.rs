@@ -1011,7 +1011,11 @@ impl App {
         let launcher = Arc::new(runner);
         let runner: Arc<dyn CommandRunner> = Arc::clone(&launcher) as Arc<dyn CommandRunner>;
         let clock: Arc<dyn Clock> = Arc::new(clock);
-        let git: Arc<dyn Git> = Arc::new(GitCli::new(Arc::clone(&runner)));
+        // Every listing the app makes leaves out the checkouts reviews read, which are the app's
+        // and never yours. One `Git` for everything, so no caller can list without that.
+        let git: Arc<dyn Git> = Arc::new(
+            GitCli::new(Arc::clone(&runner)).without_worktrees_under(paths.flow_dir.clone()),
+        );
         let engine: Arc<dyn TemplateEngine> = Arc::new(wtm_render::Engine::new());
 
         let config = Arc::new(FileConfigStore::new(
