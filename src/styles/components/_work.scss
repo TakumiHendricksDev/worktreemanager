@@ -127,8 +127,9 @@
 
 /*
  * One state of a review, as the Reviews tab draws it: what the state is, what it means, and the
- * one thing to do about it. Only "Not reviewed yet" exists so far; the design's other states —
- * running, waiting for capacity, interrupted, failed, stale, clean — are the same block.
+ * one thing to do about it. "Not reviewed yet" and a run's states — running, waiting for capacity,
+ * interrupted, a role failed, reviewed — are the same block, told apart by a tone modifier whose
+ * names are `RunTone` in `review-run.ts`. Stale and the finding list arrive with R6.
  */
 .c-work-state {
   display: flex;
@@ -172,4 +173,51 @@
 .c-work-state__note {
   color: var(--fg-muted);
   font-size: var(--step--2);
+}
+
+.c-work-state__error {
+  color: var(--danger);
+  font-size: var(--step--1);
+}
+
+.c-work-state__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-width: 320px;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+/* The tone colours the frame and the eyebrow, the two places the design puts a state's colour. */
+.c-work-state--info {
+  border-color: var(--info-line);
+}
+
+.c-work-state--warn {
+  border-color: var(--warn-line);
+}
+
+.c-work-state--danger {
+  border-color: var(--danger-line);
+}
+
+.c-work-state--ok {
+  border-color: var(--ok-line);
+}
+
+.c-work-state--info > .c-work-state__eyebrow {
+  color: var(--info);
+}
+
+.c-work-state--warn > .c-work-state__eyebrow {
+  color: var(--warn);
+}
+
+.c-work-state--danger > .c-work-state__eyebrow {
+  color: var(--danger);
+}
+
+.c-work-state--ok > .c-work-state__eyebrow {
+  color: var(--ok);
 }

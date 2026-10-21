@@ -51,6 +51,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "rules",
         sql: include_str!("../migrations/0002_rules.sql"),
     },
+    Migration {
+        version: 3,
+        name: "review runs",
+        sql: include_str!("../migrations/0003_review_runs.sql"),
+    },
 ];
 
 /// Bring the database at `path`, open as `conn`, up to the last of `migrations`.
@@ -295,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn a_version_one_database_gains_the_rule_tables_and_keeps_its_work_items() {
+    fn a_version_one_database_gains_the_rule_and_review_run_tables_and_keeps_its_work_items() {
         let dir = tempfile::tempdir().unwrap();
         let path = a_version_one_database(dir.path());
 
@@ -304,6 +309,15 @@ mod tests {
         assert!(has_table(&path, "rules"));
         assert!(has_table(&path, "rule_revisions"));
         assert!(has_table(&path, "rule_applications"));
+        for table in [
+            "review_runs",
+            "snapshots",
+            "steps",
+            "invocations",
+            "inbox_items",
+        ] {
+            assert!(has_table(&path, table), "{table}");
+        }
         assert_eq!(work_items_in(&path), 1);
         assert_eq!(work_items_in(&backup_path(&path, 1)), 1);
     }
@@ -319,14 +333,15 @@ mod tests {
 
         let error = AppDb::open(&path).unwrap_err();
 
+        let newest = MIGRATIONS.last().unwrap().version;
         assert!(
             matches!(
                 error,
                 AppDbError::NewerSchema {
                     found: 99,
-                    known: 2,
+                    known,
                     ..
-                }
+                } if known == newest
             ),
             "{error}"
         );

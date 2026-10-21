@@ -53,6 +53,17 @@ pub struct RoleSession {
     pub brief: String,
     /// A provider conversation to continue, when a question's answer resumes a role.
     pub resume: Option<String>,
+    /// Where the session works, when that is not the worktree itself: a snapshot checkout.
+    ///
+    /// The scope keeps the worktree's id either way. A checkout is the app's own, and
+    /// `App::worktree` deliberately cannot find one, so a session keyed by it would belong to no
+    /// worktree; this way the session is the worktree's, and only its working directory and the
+    /// directories its sandbox protects are the checkout's.
+    pub cwd: Option<PathBuf>,
+    /// The skills the role names, without a leading `/`. A Claude role gets them from a plugin
+    /// directory wtm writes; see [`install_claude_skills`]. Codex finds a repository's skills on its
+    /// own, under the run's own home.
+    pub skills: Vec<String>,
 }
 
 /// A session cleared to open: its request, its scope, and what its profile put on disk.
@@ -151,6 +162,46 @@ pub fn places(
 ///
 /// Every reason the session cannot open, in a sentence.
 pub fn prepare(app: &Arc<App>, spec: &RoleSession) -> Result<Prepared, String> {
+    prepare_with(app, spec, &BridgeEndpoint::app()?)
+}
+
+/// Where a run session's bridge process comes from, and the socket it calls home on.
+///
+/// The app's own executable and its own socket, always, in the app. A test that runs real CLIs
+/// names the built `wtm` binary and a socket of its own instead: the test binary is not a bridge, and
+/// the socket in the user's config directory belongs to whatever wtm they have running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeEndpoint {
+    pub program: PathBuf,
+    pub socket: PathBuf,
+}
+
+impl BridgeEndpoint {
+    /// This app's executable and socket.
+    ///
+    /// # Errors
+    ///
+    /// When either cannot be found.
+    pub fn app() -> Result<Self, String> {
+        Ok(Self {
+            program: std::env::current_exe().map_err(|e| {
+                format!("wtm could not find its own executable for the run's bridge: {e}")
+            })?,
+            socket: crate::bridge::socket_path()?,
+        })
+    }
+}
+
+/// [`prepare`], with the run's bridge started from `endpoint`.
+///
+/// # Errors
+///
+/// As [`prepare`].
+pub fn prepare_with(
+    app: &Arc<App>,
+    spec: &RoleSession,
+    endpoint: &BridgeEndpoint,
+) -> Result<Prepared, String> {
     let project = app
         .project(&spec.project)
         .map_err(|e| format!("that worktree's project is no longer registered: {e}"))?;
@@ -177,12 +228,18 @@ pub fn prepare(app: &Arc<App>, spec: &RoleSession) -> Result<Prepared, String> {
             entry.id
         ));
     }
-    let places = places(app, &project, &worktree.path, &spec.role)?;
+    let cwd = spec.cwd.clone().unwrap_or_else(|| worktree.path.clone());
+    if !app.files.exists(&cwd) {
+        return Err(format!(
+            "`{}` is not there to work in — the snapshot checkout may have been removed",
+            cwd.display()
+        ));
+    }
+    let places = places(app, &project, &cwd, &spec.role)?;
     let scope = SessionScope::run(&spec.project, &spec.worktree, spec.role.clone());
 
-    let socket = crate::bridge::socket_path()?;
-    let program = std::env::current_exe()
-        .map_err(|e| format!("wtm could not find its own executable for the run's bridge: {e}"))?;
+    let socket = &endpoint.socket;
+    let program = &endpoint.program;
     let token = app.handoff.issue(handoff::Caller {
         scope: scope.clone(),
         provider: entry.id.to_owned(),
@@ -220,8 +277,18 @@ pub fn prepare(app: &Arc<App>, spec: &RoleSession) -> Result<Prepared, String> {
         &bridge,
         &codex_auth(app, &places.home),
     )
-    .and_then(|profile| {
+    .and_then(|mut profile| {
         write_private(&places, &profile)?;
+        if let RunAuthority::Claude(run) = &mut profile.run
+            && !spec.skills.is_empty()
+        {
+            let dir = wtm_core::flow::FlowDir::new(&app.config.paths().flow_dir, spec.role.flow)
+                .path()
+                .join("skills")
+                .join(segment(&spec.role.role)?);
+            install_claude_skills(&dir, &spec.skills, &[&cwd, &places.home])?;
+            authority::with_skills(run, &dir);
+        }
         Ok(profile)
     });
     let profile = match built {
@@ -233,7 +300,7 @@ pub fn prepare(app: &Arc<App>, spec: &RoleSession) -> Result<Prepared, String> {
     };
 
     let request = wtm_agent::SessionRequest {
-        cwd: worktree.path.to_string_lossy().into_owned(),
+        cwd: cwd.to_string_lossy().into_owned(),
         executable: None,
         model: spec.model.clone(),
         effort: spec.effort.clone(),
@@ -262,6 +329,81 @@ pub fn prepare(app: &Arc<App>, spec: &RoleSession) -> Result<Prepared, String> {
         profile,
         token,
     })
+}
+
+/// Copy each skill `names` lists into `dir` as a Claude plugin, from the first of `roots` that has
+/// it under `.claude/skills/<name>`, and say which were found.
+///
+/// `roots` is the session's working directory, then the user's home: a repository's own skill
+/// first, as the review checkout has it, then a personal one. Only the named skills are copied,
+/// which is the whole point — the run's profile keeps everything else in those directories out.
+/// A skill found nowhere is not an error here: the provider's own list will lack it, and the
+/// skill check names the role and the provider, which is the sentence someone can act on.
+///
+/// Files and folders only. A link inside a skill is skipped rather than followed, because what it
+/// points at was not part of what the role was configured with.
+///
+/// # Errors
+///
+/// When the directory cannot be written.
+pub fn install_claude_skills(
+    dir: &Path,
+    names: &[String],
+    roots: &[&Path],
+) -> Result<Vec<String>, String> {
+    let fail = |what: &str, path: &Path, e: &dyn std::fmt::Display| {
+        format!("wtm could not {what} {}: {e}", path.display())
+    };
+    // Rewritten whole each time, so a skill the role no longer names is gone.
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(fail("clear", dir, &e)),
+    }
+    let manifest = dir.join(".claude-plugin");
+    std::fs::create_dir_all(&manifest).map_err(|e| fail("create", &manifest, &e))?;
+    let plugin = serde_json::json!({
+        "name": authority::RUN_SKILL_PLUGIN,
+        "version": "0.0.0",
+        "description": "The skills one workflow run role names, copied by Worktree Manager.",
+    });
+    let path = manifest.join("plugin.json");
+    std::fs::write(&path, plugin.to_string()).map_err(|e| fail("write", &path, &e))?;
+
+    let mut found = Vec::new();
+    for name in names {
+        let name = name.trim_start_matches('/');
+        // A name becomes a path segment below; `../x` would copy from somewhere else entirely.
+        if segment(name).is_err() {
+            continue;
+        }
+        let Some(source) = roots
+            .iter()
+            .map(|root| root.join(".claude/skills").join(name))
+            .find(|candidate| candidate.join("SKILL.md").is_file())
+        else {
+            continue;
+        };
+        copy_tree(&source, &dir.join("skills").join(name))
+            .map_err(|e| fail("copy", &source, &e))?;
+        found.push(name.to_owned());
+    }
+    Ok(found)
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }
 
 /// Make the profile's directories and files, private to the user, and its links.
@@ -520,43 +662,43 @@ pub fn open(
     app: &Arc<App>,
     spec: &RoleSession,
 ) -> Result<SessionId, String> {
-    crate::run_profile::preflight(app, &[spec.provider.as_str()])?;
-    let prepared = prepare(app, spec)?;
-    if let Err(error) = canary(app, &prepared) {
-        app.handoff.forget_unbound(&prepared.token);
-        tracing::warn!(flow = %spec.role.flow, role = %spec.role.role, %error, "a run's sandbox canary failed");
-        return Err(format!(
-            "The {} role did not start, because its sandbox check failed: {error}",
-            spec.role.role
-        ));
-    }
-    let sink: Arc<dyn wtm_agent::session::AgentSink> =
+    open_tapped(handle, app, spec, None)
+}
+
+/// [`open`], with `tap` hearing every event the session emits alongside the window, from the first.
+///
+/// The review engine's route in: it needs a session's events from before `open` returns its id,
+/// which no registry keyed by that id can give it. See `flow::host`.
+///
+/// # Errors
+///
+/// As [`open`].
+pub fn open_tapped(
+    handle: &tauri::AppHandle,
+    app: &Arc<App>,
+    spec: &RoleSession,
+    tap: Option<Arc<dyn wtm_agent::session::AgentSink>>,
+) -> Result<SessionId, String> {
+    let window: Arc<dyn wtm_agent::session::AgentSink> =
         crate::agent_bridge::AgentEventSink::new(handle.clone());
-    let session = app
-        .open_agent(
-            prepared.entry,
-            &prepared.request,
-            prepared.scope.clone(),
-            &sink,
-        )
-        .map_err(|error| {
-            app.handoff.forget_unbound(&prepared.token);
-            format!(
-                "could not start the {} role's session: {error}",
-                spec.role.role
-            )
-        })?;
-    app.flow_ledger.brief(&spec.role, &spec.brief);
+    let sink: Arc<dyn wtm_agent::session::AgentSink> = match tap {
+        Some(tap) => Arc::new(crate::flow::host::Tee {
+            first: window,
+            second: tap,
+        }),
+        None => window,
+    };
+    let opened = open_headless(app, spec, &sink, &BridgeEndpoint::app()?)?;
     crate::agent_bridge::announce_spawn(
         handle,
         &crate::agent_bridge::SpawnedSession {
-            session: session.as_str().to_owned(),
+            session: opened.session.as_str().to_owned(),
             project: spec.project.clone(),
             worktree: spec.worktree.clone(),
-            provider: prepared.entry.id.to_owned(),
-            model: prepared.request.model.clone(),
-            effort: prepared.request.effort.clone(),
-            mode: Some(mode_label(&prepared.profile.run).to_owned()),
+            provider: opened.provider.to_owned(),
+            model: opened.model,
+            effort: opened.effort,
+            mode: Some(opened.mode.to_owned()),
             // No parent: a run session is nobody's delegation. `flow` is what keeps it off the
             // tiles and behind the run's rail instead; see `sessions.svelte.ts`'s `adoptSpawned`.
             parent_session: None,
@@ -566,7 +708,67 @@ pub fn open(
             flow: Some(spec.role.clone()),
         },
     );
-    Ok(session)
+    Ok(opened.session)
+}
+
+/// A run session that opened, and what the window is told about it.
+#[derive(Debug, Clone)]
+pub struct Opened {
+    pub session: SessionId,
+    pub provider: &'static str,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// The profile's mode, for display.
+    pub mode: &'static str,
+}
+
+/// Preflight, prepare, canary and open, with `sink` hearing everything and no window told.
+///
+/// Every check [`open`] makes, in the same order, and the same session: only the announcement is
+/// left to the caller. The window's route wraps this; the real-CLI test calls it directly, with a
+/// bridge of its own, because a test has no window and must not reach the user's running wtm.
+///
+/// # Errors
+///
+/// As [`open`].
+pub fn open_headless(
+    app: &Arc<App>,
+    spec: &RoleSession,
+    sink: &Arc<dyn wtm_agent::session::AgentSink>,
+    endpoint: &BridgeEndpoint,
+) -> Result<Opened, String> {
+    crate::run_profile::preflight(app, &[spec.provider.as_str()])?;
+    let prepared = prepare_with(app, spec, endpoint)?;
+    if let Err(error) = canary(app, &prepared) {
+        app.handoff.forget_unbound(&prepared.token);
+        tracing::warn!(flow = %spec.role.flow, role = %spec.role.role, %error, "a run's sandbox canary failed");
+        return Err(format!(
+            "The {} role did not start, because its sandbox check failed: {error}",
+            spec.role.role
+        ));
+    }
+    let session = app
+        .open_agent(
+            prepared.entry,
+            &prepared.request,
+            prepared.scope.clone(),
+            sink,
+        )
+        .map_err(|error| {
+            app.handoff.forget_unbound(&prepared.token);
+            format!(
+                "could not start the {} role's session: {error}",
+                spec.role.role
+            )
+        })?;
+    app.flow_ledger.brief(&spec.role, &spec.brief);
+    Ok(Opened {
+        session,
+        provider: prepared.entry.id,
+        model: prepared.request.model.clone(),
+        effort: prepared.request.effort.clone(),
+        mode: mode_label(&prepared.profile.run),
+    })
 }
 
 /// The rail a run's sessions are grouped under: one per run.

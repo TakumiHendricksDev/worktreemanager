@@ -1398,3 +1398,148 @@ export function errorMessage(value: unknown): string {
   if (typeof value === 'string') return value;
   return 'Something went wrong.';
 }
+
+// ─────────────────────────────── review runs ───────────────────────────────
+//
+// The Rust shapes in `wtm_core::flow` and `src-tauri/src/flow`, as they serialize. Unions where Rust
+// has an enum, so a status the readout does not handle is a type error, not a blank row.
+
+export type RoleProvider = 'claude' | 'codex';
+
+export type FlowPhase =
+  | 'resolving'
+  | 'preparing'
+  | 'investigating'
+  | 'planned'
+  | 'designing'
+  | 'design_ready'
+  | 'implementing'
+  | 'verifying'
+  | 'reviewing'
+  | 'fixing'
+  | 'ready_to_test'
+  | 'revising'
+  | 'publishing'
+  | 'in_review'
+  | 'consolidated'
+  | 'fix_ready'
+  | 'submitting'
+  | 'following';
+
+export type FlowHold =
+  | { kind: 'awaiting_answer' }
+  | { kind: 'awaiting_approval' }
+  | { kind: 'waiting_capacity'; provider: string; resetsAt: number | null }
+  | { kind: 'paused' }
+  | { kind: 'interrupted'; cause: 'quit' | 'crash' | 'sleep' }
+  | { kind: 'blocked'; cause: 'env' | 'permission' | 'conflict' | 'stale_remote' };
+
+export type FlowEnd =
+  { kind: 'done' } | { kind: 'failed'; reason: string } | { kind: 'cancelled' };
+
+export interface FlowState {
+  kind: 'implement' | 'review_mine' | 'review_pr' | 'revise';
+  phase: FlowPhase;
+  hold: FlowHold | null;
+  end: FlowEnd | null;
+}
+
+export type StepStatus =
+  | 'pending'
+  | 'running'
+  | 'waiting_capacity'
+  | 'done'
+  | 'failed'
+  | 'replaced'
+  | 'interrupted'
+  | 'cancelled'
+  | 'skipped';
+
+export type InvocationStatus =
+  | 'opening'
+  | 'running'
+  | 'submitted'
+  | 'failed'
+  | 'timed_out'
+  | 'limit_reached'
+  | 'interrupted'
+  | 'cancelled';
+
+export interface ReportedFinding {
+  title: string;
+  severity: 'minor' | 'notable' | 'blocking';
+  class: 'confirmed_bug' | 'rule_violation' | 'conflict' | 'suggestion';
+  body: string;
+  path?: string | null;
+  line?: number | null;
+  endLine?: number | null;
+}
+
+/** A role's result, exactly as `flow_submit` accepted it. */
+export type RoleResult =
+  | { kind: 'findings'; payload: { summary?: string | null; findings: ReportedFinding[] } }
+  | { kind: 'plan'; payload: { summary: string; steps: string[] } }
+  | { kind: 'handoff'; payload: { summary: string } };
+
+export interface ReviewStep {
+  id: number;
+  stage: number;
+  role: string;
+  provider: RoleProvider;
+  model: string | null;
+  status: StepStatus;
+  failures: number;
+  retries: number;
+  standsInFor: string | null;
+  detail: string | null;
+  resetsAt: number | null;
+  result: RoleResult | null;
+}
+
+export interface ReviewInvocation {
+  id: number;
+  step: number;
+  attempt: number;
+  role: string;
+  status: InvocationStatus;
+  detail: string | null;
+  progress: string | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+export type InboxKind = 'failure' | 'capacity' | 'permission' | 'interrupted';
+
+export interface RunInboxItem {
+  id: number;
+  flow: number;
+  kind: InboxKind;
+  subject: string;
+  title: string;
+  body: string;
+  createdAt: number;
+}
+
+/** One review run, whole: `review_run` and friends. */
+export interface ReviewRunView {
+  flow: { id: number; state: FlowState; startedAt: number; updatedAt: number };
+  review: {
+    flow: number;
+    project: string;
+    worktree: string;
+    worktreePath: string;
+    recipe: string;
+    base: string;
+  };
+  snapshot: { headSha: string; treeSha: string; baseSha: string } | null;
+  steps: ReviewStep[];
+  invocations: ReviewInvocation[];
+  inbox: RunInboxItem[];
+  running: boolean;
+}
+
+export interface RecipeChoice {
+  id: string;
+  label: string;
+  roles: { id: string; provider: RoleProvider; model: string | null }[];
+}

@@ -30,10 +30,12 @@
 //! # What is here, and what is not yet
 //!
 //! This is the skeleton the Work view is built on: the types and the rules that are already
-//! decided, plus recipes and their planning, snapshot staleness, and review knowledge (rules,
-//! their retrieval, and the repository's instruction sources). Consolidation and the engine arrive
-//! with the backlog items that first need them, and so do the store tables for snapshots,
-//! questions, approvals, findings and operations.
+//! decided, plus recipes and their planning, snapshot staleness, review knowledge (rules, their
+//! retrieval, and the repository's instruction sources), and a review run's steps, invocations and
+//! inbox with the rules for retries, fallbacks and usage limits. The engine that drives them is in
+//! the app (`src-tauri/src/flow/`), because it opens sessions. Consolidation arrives with the backlog
+//! item that first needs it, and so do the store tables for questions, approvals, findings and
+//! operations.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -66,8 +68,11 @@ pub mod question;
 pub mod recipe;
 pub mod review;
 pub mod rule;
+pub mod run;
+pub mod schema;
 pub mod snapshot;
 pub mod state;
+pub mod submission;
 pub mod work;
 
 pub use approval::{
@@ -103,10 +108,20 @@ pub use rule::{
     ExampleStance, NewRule, Rule, RuleApproval, RuleChange, RuleDraft, RuleError, RuleExample,
     RuleId, RuleKind, RuleOrigin, RuleRevision, RuleScope, RuleSource, RuleStatus,
 };
+pub use run::{
+    AfterFailure, Field, InboxItem, InboxItemId, InboxKind, Invocation, InvocationChange,
+    InvocationId, InvocationStatus, NewInboxItem, NewInvocation, NewReviewRun, NewStep, OnLimit,
+    ReviewRun, SnapshotId, Step, StepChange, StepId, StepStatus, after_failure, on_limit,
+    resume_at,
+};
+pub use schema::SchemaProblem;
 pub use snapshot::{FlowDir, ScratchLabel, TreeCheck};
 pub use state::{
     BlockCause, End, Flow, FlowId, FlowKind, FlowState, Hold, HoldKind, InterruptCause, Phase,
     Status, TransitionError,
+};
+pub use submission::{
+    FindingsReport, Handoff, PlanReport, ReportedClass, ReportedFinding, RuleCitation, Submission,
 };
 pub use work::{
     Backing, IssueRef, NewWorkItem, PullRequestRef, RecordedLink, WorkItem, WorkItemId, WorkKey,

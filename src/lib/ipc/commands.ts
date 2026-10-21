@@ -19,6 +19,9 @@ import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 
 import type {
   AccountUsage,
+  RecipeChoice,
+  ReviewRunView,
+  RunInboxItem,
   DictationStatus,
   DatabaseColumn,
   DatabaseConnection,
@@ -764,6 +767,37 @@ export const commands = {
    * carry a payload a click delivers back — see `notifier.rs`. Rejects when the OS is
    * refusing delivery, which is the signal `attention.blocked` keys off.
    */
+  /** The review recipes a project's own workflow config declares. Empty without one. */
+  reviewRecipes: (project: string) => invoke<RecipeChoice[]>('review_recipes', { project }),
+
+  /**
+   * Start a review of a worktree with a recipe, or get back the one it already has running or
+   * waiting. Refused while the Work view is off, and before anything is recorded when a provider
+   * would not bill a plan.
+   */
+  startReview: (request: {
+    project: string;
+    worktree: string;
+    recipe: string;
+    base?: string | null;
+  }) => invoke<ReviewRunView>('start_review', { request }),
+
+  reviewRun: (flow: number) => invoke<ReviewRunView>('review_run', { flow }),
+
+  /** A worktree's newest review run. Creates no database for someone who never ran one. */
+  latestReview: (project: string, worktree: string) =>
+    invoke<ReviewRunView | null>('latest_review', { project, worktree }),
+
+  /** Run what is left: interrupted, waiting for capacity, or with a failed role. */
+  resumeReview: (flow: number) => invoke<ReviewRunView>('resume_review', { flow }),
+
+  cancelReview: (flow: number) => invoke<ReviewRunView>('cancel_review', { flow }),
+
+  /** Open run inbox items, newest first, for one project or all. */
+  workInbox: (project: string | null) => invoke<RunInboxItem[]>('work_inbox', { project }),
+
+  resolveInboxItem: (item: number) => invoke<boolean>('resolve_inbox_item', { item }),
+
   postNotification: (args: {
     title: string;
     body: string;

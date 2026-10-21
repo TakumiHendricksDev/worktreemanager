@@ -45,7 +45,9 @@
   import Splitter from './lib/components/ui/Splitter.svelte';
   import { commands } from './lib/ipc/commands';
   import { errorMessage, type NotificationClick, type Project } from './lib/ipc/types';
-  import { attention } from './lib/state/attention.svelte';
+  import { attention, RUN_TARGET } from './lib/state/attention.svelte';
+  import { reviewRuns } from './lib/state/review-runs.svelte';
+  import { work } from './lib/state/work.svelte';
   import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
   import { composerPrefs } from './lib/state/composer.svelte';
@@ -129,6 +131,16 @@
     // There is nothing to navigate yet, and boot lands on the last active project on its own;
     // the click still brought the window to the front, which is all it ever did before.
     if (!booted) return;
+    // A review run's: its worktree's Reviews tab in Work, where the item that notified is.
+    if (target.paneId === RUN_TARGET) {
+      if (target.projectId !== workspace.activeProjectId) {
+        await workspace.selectProject(target.projectId);
+      }
+      work.pick(target.worktreeId);
+      work.tab = 'reviews';
+      view.show('work');
+      return;
+    }
     // Home's own pane has no worktree to arrive at; it is on Home, and Home is a view.
     if (isHome(target.worktreeId)) {
       view.show('home');
@@ -327,6 +339,12 @@
      * come from Rust's record whenever they land, and nothing waits on them.
      */
     const unlistenUsage = usage.init();
+    /*
+     * Review runs: their state for the Reviews tab, and their inbox, which is what notifies about
+     * them. Here rather than in the Work view, which mounts lazily: a run started before a reload
+     * can fail while Work is closed, and that has to reach you anyway.
+     */
+    const unlistenRuns = reviewRuns.init();
 
     /*
      * A macOS notification was clicked. The payload is the pane's address, attached by
@@ -447,6 +465,7 @@
       void unlistenHome.then((off) => off());
       void unlistenWork.then((off) => off());
       void unlistenUsage.then((off) => off());
+      void unlistenRuns.then((off) => off());
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
       offFleet?.();

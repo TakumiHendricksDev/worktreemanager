@@ -175,6 +175,10 @@ pub struct ClaudeRun {
     pub mcp_config: Option<String>,
     /// `false` passes `--no-session-persistence`, so the canary leaves no conversation behind.
     pub persist: bool,
+    /// A plugin directory wtm wrote for this session, holding copies of exactly the skills its role
+    /// names. Passed as `--plugin-dir`, and as `--add-dir` so the role can read a skill's own files.
+    /// See [`with_skills`].
+    pub skills: Option<String>,
 }
 
 /// A run session's authority in Codex's terms.
@@ -327,6 +331,7 @@ fn claude_run(
         settings: claude_settings(authority, places, bridge),
         mcp_config,
         persist: true,
+        skills: None,
     }
 }
 
@@ -538,12 +543,19 @@ fn codex_config(authority: Authority, places: &RunPlaces, bridge: &RunBridge) ->
     }
     // The bridge, here rather than as `-c` argv: a `-c` value is in every process listing on the
     // machine, and this one carries the session's token.
+    //
+    // Its tools approved and listed by name, the way Claude's allow rules name them. Codex 0.160.1
+    // asks before every MCP tool call, and under `approval_policy = never` an ask is a refusal: a
+    // reviewer measured against the real CLI had every `flow_submit` rejected, so the run's only
+    // route back to the app was shut. `approve` covers exactly this server, and `enabled_tools`
+    // keeps it to the role's own tools whatever the bridge chose to list.
     let _ = writeln!(
         out,
-        "\n[mcp_servers.{}]\ncommand = {}\nargs = {}",
+        "\n[mcp_servers.{}]\ncommand = {}\nargs = {}\ndefault_tools_approval_mode = \"approve\"\nenabled_tools = {}",
         bridge.name,
         toml_string(&bridge.server.command),
-        toml_array(bridge.server.args.iter().map(String::as_str))
+        toml_array(bridge.server.args.iter().map(String::as_str)),
+        toml_array(bridge.tools.iter().map(String::as_str))
     );
     if !bridge.server.env.is_empty() {
         let _ = writeln!(out, "\n[mcp_servers.{}.env]", bridge.name);
@@ -607,8 +619,36 @@ pub fn claude_canary(run: &ClaudeRun) -> ClaudeRun {
         tools: vec!["Bash"],
         mcp_config: None,
         persist: false,
+        skills: None,
         ..run.clone()
     }
+}
+
+/// The name of the plugin a Claude run's skills are loaded from, and so the prefix they are
+/// listed and invoked under: a role's `review` skill is `wtm:review` in its session.
+pub const RUN_SKILL_PLUGIN: &str = "wtm";
+
+/// Give a Claude run the skills its role names, from `plugin_dir`, which wtm wrote for it.
+///
+/// # Why a plugin directory
+///
+/// A run session starts with `--setting-sources ""`, which F2 found is what keeps a repository's
+/// hooks and settings out, and it keeps the repository's `.claude/skills` out with them: measured
+/// on Claude Code 2.1.296, a project skill is in the `initialize` command list with the default
+/// sources and absent with none, and `--add-dir` does not bring it back. `--plugin-dir` does, as
+/// `<plugin>:<skill>`, without loading anything else from the repository. So the engine copies the
+/// role's named skills, and only those, into a directory of its own and names it here.
+///
+/// `Skill` joins the tool allowlist, because a skill is invoked through that tool and `--tools` is
+/// an allowlist. It loads instructions; the sandbox and the deny rules still decide what any of
+/// them can do. The directory is also an `--add-dir`, because under `dontAsk` a Read outside the
+/// working directories is refused, and a skill that ships a checklist beside its `SKILL.md` would
+/// otherwise be unreadable to the role it was copied for.
+pub fn with_skills(run: &mut ClaudeRun, plugin_dir: &Path) {
+    if !run.tools.contains(&"Skill") {
+        run.tools.push("Skill");
+    }
+    run.skills = Some(plugin_dir.to_string_lossy().into_owned());
 }
 
 /// The one turn a Claude canary is sent.
@@ -882,6 +922,31 @@ mod tests {
             parsed["mcp_servers"].as_table().map(toml::Table::len),
             Some(1)
         );
+    }
+
+    #[test]
+    fn a_codex_run_may_call_its_own_bridge_tools_without_asking_and_no_others_are_enabled() {
+        // Measured on codex-cli 0.160.1: every MCP tool call asks first, and under `never` the ask
+        // is a refusal, so without this a Codex reviewer could not hand in a result at all.
+        for authority in [Authority::Reviewer, Authority::Writer] {
+            let config = codex_config(
+                authority,
+                &places(),
+                &bridge(&["flow_context", "flow_submit"]),
+            );
+            let parsed: toml::Value = toml::from_str(&config).unwrap();
+            let server = &parsed["mcp_servers"]["wtm"];
+            assert_eq!(
+                server["default_tools_approval_mode"].as_str(),
+                Some("approve"),
+                "{authority:?}"
+            );
+            assert_eq!(
+                server["enabled_tools"],
+                toml::Value::Array(vec!["flow_context".into(), "flow_submit".into()]),
+                "{authority:?}"
+            );
+        }
     }
 
     #[test]

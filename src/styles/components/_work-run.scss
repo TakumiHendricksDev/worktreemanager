@@ -1,0 +1,115 @@
+/*
+ * A review run's roles, one line each, and the run inbox beside the workspace.
+ *
+ * The role mark's tone and an inbox item's kind are modifiers named by unions in TypeScript
+ * (`RunTone`, `InboxKind`), so a name the CSS does not have cannot be written in the markup.
+ */
+
+.c-run-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--step--1);
+}
+
+.c-run-roles__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+}
+
+.c-run-roles__mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-subtle);
+}
+
+.c-run-roles__mark--info {
+  background: var(--info);
+}
+
+.c-run-roles__mark--warn {
+  background: var(--warn);
+}
+
+.c-run-roles__mark--danger {
+  background: var(--danger);
+}
+
+.c-run-roles__mark--ok {
+  background: var(--ok);
+}
+
+.c-run-roles__who {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.c-run-roles__line {
+  flex: 0 1 auto;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  overflow-wrap: anywhere;
+}
+
+.c-run-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.c-run-inbox__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+}
+
+.c-run-inbox__kind {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-run-inbox__kind--failure {
+  color: var(--danger);
+}
+
+.c-run-inbox__kind--capacity,
+.c-run-inbox__kind--interrupted {
+  color: var(--warn);
+}
+
+.c-run-inbox__kind--permission {
+  color: var(--info);
+}
+
+.c-run-inbox__title {
+  font-size: var(--step--1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-run-inbox__body {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}

@@ -128,7 +128,15 @@ impl AgentSession {
         // line is later still, after the first turn. Whatever the session reports replaces this
         // wholesale. What it cannot supply is a plugin's skills, which live in no directory this
         // reads; the CLI's answer to the question `ClaudeProtocol::open` writes does.
-        let seeded = provider.seed_skills(req);
+        //
+        // Never for a workflow run's session. Its skills are checked against what the provider
+        // reports, and the seed is wtm's own reading of skill directories the run's profile keeps
+        // out: a run session that started with it would appear to have skills it does not.
+        let seeded = if req.run.is_some() {
+            Vec::new()
+        } else {
+            provider.seed_skills(req)
+        };
         if !seeded.is_empty() {
             steps.insert(0, Step::Emit(AgentEvent::SkillsListed { skills: seeded }));
         }

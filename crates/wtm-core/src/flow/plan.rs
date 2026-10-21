@@ -28,6 +28,8 @@ use super::recipe::{RoleProfile, RoleProvider, RoleSpec, WorkflowError, Workflow
 pub struct RecipePlan {
     pub recipe: String,
     pub stages: Vec<PlannedStage>,
+    /// The recipe's cap on roles running at once within a stage. `None` runs each stage whole.
+    pub concurrency: Option<u32>,
 }
 
 /// Roles that start together. The next stage waits for all of them.
@@ -160,6 +162,7 @@ pub fn plan(
     Ok(RecipePlan {
         recipe: recipe.to_owned(),
         stages,
+        concurrency: spec.concurrency,
     })
 }
 

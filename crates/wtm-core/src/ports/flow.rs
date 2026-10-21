@@ -25,6 +25,11 @@ use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
     UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink,
 };
+use crate::flow::{
+    InboxItem, InboxItemId, InboxKind, Invocation, InvocationChange, InvocationId, NewInboxItem,
+    NewInvocation, NewReviewRun, NewStep, ReviewRun, Snapshot, SnapshotId, Step, StepChange,
+    StepId,
+};
 use crate::model::ProjectId;
 
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -99,4 +104,111 @@ pub trait FlowStore: Send + Sync {
 
     /// The flow's history, in order.
     fn events(&self, flow: FlowId) -> Result<Vec<RecordedEvent>, FlowStoreError>;
+}
+
+/// A review run's working records: what it is of, its snapshot, its steps and their attempts, and
+/// its inbox.
+///
+/// A port of its own beside [`FlowStore`] rather than more methods on it, because the two change
+/// for different reasons: a flow's lifecycle is the same for every kind of work, and these records
+/// are what one kind of flow, a review, keeps while it runs. The same database implements both.
+///
+/// Each write is its own transaction. The engine orders them so that a crash between two leaves a
+/// record recovery can read — a step marked running whose invocation never got a session is one
+/// recovery calls interrupted — rather than relying on one transaction across a session's life.
+pub trait RunStore: Send + Sync {
+    /// The work item a worktree has been reviewed as before, or that it was created for, found by
+    /// the worktree links its items recorded.
+    fn work_item_for_worktree(
+        &self,
+        project: &ProjectId,
+        worktree_path: &str,
+    ) -> Result<Option<WorkItemId>, FlowStoreError>;
+
+    fn create_review(&self, review: &NewReviewRun, at: UnixMs)
+    -> Result<ReviewRun, FlowStoreError>;
+
+    fn review(&self, flow: FlowId) -> Result<Option<ReviewRun>, FlowStoreError>;
+
+    /// A worktree's review runs, newest first.
+    fn reviews_of(
+        &self,
+        project: &ProjectId,
+        worktree: &str,
+    ) -> Result<Vec<ReviewRun>, FlowStoreError>;
+
+    /// Every review run whose flow has not ended, oldest first: what recovery at launch looks at.
+    fn open_reviews(&self) -> Result<Vec<ReviewRun>, FlowStoreError>;
+
+    /// Record the run's snapshot, and make it the one the run reads.
+    fn record_snapshot(
+        &self,
+        flow: FlowId,
+        snapshot: &Snapshot,
+        at: UnixMs,
+    ) -> Result<SnapshotId, FlowStoreError>;
+
+    fn snapshot(&self, id: SnapshotId) -> Result<Option<Snapshot>, FlowStoreError>;
+
+    /// Add steps to a run. Refused for a role the run already has a step for: a role's result,
+    /// its retries and its fallback are all found by its id within the run.
+    fn add_steps(
+        &self,
+        flow: FlowId,
+        steps: &[NewStep],
+        at: UnixMs,
+    ) -> Result<Vec<Step>, FlowStoreError>;
+
+    /// A run's steps, in stage order and then the order they were added.
+    fn steps(&self, flow: FlowId) -> Result<Vec<Step>, FlowStoreError>;
+
+    fn update_step(
+        &self,
+        step: StepId,
+        change: &StepChange,
+        at: UnixMs,
+    ) -> Result<Step, FlowStoreError>;
+
+    fn start_invocation(
+        &self,
+        invocation: &NewInvocation,
+        at: UnixMs,
+    ) -> Result<Invocation, FlowStoreError>;
+
+    fn update_invocation(
+        &self,
+        invocation: InvocationId,
+        change: &InvocationChange,
+        at: UnixMs,
+    ) -> Result<Invocation, FlowStoreError>;
+
+    /// A run's invocations, oldest first.
+    fn invocations(&self, flow: FlowId) -> Result<Vec<Invocation>, FlowStoreError>;
+
+    /// File an inbox item, unless an open one already covers the same `(flow, kind, subject)`.
+    /// `None` when it was already there, which is what keeps a notification from firing twice.
+    fn file_inbox(
+        &self,
+        item: &NewInboxItem,
+        at: UnixMs,
+    ) -> Result<Option<InboxItem>, FlowStoreError>;
+
+    /// Resolve a run's open items of `kind`, about `subject` when one is given. Returns how many.
+    fn resolve_inbox(
+        &self,
+        flow: FlowId,
+        kind: InboxKind,
+        subject: Option<&str>,
+        at: UnixMs,
+    ) -> Result<usize, FlowStoreError>;
+
+    /// Resolve one item, as a person does. `false` if it was already resolved or never existed.
+    fn resolve_inbox_item(&self, item: InboxItemId, at: UnixMs) -> Result<bool, FlowStoreError>;
+
+    /// Open inbox items, newest first: one run's, one project's, or everyone's.
+    fn inbox(
+        &self,
+        flow: Option<FlowId>,
+        project: Option<&ProjectId>,
+    ) -> Result<Vec<InboxItem>, FlowStoreError>;
 }
