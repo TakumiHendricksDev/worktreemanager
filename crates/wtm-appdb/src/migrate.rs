@@ -40,11 +40,18 @@ pub(crate) struct Migration {
 
 /// Every migration, in order. Append only: a shipped migration has already run on someone's
 /// database, so editing it would leave theirs different from a fresh one.
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "work items and flows",
-    sql: include_str!("../migrations/0001_work_items_and_flows.sql"),
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "work items and flows",
+        sql: include_str!("../migrations/0001_work_items_and_flows.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "rules",
+        sql: include_str!("../migrations/0002_rules.sql"),
+    },
+];
 
 /// Bring the database at `path`, open as `conn`, up to the last of `migrations`.
 pub(crate) fn migrate(
@@ -69,7 +76,9 @@ pub(crate) fn migrate(
 
     let found = version;
     for migration in migrations.iter().filter(|m| m.version > found) {
-        if version > 0 {
+        // `found`, not `version`: a database created by this open gains its schema from the first
+        // migration, and copying it again before each later one would only copy empty tables.
+        if found > 0 {
             let copy = backup(conn, path, version)?;
             tracing::info!(backup = %copy.display(), from = version, "backed up the app database");
         }
@@ -137,6 +146,8 @@ mod tests {
     use super::*;
     use crate::AppDb;
 
+    // The tests below build a version-1 database and migrate it with their own lists, so they keep
+    // proving the backup and rollback rules however many migrations ship.
     const ADD_NOTES: Migration = Migration {
         version: 2,
         name: "notes",
@@ -178,7 +189,7 @@ mod tests {
     /// A version-1 database holding one work item, closed again.
     fn a_version_one_database(dir: &Path) -> PathBuf {
         let path = dir.join("flow.db");
-        let db = AppDb::open(&path).unwrap();
+        let db = AppDb::open_with(&path, &MIGRATIONS[..1]).unwrap();
         db.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO work_items (project, title, created_at) VALUES ('/work/webapp', 'Export', 1)",
@@ -215,7 +226,11 @@ mod tests {
 
         AppDb::open(&path).unwrap();
 
-        assert_eq!(version_of(&path), 1);
+        assert_eq!(
+            version_of(&path),
+            MIGRATIONS.last().unwrap().version,
+            "every migration ran"
+        );
         assert!(!backup_path(&path, 0).exists());
         let entries: Vec<_> = std::fs::read_dir(path.parent().unwrap())
             .unwrap()
@@ -270,11 +285,27 @@ mod tests {
     #[test]
     fn reopening_an_up_to_date_database_takes_no_backup() {
         let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flow.db");
+        drop(AppDb::open(&path).unwrap());
+
+        AppDb::open(&path).unwrap();
+
+        let current = MIGRATIONS.last().unwrap().version;
+        assert!(!backup_path(&path, current).exists());
+    }
+
+    #[test]
+    fn a_version_one_database_gains_the_rule_tables_and_keeps_its_work_items() {
+        let dir = tempfile::tempdir().unwrap();
         let path = a_version_one_database(dir.path());
 
         AppDb::open(&path).unwrap();
 
-        assert!(!backup_path(&path, 1).exists());
+        assert!(has_table(&path, "rules"));
+        assert!(has_table(&path, "rule_revisions"));
+        assert!(has_table(&path, "rule_applications"));
+        assert_eq!(work_items_in(&path), 1);
+        assert_eq!(work_items_in(&backup_path(&path, 1)), 1);
     }
 
     #[test]
@@ -293,7 +324,7 @@ mod tests {
                 error,
                 AppDbError::NewerSchema {
                     found: 99,
-                    known: 1,
+                    known: 2,
                     ..
                 }
             ),

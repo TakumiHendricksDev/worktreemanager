@@ -92,6 +92,15 @@
   width: min(600px, calc(100vw - 4rem));
 }
 
+/* After `--wide`, which it is passed with, so its width wins at equal specificity. A fixed height
+   rather than a cap, so choosing another rule or filter in Settings › Knowledge does not make the
+   panel grow and shrink with the detail beside the list. */
+.c-dialog--workspace {
+  width: min(1080px, calc(100vw - 4rem));
+  height: min(86vh, 860px);
+  max-height: none;
+}
+
 .c-dialog__head {
   flex: 0 0 auto;
   display: flex;

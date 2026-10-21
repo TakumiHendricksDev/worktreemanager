@@ -1,0 +1,311 @@
+/*
+ * Settings › Knowledge: the rule list and its filters, an agent's proposal, the chosen rule's
+ * detail and history, and the repository's instruction sources.
+ *
+ * Two columns at the workspace dialog's width, each scrolling on its own so the filters stay in
+ * reach while a long history scrolls beside them. Below the app's narrow breakpoint they stack
+ * and scroll together. The breakpoint is the viewport's rather than a container query, because the
+ * dialog's width is the viewport's minus a margin and nothing else, so the two cannot disagree.
+ *
+ * The proposal card is dashed, as the design drew it: a solid card reads as a rule that applies,
+ * and the one thing a proposal must not look like is that.
+ */
+
+@use '../tools' as t;
+
+.c-knowledge {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--sp-5);
+  min-height: 0;
+
+  @include t.narrow {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    align-content: start;
+    overflow-y: auto;
+  }
+}
+
+.c-knowledge__rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  min-height: 0;
+  padding-right: var(--sp-4);
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+
+  /* `min-height: auto` again once stacked: at zero, the rows would share the dialog's height and
+     draw over each other instead of the panel scrolling. */
+  @include t.narrow {
+    min-height: auto;
+    padding-right: 0;
+    overflow-y: visible;
+    border-right: 0;
+  }
+}
+
+.c-knowledge__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-knowledge__title {
+  flex: 1 1 auto;
+  font-size: var(--step-1);
+  font-weight: 600;
+}
+
+.c-knowledge__intro,
+.c-knowledge__empty {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-knowledge__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.c-knowledge__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-pressed {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--fg);
+  }
+}
+
+.c-knowledge__count {
+  font-variant-numeric: tabular-nums;
+}
+
+.c-knowledge__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-knowledge__detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+  min-height: 0;
+  padding-right: var(--sp-1);
+  overflow-y: auto;
+
+  @include t.narrow {
+    min-height: auto;
+    overflow-y: visible;
+  }
+}
+
+.c-knowledge__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-knowledge__state {
+  flex: 1 1 auto;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-knowledge__rule {
+  font-size: var(--step-2);
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.c-knowledge__why {
+  max-width: 720px;
+  line-height: 1.5;
+}
+
+.c-knowledge__facts {
+  max-width: 760px;
+  font-size: var(--step--1);
+}
+
+.c-knowledge__examples {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-knowledge__history,
+.c-knowledge__sources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 760px;
+}
+
+.c-knowledge__subhead {
+  font-size: var(--step--1);
+  font-weight: 700;
+}
+
+.c-knowledge__revisions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* The team's files outrank the rules above, so the box that says so wears the info role. */
+.c-knowledge__sources {
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-lg);
+  background: var(--info-soft);
+}
+
+.c-knowledge__prose,
+.c-knowledge__found {
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-knowledge__found {
+  color: var(--fg-muted);
+}
+
+.c-knowledge__source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* One rule in the list: its id and kind, its text, and how often reviews have read it. */
+.c-rule-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-selected {
+    border-color: var(--accent);
+    background: var(--bg-elevated);
+  }
+}
+
+.c-rule-row__meta,
+.c-rule-row__usage {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-rule-row__text {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-rule-row__kind {
+  color: var(--fg-muted);
+}
+
+.c-rule-row__kind--required {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.c-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+
+  &.is-selected {
+    border-color: var(--accent);
+  }
+}
+
+.c-proposal__eyebrow {
+  color: var(--info);
+  font-size: var(--step--2);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-proposal__text {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.c-proposal__why {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-proposal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+/* One revision in a rule's history. The current one is raised; earlier ones read as quotations. */
+.c-revision {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--step--1);
+
+  &.is-current {
+    background: var(--bg-elevated);
+  }
+}
+
+.c-revision__meta {
+  color: var(--fg-muted);
+}
+
+.c-revision__text {
+  overflow-wrap: anywhere;
+}

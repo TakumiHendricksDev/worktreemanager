@@ -1390,6 +1390,19 @@ roles = ["conventions", "correctness"]
     }
 
     #[test]
+    fn a_repository_may_name_its_own_instruction_sources() {
+        // Unlike a role, the list names only files in the repository for a review to read, which
+        // anyone who could commit this file could already have written into those files.
+        let h = Harness::new();
+        h.write_repo_config("[workflow]\ninstruction_sources = ['REVIEW.md', 'docs/review/**']\n");
+        let workflow = h.store.load(&h.repo).unwrap().workflow.unwrap();
+        assert_eq!(
+            workflow.instruction_sources(),
+            ["REVIEW.md", "docs/review/**"]
+        );
+    }
+
+    #[test]
     fn the_local_layer_may_declare_roles_because_it_is_yours() {
         let h = Harness::new();
         h.write_local_config(&RECIPE.replace("defaults.", ""));

@@ -80,6 +80,7 @@
     onsubmit,
     closeDisabled = false,
     wide = false,
+    workspace = false,
     shape = 'dialog',
     body,
     footer,
@@ -96,6 +97,12 @@
     /** True while an operation is in flight and dismissing would abandon it mid-way. */
     closeDisabled?: boolean;
     wide?: boolean;
+    /**
+     * Wider and taller than `wide`, for a list and its detail side by side, such as Settings ›
+     * Knowledge. A boolean beside `wide` rather than a size union so the five `wide` callers stay
+     * as they are.
+     */
+    workspace?: boolean;
     /**
      * `dialog` is the modal with a header and a footer. The other two are the Code tab's popups —
      * a question you type into rather than one you answer — so they have neither, hang from the
@@ -220,6 +227,7 @@
     bind:this={panel}
     class="c-dialog"
     class:c-dialog--wide={wide}
+    class:c-dialog--workspace={workspace}
     class:c-dialog--palette={shape === 'palette'}
     class:c-dialog--finder={shape === 'finder'}
     role="dialog"

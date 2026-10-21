@@ -54,7 +54,7 @@ wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl 
 wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl both
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
-wtm-appdb    the app's own SQLite store for work items and flows (§9).     impl FlowStore
+wtm-appdb    the app's own SQLite store: work items, flows, rules (§9).   impl FlowStore, RuleStore
 wtm-forge    pull requests through the user's own `gh` (§6a). Reads only.  impl Forge
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
@@ -1651,8 +1651,8 @@ decision, and it belongs written down rather than discovered in eighteen months.
 
   The shape follows §2. The rules (phases and holds, approval staleness, outbox states) are
   `wtm-core::flow`, pure and covered by the `wasm32` check, not a domain crate of their own, which
-  §2 already rejected. `wtm-appdb` is one adapter behind its `FlowStore` port. Every schema change
-  is a numbered migration, preceded by a copy of the database.
+  §2 already rejected. `wtm-appdb` is one adapter behind its `FlowStore` and `RuleStore` ports.
+  Every schema change is a numbered migration, preceded by a copy of the database.
 - **`--move-changes`** (stash/pop across worktrees). The one `create` feature with genuinely nasty
   failure modes — a pop conflict in a brand-new worktree — and rarely used. Config can express it later
   as a post-create step.

@@ -1,0 +1,84 @@
+/*
+ * The rule editor: Save as rule, New rule, Edit, Edit first and Replace share one form.
+ *
+ * The scope and example fields sit in an auto-fitting grid, two across at the wide dialog's width
+ * and one in a narrow window, rather than a fixed two-column layout that would squeeze a glob.
+ */
+
+.c-rule-form {
+  gap: var(--sp-3);
+}
+
+.c-rule-form__from {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+/* A finding's severity, in the colour the Reviews tab will give it. */
+.c-rule-form__severity {
+  font-weight: 600;
+}
+
+.c-rule-form__severity--minor {
+  color: var(--fg-muted);
+}
+
+.c-rule-form__severity--notable {
+  color: var(--warn);
+}
+
+.c-rule-form__severity--blocking {
+  color: var(--danger);
+}
+
+.c-rule-form__kinds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.c-rule-form__legend {
+  padding: 0 0 var(--sp-1);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-rule-form__kind {
+  font-weight: 600;
+}
+
+.c-rule-form__kind-help {
+  color: var(--fg-muted);
+}
+
+.c-rule-form__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-3);
+}
+
+.c-rule-form__mono {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+}
+
+.c-rule-form__later {
+  margin-top: calc(var(--sp-2) * -1);
+}
+
+.c-rule-form__note {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--bg-sidebar);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}

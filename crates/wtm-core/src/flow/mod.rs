@@ -30,9 +30,10 @@
 //! # What is here, and what is not yet
 //!
 //! This is the skeleton the Work view is built on: the types and the rules that are already
-//! decided, plus recipes and their planning, and snapshot staleness. Consolidation, rule retrieval
-//! and the engine arrive with the backlog items that first need them, and so do the store tables
-//! for snapshots, questions, approvals, findings, rules and operations.
+//! decided, plus recipes and their planning, snapshot staleness, and review knowledge (rules,
+//! their retrieval, and the repository's instruction sources). Consolidation and the engine arrive
+//! with the backlog items that first need them, and so do the store tables for snapshots,
+//! questions, approvals, findings and operations.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -57,6 +58,8 @@ pub mod approval;
 pub mod event;
 pub mod forge;
 pub mod glob;
+pub mod instructions;
+pub mod knowledge;
 pub mod outbox;
 pub mod plan;
 pub mod question;
@@ -76,6 +79,13 @@ pub use forge::{
     PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug, Reviewer,
     default_host, host_for, remote_for,
 };
+pub use instructions::{
+    DEFAULT_INSTRUCTION_SOURCES, InstructionDocument, InstructionSet, SkippedDocument, SourceMatch,
+};
+pub use knowledge::{
+    DEFAULT_MAX_RULES, MatchReason, RecordedApplication, ReviewInvocation, RuleQuery,
+    RuleSelection, RuleUsage, SelectedRule,
+};
 pub use outbox::{
     Operation, OperationId, OperationKey, OperationKind, OperationState, OutboxError,
 };
@@ -90,8 +100,8 @@ pub use review::{
     BlobRef, Dismissal, Finding, FindingClass, FindingId, Location, Severity, Snapshot,
 };
 pub use rule::{
-    Rule, RuleApproval, RuleDraft, RuleError, RuleId, RuleKind, RuleOrigin, RuleRevision,
-    RuleScope, RuleStatus,
+    ExampleStance, NewRule, Rule, RuleApproval, RuleChange, RuleDraft, RuleError, RuleExample,
+    RuleId, RuleKind, RuleOrigin, RuleRevision, RuleScope, RuleSource, RuleStatus,
 };
 pub use snapshot::{FlowDir, ScratchLabel, TreeCheck};
 pub use state::{

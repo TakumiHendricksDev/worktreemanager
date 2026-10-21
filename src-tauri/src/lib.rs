@@ -8,6 +8,7 @@
 
 pub mod agent_bridge;
 pub mod app;
+pub mod appdb;
 pub mod bridge;
 pub mod browser;
 pub mod browser_bridge;
@@ -25,6 +26,7 @@ pub mod handoff;
 pub mod home;
 pub mod home_shells;
 pub mod home_tools;
+pub mod knowledge;
 pub mod messages;
 pub mod native_menu;
 pub mod notifier;
@@ -424,6 +426,12 @@ pub fn run() {
             prototype_commands::open_prototype_preview,
             prototype_commands::cancel_prototype,
             prototype_commands::implement_prototype,
+            knowledge::list_rules,
+            knowledge::instruction_sources,
+            knowledge::create_rule,
+            knowledge::save_finding_as_rule,
+            knowledge::change_rule,
+            knowledge::replace_rule,
             commands::close_browser,
             commands::browser_navigate,
             commands::browser_history,

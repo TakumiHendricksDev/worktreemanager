@@ -469,7 +469,7 @@ fn is_unique_violation(error: &rusqlite::Error) -> bool {
 }
 
 /// A unit enum variant as its serde name: `FlowKind::ReviewPr` is `review_pr`.
-fn tag<T: Serialize>(value: &T) -> Result<String, FlowStoreError> {
+pub(crate) fn tag<T: Serialize>(value: &T) -> Result<String, FlowStoreError> {
     match serde_json::to_value(value).map_err(storage)? {
         serde_json::Value::String(name) => Ok(name),
         other => Err(FlowStoreError::Storage(format!(
@@ -478,15 +478,15 @@ fn tag<T: Serialize>(value: &T) -> Result<String, FlowStoreError> {
     }
 }
 
-fn untag<T: DeserializeOwned>(name: String) -> Result<T, FlowStoreError> {
+pub(crate) fn untag<T: DeserializeOwned>(name: String) -> Result<T, FlowStoreError> {
     serde_json::from_value(serde_json::Value::String(name)).map_err(storage)
 }
 
-fn json<T: Serialize>(value: &T) -> Result<String, FlowStoreError> {
+pub(crate) fn json<T: Serialize>(value: &T) -> Result<String, FlowStoreError> {
     serde_json::to_string(value).map_err(storage)
 }
 
-fn from_json<T: DeserializeOwned>(text: &str) -> Result<T, FlowStoreError> {
+pub(crate) fn from_json<T: DeserializeOwned>(text: &str) -> Result<T, FlowStoreError> {
     serde_json::from_str(text).map_err(storage)
 }
 

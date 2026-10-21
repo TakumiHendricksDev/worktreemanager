@@ -1,4 +1,4 @@
-//! The app's own database: work items, flows and their history, in SQLite.
+//! The app's own database: work items, flows and their history, and review rules, in SQLite.
 //!
 //! # Why this name
 //!
@@ -31,6 +31,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod migrate;
+mod rules;
 mod store;
 
 use std::path::{Path, PathBuf};
@@ -71,7 +72,8 @@ pub enum AppDbError {
     },
 }
 
-/// The open database. Implements [`FlowStore`](wtm_core::ports::FlowStore).
+/// The open database. Implements [`FlowStore`](wtm_core::ports::FlowStore) and
+/// [`RuleStore`](wtm_core::ports::RuleStore).
 #[derive(Debug)]
 pub struct AppDb {
     conn: Mutex<Connection>,
