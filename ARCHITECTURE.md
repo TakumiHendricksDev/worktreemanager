@@ -1053,6 +1053,98 @@ revision and current context and sends an approval turn into that same idle chat
 cannot start or change a provider. The tools deliberately expose no approval operation
 to the model.
 
+## 6h. Workflow run sessions: authority from the profile, not the prompt
+
+A workflow run (§6a's Work view) starts agent sessions with nobody watching them, which no pane
+does. The rule they are held to is that an agent in a run cannot push, merge, or reach the forge or
+the tracker, and it holds because of what the process *can* do. A prompt saying "do not push" is a
+request; a sandbox that has no route to github.com is a fact. Every row below was measured against
+the real CLIs (Claude Code 2.1.296, codex-cli 0.160.1) before it was written down, and
+`wtm_agent::authority` is the table as code — one function per row, both providers side by side.
+
+**Nothing a repository wrote is an input.** A run session gets none of its repository's
+`[agent.<id>]` `extra_args`, `env` or `mcp`, and none of its mode. The providers enforce it, not
+only the builder: with `SessionRequest::run` set, `claude.rs` and `codex.rs` drop `extra_args` and
+put no MCP server on the argv, `AgentSession::open` applies no request environment, and a profile
+built for the other CLI refuses to spawn. `offers_agent` still holds: a repository can decline an
+agent for runs as for panes. It cannot say how that agent runs.
+
+| Row | Reviewer / planner | Writer |
+| --- | --- | --- |
+| Claude settings sources | `--strict-mcp-config` **and** `--setting-sources ""`; everything else is in one `--settings` object | Same |
+| Claude sandbox | `enabled`, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, `autoAllowBashIfSandboxed: true`; `denyWrite`: the worktree, every git dir (common, gitdir, the worktree's `.git` file), the worktree's `.claude`, `.codex`, `.cursor`, `.mcp.json` | The same without the worktree |
+| Claude reads | `denyRead` and `Read(…)` deny rules: `~/Library/Keychains`, `~/.config/gh`, `~/.ssh`, `~/.codex`, `~/.config/acli`, wtm's run-sessions folder | Same |
+| Claude tools | `--tools Read,Bash,Grep,Glob,Task`, mode `dontAsk` | `--tools Read,Edit,Write,Bash,Grep,Glob,Task`, mode `acceptEdits`, `Edit`/`Write` deny rules on every git dir and agent config |
+| Claude allow rules | The role's run tools by full name (`mcp__wtm__flow_…`). Never Bash | Same |
+| Codex home | Its own `CODEX_HOME`: `auth.json` linked to the sign-in, a generated `config.toml` with `features.apps = false`, the repository and worktree `trust_level = "untrusted"`, the bridge as the only server | Same |
+| Codex sandbox | `read-only`, `approvalPolicy: never`, `{"type":"readOnly","networkAccess":false}` per turn | `workspace-write`, `on-request`, `approvalsReviewer: user`, `workspaceWrite` with `networkAccess: false` |
+| Network | Claude: `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`. Codex: none | Same |
+| Environment | F3's scrub (`run_profile::scrub`), and for Codex `CODEX_HOME` set last; Codex's `shell_environment_policy` excludes the same names, `GH_*` by exact name, and sets `GH_CONFIG_DIR` | Same |
+| Bridge | The run tools only; token in a 0600 file (Claude's `--mcp-config` path, Codex's home config), never argv | The same plus `flow_checkpoint` |
+| Git | Read only. Agents cannot commit, stash, update a ref or push | Same. `flow_checkpoint` is an app commit with `-c core.hooksPath=/dev/null` and `--no-verify`, refusing agent and hook config |
+
+Three of those rows are F2 correcting the first plan. `--tools` is an allowlist because the
+`--disallowedTools` route left 22 tools, among them `SendMessage` and `ListAgents`, which reach the
+user's other sessions, unsandboxed ones included. `--setting-sources ""` is needed beside
+`--strict-mcp-config` because strict MCP alone still ran the repository's `SessionStart` hook. And
+Codex gets a home of its own because per-thread overrides merge (`mcp_servers = {}` leaves every
+server running), and because `thread/start` with `workspace-write` in an unconfigured home writes
+`trust_level = "trusted"` for the repository and then starts its `.codex/config.toml` server, outside
+the sandbox. Writing `untrusted` first stops that. The cost is the user's skills and settings: a
+role's skills come from its recipe.
+
+**Bash is never pre-allowed.** F2 found that Claude ignores a sandbox object it cannot read, without
+a word. With no allow rule for Bash, that failure is closed: `dontAsk` denies Bash rather than run it
+unsandboxed. Pre-allowing it would turn the same typo into an agent running bare.
+
+**A canary before every session.** Neither CLI reports whether its sandbox engaged, so
+`flow_session::canary` tries a write outside the worktree, under the session's own profile, and the
+run does not start unless it fails. For Codex that is `command/exec` on a throwaway app-server with
+the run's environment and the turn's own `sandboxPolicy`: no thread, no model call. Claude has no way
+to run a sandboxed command without a model asking, so its canary has two halves. The first is
+`claude --setting-sources "" --settings … sandbox status`, which reports `enabled: false` for an object
+the CLI could not read, and needs no model. The second is one Haiku turn in a session with the same
+settings, Bash only, no MCP and no persistence. It passes only when the tool output names the
+canary's own nonce path in the shell's refusal: a permission prompt, a denied tool, or a model that
+did not try all fail closed. The target is in the app's own folder and outside every temp directory,
+since a Codex writer may write those and the canary would then prove nothing.
+
+**Headless, behind a rail.** A run session is opened by `App::open_agent` like any other, so its
+transcript, approvals and resume work as a pane's do. It is announced with no parent and a `flow`
+role, and the window keeps it behind the worktree's agent rail grouped by run, never in a tile and
+never in the saved layout: after a quit, whether a role resumes is the run's call, not the window's.
+
+**The run tools, and a field on the scope.** `SessionScope::Worktree` carries `flow:
+Option<FlowRole>`, so `place()`, removal and the resume key treat a run session as the worktree
+session it is. Authority is decided in two places. The bridge, started with `WTM_FLOW_TOOLS`, lists
+`flow_context`, `flow_progress`, `flow_ask`, `flow_submit`, `flow_request`, `flow_run_check` and
+`flow_propose_rule`, plus `flow_checkpoint` for a writer, and nothing else: no `ask_agent`,
+`spawn_agents`, `close_agents`, browser, code or prototype tools. At the socket,
+`handoff::scope_refusal` refuses a run token every other action and refuses the run tools to every
+other token, and `flow_tools` refuses a tool the token's role lacks. Arguments are typed structs
+that refuse unknown fields, so a malformed `flow_submit` comes back as an error to fix and retry.
+`flow_request` answers with a request id, never a result.
+
+**Stated limits.** These are what a profile cannot do, and saying so is part of the design:
+
+- MCP servers run outside the sandbox in both CLIs, so the server allowlist (the bridge alone) is
+  the boundary there. Organization-managed Claude plugins load under every flag and run their hooks
+  unsandboxed; wtm cannot remove them.
+- Claude's Read, Edit and Write run in the CLI's own process, not the sandbox, so only the deny
+  rules above stop them.
+- A writer can still leak through an allowed registry host in a URL path, or by writing a secret
+  into the worktree for the app's own push to carry. The credential `denyRead` rules narrow the
+  first; nothing here classifies secrets (§6a says why).
+- A Codex writer can write `.claude/`, `.mcp.json` and in-tree hook folders. Run sessions ignore
+  them, the checkpoint refuses them, and the user's own panes in that worktree would still load them.
+- A Codex reviewer cannot run tests that need temporary files; `flow_run_check` is the route.
+- Nothing here stops a merge made through GitHub's web UI or by CI. Branch protection is the only
+  control there.
+- Not yet measured: the real login keychain's `gh` item (F2 used a dummy keychain file) and the
+  Codex writer's escalation reaching a person. Codex's shell policy is measured: a command in a
+  run's home loses the excluded names even from a dirty environment, and gets the run's
+  `GH_CONFIG_DIR` over an inherited one.
+
 ## 7. Toolchain policy
 
 **Pinned to an exact version** (`1.97.1`) rather than the floating `stable` channel, so `cargo build`

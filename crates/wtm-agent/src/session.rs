@@ -74,6 +74,19 @@ impl AgentSession {
         timeout_ms: u64,
         worktree: Option<&str>,
     ) -> Result<Self, ExecError> {
+        // A profile built for the other CLI is a bug, and the two ways of carrying on are both wrong:
+        // ignoring it would start a run session with a pane's authority, and translating it would
+        // be a third profile nobody measured. So it does not start.
+        if let Some(run) = &req.run
+            && run.provider() != provider.id().as_str()
+        {
+            return Err(ExecError::Refused(format!(
+                "a {} run profile cannot start a {} session",
+                run.provider(),
+                provider.id()
+            )));
+        }
+
         let driver: Arc<Mutex<Box<dyn Protocol>>> = Arc::new(Mutex::new(provider.protocol(req)));
 
         let relay = Arc::new(Relay {
@@ -84,7 +97,13 @@ impl AgentSession {
         });
 
         let mut inv = Invocation::new(provider.argv(req), req.cwd.clone(), timeout_ms);
-        inv.env.extend(req.env.clone());
+        // Not for a run session, whose environment is its profile's scrub over the app's own and
+        // nothing a repository wrote: `NODE_OPTIONS` loads a script into any CLI written in Node,
+        // which makes `[agent.<id>.env]` argv by another name. The providers drop `extra_args` for
+        // the same reason.
+        if req.run.is_none() {
+            inv.env.extend(req.env.clone());
+        }
         // This is a JSON protocol child, never a terminal. Codex otherwise colours tracing output
         // on stderr when wtm was launched from Finder without an ambient `NO_COLOR`, and those
         // escape bytes have no meaning in a transcript.

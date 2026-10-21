@@ -2461,6 +2461,7 @@ pub async fn list_agent_sessions(app: AppState<'_>) -> Reply<Vec<AgentSessionVie
                 project: facts.scope.project_key().to_owned(),
                 provider: facts.provider,
                 provider_session: facts.provider_session,
+                flow: facts.scope.flow().cloned(),
             })
             .collect())
     })
@@ -2617,6 +2618,36 @@ fn probe_codex(app: &Arc<App>) -> Result<wtm_core::model::AgentCapability, Strin
 ///
 /// If the CLI cannot be spawned, or does not answer within the deadline.
 pub(crate) fn ask_codex(app: &Arc<App>, method: &str) -> Result<serde_json::Value, String> {
+    let entry = wtm_agent::entry(wtm_agent::codex::ID).ok_or("codex is not in the catalogue")?;
+    let argv = entry.provider.argv(&wtm_agent::SessionRequest::default());
+    let inv = wtm_core::ports::exec::Invocation::new(argv, std::env::temp_dir(), SHELL_TIMEOUT_MS);
+    drive_codex(
+        app,
+        &inv,
+        &wtm_agent::codex::probe_frames(method),
+        method,
+        CAPABILITY_TIMEOUT_MS,
+    )
+}
+
+/// [`ask_codex`]'s handshake and wait, for a throwaway app server started as `inv` says: write
+/// `frames` (`initialize` first, the rest once it is answered) and return the reply to
+/// [`wtm_agent::codex::PROBE_ID`].
+///
+/// Its own function because a workflow run's sandbox canary asks the same way with a different
+/// environment — the run's own Codex home and scrub — and a second copy of the handshake is how the
+/// two would come to disagree about Codex 0.147's refusal of pipelined requests.
+///
+/// # Errors
+///
+/// If the CLI cannot be spawned, or does not answer within `timeout_ms`.
+pub fn drive_codex(
+    app: &Arc<App>,
+    inv: &wtm_core::ports::exec::Invocation,
+    frames: &[String],
+    method: &str,
+    timeout_ms: u64,
+) -> Result<serde_json::Value, String> {
     use wtm_core::ports::pipe::{PipeHost, PipeSink};
 
     #[derive(Default)]
@@ -2633,17 +2664,12 @@ pub(crate) fn ask_codex(app: &Arc<App>, method: &str) -> Result<serde_json::Valu
         fn on_exit(&self, _s: &wtm_core::model::SessionId, _o: &wtm_core::model::ExitOutcome) {}
     }
 
-    let entry = wtm_agent::entry(wtm_agent::codex::ID).ok_or("codex is not in the catalogue")?;
-    let argv = entry.provider.argv(&wtm_agent::SessionRequest::default());
-    let inv = wtm_core::ports::exec::Invocation::new(argv, std::env::temp_dir(), SHELL_TIMEOUT_MS);
-
     let sink = Arc::new(Collect::default());
     let spawned = app
         .pipe
-        .spawn(&inv, None, Arc::clone(&sink) as Arc<dyn PipeSink>)
+        .spawn(inv, None, Arc::clone(&sink) as Arc<dyn PipeSink>)
         .map_err(|e| e.to_string())?;
 
-    let frames = wtm_agent::codex::probe_frames(method);
     let Some((initialize, after_initialize)) = frames.split_first() else {
         let _ = app.pipe.kill(&spawned.session);
         return Err("codex probe had no initialization frame".to_owned());
@@ -2662,7 +2688,7 @@ pub(crate) fn ask_codex(app: &Arc<App>, method: &str) -> Result<serde_json::Valu
     // Codex 0.147 stopped accepting requests pipelined behind `initialize`. Waiting for that reply
     // preserves the JSON-RPC handshake and keeps the picker from losing the exact ids a handoff
     // needs when a display label differs from the provider's model name.
-    let deadline = app.clock.monotonic_ms() + CAPABILITY_TIMEOUT_MS;
+    let deadline = app.clock.monotonic_ms() + timeout_ms;
     while reply_to(1).is_none() {
         if app.clock.monotonic_ms() >= deadline {
             let _ = app.pipe.kill(&spawned.session);
@@ -2881,6 +2907,8 @@ pub fn session_request_for(
         // A pane a person opens keeps the environment it always had. Only a workflow run's session
         // is scrubbed; see `run_profile.rs`.
         scrub: wtm_core::ports::EnvScrub::default(),
+        // A run session's request is built by `flow_session`, from its profile and none of this.
+        run: None,
         mcp,
         instructions: session_instructions(app, project, entry.id),
         effort,
