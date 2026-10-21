@@ -8,12 +8,22 @@
  * # What is here, and what is not yet
  *
  * The queue's review slice has two sections: the worktrees you are working in, and pull requests
- * you are reviewing. Only the first has a source today, the project's worktree listing. Reviews
- * stays empty until the forge read side lands, and every row's review status is the one value a row
- * can honestly have before review runs exist. Nothing here is invented to fill the space.
+ * you are reviewing. The first comes from the project's worktree listing; the second from the
+ * flow store, where adding a pull request makes a work item, with what the forge says about each
+ * read on demand. Every worktree row's review status is the one value a row can honestly have
+ * before review runs exist. Nothing here is invented to fill the space.
  */
 
-import type { Worktree } from './ipc/types';
+import type {
+  BranchProtection,
+  Permission,
+  PrState,
+  PullRequest,
+  ReuseReason,
+  ReviewItem,
+  ReviewSetup,
+  Worktree,
+} from './ipc/types';
 import { worktreeLabel } from './worktree-label';
 
 /**
@@ -104,4 +114,135 @@ export function changesOf(w: Pick<Worktree, 'dirty' | 'staged' | 'untracked'>): 
   }
   if (w.untracked > 0) parts.push(`${w.untracked} untracked`);
   return parts.length === 0 ? 'Clean' : parts.join(' · ');
+}
+
+// ── pull requests in the Reviews section ──
+
+/**
+ * Where a queued pull request stands, as its row says it.
+ *
+ * About the worktree only, for the reason `ReviewStatus` has one value: no review of a pull
+ * request can run yet, so "has somewhere to read it" is the one thing a row can truthfully report.
+ */
+export type ReviewRowStatus = 'no_worktree' | 'worktree';
+
+export const REVIEW_ROW_WORDS: Record<ReviewRowStatus, string> = {
+  no_worktree: 'No review worktree yet',
+  worktree: 'Review worktree ready',
+};
+
+export interface ReviewRow {
+  /** The work item's id. */
+  id: number;
+  /** `#4031 · title`. */
+  name: string;
+  /** `owner/name#4031`, for a tooltip. */
+  detail: string;
+  /** The worktree it was last reviewed in, if it is still in the listing. */
+  worktree: Worktree | null;
+  status: ReviewRowStatus;
+}
+
+/**
+ * The queue's pull requests, in the order they were added.
+ *
+ * A recorded worktree counts only while the listing still has it: removing the worktree is the
+ * user's to do, and the row should not keep pointing at a directory that is gone.
+ */
+export function reviewRows(
+  items: readonly ReviewItem[],
+  worktrees: readonly Worktree[],
+): ReviewRow[] {
+  return items.map((item) => {
+    const worktree =
+      item.worktree === null
+        ? null
+        : (worktrees.find((w) => w.path === item.worktree && w.prunable === null) ?? null);
+    return {
+      id: item.id,
+      name: item.title ? `#${item.number} · ${item.title}` : `#${item.number}`,
+      detail: `${item.repo}#${item.number}`,
+      worktree,
+      status: worktree ? 'worktree' : 'no_worktree',
+    };
+  });
+}
+
+export const PR_STATE_WORDS: Record<PrState, string> = {
+  open: 'Open',
+  closed: 'Closed',
+  merged: 'Merged',
+  unknown: 'State unknown',
+};
+
+/** What you can do on the base repository, in the words of what it lets you do. */
+export const PERMISSION_WORDS: Record<Permission, string> = {
+  admin: 'Admin: you can push',
+  maintain: 'Maintain: you can push',
+  write: 'Write: you can push',
+  triage: 'Triage: you cannot push',
+  read: 'Read: you cannot push',
+  none: 'No access',
+  unknown: 'Unknown',
+};
+
+export const REUSE_WORDS: Record<ReuseReason, string> = {
+  review_branch: 'it is on the review branch an earlier review made',
+  review_directory: "it is where this pull request's review worktree goes",
+  pull_request_branch: "it is on the pull request's own branch",
+  head_commit: "it is at the pull request's head commit",
+};
+
+/**
+ * Where the commits come from: `owner:branch` for a fork, the branch alone otherwise, since the
+ * base repository is already in the header.
+ */
+export function headLabel(pr: Pick<PullRequest, 'head' | 'crossRepository'>): string {
+  if (!pr.crossRepository) return pr.head.branch;
+  return pr.head.repo
+    ? `${pr.head.repo.owner}:${pr.head.branch}`
+    : `(deleted fork):${pr.head.branch}`;
+}
+
+/** Every bucket with something in it, so a pending check is never hidden behind a pass. */
+export function checksLine(checks: PullRequest['checks']): string {
+  const parts = [
+    checks.passed > 0 && `${checks.passed} passed`,
+    checks.failed > 0 && `${checks.failed} failed`,
+    checks.pending > 0 && `${checks.pending} pending`,
+    checks.skipped > 0 && `${checks.skipped} skipped`,
+  ].filter((part): part is string => typeof part === 'string');
+  return parts.length === 0 ? 'No checks reported' : parts.join(' · ');
+}
+
+/** The fork, and whether its author lets maintainers push to it, in one phrase. */
+export function forkLine(
+  pr: Pick<PullRequest, 'crossRepository' | 'maintainerCanModify'>,
+): string {
+  if (!pr.crossRepository) return 'No: a branch of the base repository';
+  return pr.maintainerCanModify
+    ? 'Yes: maintainers may push to it'
+    : 'Yes: maintainer edits off';
+}
+
+export function protectionLine(protection: BranchProtection): string {
+  if (protection.protected === null) return 'The forge did not say';
+  if (!protection.protected) return 'Not protected';
+  return protection.rules.length > 0
+    ? `Protected: ${protection.rules.join(', ').replaceAll('_', ' ')}`
+    : 'Protected';
+}
+
+/** What happens about the project's setup, as the Prepare panel says it. */
+export function setupLine(setup: ReviewSetup): string {
+  switch (setup.kind) {
+    case 'skipped':
+      return 'Skipped. Tick Prepare environment to run it.';
+    case 'not_declared':
+      return 'This project declares none.';
+    case 'not_applicable':
+      return 'Not run: the existing worktree is used as it is.';
+    case 'run':
+      return 'Runs after the worktree is made:';
+  }
 }

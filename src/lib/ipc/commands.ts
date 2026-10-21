@@ -51,6 +51,11 @@ import type {
   Palette,
   Preflight,
   Preview,
+  ReviewDetail,
+  ReviewOutcome,
+  ReviewPreview,
+  ReviewQueue,
+  ReviewWorktreeArgs,
   Project,
   Registered,
   Resumable,
@@ -143,6 +148,22 @@ export const commands = {
     rows: number;
     cols: number;
   }) => invoke<CreateOutcome>('create_worktree', args),
+
+  // ── reviews: pull requests in the Work view ──
+  /** The project's Reviews queue, from the local store. Reads no forge. */
+  reviewQueue: (projectId: string) => invoke<ReviewQueue>('review_queue', { projectId }),
+  /** Add a pull request by URL or number. Adding one already queued returns that one. */
+  addReview: (projectId: string, input: string) =>
+    invoke<ReviewDetail>('add_review', { projectId, input }),
+  /** Read a queued pull request from the forge again. */
+  reviewDetail: (projectId: string, itemId: number) =>
+    invoke<ReviewDetail>('review_detail', { projectId, itemId }),
+  /** What preparing its worktree would do. Mutates nothing. */
+  previewReviewWorktree: (projectId: string, args: ReviewWorktreeArgs) =>
+    invoke<ReviewPreview>('preview_review_worktree', { projectId, args }),
+  /** Fetch, add, and only if asked, run setup; or hand back the worktree that has it. */
+  createReviewWorktree: (projectId: string, args: ReviewWorktreeArgs) =>
+    invoke<ReviewOutcome>('create_review_worktree', { projectId, args }),
 
   // ── remove ──
   removePreflight: (projectId: string, worktreeId: string, deleteBranch: boolean) =>

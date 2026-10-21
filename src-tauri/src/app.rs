@@ -23,6 +23,8 @@ use wtm_core::ports::clock::Clock;
 use wtm_core::ports::config::ConfigStore;
 use wtm_core::ports::database::{DatabaseConnection, DatabaseHost};
 use wtm_core::ports::exec::CommandRunner;
+use wtm_core::ports::flow::FlowStore;
+use wtm_core::ports::forge::Forge;
 use wtm_core::ports::fs::FileStore;
 use wtm_core::ports::git::Git;
 use wtm_core::ports::template::TemplateEngine;
@@ -943,6 +945,12 @@ pub struct App {
     handles_write: parking_lot::Mutex<()>,
     /// The one recording in progress, if any. See [`crate::dictate`].
     pub dictation: crate::dictate::Dictation,
+    /// Pull requests, permissions and branch protection, read through the user's own `gh`. Only
+    /// the Work view asks, and only for a project whose workflow names a forge — see `reviews.rs`.
+    pub forge: Arc<dyn Forge>,
+    /// The Work view's SQLite store, opened the first time something needs it. See
+    /// [`Self::flow_store`].
+    flow_store: parking_lot::Mutex<Option<Arc<dyn FlowStore>>>,
     /// Whether this run's window has already started bringing the last run's sessions back.
     ///
     /// Process state, and that is the point: a webview reload starts the frontend again but not
@@ -1016,6 +1024,7 @@ impl App {
         let git: Arc<dyn Git> = Arc::new(
             GitCli::new(Arc::clone(&runner)).without_worktrees_under(paths.flow_dir.clone()),
         );
+        let forge_runner = Arc::clone(&runner);
         let engine: Arc<dyn TemplateEngine> = Arc::new(wtm_render::Engine::new());
 
         let config = Arc::new(FileConfigStore::new(
@@ -1061,7 +1070,27 @@ impl App {
             handles_file,
             handles_write: parking_lot::Mutex::new(()),
             launch_restore: std::sync::atomic::AtomicBool::new(false),
+            forge: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
+            flow_store: parking_lot::Mutex::new(None),
         })
+    }
+
+    /// The Work view's store, opening it on first use.
+    ///
+    /// Lazily, because opening is not free and not only a read: it creates `flow.db`, runs its
+    /// migrations and, before migrating one that exists, copies it aside. Somebody who never turns
+    /// the Work view on should not find a database in their data directory, and a launch should not
+    /// wait on a migration for a view that is not showing. A failure is not cached, so a database
+    /// that was briefly unopenable (a newer wtm holding it, a full disk) is tried again next time.
+    pub fn flow_store(&self) -> Result<Arc<dyn FlowStore>, wtm_appdb::AppDbError> {
+        let mut slot = self.flow_store.lock();
+        if let Some(store) = slot.as_ref() {
+            return Ok(Arc::clone(store));
+        }
+        let store: Arc<dyn FlowStore> =
+            Arc::new(wtm_appdb::AppDb::open(&self.config.paths().flow_db)?);
+        *slot = Some(Arc::clone(&store));
+        Ok(store)
     }
 
     /// True the first time it is asked in this run of the app, and never again.

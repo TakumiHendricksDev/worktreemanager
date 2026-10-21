@@ -1,0 +1,25 @@
+[package]
+name        = "wtm-forge"
+description = "The Forge port over the user's own `gh`: pull requests, permissions, branch protection. Reads only."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# No `wtm-exec` and no HTTP client. This crate is handed an `Arc<dyn CommandRunner>`, like
+# `wtm-git`, so every request is the user's own `gh` spawned by the one runner that times, traces
+# and kills it, and this dependency list is the proof that nothing here can reach the network any
+# other way (ARCHITECTURE §6a).
+[dependencies]
+wtm-core   = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wtm-testkit       = { workspace = true }
+pretty_assertions = { workspace = true }

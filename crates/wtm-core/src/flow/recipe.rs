@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use super::ForgeKind;
 use super::glob;
 use crate::model::AgentSkill;
 
@@ -48,12 +49,27 @@ pub const MAX_RETRIES: u32 = 3;
 
 /// The `[workflow]` table.
 ///
-/// Only recipes and roles so far. The tracker, forge and status mapping the plan puts here arrive
-/// with the items that first read them, and until then a key this build does not know is an error
-/// rather than something silently ignored.
+/// Recipes, roles, the forge and the integration branches so far. The tracker and status mapping
+/// the plan puts here arrive with the items that first read them, and until then a key this build
+/// does not know is an error rather than something silently ignored.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowSpec {
+    /// Where pull requests are read from. Absent, nothing is: see [`ForgeKind`] for why a workflow
+    /// does not assume one. Accepted from your own config and the local layer only, because naming
+    /// it is what lets the Work view call a forge on your behalf (ARCHITECTURE §6a), and a
+    /// committed file is written by whoever can push to the branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<ForgeKind>,
+    /// Branches work merges into, such as `main` or `release/*`, in [`glob`]'s dialect, so
+    /// `release/*` also covers `release/4.2/hotfix`.
+    ///
+    /// Read for display so far: the Work view shows whether a pull request's base is one, and
+    /// whether the forge protects it. A repository may declare these, since naming a branch grants
+    /// nothing; the item that refuses pushes to them should treat a repository's list as additions
+    /// to yours, never as a replacement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub integration_branches: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub role: BTreeMap<String, RoleSpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -318,6 +334,23 @@ impl WorkflowSpec {
     /// Fail-fast like the rest of config validation: one misspelt role id makes every stage and
     /// fallback that names it look wrong too, and a list would mostly be that one mistake repeated.
     pub fn validate(&self) -> Result<(), WorkflowError> {
+        for branch in &self.integration_branches {
+            // `refs/heads/main` or `origin/main` would never equal a pull request's base, which
+            // the forge names bare, so the entry would silently match nothing.
+            if branch.is_empty()
+                || branch.starts_with('/')
+                || branch.starts_with("refs/")
+                || branch.chars().any(char::is_whitespace)
+            {
+                return Err(WorkflowError::new(
+                    "integration_branches",
+                    format!(
+                        "`{branch}` is not a branch name or pattern; write it as the forge \
+                         names it, such as `main` or `release/*`"
+                    ),
+                ));
+            }
+        }
         for (id, role) in &self.role {
             check_id(&format!("role.{id}"), id)?;
             if id == ASK {
@@ -696,6 +729,25 @@ fn skill_name(raw: &str) -> &str {
     raw.trim().trim_start_matches('/')
 }
 
+impl WorkflowSpec {
+    /// Whether `branch` is one of the integration branches, by name or by pattern.
+    #[must_use]
+    pub fn is_integration_branch(&self, branch: &str) -> bool {
+        self.integration_branches
+            .iter()
+            .any(|pattern| glob::matches(pattern, branch))
+    }
+
+    /// The integration branches named outright. A pattern names no branch a forge can be asked
+    /// about, so its protection is read only once it matches a pull request's base.
+    pub fn named_integration_branches(&self) -> impl Iterator<Item = &str> {
+        self.integration_branches
+            .iter()
+            .map(String::as_str)
+            .filter(|branch| !branch.contains(['*', '?']))
+    }
+}
+
 /// Same rule as database ids: the id ends up in keys, logs and directory names.
 fn check_id(key: &str, id: &str) -> Result<(), WorkflowError> {
     if id.is_empty()
@@ -1044,5 +1096,40 @@ mod tests {
             .check_skills("revew", &SkillCatalog::new())
             .unwrap_err();
         assert_eq!(error, SkillError::UnknownRecipe("revew".to_owned()));
+    }
+
+    #[test]
+    fn a_workflow_names_its_forge_and_says_which_branches_are_integration_branches() {
+        let spec = workflow(json!({
+            "forge": "github",
+            "integration_branches": ["main", "release/*"]
+        }));
+        spec.validate().unwrap();
+        assert_eq!(spec.forge, Some(ForgeKind::Github));
+        assert!(spec.is_integration_branch("main"));
+        assert!(spec.is_integration_branch("release/4.2"));
+        // The path dialect: a pattern that covers a "directory" covers what is beneath it.
+        assert!(spec.is_integration_branch("release/4.2/hotfix"));
+        assert!(!spec.is_integration_branch("feature/main"));
+        assert_eq!(
+            spec.named_integration_branches().collect::<Vec<_>>(),
+            ["main"]
+        );
+    }
+
+    #[test]
+    fn a_forge_this_build_cannot_read_is_a_config_error_not_a_silent_no_forge() {
+        let error = serde_json::from_value::<WorkflowSpec>(json!({ "forge": "gitlab" }));
+        assert!(error.is_err());
+    }
+
+    #[test]
+    fn an_integration_branch_written_as_a_ref_or_with_a_space_is_refused() {
+        for branch in ["refs/heads/main", "/main", "", "release candidate"] {
+            let error = workflow(json!({ "integration_branches": [branch] }))
+                .validate()
+                .unwrap_err();
+            assert_eq!(error.key, "integration_branches", "{branch}");
+        }
     }
 }

@@ -45,6 +45,13 @@ use crate::ports::progress::ProgressSink;
 use crate::ports::pty::{PtyHost, PtySink};
 use crate::ports::template::{Context, TemplateEngine};
 
+mod review;
+
+pub use review::{
+    ReuseReason, ReviewCheckout, ReviewFetch, ReviewOutcome, ReviewPlan, ReviewPreview,
+    ReviewRequest, ReviewSetup, ReviewTarget,
+};
+
 /// Total stage count, for progress reporting.
 const STAGES: u16 = 10;
 
@@ -359,21 +366,7 @@ impl CreatePipeline {
         let planned = self.plan(req, progress, cancel)?;
         let project = &req.project;
 
-        // Anything not acknowledged, or not waivable at all, stops us here — with nothing to
-        // undo, which is the entire point of the 1–6 boundary.
-        let blocking: Vec<PreflightItem> = planned
-            .preview
-            .preflight
-            .iter()
-            .filter(|item| {
-                item.severity == crate::model::PreflightSeverity::Error
-                    && !(item.overridable && req.acknowledged.contains(&item.id))
-            })
-            .cloned()
-            .collect();
-        if !blocking.is_empty() {
-            return Err(WtmError::Preflight(blocking));
-        }
+        refuse_unacknowledged(&planned.preview.preflight, &req.acknowledged)?;
 
         // ── 7. fetch ──
         if let Some((remote, branch)) = &planned.fetch {
@@ -408,6 +401,35 @@ impl CreatePipeline {
         };
 
         // ── 9. setup ──
+        self.setup_stage(
+            &SetupStage {
+                project,
+                base_ctx: &planned.setup_base_ctx,
+                values: &planned.values,
+                rows: req.rows,
+                cols: req.cols,
+            },
+            worktree,
+            sink,
+            progress,
+            cancel,
+        )
+    }
+
+    /// Stages 9 and 10 for a worktree stage 8 just made: the project's setup in a PTY, if it
+    /// declares one, and the outcome either way.
+    ///
+    /// Shared by [`Self::execute`] and [`Self::execute_review`], so a review that opts into its
+    /// project's setup runs it exactly as a created worktree does, partial outcome included.
+    fn setup_stage(
+        &self,
+        stage: &SetupStage<'_>,
+        worktree: Worktree,
+        sink: Arc<dyn PtySink>,
+        progress: &dyn ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<CreateOutcome, WtmError> {
+        let project = stage.project;
         let Some(setup) = &project.setup else {
             progress.stage("done", "Done", STAGES, STAGES);
             return Ok(CreateOutcome::Created {
@@ -420,11 +442,11 @@ impl CreatePipeline {
 
         // Git is allowed to canonicalize the path, and only the created worktree has a real head.
         // Rendering here keeps a first setup run identical to retry instead of reusing the preview.
-        let mut setup_ctx = planned.setup_base_ctx.clone();
+        let mut setup_ctx = stage.base_ctx.clone();
         insert_actual_worktree(&mut setup_ctx, &worktree);
 
         let (Some(argv), Some(cwd)) =
-            self.render_setup(project, &setup_ctx, &planned.values, Some(&worktree.path))?
+            self.render_setup(project, &setup_ctx, stage.values, Some(&worktree.path))?
         else {
             progress.stage("done", "Done", STAGES, STAGES);
             return Ok(CreateOutcome::Created {
@@ -445,24 +467,26 @@ impl CreatePipeline {
             cwd: cwd.to_string_lossy().into_owned(),
         });
 
-        let spawned =
-            match self
-                .pty
-                .spawn(&inv, req.rows, req.cols, Some(worktree.id.as_str()), sink)
-            {
-                Ok(spawned) => spawned,
-                Err(err) => {
-                    // The worktree exists and is fine; only setup could not start. Report it as a
-                    // partial outcome so the remedies are offered.
-                    progress.warn("setup_spawn_failed", &err.to_string());
-                    return Ok(CreateOutcome::SetupFailed {
-                        worktree,
-                        session: SessionId::new("none"),
-                        outcome: ExitOutcome::Failed { code: -1 },
-                        remedies: CreateOutcome::default_remedies(),
-                    });
-                }
-            };
+        let spawned = match self.pty.spawn(
+            &inv,
+            stage.rows,
+            stage.cols,
+            Some(worktree.id.as_str()),
+            sink,
+        ) {
+            Ok(spawned) => spawned,
+            Err(err) => {
+                // The worktree exists and is fine; only setup could not start. Report it as a
+                // partial outcome so the remedies are offered.
+                progress.warn("setup_spawn_failed", &err.to_string());
+                return Ok(CreateOutcome::SetupFailed {
+                    worktree,
+                    session: SessionId::new("none"),
+                    outcome: ExitOutcome::Failed { code: -1 },
+                    remedies: CreateOutcome::default_remedies(),
+                });
+            }
+        };
 
         progress.emit(crate::ports::progress::ProgressEvent::SessionStarted {
             session: spawned.session.as_str().to_owned(),
@@ -1194,42 +1218,80 @@ impl CreatePipeline {
             );
         }
 
-        // Every configured program must be findable, or setup fails after the worktree
-        // exists — the messiest possible time.
-        if let Some(argv) = &plan.setup_argv
-            && let Some(program) = argv.first()
-        {
-            let is_path = program.contains('/');
-            let found = if is_path {
-                let candidate = if program.starts_with('/') {
-                    PathBuf::from(program)
-                } else {
-                    plan.setup_cwd
-                        .clone()
-                        .unwrap_or_else(|| project.root.clone())
-                        .join(program)
-                };
-                self.files.exists(&candidate)
-            } else {
-                self.runner.which(program).is_some()
-            };
-
-            if !found {
-                items.push(
-                    PreflightItem::error(
-                        "setup_program_missing",
-                        format!("`{program}` was not found."),
-                    )
-                    .overridable()
-                    .with_hint(
-                        "Create the worktree anyway and run setup later, or check \
-                             `just doctor` — a GUI app may not inherit your shell's PATH.",
-                    ),
-                );
-            }
+        if let Some(argv) = &plan.setup_argv {
+            items.extend(self.setup_program_missing(project, argv, plan.setup_cwd.as_ref()));
         }
 
         items
+    }
+
+    /// Every configured program must be findable, or setup fails after the worktree exists — the
+    /// messiest possible time.
+    fn setup_program_missing(
+        &self,
+        project: &Project,
+        argv: &[String],
+        cwd: Option<&PathBuf>,
+    ) -> Option<PreflightItem> {
+        let program = argv.first()?;
+        let found = if program.contains('/') {
+            let candidate = if program.starts_with('/') {
+                PathBuf::from(program)
+            } else {
+                cwd.cloned()
+                    .unwrap_or_else(|| project.root.clone())
+                    .join(program)
+            };
+            self.files.exists(&candidate)
+        } else {
+            self.runner.which(program).is_some()
+        };
+
+        (!found).then(|| {
+            PreflightItem::error(
+                "setup_program_missing",
+                format!("`{program}` was not found."),
+            )
+            .overridable()
+            .with_hint(
+                "Create the worktree anyway and run setup later, or check \
+                 `just doctor` — a GUI app may not inherit your shell's PATH.",
+            )
+        })
+    }
+}
+
+/// The context stage 9 renders setup against, before the worktree's own tokens are added.
+struct SetupStage<'a> {
+    project: &'a Project,
+    /// Ambient tokens plus whatever the form or the pull request contributed.
+    base_ctx: &'a Context,
+    /// The form's values, for `args_when`. Empty for a review, which has no form.
+    values: &'a FormValues,
+    rows: u16,
+    cols: u16,
+}
+
+/// Stop before the first mutation if anything blocks it.
+///
+/// Anything not acknowledged, or not waivable at all, stops us here — with nothing to undo, which
+/// is the entire point of the 1–6 boundary.
+fn refuse_unacknowledged(
+    preflight: &[PreflightItem],
+    acknowledged: &[String],
+) -> Result<(), WtmError> {
+    let blocking: Vec<PreflightItem> = preflight
+        .iter()
+        .filter(|item| {
+            item.severity == crate::model::PreflightSeverity::Error
+                && !(item.overridable && acknowledged.contains(&item.id))
+        })
+        .cloned()
+        .collect();
+    if blocking.is_empty() {
+        Ok(())
+    } else {
+        Err(WtmError::Preflight(blocking))
     }
 }
 

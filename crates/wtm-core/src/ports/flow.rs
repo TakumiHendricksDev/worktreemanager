@@ -25,6 +25,7 @@ use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
     UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink,
 };
+use crate::model::ProjectId;
 
 #[derive(Debug, thiserror::Error, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -67,6 +68,9 @@ pub trait FlowStore: Send + Sync {
 
     /// The work item for an issue, or the one whose current pull request this is.
     fn find_work_item(&self, key: &WorkKey) -> Result<Option<WorkItem>, FlowStoreError>;
+
+    /// A project's work items, oldest first, which is the order they were added to its queue.
+    fn work_items(&self, project: &ProjectId) -> Result<Vec<WorkItem>, FlowStoreError>;
 
     /// Record something the work item used. Linking a pull request also makes it the item's
     /// current one, which is refused with [`FlowStoreError::PullRequestTaken`] when another item's

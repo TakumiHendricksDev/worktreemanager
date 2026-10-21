@@ -45,6 +45,13 @@ pub struct AddOptions {
     pub create_branch: bool,
 }
 
+/// A remote and one URL it is configured with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteUrl {
+    pub name: String,
+    pub url: String,
+}
+
 /// Read and write git state.
 ///
 /// Implementations must be `Send + Sync` because a single instance is shared
@@ -84,6 +91,16 @@ pub trait Git: Send + Sync {
     /// routinely contain slashes (`epic/thing-api`), so callers must compare the prefix with this
     /// list before treating it as `remote/ref`.
     fn remotes(&self, repo_root: &Path) -> Result<Vec<String>, GitError>;
+
+    /// Each remote's URL as configured, `remote.<name>.url`, in config order.
+    ///
+    /// # As written, not as rewritten
+    ///
+    /// `git remote -v` applies `url.<base>.insteadOf`, and that is the wrong answer for the one
+    /// question this serves: which remote is a forge repository. A rewrite is how people point a
+    /// forge URL at a mirror or a local path, and the URL they wrote is the one that names the
+    /// repository. Fetching still goes through git, so it still honours the rewrite.
+    fn remote_urls(&self, repo_root: &Path) -> Result<Vec<RemoteUrl>, GitError>;
 
     /// Resolve a revision to a commit. `Ok(None)` when the ref simply does not
     /// exist — that is an expected state during planning, not an error.
@@ -298,6 +315,9 @@ mod tests {
             unused!()
         }
         fn remotes(&self, _: &Path) -> Result<Vec<String>, GitError> {
+            unused!()
+        }
+        fn remote_urls(&self, _: &Path) -> Result<Vec<RemoteUrl>, GitError> {
             unused!()
         }
         fn rev_parse(&self, _: &Path, _: &str) -> Result<Option<CommitId>, GitError> {

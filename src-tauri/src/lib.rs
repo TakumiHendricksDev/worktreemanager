@@ -33,6 +33,7 @@ pub mod prototype_context;
 pub mod prototype_tools;
 pub mod prototypes;
 pub mod pty_bridge;
+pub mod reviews;
 pub mod run_profile;
 pub mod shell_admission;
 pub mod shell_commands;
@@ -339,6 +340,11 @@ pub fn run() {
             commands::cancel_database_query,
             commands::preview_worktree,
             commands::create_worktree,
+            reviews::review_queue,
+            reviews::add_review,
+            reviews::review_detail,
+            reviews::preview_review_worktree,
+            reviews::create_review_worktree,
             commands::remove_preflight,
             commands::remove_worktree,
             commands::run_setup,

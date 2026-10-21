@@ -30,7 +30,7 @@ use wtm_core::model::{
     Worktree, WorktreeId,
 };
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation};
-use wtm_core::ports::git::{AddOptions, BranchFilter, Git};
+use wtm_core::ports::git::{AddOptions, BranchFilter, Git, RemoteUrl};
 
 use crate::porcelain;
 
@@ -266,6 +266,25 @@ impl Git for GitCli {
             .filter(|remote| !remote.is_empty())
             .map(str::to_owned)
             .collect())
+    }
+
+    fn remote_urls(&self, repo_root: &Path) -> Result<Vec<RemoteUrl>, GitError> {
+        let out = self.run(
+            repo_root,
+            &["config", "-z", "--get-regexp", r"^remote\..+\.url$"],
+            QUERY_TIMEOUT,
+            true,
+        )?;
+        // `--get-regexp` exits 1 when nothing matches: a repository with no remotes.
+        match out.code {
+            0 => Ok(porcelain::parse_remote_urls(&out.stdout)),
+            1 => Ok(Vec::new()),
+            code => Err(GitError::Failed {
+                argv: "git config --get-regexp remote urls".to_owned(),
+                code,
+                stderr: out.stderr.trim().to_owned(),
+            }),
+        }
     }
 
     fn rev_parse(&self, repo_root: &Path, rev: &str) -> Result<Option<CommitId>, GitError> {

@@ -77,6 +77,11 @@ Worth stating because it narrows the surface considerably:
   machine or the installed version. It only shows a banner — installing waits for a click and goes
   through Homebrew — and Settings → General turns it off. ARCHITECTURE §6a has the reasoning.
 
+  The optional **Work view** reads pull requests through your own `gh`, signed in with the
+  credentials `gh` already holds, and only for a project whose own config names a forge; a
+  repository's `wtm.toml` cannot name one for you. It reads only: no review, comment or push is
+  sent. wtm stores no GitHub token.
+
   What is unchanged, and is the reason the exceptions are narrow enough to describe in a bullet:
 
   - **The webview still cannot reach the network.** The CSP permits only `self` and `ipc:`, and

@@ -16,7 +16,7 @@ use wtm_core::model::{
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation, Output};
 use wtm_core::ports::fs::{FileDigest, FileStore};
-use wtm_core::ports::git::{AddOptions, BranchFilter, Git};
+use wtm_core::ports::git::{AddOptions, BranchFilter, Git, RemoteUrl};
 use wtm_core::ports::progress::{ProgressEvent, ProgressSink};
 
 // ─────────────────────────────── CommandRunner ───────────────────────────────
@@ -373,9 +373,12 @@ pub fn normalize(path: &Path) -> PathBuf {
 pub struct FakeGit {
     worktrees: Mutex<Vec<Worktree>>,
     remotes: Mutex<Vec<String>>,
+    remote_urls: Mutex<Vec<RemoteUrl>>,
     local_branches: Mutex<Vec<BranchRef>>,
     remote_branches: Mutex<Vec<BranchRef>>,
     revs: Mutex<BTreeMap<String, CommitId>>,
+    /// Commits a fetch of a refspec brings, so a test can tell "already here" from "fetched".
+    fetchable: Mutex<BTreeMap<String, CommitId>>,
     statuses: Mutex<BTreeMap<PathBuf, WorkingTreeStatus>>,
     /// Names of mutating operations, in order.
     mutations: Mutex<Vec<String>>,
@@ -438,10 +441,35 @@ impl FakeGit {
         self
     }
 
+    /// Configure `remote.<name>.url`, adding the remote if it is not there yet.
+    #[must_use]
+    pub fn with_remote_url(self, name: &str, url: &str) -> Self {
+        {
+            let mut remotes = self.remotes.lock();
+            if !remotes.iter().any(|remote| remote == name) {
+                remotes.push(name.to_owned());
+            }
+        }
+        self.remote_urls.lock().push(RemoteUrl {
+            name: name.to_owned(),
+            url: url.to_owned(),
+        });
+        self
+    }
+
     /// Make `rev` resolve to `sha`. Unregistered revs resolve to `None`.
     #[must_use]
     pub fn with_rev(self, rev: &str, sha: &str) -> Self {
         self.revs.lock().insert(rev.to_owned(), CommitId::new(sha));
+        self
+    }
+
+    /// Make a fetch of `refspec` bring `sha`, after which `sha` resolves.
+    #[must_use]
+    pub fn with_fetchable(self, refspec: &str, sha: &str) -> Self {
+        self.fetchable
+            .lock()
+            .insert(refspec.to_owned(), CommitId::new(sha));
         self
     }
 
@@ -459,6 +487,30 @@ impl FakeGit {
             id: WorktreeId::from_path(&path),
             path,
             head: Some(CommitId::new("2222222222222222222222222222222222222222")),
+            checkout: branch.map_or(Checkout::Detached, |b| Checkout::Branch {
+                branch: BranchRef::new(b),
+            }),
+            is_main: false,
+            is_bare: false,
+            locked: None,
+            prunable: None,
+        });
+        self
+    }
+
+    /// Add an extra worktree at a known commit, for "is that head already checked out" cases.
+    #[must_use]
+    pub fn with_worktree_at(
+        self,
+        path: impl Into<PathBuf>,
+        branch: Option<&str>,
+        head: &str,
+    ) -> Self {
+        let path = path.into();
+        self.worktrees.lock().push(Worktree {
+            id: WorktreeId::from_path(&path),
+            path,
+            head: Some(CommitId::new(head)),
             checkout: branch.map_or(Checkout::Detached, |b| Checkout::Branch {
                 branch: BranchRef::new(b),
             }),
@@ -561,6 +613,10 @@ impl Git for FakeGit {
         Ok(self.remotes.lock().clone())
     }
 
+    fn remote_urls(&self, _repo_root: &Path) -> Result<Vec<RemoteUrl>, GitError> {
+        Ok(self.remote_urls.lock().clone())
+    }
+
     fn rev_parse(&self, _repo_root: &Path, rev: &str) -> Result<Option<CommitId>, GitError> {
         Ok(self.revs.lock().get(rev).cloned())
     }
@@ -635,6 +691,9 @@ impl Git for FakeGit {
 
     fn fetch(&self, _repo_root: &Path, remote: &str, refspec: &str) -> Result<(), GitError> {
         self.note(format!("fetch {remote} {refspec}"));
+        if let Some(sha) = self.fetchable.lock().get(refspec).cloned() {
+            self.revs.lock().insert(sha.as_str().to_owned(), sha);
+        }
         Ok(())
     }
 
@@ -653,10 +712,19 @@ impl Git for FakeGit {
             .lock()
             .clone()
             .unwrap_or_else(|| opts.path.clone());
+        // A start point that is already a full commit id is where the checkout lands, as in git;
+        // anything else is a ref this fake does not resolve, so it gets a recognizable stand-in.
+        let head = if opts.start_point.len() == 40
+            && opts.start_point.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            opts.start_point.clone()
+        } else {
+            "3333333333333333333333333333333333333333".to_owned()
+        };
         let worktree = Worktree {
             id: WorktreeId::from_path(&path),
             path,
-            head: Some(CommitId::new("3333333333333333333333333333333333333333")),
+            head: Some(CommitId::new(head)),
             checkout: opts
                 .branch
                 .clone()
@@ -1251,5 +1319,120 @@ impl wtm_core::ports::pipe::PipeSink for NullPipeSink {
         _session: &wtm_core::model::SessionId,
         _outcome: &wtm_core::model::ExitOutcome,
     ) {
+    }
+}
+
+// ─────────────────────────────── Forge ───────────────────────────────
+
+/// A forge that knows the pull requests it was given and records every question.
+///
+/// Its call log is the point: the Work view promises that a project without a forge causes no
+/// forge call, and only a fake that counts can show that nothing asked.
+#[derive(Debug, Default)]
+pub struct FakeForge {
+    pull_requests: Mutex<Vec<wtm_core::flow::PullRequest>>,
+    calls: Mutex<Vec<String>>,
+}
+
+impl FakeForge {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Answer for `pr`, by its number and base repository.
+    #[must_use]
+    pub fn with_pull_request(self, pr: wtm_core::flow::PullRequest) -> Self {
+        self.pull_requests.lock().push(pr);
+        self
+    }
+
+    /// Each question asked, as `method target`, in order.
+    #[must_use]
+    pub fn calls(&self) -> Vec<String> {
+        self.calls.lock().clone()
+    }
+
+    fn note(&self, call: String) {
+        self.calls.lock().push(call);
+    }
+}
+
+impl wtm_core::ports::forge::Forge for FakeForge {
+    fn check(
+        &self,
+        _cwd: &Path,
+        host: &str,
+    ) -> Result<wtm_core::flow::ForgeAccount, wtm_core::error::ForgeError> {
+        self.note(format!("check {host}"));
+        Ok(wtm_core::flow::ForgeAccount {
+            host: host.to_owned(),
+            login: Some("reviewer".to_owned()),
+            version: Some("2.100.0".to_owned()),
+        })
+    }
+
+    fn pull_request(
+        &self,
+        _cwd: &Path,
+        target: &wtm_core::flow::PrTarget,
+    ) -> Result<wtm_core::flow::PullRequest, wtm_core::error::ForgeError> {
+        self.note(format!("pull_request #{}", target.number));
+        self.pull_requests
+            .lock()
+            .iter()
+            .find(|pr| {
+                pr.number == target.number
+                    && target
+                        .repo
+                        .as_ref()
+                        .is_none_or(|repo| repo.same_repository(&pr.base.repo))
+            })
+            .cloned()
+            .ok_or_else(|| wtm_core::error::ForgeError::NotFound {
+                what: format!("pull request #{}", target.number),
+            })
+    }
+
+    fn pull_request_for_head(
+        &self,
+        _cwd: &Path,
+        repo: &wtm_core::flow::RepoSlug,
+        branch: &str,
+    ) -> Result<Option<wtm_core::flow::PullRequest>, wtm_core::error::ForgeError> {
+        self.note(format!("pull_request_for_head {repo}:{branch}"));
+        Ok(self
+            .pull_requests
+            .lock()
+            .iter()
+            .find(|pr| {
+                !pr.cross_repository
+                    && pr.head.branch == branch
+                    && pr.base.repo.same_repository(repo)
+            })
+            .cloned())
+    }
+
+    fn permission(
+        &self,
+        _cwd: &Path,
+        repo: &wtm_core::flow::RepoSlug,
+    ) -> Result<wtm_core::flow::Permission, wtm_core::error::ForgeError> {
+        self.note(format!("permission {repo}"));
+        Ok(wtm_core::flow::Permission::Write)
+    }
+
+    fn branch_protection(
+        &self,
+        _cwd: &Path,
+        repo: &wtm_core::flow::RepoSlug,
+        branch: &str,
+    ) -> Result<wtm_core::flow::BranchProtection, wtm_core::error::ForgeError> {
+        self.note(format!("branch_protection {repo}:{branch}"));
+        Ok(wtm_core::flow::BranchProtection {
+            branch: branch.to_owned(),
+            protected: Some(true),
+            rules: vec!["pull_request".to_owned()],
+        })
     }
 }

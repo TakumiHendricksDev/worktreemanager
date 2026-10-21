@@ -73,6 +73,8 @@ wtm-agent  = { workspace = true }
 wtm-dictate = { workspace = true }
 wtm-update = { workspace = true }
 wtm-db      = { workspace = true }
+wtm-appdb   = { workspace = true }
+wtm-forge   = { workspace = true }
 wtm-code    = { workspace = true }
 wtm-git    = { workspace = true }
 wtm-render = { workspace = true }
@@ -89,5 +91,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [dev-dependencies]
 wtm-testkit = { workspace = true }
 tempfile    = { workspace = true }
-# Only to assert things about our own Cargo.toml — see `the_release_profile_does_not_abort_on_panic`.
+# Only to assert things about our own manifests — see `the_release_profile_does_not_abort_on_panic`
+# and `the_forge_is_reached_only_through_the_users_own_gh`.
 toml        = { workspace = true }

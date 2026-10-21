@@ -91,6 +91,20 @@ impl FlowStore for AppDb {
         }
     }
 
+    fn work_items(&self, project: &ProjectId) -> Result<Vec<WorkItem>, FlowStoreError> {
+        let conn = self.conn.lock();
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT {WORK_ITEM_COLUMNS} FROM work_items WHERE project = ?1 ORDER BY id"
+            ))
+            .map_err(storage)?;
+        statement
+            .query_map(params![project.as_str()], read_work_item)
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)
+    }
+
     fn link(&self, item: WorkItemId, link: &WorkLink, at: UnixMs) -> Result<(), FlowStoreError> {
         let mut conn = self.conn.lock();
         let tx = conn

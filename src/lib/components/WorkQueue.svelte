@@ -6,18 +6,30 @@
    * it lists the same project's worktrees, and two lists of them side by side would be one too many.
    * The sidebar stays mounted underneath, hidden, and comes back as it was.
    *
-   * Two sections, the review slice's: My worktrees, from the project's listing, and Reviews, which
-   * stays empty until pull requests can be read. The plan's other sections — needs you, running,
-   * the sprint — arrive with the runs and the tracker that fill them, not as empty headings now.
+   * Two sections, the review slice's: My worktrees, from the project's listing, and Reviews, the
+   * pull requests you added by URL or number. Adding one is a field at the foot of the section
+   * rather than a dialog: it is one line of input, and its answer is a row appearing right above
+   * it. The section offers no field at all for a project whose workflow names no forge, and says
+   * what to configure instead, because wtm reads no pull request for such a project. The plan's
+   * other sections — needs you, running, the sprint — arrive with the runs and the tracker that
+   * fill them, not as empty headings now.
    *
    * Rows are buttons in a list rather than a `role="tree"` like the sidebar's. There is nothing to
    * fold and no second level, so a tree's keyboard model would be ceremony with nothing behind it.
    */
-  import { myWorktrees, REVIEW_WORDS, subjectOf } from '../work';
+  import {
+    myWorktrees,
+    REVIEW_ROW_WORDS,
+    REVIEW_WORDS,
+    reviewRows,
+    subjectOf,
+  } from '../work';
+  import { reviews } from '../state/reviews.svelte';
   import { work } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
+  import TextInput from './ui/TextInput.svelte';
 
   const {
     visible,
@@ -30,6 +42,32 @@
 
   const rows = $derived(myWorktrees(workspace.worktrees));
   const subject = $derived(subjectOf(rows, work.picked, workspace.selectedWorktreeId));
+  const queue = $derived(
+    reviews.projectId === workspace.activeProjectId ? reviews.queue : null,
+  );
+  const pullRequests = $derived(reviewRows(queue?.items ?? [], workspace.worktrees));
+
+  let pasted = $state('');
+
+  // Read on arrival and on a project switch, never on a timer: the queue is local, and each pull
+  // request is read from the forge only when it is opened.
+  $effect(() => {
+    const projectId = workspace.activeProjectId;
+    if (visible && projectId && workspace.activeProject?.usable)
+      void reviews.load(projectId);
+  });
+
+  async function addPullRequest(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    const projectId = workspace.activeProjectId;
+    const input = pasted.trim();
+    if (!projectId || !input || reviews.adding) return;
+    const id = await reviews.add(projectId, input);
+    if (id !== null) {
+      pasted = '';
+      work.pickReview(id);
+    }
+  }
 </script>
 
 <nav class="c-work-queue" class:is-hidden={!visible} aria-label="Work queue">
@@ -46,8 +84,10 @@
             <li>
               <button
                 class="c-work-row"
-                class:is-selected={row.id === subject?.id}
-                aria-current={row.id === subject?.id ? 'true' : undefined}
+                class:is-selected={work.review === null && row.id === subject?.id}
+                aria-current={work.review === null && row.id === subject?.id
+                  ? 'true'
+                  : undefined}
                 title={row.detail}
                 onclick={() => work.pick(row.id)}
               >
@@ -76,11 +116,69 @@
 
     <section class="c-work-queue__section" aria-labelledby="work-queue-reviews">
       <h3 class="c-work-queue__heading" id="work-queue-reviews">
-        Reviews <span class="c-work-queue__count">0</span>
+        Reviews <span class="c-work-queue__count">{pullRequests.length}</span>
       </h3>
-      <p class="c-work-queue__empty">
-        Nothing to review yet. Pull requests waiting on your review will be listed here.
-      </p>
+      {#if pullRequests.length > 0}
+        <ul class="o-plain-list">
+          {#each pullRequests as row (row.id)}
+            <li>
+              <button
+                class="c-work-row"
+                class:is-selected={work.review === row.id}
+                aria-current={work.review === row.id ? 'true' : undefined}
+                title={row.detail}
+                onclick={() => work.pickReview(row.id)}
+              >
+                <span
+                  class="c-dot c-work-row__mark"
+                  class:c-dot--idle={row.status === 'no_worktree'}
+                  class:c-dot--done={row.status === 'worktree'}
+                  aria-hidden="true"
+                ></span>
+                <span class="c-work-row__text">
+                  <span class="c-work-row__name">{row.name}</span>
+                  <span class="c-work-row__status">{REVIEW_ROW_WORDS[row.status]}</span>
+                </span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+
+      {#if queue?.forge}
+        {#if pullRequests.length === 0}
+          <p class="c-work-queue__empty">
+            Nothing to review yet. Add a pull request by its URL or number.
+          </p>
+        {/if}
+        <form class="c-work-queue__add" onsubmit={addPullRequest}>
+          <TextInput
+            bind:value={pasted}
+            mono
+            placeholder="URL or #number"
+            ariaLabel="Pull request URL or number"
+            disabled={reviews.adding}
+          />
+          <Button type="submit" size="sm" disabled={reviews.adding || pasted.trim() === ''}>
+            {reviews.adding ? 'Reading…' : 'Add'}
+          </Button>
+        </form>
+        {#if reviews.addError}
+          <p class="c-work-queue__error c-status--danger" role="alert">
+            {reviews.addError}
+          </p>
+        {/if}
+      {:else if queue}
+        <p class="c-work-queue__empty">
+          This project's workflow names no forge, so wtm reads no pull requests for it. Add
+          <code>forge = "github"</code> to its <code>[workflow]</code> in your own config.
+        </p>
+      {/if}
+      {#if reviews.queueError && reviews.projectId === workspace.activeProjectId}
+        <p class="c-work-queue__error c-status--danger" role="alert">
+          {reviews.queueError}
+        </p>
+      {/if}
     </section>
   </div>
 

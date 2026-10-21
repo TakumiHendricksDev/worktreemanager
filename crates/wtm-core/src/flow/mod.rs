@@ -55,6 +55,7 @@ macro_rules! id {
 
 pub mod approval;
 pub mod event;
+pub mod forge;
 pub mod glob;
 pub mod outbox;
 pub mod plan;
@@ -70,6 +71,11 @@ pub use approval::{
     Approval, ApprovalError, ApprovalId, ApprovalIntent, Binding, PinChange, Pinned, Stale,
 };
 pub use event::{FlowEvent, RecordedEvent};
+pub use forge::{
+    BranchProtection, ChecksState, ChecksSummary, ForgeAccount, ForgeKind, GITHUB_HOST, Permission,
+    PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug, Reviewer,
+    default_host, host_for, remote_for,
+};
 pub use outbox::{
     Operation, OperationId, OperationKey, OperationKind, OperationState, OutboxError,
 };

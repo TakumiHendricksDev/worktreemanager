@@ -5839,12 +5839,14 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wtm-agent",
+ "wtm-appdb",
  "wtm-code",
  "wtm-config",
  "wtm-core",
  "wtm-db",
  "wtm-dictate",
  "wtm-exec",
+ "wtm-forge",
  "wtm-git",
  "wtm-notify",
  "wtm-render",
@@ -5960,6 +5962,16 @@ dependencies = [
  "tracing",
  "uuid",
  "wtm-core",
+]
+
+[[package]]
+name = "wtm-forge"
+version = "4.1.1"
+dependencies = [
+ "pretty_assertions",
+ "serde_json",
+ "wtm-core",
+ "wtm-testkit",
 ]
 
 [[package]]

@@ -390,6 +390,7 @@ impl From<WtmError> for ErrorView {
             WtmError::Exec(_) => "exec",
             WtmError::Render(_) => "render",
             WtmError::Database(_) => "database",
+            WtmError::Forge(_) => "forge",
             WtmError::Validation(_) => "validation",
             WtmError::Preflight(_) => "preflight",
             WtmError::Cancelled => "cancelled",
@@ -417,6 +418,12 @@ impl From<wtm_core::error::ConfigError> for ErrorView {
 impl From<wtm_core::error::GitError> for ErrorView {
     fn from(err: wtm_core::error::GitError) -> Self {
         WtmError::Git(err).into()
+    }
+}
+
+impl From<wtm_core::error::ForgeError> for ErrorView {
+    fn from(err: wtm_core::error::ForgeError) -> Self {
+        WtmError::Forge(err).into()
     }
 }
 

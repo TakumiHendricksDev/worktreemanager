@@ -1,0 +1,30 @@
+{
+  "author": {"id": "U_00000002", "is_bot": false, "login": "sam-rivera", "name": "Sam Rivera"},
+  "baseRefName": "main",
+  "baseRefOid": "fa92838bef95fe4a29c1587693885d5e9bdb6cf1",
+  "headRefName": "main",
+  "headRefOid": "1156f977ff6d12d592bc152987b9d9b378f6718d",
+  "headRepository": {"id": "R_00000002", "name": "webapp", "nameWithOwner": "sam-rivera/webapp"},
+  "headRepositoryOwner": {"id": "U_00000002", "name": "Sam Rivera", "login": "sam-rivera"},
+  "isCrossRepository": true,
+  "isDraft": false,
+  "maintainerCanModify": true,
+  "number": 4031,
+  "reviewDecision": "REVIEW_REQUIRED",
+  "reviewRequests": [
+    {"__typename": "User", "login": "dana-lee"},
+    {"__typename": "Team", "name": "Frontend", "slug": "acme/frontend"}
+  ],
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {"__typename": "CheckRun", "completedAt": "2026-10-17T15:22:11Z", "conclusion": "SUCCESS", "detailsUrl": "https://github.com/acme/webapp/actions/runs/2/job/21", "name": "label / label_issues", "startedAt": "2026-10-17T15:22:05Z", "status": "COMPLETED", "workflowName": "PR Triaging"},
+    {"__typename": "CheckRun", "completedAt": "2026-10-17T15:27:00Z", "conclusion": "SKIPPED", "detailsUrl": "https://github.com/acme/webapp/actions/runs/3/job/31", "name": "close-from-default-branch", "startedAt": "2026-10-17T15:27:10Z", "status": "COMPLETED", "workflowName": "PR Triaging"},
+    {"__typename": "CheckRun", "completedAt": "0001-01-01T00:00:00Z", "conclusion": "", "detailsUrl": "https://github.com/acme/webapp/actions/runs/4/job/41", "name": "build (macos-latest)", "startedAt": "2026-10-17T15:30:00Z", "status": "IN_PROGRESS", "workflowName": "Tests"},
+    {"__typename": "CheckRun", "completedAt": "2026-10-17T15:40:00Z", "conclusion": "FAILURE", "detailsUrl": "https://github.com/acme/webapp/actions/runs/4/job/42", "name": "build (ubuntu-latest)", "startedAt": "2026-10-17T15:30:00Z", "status": "COMPLETED", "workflowName": "Tests"},
+    {"__typename": "StatusContext", "context": "coverage", "startedAt": "2026-10-17T15:41:00Z", "state": "SUCCESS", "targetUrl": "https://coverage.example.com/acme/webapp/4031"},
+    {"__typename": "StatusContext", "context": "deploy-preview", "startedAt": "2026-10-17T15:41:00Z", "state": "PENDING", "targetUrl": ""}
+  ],
+  "title": "Resolve the issue type before creating",
+  "updatedAt": "2026-10-17T15:41:00Z",
+  "url": "https://github.com/acme/webapp/pull/4031"
+}

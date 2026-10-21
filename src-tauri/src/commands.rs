@@ -1177,6 +1177,26 @@ pub fn seeded_value(field: &wtm_core::model::FieldSpec) -> String {
 }
 
 /// Build the pipeline's request from what the frontend sent.
+/// The tokens every create-pipeline input renders against: `repo.*`, `os.*`, `now.*` and the
+/// handful of `env.*` a config may pass through to a command it spawns.
+pub(crate) fn ambient_context(
+    app: &App,
+    project: &wtm_core::model::Project,
+) -> wtm_core::ports::template::Context {
+    let mut ambient = display::base_context(project, app.os_tokens());
+    ambient.insert("now.date".to_owned(), app.clock.today());
+    ambient.insert("now.iso".to_owned(), app.clock.now_iso());
+    ambient.insert("now.unix".to_owned(), app.clock.now_unix_ms().to_string());
+    // A config may pass the resolved shell or PATH through to a command it spawns.
+    for name in ["SHELL", "HOME", "USER", "LOGIN_PATH"] {
+        if let Ok(value) = std::env::var(name) {
+            ambient.entry(format!("env.{name}")).or_insert(value);
+        }
+    }
+    ambient.insert("env.LOGIN_PATH".to_owned(), app.runner.resolved_path());
+    ambient
+}
+
 pub(crate) fn create_request(
     app: &App,
     project_id: &str,
@@ -1201,17 +1221,7 @@ pub(crate) fn create_request(
         raw.insert(field.key.clone(), value);
     }
 
-    let mut ambient = display::base_context(&project, app.os_tokens());
-    ambient.insert("now.date".to_owned(), app.clock.today());
-    ambient.insert("now.iso".to_owned(), app.clock.now_iso());
-    ambient.insert("now.unix".to_owned(), app.clock.now_unix_ms().to_string());
-    // A config may pass the resolved shell or PATH through to a command it spawns.
-    for name in ["SHELL", "HOME", "USER", "LOGIN_PATH"] {
-        if let Ok(value) = std::env::var(name) {
-            ambient.entry(format!("env.{name}")).or_insert(value);
-        }
-    }
-    ambient.insert("env.LOGIN_PATH".to_owned(), app.runner.resolved_path());
+    let ambient = ambient_context(app, &project);
 
     Ok(wtm_core::usecase::CreateRequest {
         project,

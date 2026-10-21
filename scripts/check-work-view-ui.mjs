@@ -83,6 +83,8 @@ mockIPC((cmd, args) => {
     case 'notification_permission': return 'granted';
     case 'dictation_status': return { available: false, recording: false, key: null, reason: 'harness' };
     case 'doctor': return { path: [], tools: [], problems: [] };
+    // A project with no [workflow] forge: the Reviews section says why it offers nothing to add.
+    case 'review_queue': return { forge: null, items: [] };
     default: return cmd.startsWith('list_') ? [] : null;
   }
 }, { shouldMockEvents: true });
@@ -266,8 +268,8 @@ try {
             'Not reviewed',
         ]);
         assert(
-            (await queue(page).textContent()).includes('Nothing to review yet.'),
-            'Reviews is empty and says so',
+            (await queue(page).textContent()).includes('names no forge'),
+            'Reviews is empty and says why',
         );
         const title = page.locator('.c-work__title');
         // Arriving from the worktree view lands on the worktree selected there.
