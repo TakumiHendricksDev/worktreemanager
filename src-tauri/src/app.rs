@@ -24,7 +24,7 @@ use wtm_core::ports::config::ConfigStore;
 use wtm_core::ports::database::{DatabaseConnection, DatabaseHost};
 use wtm_core::ports::exec::CommandRunner;
 use wtm_core::ports::flow::FlowStore;
-use wtm_core::ports::forge::Forge;
+use wtm_core::ports::forge::{Forge, ReviewWriter};
 use wtm_core::ports::fs::FileStore;
 use wtm_core::ports::git::Git;
 use wtm_core::ports::template::TemplateEngine;
@@ -997,6 +997,9 @@ pub struct App {
     /// Pull requests, permissions and branch protection, read through the user's own `gh`. Only
     /// the Work view asks, and only for a project whose workflow names a forge — see `reviews.rs`.
     pub forge: Arc<dyn Forge>,
+    /// Publishing an approved review through the same `gh`, and reading back what an earlier
+    /// attempt left. A capability of its own, so only the outbox's executor writes (`flow/outbox.rs`).
+    pub review_writer: Arc<dyn ReviewWriter>,
     /// The app's own database: flows and review rules, one connection for both. Opened on first
     /// use; see `appdb.rs` and [`Self::flow_store`].
     pub appdb: crate::appdb::Handle,
@@ -1123,6 +1126,7 @@ impl App {
             handles_write: parking_lot::Mutex::new(()),
             launch_restore: std::sync::atomic::AtomicBool::new(false),
             forge: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
+            review_writer: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
         })
     }
 

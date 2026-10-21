@@ -2,3 +2,4 @@
 //! directly under `tests/` as tests.
 
 pub(crate) mod agents;
+pub(crate) mod pull_requests;

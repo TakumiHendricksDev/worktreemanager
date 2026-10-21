@@ -282,7 +282,7 @@ pub enum ExecError {
     Refused(String),
 }
 
-/// A forge read that did not produce an answer.
+/// A forge read or write that did not produce an answer.
 ///
 /// Split by what the person can do about it, which is what the view needs: install or upgrade the
 /// CLI, sign it in, check the number, or read the CLI's own words. `message` fields carry the CLI's
@@ -325,6 +325,28 @@ pub enum ForgeError {
     /// The CLI answered, in a shape this build cannot read.
     #[error("could not read {what}: {message}")]
     Unreadable { what: String, message: String },
+
+    /// The forge refused a write as it was sent (for GitHub, HTTP 422 and its reasons). Sending the
+    /// same request again would be refused the same way.
+    #[error("GitHub refused {what}: {reason}")]
+    Rejected { what: String, reason: String },
+
+    /// The forge refused to start a review because you already have a pending one on the pull
+    /// request, which GitHub allows one of per person.
+    #[error("you already have a pending review on {what}")]
+    PendingReviewExists { what: String },
+}
+
+impl ForgeError {
+    /// Whether the request may have reached the forge even though no answer came back, so a write
+    /// that failed this way has to be looked for before it is sent again.
+    #[must_use]
+    pub fn outcome_unknown(&self) -> bool {
+        matches!(
+            self,
+            Self::Timeout { .. } | Self::Failed { .. } | Self::Unreadable { .. }
+        )
+    }
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]

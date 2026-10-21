@@ -20,8 +20,11 @@ import { listen } from '@tauri-apps/api/event';
 
 import { commands } from '../ipc/commands';
 import type {
+  PublicationView,
+  PublishPreview,
   RecipeChoice,
   RerunScope,
+  ReviewDraft,
   ReviewRunView,
   ReviewStaleness,
 } from '../ipc/types';
@@ -129,6 +132,55 @@ class ReviewRuns {
       return false;
     } finally {
       this.busy[worktree] = false;
+    }
+  }
+
+  /**
+   * Exactly what `draft` would post. Rejects with the app's error, which the outcome sheet reads by
+   * kind, so it is not kept as the worktree's error.
+   */
+  previewPublish(flow: number, draft: ReviewDraft): Promise<PublishPreview> {
+    return commands.previewReviewPublish(flow, draft);
+  }
+
+  /**
+   * Approve what the preview showed and start posting it. Rejects with the app's error — a moved
+   * head is its own kind — and reads the run again once it is approved, so the Reviews tab shows
+   * the publish at once.
+   */
+  async approvePublish(
+    worktree: string,
+    flow: number,
+    draft: ReviewDraft,
+    hash: string,
+    againstHead: string | null,
+  ): Promise<PublicationView> {
+    const published = await commands.approveReviewPublish(flow, draft, hash, againstHead);
+    try {
+      this.latest[worktree] = await commands.reviewRun(flow);
+    } catch {
+      // The approval stands; the next `flow:changed` reads the run again.
+    }
+    return published;
+  }
+
+  /** Something done to a publish from its card: Retry, add to the pending review, leave it. */
+  async publication(
+    worktree: string,
+    flow: number,
+    action: () => Promise<PublicationView>,
+  ): Promise<void> {
+    const key = `publication:${worktree}`;
+    if (this.busy[key]) return;
+    this.busy[key] = true;
+    delete this.errors[key];
+    try {
+      await action();
+      this.latest[worktree] = await commands.reviewRun(flow);
+    } catch (error) {
+      this.errors[key] = message(error);
+    } finally {
+      this.busy[key] = false;
     }
   }
 

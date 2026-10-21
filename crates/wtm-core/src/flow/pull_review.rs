@@ -24,12 +24,13 @@
 //! deleted, so that record is enough to show each earlier head's results later, and [`fate`] says
 //! what became of each finding since.
 //!
-//! # Private is the only outcome this build records
+//! # Private is an outcome; a publish is an approval
 //!
-//! Publishing a review and sending local fixes somewhere both write to GitHub, and every such
-//! write waits for the outbox and its approvals (M1b). Keeping notes private writes nothing
-//! outside wtm, so it is the one [`OutcomeKind`] there is. An outcome is pinned to the head it was
-//! decided at, and kept, so a later head shows that the earlier decision was about earlier code.
+//! Keeping notes private writes nothing outside wtm, and is recorded here as an [`Outcome`], pinned
+//! to the head it was decided at and kept, so a later head shows that the earlier decision was
+//! about earlier code. Publishing a review writes to GitHub, so its record is the approval of
+//! exactly what posts and the outbox's operations that post it ([`super::publish`],
+//! [`super::outbox`]), not a row here. Sending local fixes somewhere waits for the writer lease.
 
 use serde::{Deserialize, Serialize};
 
@@ -87,7 +88,8 @@ pub struct ReviewedHead {
     pub left_at: UnixMs,
 }
 
-/// What you chose to do with a review.
+/// What you chose to do with a review, when it writes nothing outside wtm. A publish is recorded as
+/// its approval instead; see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutcomeKind {

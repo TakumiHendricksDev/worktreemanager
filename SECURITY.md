@@ -79,8 +79,12 @@ Worth stating because it narrows the surface considerably:
 
   The optional **Work view** reads pull requests through your own `gh`, signed in with the
   credentials `gh` already holds, and only for a project whose own config names a forge; a
-  repository's `wtm.toml` cannot name one for you. It reads only: no review, comment or push is
-  sent, and keeping a review private writes nothing outside wtm. wtm stores no GitHub token.
+  repository's `wtm.toml` cannot name one for you. Keeping a review private writes nothing outside
+  wtm. Publishing a review posts it through the same `gh`, and only after you previewed exactly
+  what posts and approved that text: the approval is bound to its hash, the commit reviewed and the
+  head the pull request was at, and a moved head stops the publish and asks again. No agent tool
+  can publish or approve; run sessions have no `gh` credentials either (ARCHITECTURE §6h). wtm
+  stores no GitHub token.
   Preparing a review worktree, and following its pull request to a new head, fetch the pull request
   into your repository and check the review worktree out with git hooks off: any hook would run
   inside the author's tree, and once that tree is checked out the hooks directory may be the

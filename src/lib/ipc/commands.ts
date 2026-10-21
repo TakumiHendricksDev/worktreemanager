@@ -16,6 +16,9 @@ import type {
   FindingRecord,
   RecipeChoice,
   RerunScope,
+  PublicationView,
+  PublishPreview,
+  ReviewDraft,
   ReviewOutcomeRecord,
   ReviewRunView,
   ReviewStaleness,
@@ -829,6 +832,32 @@ export const commands = {
   /** Keep a review's result private: notes beside its findings, in wtm only. */
   keepReviewPrivate: (flow: number, notes: string) =>
     invoke<ReviewOutcomeRecord>('keep_review_private', { flow, notes }),
+  /** Exactly what `draft` would post, markers and all. Reads GitHub; posts nothing. */
+  previewReviewPublish: (flow: number, draft: ReviewDraft) =>
+    invoke<PublishPreview>('preview_review_publish', { flow, draft }),
+  /**
+   * Approve exactly what the preview showed, by its hash, and start posting it. `againstHead` is
+   * the pull request's new head when you chose to publish against the reviewed commit anyway.
+   */
+  approveReviewPublish: (
+    flow: number,
+    draft: ReviewDraft,
+    hash: string,
+    againstHead: string | null,
+  ) =>
+    invoke<PublicationView>('approve_review_publish', { flow, draft, hash, againstHead }),
+  /** One publish of a review, as it stands. */
+  reviewPublication: (approval: number) =>
+    invoke<PublicationView>('review_publication', { approval }),
+  /** Send what is left of a publish that failed or stopped, after checking GitHub for it. */
+  retryPublication: (approval: number) =>
+    invoke<PublicationView>('retry_publication', { approval }),
+  /** Put the review's comments on the pending review that was in the way, then submit it. */
+  addToPendingReview: (approval: number) =>
+    invoke<PublicationView>('add_to_pending_review', { approval }),
+  /** Stop a publish where it is. What was posted stays posted. */
+  cancelPublication: (approval: number) =>
+    invoke<PublicationView>('cancel_publication', { approval }),
   /** Open inbox items, newest first, for one project or every one. */
   workInbox: (project: string | null) => invoke<InboxItem[]>('work_inbox', { project }),
 

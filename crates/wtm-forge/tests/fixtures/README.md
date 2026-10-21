@@ -19,3 +19,21 @@ the repositories, people and ids replaced by placeholders (`acme/webapp`, a fork
 - `auth_status.json`, `auth_status_bad_token.json`, `auth_status_none.json`:
   `gh auth status --hostname github.com --json hosts` signed in, with a rejected token, and with
   no account at all.
+
+The `review_*` replies are what `gh` 2.100.0 printed on 2026-10-21 for a throwaway private pull
+request, with its repository, account and commit author replaced the same way (`acme/webapp`,
+`dana-lee`). Where GitHub refused, `.json` is the stdout and `.stderr` is `gh`'s one line.
+
+- `review_create_pending.json`: `gh api --method POST repos/{o}/{r}/pulls/{n}/reviews --input -`
+  with no `event`, which starts a pending review.
+- `review_pending_exists.*`: the same request while a pending review exists (HTTP 422, "User can
+  only have one pending review per pull request").
+- `review_line_unresolved.*`: the same request with a comment on a line the diff does not show
+  (HTTP 422, "Line could not be resolved").
+- `review_thread_added.json`, `review_thread_null.json`, `review_thread_bad_node.*`: GraphQL
+  `addPullRequestReviewThread` on a pending review: added; a line outside the diff, which GitHub
+  answers with `thread: null` and no error; and a review id that does not exist.
+- `review_submitted.json`: `POST …/reviews/{id}/events` with `event: COMMENT`.
+- `review_reviews.json`, `review_review_comments.json`: `gh api --method GET --paginate --slurp`
+  of `…/reviews` and `…/reviews/{id}/comments`, with markers in the bodies.
+- `review_compare.json`: `gh api --method GET repos/{o}/{r}/compare/{base}...{head}`.

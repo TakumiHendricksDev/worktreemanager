@@ -1,6 +1,6 @@
 [package]
 name        = "wtm-forge"
-description = "The Forge port over the user's own `gh`: pull requests, permissions, branch protection. Reads only."
+description = "The Forge port over the user's own `gh`: pull requests, permissions, branch protection, and publishing an approved review."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

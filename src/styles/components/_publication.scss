@@ -1,0 +1,208 @@
+/*
+ * A review's publish, step by step (`WorkPublication.svelte`), and what the outcome sheet shows of
+ * one before it is approved: its comments as they will post (`WorkPrOutcome.svelte`).
+ *
+ * The card's frame, eyebrow, title, notes and buttons are `.c-work-state`'s, so a publish reads as
+ * a state of the review like every other; this adds the list of writes and the info note. A step's
+ * tone colours only its mark, because the words beside it already say what happened.
+ */
+
+.c-publication__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-1) 0;
+}
+
+.c-publication__step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.c-publication__mark {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 16px;
+  margin-top: 2px;
+  color: var(--fg-muted);
+}
+
+.c-publication__step--ok > .c-publication__mark {
+  color: var(--ok);
+}
+
+.c-publication__step--danger > .c-publication__mark {
+  color: var(--danger);
+}
+
+.c-publication__step--warn > .c-publication__mark {
+  color: var(--warn);
+}
+
+.c-publication__step--info > .c-publication__mark {
+  color: var(--info);
+}
+
+/* An operation not tried yet: a hollow ring, so "nothing happened" is not drawn as a mark. */
+.c-publication__dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 2px;
+  border: 1.5px solid currentcolor;
+  border-radius: 50%;
+}
+
+.c-publication__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.c-publication__what {
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-publication__detail {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-publication__info {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-md);
+  background: var(--info-soft);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+/* Pushes what follows it to the end of the row, as the board puts Leave as is. */
+.c-publication__gap {
+  flex: 1 1 auto;
+}
+
+/* ── the sheet's picks, editor and preview ── */
+
+/* The picks, the state row and the preview sit at the option's text edge, past its radio. */
+.c-publication__picks,
+.c-publication__states,
+.c-publication__preview {
+  margin-left: var(--sp-5);
+}
+
+.c-publication__picks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: 0;
+  border: 0;
+}
+
+.c-publication__legend {
+  padding: 0 0 var(--sp-1);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-publication__pick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-publication__pick-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+}
+
+.c-publication__pick.is-off > .c-publication__pick-row {
+  color: var(--fg-muted);
+}
+
+.c-publication__severity {
+  font-weight: 600;
+}
+
+.c-publication__severity.is-blocking {
+  color: var(--danger);
+}
+
+.c-publication__severity.is-notable {
+  color: var(--warn);
+}
+
+/* The editor of a picked comment, indented to its text past the checkbox, and no wider than what
+   is left: `.c-textarea` is full width, which the indent would push past the option's edge. */
+.c-publication__edit {
+  width: calc(100% - var(--sp-5));
+  margin-left: var(--sp-5);
+}
+
+.c-publication__states {
+  display: flex;
+  flex-flow: row wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--step--1);
+}
+
+.c-publication__state-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.c-publication__preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.c-publication__preview.is-outdated {
+  border-style: dashed;
+}
+
+.c-publication__post {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-publication__note {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-publication__where {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+/* Exactly what posts, markers and all: monospace and unwrapped by markdown, as GitHub receives it. */
+.c-publication__body {
+  margin: 0;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

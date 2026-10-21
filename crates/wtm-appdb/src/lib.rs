@@ -1,5 +1,5 @@
-//! The app's own database: work items, flows and their history, review rules and runs, and the
-//! inbox, in SQLite.
+//! The app's own database: work items, flows and their history, review rules and runs, the inbox,
+//! and approvals with the outbox's operations, in SQLite.
 //!
 //! # Why this name
 //!
@@ -34,6 +34,7 @@
 mod findings;
 mod inbox;
 mod migrate;
+mod outbox;
 mod pull_reviews;
 mod rules;
 mod runs;
@@ -78,8 +79,9 @@ pub enum AppDbError {
 }
 
 /// The open database. Implements [`FlowStore`](wtm_core::ports::FlowStore),
-/// [`RuleStore`](wtm_core::ports::RuleStore), [`RunStore`](wtm_core::ports::RunStore) and
-/// [`InboxStore`](wtm_core::ports::InboxStore).
+/// [`RuleStore`](wtm_core::ports::RuleStore), [`RunStore`](wtm_core::ports::RunStore),
+/// [`PullReviewStore`](wtm_core::ports::PullReviewStore), [`InboxStore`](wtm_core::ports::InboxStore)
+/// and [`OutboxStore`](wtm_core::ports::OutboxStore).
 #[derive(Debug)]
 pub struct AppDb {
     conn: Mutex<Connection>,

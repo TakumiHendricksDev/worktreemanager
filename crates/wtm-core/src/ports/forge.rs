@@ -1,12 +1,13 @@
-//! Reading a forge: pull requests, permissions and branch protection.
+//! Reading a forge, and the narrow set of writes a published review needs.
 //!
-//! # Reads only
+//! # Reading and writing are two capabilities
 //!
-//! There is no method here that changes anything on a forge, and that is the whole of this port's
-//! safety story for now. Publishing a review, pushing a fix and merging are later items, each
-//! behind an approval bound to the exact head or text (ARCHITECTURE §6a), and they will arrive as
-//! a separate capability rather than as more methods on this one, so a caller that only needs to
-//! read cannot be handed the ability to write.
+//! [`Forge`] only reads: pull requests, permissions, branch protection, a diff's lines. Writing is
+//! [`ReviewWriter`], a separate trait, so a caller that only needs to read is never handed the
+//! ability to write, and the one caller that writes — the outbox's executor, running an operation you
+//! approved — is easy to find. Each write is a single request with a payload the outbox built and
+//! hashed, and the reads beside it on that trait are the ones the outbox needs to learn whether a
+//! write already happened. No agent tool reaches either trait (ARCHITECTURE §6a, §6i).
 //!
 //! # `cwd` is the checkout the question is asked from
 //!
@@ -24,7 +25,10 @@
 use std::path::Path;
 
 pub use crate::error::ForgeError;
-use crate::flow::{BranchProtection, ForgeAccount, Permission, PrTarget, PullRequest, RepoSlug};
+use crate::flow::{
+    BranchProtection, ChangedLines, ForgeAccount, Permission, PrTarget, PullRequest, RemoteComment,
+    RemoteReview, RepoSlug, ReviewEvent,
+};
 
 /// What the Work view reads from a forge.
 pub trait Forge: Send + Sync {
@@ -56,4 +60,87 @@ pub trait Forge: Send + Sync {
         repo: &RepoSlug,
         branch: &str,
     ) -> Result<BranchProtection, ForgeError>;
+
+    /// The lines of `head`'s change from where it left `base` that a review comment can sit on, by
+    /// the forge's own diff: what its pull request page would show at that commit.
+    fn changed_lines(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        base: &str,
+        head: &str,
+    ) -> Result<ChangedLines, ForgeError>;
+}
+
+/// One comment as it is sent: its place and its body, marker included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentComment {
+    pub path: String,
+    pub start_line: Option<u32>,
+    pub line: u32,
+    pub body: String,
+}
+
+/// Publishing a review, and reading back what an earlier attempt left on the pull request.
+///
+/// Only the outbox's executor holds one. Every write it makes was approved, hashed and recorded as
+/// started before the request is sent.
+pub trait ReviewWriter: Send + Sync {
+    /// Every review on pull request `number` of `repo`, oldest first: everyone's submitted ones, and
+    /// your own pending one, which the forge shows only to you.
+    fn reviews(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        number: u64,
+    ) -> Result<Vec<RemoteReview>, ForgeError>;
+
+    /// The comments of one review.
+    fn review_comments(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        number: u64,
+        review: u64,
+    ) -> Result<Vec<RemoteComment>, ForgeError>;
+
+    /// Start a pending review pinned to `commit_id`, holding `comments`, with `body`.
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeError::PendingReviewExists`] when you already have one on the pull request, and
+    /// [`ForgeError::Rejected`] when the forge refuses a comment's place or the review itself.
+    fn create_pending_review(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        number: u64,
+        commit_id: &str,
+        body: &str,
+        comments: &[SentComment],
+    ) -> Result<RemoteReview, ForgeError>;
+
+    /// Add one comment to your pending review `review_node_id`.
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeError::Rejected`] when the forge will not put it there.
+    fn add_review_comment(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        review_node_id: &str,
+        comment: &SentComment,
+    ) -> Result<(), ForgeError>;
+
+    /// Submit your pending review `review` with `event` and `body`.
+    fn submit_review(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        number: u64,
+        review: u64,
+        event: ReviewEvent,
+        body: &str,
+    ) -> Result<RemoteReview, ForgeError>;
 }

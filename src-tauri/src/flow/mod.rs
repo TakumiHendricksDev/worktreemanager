@@ -56,6 +56,8 @@ pub mod checks;
 pub mod commands;
 pub mod findings;
 pub mod host;
+pub mod outbox;
+pub mod publish;
 pub mod pull_request;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -347,6 +349,13 @@ pub struct Engine {
     /// an `index.lock`.
     scratch: AtomicU64,
     quitting: AtomicBool,
+    /// The publications this process is sending or checking now (`outbox.rs`). One sender per
+    /// publication; an operation left executing by a process that is gone is in nobody's entry.
+    publishing: Mutex<BTreeMap<wtm_core::flow::ApprovalId, wtm_core::flow::Activity>>,
+    /// A debug build's `WTM_DEV_PUBLISH_FAULT`, for click-throughs. `None` in a release build.
+    fault: Option<outbox::Fault>,
+    /// Whether a once-only fault has happened in this process.
+    fired: AtomicBool,
 }
 
 impl std::fmt::Debug for Engine {
@@ -383,6 +392,9 @@ impl Engine {
             consolidating: Mutex::new(()),
             scratch: AtomicU64::new(0),
             quitting: AtomicBool::new(false),
+            publishing: Mutex::new(BTreeMap::new()),
+            fault: outbox::Fault::from_env(),
+            fired: AtomicBool::new(false),
         })
     }
 
@@ -2200,11 +2212,17 @@ impl Engine {
         }
     }
 
-    /// Resolve a run's open items of these kinds, whatever they are about.
+    /// Resolve a run's open items of these kinds, whatever they are about, except a publish's.
+    ///
+    /// A publish of the review is settled by its own end — published, cancelled, replaced — and
+    /// not by the review being resumed or stopped: a review run again does not post what was
+    /// left unposted, and stopping it does not say anything about what reached GitHub.
     fn settle(&self, flow: FlowId, kinds: &[InboxKind]) {
         let Ok(db) = self.db() else { return };
-        for kind in kinds {
-            let _ = db.resolve_inbox(flow, *kind, None, self.now());
+        for item in db.inbox(Some(flow), None).unwrap_or_default() {
+            if kinds.contains(&item.kind) && !matches!(item.target, InboxTarget::Approval { .. }) {
+                let _ = db.resolve_inbox_item(item.id, self.now());
+            }
         }
     }
 

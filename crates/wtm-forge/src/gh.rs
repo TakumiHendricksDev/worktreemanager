@@ -6,8 +6,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use wtm_core::error::ExecError;
-use wtm_core::flow::{BranchProtection, ForgeAccount, Permission, PrTarget, PullRequest, RepoSlug};
-use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation};
+use wtm_core::flow::{
+    BranchProtection, ChangedLines, ForgeAccount, Permission, PrTarget, PullRequest, RepoSlug,
+};
+use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation, Output};
 use wtm_core::ports::forge::{Forge, ForgeError};
 
 use crate::parse;
@@ -24,7 +26,7 @@ const VERSION_TIMEOUT_MS: u64 = 10_000;
 /// `gh auth status` validates the token with a request to each host it checks.
 const AUTH_TIMEOUT_MS: u64 = 20_000;
 /// One GraphQL or REST round trip, with room for a slow network but not for a hang.
-const READ_TIMEOUT_MS: u64 = 30_000;
+pub(crate) const READ_TIMEOUT_MS: u64 = 30_000;
 
 /// The `pr view` / `pr list` fields a review reads. Narrow on purpose: `gh` fetches what it is
 /// asked for, and `files` or `comments` on a large pull request cost seconds.
@@ -57,7 +59,7 @@ impl GhForge {
     ///
     /// `host` is only for the signed-out message; `what` names the thing asked for, for
     /// [`ForgeError::NotFound`].
-    fn gh(
+    pub(crate) fn gh(
         &self,
         cwd: &Path,
         args: &[&str],
@@ -65,15 +67,7 @@ impl GhForge {
         host: &str,
         what: &str,
     ) -> Result<String, ForgeError> {
-        let mut command = Vec::with_capacity(args.len() + 1);
-        command.push(PROGRAM.to_owned());
-        command.extend(args.iter().map(|arg| (*arg).to_owned()));
-        let inv = Invocation::new(command, cwd, timeout_ms).with_env(env());
-
-        let out = self
-            .runner
-            .run_allow_failure(&inv, &CancelToken::new())
-            .map_err(|err| exec_error(&inv, err))?;
+        let (inv, out) = self.invoke(cwd, args, None, timeout_ms)?;
         if out.is_success() {
             return Ok(out.stdout);
         }
@@ -103,6 +97,30 @@ impl GhForge {
             message,
         })
     }
+
+    /// Run `gh` with `args`, and `stdin` as its input when given, and hand back whatever it
+    /// printed. Only a failure to run it at all is an error here; what a non-zero exit means is the
+    /// caller's to read.
+    pub(crate) fn invoke(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        stdin: Option<&str>,
+        timeout_ms: u64,
+    ) -> Result<(Invocation, Output), ForgeError> {
+        let mut command = Vec::with_capacity(args.len() + 1);
+        command.push(PROGRAM.to_owned());
+        command.extend(args.iter().map(|arg| (*arg).to_owned()));
+        let mut inv = Invocation::new(command, cwd, timeout_ms).with_env(env());
+        if let Some(stdin) = stdin {
+            inv = inv.with_stdin(stdin);
+        }
+        let out = self
+            .runner
+            .run_allow_failure(&inv, &CancelToken::new())
+            .map_err(|err| exec_error(&inv, err))?;
+        Ok((inv, out))
+    }
 }
 
 /// What every `gh` call gets on top of the runner's environment.
@@ -120,7 +138,7 @@ fn env() -> BTreeMap<String, String> {
     .collect()
 }
 
-fn exec_error(inv: &Invocation, err: ExecError) -> ForgeError {
+pub(crate) fn exec_error(inv: &Invocation, err: ExecError) -> ForgeError {
     match err {
         ExecError::ProgramNotFound { .. } => ForgeError::NotInstalled {
             program: PROGRAM.to_owned(),
@@ -144,7 +162,7 @@ fn repo_arg(repo: &RepoSlug) -> String {
 
 /// A branch name as a REST path segment. `/` stays, because the API takes `release/4.2` as is;
 /// anything that would change the path's meaning is escaped.
-fn path_segment(branch: &str) -> String {
+pub(crate) fn path_segment(branch: &str) -> String {
     let mut out = String::with_capacity(branch.len());
     for byte in branch.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/') {
@@ -322,6 +340,39 @@ impl Forge for GhForge {
             protected: summary.protected,
             rules,
         })
+    }
+
+    fn changed_lines(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        base: &str,
+        head: &str,
+    ) -> Result<ChangedLines, ForgeError> {
+        // Three dots: from where `head` left `base`, which is what a pull request's page shows.
+        let path = format!(
+            "repos/{}/{}/compare/{}...{}",
+            repo.owner,
+            repo.name,
+            path_segment(base),
+            path_segment(head)
+        );
+        let what = format!("the changes in {repo} from {base} to {head}");
+        let stdout = self.gh(
+            cwd,
+            &[
+                "api",
+                "--method",
+                "GET",
+                "--hostname",
+                repo.host.as_str(),
+                path.as_str(),
+            ],
+            READ_TIMEOUT_MS,
+            &repo.host,
+            &what,
+        )?;
+        parse::changed_lines(&stdout).map_err(|message| ForgeError::Unreadable { what, message })
     }
 }
 

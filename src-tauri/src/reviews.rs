@@ -305,6 +305,26 @@ pub(crate) fn read_now(
     project_id: &str,
     item_id: WorkItemId,
 ) -> Result<(Project, WorkItem, PullRequest, Permission), ErrorView> {
+    read_as(app, project_id, item_id)
+        .map(|read| (read.project, read.item, read.pull_request, read.permission))
+}
+
+/// A pull request read now, with who the forge's CLI is signed in as.
+pub(crate) struct ReadNow {
+    pub project: Project,
+    pub item: WorkItem,
+    pub pull_request: PullRequest,
+    pub permission: Permission,
+    pub account: ForgeAccount,
+}
+
+/// [`read_now`], keeping the account the sign-in check reported: publishing needs to know whose
+/// pull request is yours, and whose pending review is.
+pub(crate) fn read_as(
+    app: &App,
+    project_id: &str,
+    item_id: WorkItemId,
+) -> Result<ReadNow, ErrorView> {
     let project = forge_project(app, project_id)?;
     let store = store(app)?;
     let item = project_item(store.as_ref(), &project, item_id)?;
@@ -314,13 +334,19 @@ pub(crate) fn read_now(
         .repo
         .as_ref()
         .map_or_else(|| default_host(&remotes), |repo| repo.host.clone());
-    app.forge.check(&project.root, &host)?;
+    let account = app.forge.check(&project.root, &host)?;
     let pull_request = app.forge.pull_request(&project.root, &target)?;
     let permission = app
         .forge
         .permission(&project.root, &pull_request.base.repo)?;
     remember(app, item.id, &pull_request, permission);
-    Ok((project, item, pull_request, permission))
+    Ok(ReadNow {
+        project,
+        item,
+        pull_request,
+        permission,
+        account,
+    })
 }
 
 /// The stored pull request as something to ask the forge about. See [`host_for`] for where the
