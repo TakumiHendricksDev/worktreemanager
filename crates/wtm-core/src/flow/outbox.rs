@@ -397,21 +397,23 @@ pub struct Publication {
 
 impl Publication {
     /// The state to show, given what this process is doing with it.
+    ///
+    /// Posting wins while this process is sending it, even once every write is recorded done: the
+    /// sender still has the publication's inbox items to settle, and reading "published" before
+    /// it has would show an item about a publish that has finished. CI caught that gap as a test
+    /// seeing a published review with its failure item still open.
     #[must_use]
     pub fn state(&self, activity: Option<Activity>) -> PublicationState {
         let ops = &self.operations;
         let any = |state: OperationState| ops.iter().any(|op| op.state == state);
+        if activity == Some(Activity::Posting) {
+            return PublicationState::Posting;
+        }
         if !ops.is_empty() && ops.iter().all(|op| op.state == OperationState::Done) {
             return PublicationState::Published;
         }
         if any(OperationState::Executing) {
-            return match activity {
-                Some(Activity::Posting) => PublicationState::Posting,
-                _ => PublicationState::Checking,
-            };
-        }
-        if activity == Some(Activity::Posting) {
-            return PublicationState::Posting;
+            return PublicationState::Checking;
         }
         let stopped = ops
             .iter()
@@ -601,6 +603,11 @@ mod tests {
         assert_eq!(
             publication(&[Done, Done]).state(None),
             PublicationState::Published
+        );
+        assert_eq!(
+            publication(&[Done, Done]).state(Some(Activity::Posting)),
+            PublicationState::Posting,
+            "every write is done, and the sender has not settled its items yet"
         );
         assert_eq!(
             publication(&[Done, Executing]).state(Some(Activity::Posting)),
