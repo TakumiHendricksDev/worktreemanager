@@ -443,3 +443,118 @@ pub async fn cancel_publication(engine: EngineState<'_>, approval: i64) -> Reply
     let engine = Arc::clone(&engine);
     blocking(move || engine.cancel_publication(ApprovalId(approval))).await
 }
+
+/// The refusal every local-fix command gives while the Work view is off.
+fn fixes_off() -> ErrorView {
+    refused("local fixes happen from the Work view, which is turned off".to_owned())
+}
+
+/// Start a local fix of a finished review's findings, by a writer role, in its review worktree.
+/// Takes the writer lease; nothing leaves the Mac.
+#[tauri::command]
+pub async fn start_local_fix(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+    request: super::fix::StartFix,
+) -> Reply<FlowView> {
+    if !app.work_view_enabled() {
+        return Err(fixes_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine.start_fix(FlowId(flow), &request)?;
+        engine.view(FlowId(flow)).map_err(refused)
+    })
+    .await
+}
+
+/// Stop the local fix being written. What it committed stays in the review worktree.
+#[tauri::command]
+pub async fn cancel_local_fix(engine: EngineState<'_>, flow: i64) -> Reply<FlowView> {
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine.cancel_fix(FlowId(flow))?;
+        engine.view(FlowId(flow)).map_err(refused)
+    })
+    .await
+}
+
+/// The current local fix's diff, for reading before choosing where it goes.
+#[tauri::command]
+pub async fn local_fix_diff(engine: EngineState<'_>, flow: i64) -> Reply<super::fix::FixDiffView> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.fix_diff(FlowId(flow))).await
+}
+
+/// Every route for the run's fix, open or not, from a fresh read of the pull request. Sends
+/// nothing.
+#[tauri::command]
+pub async fn fix_routes(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+) -> Reply<super::routes::RouteOptions> {
+    if !app.work_view_enabled() {
+        return Err(fixes_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.route_options(FlowId(flow))).await
+}
+
+/// Exactly what a route would send, and the hash an approval of it pins. Sends nothing.
+#[tauri::command]
+pub async fn preview_fix_route(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+    request: super::routes::RouteRequest,
+) -> Reply<super::routes::RoutePreview> {
+    if !app.work_view_enabled() {
+        return Err(fixes_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.preview_route(FlowId(flow), &request)).await
+}
+
+/// Approve exactly what the preview showed, by its hash, and start sending it.
+///
+/// Like publishing, only the window calls this: no run tool reaches a push or a pull request.
+#[tauri::command]
+pub async fn approve_fix_route(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+    request: super::routes::RouteRequest,
+    hash: String,
+) -> Reply<super::routes::ApprovedRoute> {
+    if !app.work_view_enabled() {
+        return Err(fixes_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.approve_route(FlowId(flow), &request, &hash)).await
+}
+
+/// Send what is left of a route that failed or stopped, after reading the remote for it.
+#[tauri::command]
+pub async fn retry_fix_route(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    approval: i64,
+) -> Reply<super::routes::RouteSendView> {
+    if !app.work_view_enabled() {
+        return Err(fixes_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.retry_route(ApprovalId(approval))).await
+}
+
+/// Stop a route where it is. What was pushed stays pushed.
+#[tauri::command]
+pub async fn cancel_fix_route(
+    engine: EngineState<'_>,
+    approval: i64,
+) -> Reply<super::routes::RouteSendView> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.cancel_route(ApprovalId(approval))).await
+}

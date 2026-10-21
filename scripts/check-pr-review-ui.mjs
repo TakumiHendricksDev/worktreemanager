@@ -6,8 +6,9 @@
  * What it proves, in order: a queued pull request with a review worktree opens on Reviews, whose
  * Run Review asks for a pull request review carrying the head that was shown; a reviewed one says
  * which head it read and that the pull request is still there; the outcome sheet offers Keep
- * private notes beside a live Publish (which `check-publish-ui.mjs` drives) and draws Local fixes
- * disabled, saying it comes next, with the push to a fork without maintainer edits unavailable;
+ * private notes beside a live Publish (which `check-publish-ui.mjs` drives) and a live Fix it
+ * locally (which `check-local-fix-ui.mjs` drives), with the push to a fork without maintainer edits
+ * unavailable;
  * keeping notes sends them and shows the outcome;
  * a new head read from the forge makes the review stale with Re-review changes as its one action
  * (no Rerun affected, which would read the old head), and the re-review sends the new head; the
@@ -110,7 +111,9 @@ const view = () => {
       }] : [],
       outcomes: ['kept', 'moved', 'rereviewed'].includes(p) ? [outcome] : [],
       publications: [],
+      routes: [],
     },
+    fixes: [], leases: [], writers: [],
   };
 };
 window.calls = [];
@@ -279,11 +282,6 @@ try {
             '2 findings stay beside the notes',
         ])
             assert(sheetText.includes(words), `the sheet says “${words}”:\n${sheetText}`);
-        assert.equal(
-            await sheet.getByText('Coming next').count(),
-            1,
-            'Local fixes say they come next',
-        );
         assert.equal(await outcome(/Keep private notes/).isChecked(), true);
         assert.equal(
             await outcome(/Publish a review/).isDisabled(),
@@ -292,8 +290,8 @@ try {
         );
         assert.equal(
             await outcome(/Fix it locally/).isDisabled(),
-            true,
-            'Local fixes are not offered yet',
+            false,
+            'Local fixes are live',
         );
         const push = sheet.locator('.c-pr-outcome__destination.is-unavailable');
         assert.match(await push.innerText(), /Push to sam-rivera:feature\/csv-export/);

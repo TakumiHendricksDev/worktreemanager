@@ -37,3 +37,13 @@ request, with its repository, account and commit author replaced the same way (`
 - `review_reviews.json`, `review_review_comments.json`: `gh api --method GET --paginate --slurp`
   of `…/reviews` and `…/reviews/{id}/comments`, with markers in the bodies.
 - `review_compare.json`: `gh api --method GET repos/{o}/{r}/compare/{base}...{head}`.
+
+The `pull*` replies are what `gh` 2.100.0 printed on 2026-10-21 for the same throwaway repository,
+named the same way, for the follow-up pull request of a local fix.
+
+- `pulls_by_head.json`: `gh api --method GET --paginate --slurp
+  repos/{o}/{r}/pulls?head={owner}:{branch}&state=all`, finding one open pull request.
+- `pull_created.json`: that reply's one pull request, alone. `POST repos/{o}/{r}/pulls` answers
+  with the same object, which is how the create's reply is read.
+- `pull_exists.*`: `POST repos/{o}/{r}/pulls` from a head that already has a pull request into
+  that base (HTTP 422, "A pull request already exists for …"). Nothing was opened.

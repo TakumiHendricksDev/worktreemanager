@@ -55,10 +55,12 @@ pub mod brief;
 pub mod checks;
 pub mod commands;
 pub mod findings;
+pub mod fix;
 pub mod host;
 pub mod outbox;
 pub mod publish;
 pub mod pull_request;
+pub mod routes;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -82,7 +84,7 @@ use wtm_core::flow::{
 };
 use wtm_core::model::{AgentEvent, AgentSkill, ApprovalRequest, ExitOutcome, ProjectId, SessionId};
 use wtm_core::ports::clock::Clock;
-use wtm_core::ports::{FlowStore, FlowStoreError, InboxStore, RunStore};
+use wtm_core::ports::{FixStore, FlowStore, FlowStoreError, InboxStore, LeaseStore, RunStore};
 use wtm_core::usecase::snapshot::{SnapshotCheckout, Snapshots};
 
 use crate::app::{App, FlowRole};
@@ -195,6 +197,12 @@ pub struct FlowView {
     pub applied: findings::Applied,
     /// The pull request the review is of, for a teammate's; `None` for a review of your own work.
     pub pull_request: Option<pull_request::PullRequestReview>,
+    /// The run's local fixes, oldest first. The last is the current one.
+    pub fixes: Vec<wtm_core::flow::Fix>,
+    /// Who holds the reviewed worktree now: a writer, or a review reading it.
+    pub leases: Vec<wtm_core::flow::Lease>,
+    /// The writer roles your config has, which a local fix can be given to.
+    pub writers: Vec<fix::WriterChoice>,
 }
 
 /// One run's controls, shared by its thread and its roles.
@@ -203,6 +211,9 @@ struct Run {
     cancel: AtomicBool,
     /// Set by a resume while the run is still working: roles waiting for capacity run now.
     wake: AtomicBool,
+    /// The reviewer lease a review drive holds on its worktree while it reads it, released when
+    /// the drive ends. A fix's writer lease is the fix's, not the drive's (`fix.rs`).
+    lease: Mutex<Option<wtm_core::flow::LeaseId>>,
 }
 
 /// What a session told the role thread waiting on it.
@@ -227,6 +238,8 @@ struct Live {
     /// The checks it may ask for, by id.
     checks: BTreeMap<String, CheckSpec>,
     dir: FlowDir,
+    /// What a writer fixing findings is held to, for a fix's role; `None` for a reviewer.
+    fix: Option<Arc<fix::FixLive>>,
 }
 
 /// The engine's ear on one session: the events it acts on, forwarded to the role thread.
@@ -313,6 +326,8 @@ struct RunCtx {
     pull_request: Option<wtm_core::flow::PullRequest>,
     /// When this round follows the pull request to a new head: the head it moved on from.
     revision: Option<(String, String)>,
+    /// The fix this drive's writer is making, when it is a fix's drive.
+    fix: Option<Arc<fix::FixLive>>,
 }
 
 impl RunCtx {
@@ -445,6 +460,9 @@ impl Engine {
             .collect();
         self.host.preflight(&providers)?;
         let path = worktree.path.to_string_lossy().into_owned();
+        // A writer has the worktree to itself until its fix is done: say so before anything is
+        // recorded. The reviewer lease `spawn` takes refuses it again, in the store.
+        self.refuse_if_written(&path)?;
         // A pull request's review is measured from its own base, whichever button started it.
         let asked = req
             .base
@@ -525,7 +543,12 @@ impl Engine {
         )
         .map_err(text)?;
         self.notice.changed(flow.id);
-        self.spawn(flow.id)?;
+        if let Err(reason) = self.spawn(flow.id) {
+            // Lost a race for the worktree, or no thread: the run says so rather than sitting
+            // in Resolving with nothing behind it.
+            self.fail(flow.id, &reason);
+            return Err(reason.into());
+        }
         Ok(flow.id)
     }
 
@@ -586,23 +609,48 @@ impl Engine {
             }
             runs.insert(flow, Arc::clone(&run));
         }
+        // A review reads its worktree for as long as it runs, so it holds a reviewer lease that
+        // long, and a writer holding the worktree refuses it here, in the store's transaction,
+        // whatever the checks before this one saw. A fix's drive runs under the fix's own lease.
+        if !self
+            .state(flow)
+            .is_ok_and(|state| state.phase == Phase::Fixing)
+        {
+            match self.take_reviewer_lease(flow) {
+                Ok(lease) => *run.lease.lock() = lease,
+                Err(reason) => {
+                    self.runs.lock().remove(&flow);
+                    return Err(reason);
+                }
+            }
+        }
         let engine = Arc::clone(self);
+        let thread_run = Arc::clone(&run);
         let spawned = std::thread::Builder::new()
             .name(format!("flow-{flow}"))
             .spawn(move || {
                 // Removed however the drive ends, a panic included, or the run could never be
-                // resumed in this app.
-                struct Done<'a>(&'a Engine, FlowId);
+                // resumed in this app; and its reviewer lease with it, or the worktree could never
+                // be fixed.
+                struct Done<'a>(&'a Engine, FlowId, &'a Run);
                 impl Drop for Done<'_> {
                     fn drop(&mut self) {
+                        if let Some(lease) = self.2.lease.lock().take() {
+                            self.0
+                                .release_lease(lease, wtm_core::flow::LeaseRelease::Completed);
+                        }
                         self.0.runs.lock().remove(&self.1);
                         self.0.notice.changed(self.1);
                     }
                 }
-                let _done = Done(&engine, flow);
+                let run = thread_run;
+                let _done = Done(&engine, flow, &run);
                 engine.drive(flow, &run);
             });
         if let Err(e) = spawned {
+            if let Some(lease) = run.lease.lock().take() {
+                self.release_lease(lease, wtm_core::flow::LeaseRelease::Failed);
+            }
             self.runs.lock().remove(&flow);
             return Err(format!("wtm could not start the run's thread: {e}"));
         }
@@ -612,6 +660,19 @@ impl Engine {
     // ═══════════════════════════════ driving ═══════════════════════════════
 
     fn drive(&self, flow: FlowId, run: &Run) {
+        if self
+            .state(flow)
+            .is_ok_and(|state| state.phase == Phase::Fixing)
+        {
+            if let Err(reason) = self.drive_fix(flow, run) {
+                if self.quitting() {
+                    return;
+                }
+                tracing::warn!(%flow, %reason, "a local fix failed");
+                self.fail_fix(flow, &reason);
+            }
+            return;
+        }
         if let Err(reason) = self.drive_inner(flow, run) {
             if self.quitting() {
                 return;
@@ -764,6 +825,7 @@ impl Engine {
                 })
                 .map(|mirror| mirror.pull_request),
             revision: self.revision(flow, &snapshot),
+            fix: None,
             workflow,
             dir,
             snapshot,
@@ -1086,10 +1148,14 @@ impl Engine {
         let Ok(db) = self.db() else {
             return AttemptEnd::Quitting;
         };
-        let spec = match ctx.role(&step.role) {
+        let mut spec = match ctx.role(&step.role) {
             Ok(spec) => spec.clone(),
             Err(reason) => return AttemptEnd::Unrunnable(reason, None),
         };
+        // A writer fixing findings hands in a handoff, whatever a recipe would have it hand in.
+        if ctx.fix.is_some() {
+            spec.output = OutputKind::Handoff;
+        }
         let cwd = match step.workspace {
             Workspace::Snapshot => match Self::checkout_path(ctx, snapshots, checkout) {
                 Ok(path) => path,
@@ -1153,6 +1219,7 @@ impl Engine {
                     })
                     .collect(),
                 dir: ctx.dir.clone(),
+                fix: ctx.fix.clone(),
             }),
         );
         let end = self.converse(ctx, run, step, &spec, &cwd, &invocation, tx, &rx);
@@ -1249,7 +1316,10 @@ impl Engine {
             provider: step.provider.id().to_owned(),
             model: step.model.clone(),
             effort: spec.effort.clone(),
-            brief: brief::brief(&facts),
+            brief: match &ctx.fix {
+                Some(fix) => brief::fix_brief(&facts, fix),
+                None => brief::brief(&facts),
+            },
             resume: None,
             cwd: Some(cwd.to_path_buf()),
             skills: spec.skill_names().map(str::to_owned).collect(),
@@ -1316,8 +1386,13 @@ impl Engine {
                     reason: format!("its session would not take the turn: {reason}"),
                 })
         };
+        let opening = if ctx.fix.is_some() {
+            brief::fix_opening_turn(&step.role)
+        } else {
+            brief::opening_turn(&step.role)
+        };
         if skills_checked {
-            if let Err(end) = say(&brief::opening_turn(&step.role)) {
+            if let Err(end) = say(&opening) {
                 return end;
             }
             sent = true;
@@ -1352,7 +1427,7 @@ impl Engine {
                             return AttemptEnd::Unrunnable(problem.to_string(), Some(problem));
                         }
                         skills_checked = true;
-                        if let Err(end) = say(&brief::opening_turn(&step.role)) {
+                        if let Err(end) = say(&opening) {
                             return end;
                         }
                         sent = true;
@@ -1702,11 +1777,20 @@ impl Engine {
             }
             (FlowCall::Ask(ask), Some(live)) => Ok(self.ask(role, &live, ask)),
             (FlowCall::RunCheck { name }, Some(live)) => self.run_check(role, &live, name),
+            // A run of this engine's commits only through a fix, held to the fix's files. Never
+            // through the ledger's unscoped commit, which is for sessions no engine runs.
+            (FlowCall::Checkpoint { message }, Some(live)) => match &live.fix {
+                Some(fix) => self.fix_checkpoint(role, &live, fix, message),
+                None => {
+                    Err("this role is not fixing anything, so it has nothing to commit".to_owned())
+                }
+            },
             (
                 FlowCall::Submit(_)
                 | FlowCall::Progress(_)
                 | FlowCall::Ask(_)
-                | FlowCall::RunCheck { .. },
+                | FlowCall::RunCheck { .. }
+                | FlowCall::Checkpoint { .. },
                 None,
             ) => Err(ended()),
             _ => return None,
@@ -1749,6 +1833,12 @@ impl Engine {
             run.wake.store(true, Ordering::SeqCst);
             return Ok(());
         }
+        if self
+            .state(flow)
+            .is_ok_and(|state| state.phase == Phase::Fixing && state.end.is_none())
+        {
+            return self.resume_fix(flow);
+        }
         let db = self.db()?;
         let review = db
             .review(flow)
@@ -1764,6 +1854,7 @@ impl Engine {
                 "every role of this review has its result; there is nothing to resume".into(),
             );
         }
+        self.refuse_if_written(&review.worktree_path)?;
         let project = self.app.project(review.project.as_str()).map_err(text)?;
         if let Some(workflow) = &project.workflow
             && let Ok(plan) = wtm_core::flow::plan(workflow, &review.recipe, None)
@@ -1835,6 +1926,8 @@ impl Engine {
         if let Some(run) = self.runs.lock().get(&flow) {
             run.cancel.store(true, Ordering::SeqCst);
         }
+        // A fix being written is stopped with the review, and its writer lease goes with it.
+        self.stop_fix_record(flow);
         let db = self.db()?;
         {
             let _held = self.holds.lock();
@@ -1896,13 +1989,17 @@ impl Engine {
             let gone = matches!(
                 (&state.hold, state.phase),
                 (Some(Hold::WaitingCapacity { .. }), _)
-                    | (None, Phase::Resolving | Phase::Preparing | Phase::Reviewing)
+                    | (
+                        None,
+                        Phase::Resolving | Phase::Preparing | Phase::Reviewing | Phase::Fixing
+                    )
             );
             if gone {
                 self.interrupt(review.flow, InterruptCause::Crash);
                 interrupted.push(review.flow);
             }
         }
+        self.reconcile_leases();
         Ok(interrupted)
     }
 
@@ -1974,9 +2071,14 @@ impl Engine {
             .filter(|s| !matches!(s.status, StepStatus::Skipped | StepStatus::Replaced))
             .count();
         let names: Vec<String> = cut.iter().map(|s| format!("`{}`", s.role)).collect();
-        let title = match cause {
-            InterruptCause::Quit => "wtm quit during this review".to_owned(),
-            _ => "wtm stopped unexpectedly during this review".to_owned(),
+        let fixing = self
+            .state(flow)
+            .is_ok_and(|state| state.phase == Phase::Fixing);
+        let title = match (cause, fixing) {
+            (InterruptCause::Quit, false) => "wtm quit during this review".to_owned(),
+            (_, false) => "wtm stopped unexpectedly during this review".to_owned(),
+            (InterruptCause::Quit, true) => "wtm quit during this local fix".to_owned(),
+            (_, true) => "wtm stopped unexpectedly during this local fix".to_owned(),
         };
         let cut_off = if names.is_empty() {
             "No role was mid-turn.".to_owned()
@@ -1987,15 +2089,24 @@ impl Engine {
                 if names.len() == 1 { "was" } else { "were" }
             )
         };
+        let body = if fixing {
+            format!(
+                "{cut_off} The writer still holds the review worktree, and any edits it had not \
+                 committed are still there. Resume runs the writer again on top of them; stopping \
+                 the fix lets the worktree go."
+            )
+        } else {
+            format!(
+                "{done} of {counted} roles had finished; their results are kept. {cut_off} Resume \
+                 runs the remaining roles against the same snapshot."
+            )
+        };
         self.file(&NewInboxItem {
             flow,
             kind: InboxKind::Interrupted,
             target: InboxTarget::Flow,
             title,
-            body: format!(
-                "{done} of {counted} roles had finished; their results are kept. {cut_off} Resume \
-                 runs the remaining roles against the same snapshot."
-            ),
+            body,
         });
         self.notice.changed(flow);
     }
@@ -2060,7 +2171,13 @@ impl Engine {
         let found = db.findings(flow).map_err(text)?;
         let checks = db.checks(flow).map_err(text)?;
         let pull_request = self.pull_request_view(&state, snapshot.as_ref(), &found, &checks)?;
+        let fixes = db.fixes(flow).map_err(text)?;
+        let leases = db.open_leases(Some(&review.worktree_path)).map_err(text)?;
+        let writers = fix::writer_choices(workflow.as_ref());
         Ok(FlowView {
+            fixes,
+            leases,
+            writers,
             status: state.state.status(),
             flow: state,
             snapshot,
@@ -2169,6 +2286,7 @@ impl Engine {
                 },
             )
             .map_err(text)?;
+        self.on_outlier_answer(&answered);
         self.notice.changed(answered.flow);
         Ok(answered)
     }

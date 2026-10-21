@@ -1,0 +1,114 @@
+/*
+ * A local fix in the outcome sheet (`WorkPrOutcome.svelte`): the diff you read before choosing
+ * where the fix goes, and the routes it can take.
+ *
+ * Everything sits at the option's text edge, past its radio, as the sheet's other options' fields
+ * do. The patch is the one tall thing in the sheet, so it scrolls in its own box rather than
+ * pushing the routes and the Approve button out of sight. A route that is closed is dimmed and
+ * says why, never hidden: whether you can push to their branch is a fact about the pull request.
+ */
+
+.c-local-fix {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-left: var(--sp-5);
+}
+
+.c-local-fix__head,
+.c-local-fix__left {
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* What the fix left out of itself: a warning, since it is not sent. */
+.c-local-fix__left {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+}
+
+.c-local-fix__files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--step--1);
+}
+
+.c-local-fix__file {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+.c-local-fix__added {
+  color: var(--ok);
+  font-family: var(--font-mono);
+}
+
+.c-local-fix__removed {
+  color: var(--danger);
+  font-family: var(--font-mono);
+}
+
+.c-local-fix__read > summary {
+  cursor: pointer;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-local-fix__patch {
+  max-height: 320px;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2);
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.c-local-fix__routes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.c-local-fix__route {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+
+  &.is-unavailable {
+    color: var(--fg-muted);
+  }
+}
+
+/* The radio sits on the title's first line rather than centred on the whole label. */
+.c-local-fix__route > input {
+  margin-top: 3px;
+}
+
+.c-local-fix__route-title {
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-local-fix__where,
+.c-local-fix__why {
+  font-size: var(--step--2);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-local-fix__why {
+  color: var(--warn);
+}

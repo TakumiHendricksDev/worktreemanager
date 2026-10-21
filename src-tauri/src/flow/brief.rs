@@ -345,6 +345,104 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
     out
 }
 
+/// The brief `flow_context` hands a writer fixing findings of a teammate's pull request.
+///
+/// Facts as a review's brief is, and the same fence: the findings' text is a reviewer's words about
+/// someone else's code. What differs is what the role may do — change the files those findings
+/// name, and nothing else — and that its commits are the app's, through `flow_checkpoint`.
+#[must_use]
+pub fn fix_brief(facts: &BriefFacts<'_>, fix: &super::fix::FixLive) -> String {
+    let spec = facts.spec;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Role `{}`: you fix findings from a review, as a writer.\n\nObjective: {}",
+        facts.role,
+        spec.objective.trim()
+    );
+    if let Some(instructions) = spec.instructions.as_deref().map(str::trim)
+        && !instructions.is_empty()
+    {
+        let _ = writeln!(out, "\n{instructions}");
+    }
+    let _ = writeln!(out, "\nWhere you work:");
+    if let Some(pr) = facts.pull_request {
+        let _ = writeln!(
+            out,
+            "- Pull request #{} on {}, \"{}\": `{}` into `{}`. It is a teammate's change; you are \
+             fixing what a review of it found, for the person who reviewed it.",
+            pr.number,
+            pr.base.repo,
+            pr.title.trim(),
+            pr.head.branch,
+            pr.base.branch
+        );
+    }
+    let _ = writeln!(
+        out,
+        "- Your working directory is the review worktree at `{}`, at the pull request's head \
+         `{}` or a fix made on top of it. It may already hold edits from an earlier attempt of \
+         yours: look at `git status` and carry on from them.",
+        facts.worktree_path,
+        facts.snapshot.head_sha.chars().take(10).collect::<String>()
+    );
+    let _ = writeln!(out, "\nFix exactly these findings:");
+    for record in &fix.findings {
+        let finding = &record.finding;
+        let place = finding.location.as_ref().map_or_else(
+            || "the whole change".to_owned(),
+            |at| format!("{}:{}-{}", at.path, at.start_line, at.end_line),
+        );
+        let _ = writeln!(
+            out,
+            "- [{}] {} ({place}, {:?}): {}",
+            finding.id,
+            finding.title.trim(),
+            finding.severity,
+            finding.rationale.trim()
+        );
+    }
+    let scope: Vec<String> = fix.scope.paths.iter().map(|p| format!("`{p}`")).collect();
+    let _ = writeln!(
+        out,
+        "\nYou may change only these files: {}. A change to any other file is refused when it is \
+         committed, and the person is asked whether to let it in; until they say yes, it stays out \
+         of the fix.",
+        scope.join(", ")
+    );
+    let _ = writeln!(
+        out,
+        "\nYou cannot commit or push. When a finding is fixed, call `flow_checkpoint` with a commit \
+         message saying what you fixed and why; the app makes the commit, as the person, after \
+         checking the files. Then hand in a handoff with `flow_submit`, kind `handoff`, matching \
+         this JSON Schema:\n{}",
+        submission::schema(OutputKind::Handoff)
+    );
+    let _ = write!(
+        out,
+        "\nDo not push, open pull requests or post anything: where this fix goes is the person's \
+         decision, made after reading its diff."
+    );
+    let fenced = facts.knowledge.map(str::trim).filter(|k| !k.is_empty());
+    if let Some(knowledge) = fenced {
+        let _ = write!(
+            out,
+            "\n\nThe repository's guidance and your rules:\n{knowledge}"
+        );
+    }
+    out
+}
+
+/// The first turn a fix's writer session is sent.
+#[must_use]
+pub fn fix_opening_turn(role: &str) -> String {
+    format!(
+        "Start the `{role}` fix: call `flow_context` for your brief, fix the findings it lists in \
+         the files it allows, commit with `flow_checkpoint`, and hand in a handoff with \
+         `flow_submit`."
+    )
+}
+
 /// The first turn a role session is sent.
 #[must_use]
 pub fn opening_turn(role: &str) -> String {

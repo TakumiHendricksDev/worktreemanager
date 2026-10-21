@@ -82,9 +82,15 @@ Worth stating because it narrows the surface considerably:
   repository's `wtm.toml` cannot name one for you. Keeping a review private writes nothing outside
   wtm. Publishing a review posts it through the same `gh`, and only after you previewed exactly
   what posts and approved that text: the approval is bound to its hash, the commit reviewed and the
-  head the pull request was at, and a moved head stops the publish and asks again. No agent tool
-  can publish or approve; run sessions have no `gh` credentials either (ARCHITECTURE §6h). wtm
-  stores no GitHub token.
+  head the pull request was at, and a moved head stops the publish and asks again. A local fix of
+  a teammate's pull request is written by an agent that can edit only the review worktree and
+  cannot commit or push; wtm commits for it, with git hooks off, only within the files of the
+  findings you picked. The fix leaves your machine only by a route you approved by its exact
+  destination — remote and ref — and the hash of its diff: your own `git push`, never forced, never
+  to an integration branch, never to someone's branch without write access or to a fork whose
+  author did not allow maintainer edits, and re-read before pushing so a branch that moved stops it.
+  No agent tool can publish, push or approve; run sessions have no `gh` credentials either
+  (ARCHITECTURE §6h). wtm stores no GitHub token.
   Preparing a review worktree, and following its pull request to a new head, fetch the pull request
   into your repository and check the review worktree out with git hooks off: any hook would run
   inside the author's tree, and once that tree is checked out the hooks directory may be the

@@ -1706,7 +1706,172 @@ export interface ReviewRunView {
   applied: AppliedKnowledge;
   /** The pull request a teammate's review is of; null for a review of your own work. */
   pullRequest: PullRequestReview | null;
+  /** The run's local fixes, oldest first. The last is the current one. */
+  fixes: LocalFix[];
+  /** Who holds the reviewed worktree now: a writer, or a review reading it. */
+  leases: WorktreeLease[];
+  /** The writer roles your config has. */
+  writers: WriterChoice[];
 }
+
+// ── local fixes: `wtm_core::flow::{fix, route}` ──
+
+export type FixState = 'writing' | 'ready' | 'failed' | 'cancelled';
+
+/** One local fix of a review's findings, by a writer, in its review worktree. */
+export interface LocalFix {
+  id: number;
+  flow: number;
+  step: number;
+  role: string;
+  findings: number[];
+  scope: { paths: string[] };
+  /** The head the review read, which the fix is measured from. */
+  baseSha: string;
+  headSha: string | null;
+  /** What a route's approval pins as the diff it covers. */
+  diffHash: string | null;
+  state: FixState;
+  detail: string | null;
+  asked: { question: number; paths: string[] }[];
+  allowed: string[];
+  startedAt: number;
+  endedAt: number | null;
+}
+
+export type LeaseKind = 'writer' | 'reviewer';
+
+export interface WorktreeLease {
+  id: number;
+  worktree: string;
+  flow: number;
+  kind: LeaseKind;
+  holder: string;
+  acquiredAt: number;
+  releasedAt: number | null;
+  releasedWhy: 'completed' | 'cancelled' | 'failed' | 'recovered' | null;
+}
+
+/** A writer role a fix can be given to. */
+export interface WriterChoice {
+  id: string;
+  provider: RoleProvider;
+  model: string | null;
+  objective: string;
+}
+
+/** `start_local_fix`. */
+export interface StartFix {
+  findings: number[];
+  role: string;
+}
+
+/** `local_fix_diff`: the fix's diff, to read before choosing where it goes. */
+export interface FixDiffView {
+  fix: LocalFix;
+  base: string;
+  head: string;
+  hash: string;
+  files: { path: string; added: number | null; removed: number | null }[];
+  patch: string;
+  truncated: boolean;
+  uncommitted: string[];
+  outliers: string[];
+}
+
+export type RouteKind = 'follow_up' | 'suggestions' | 'push_to_branch';
+
+/** What a route is asked for: the follow-up's title and body, or the suggestions' summary. */
+export interface RouteRequest {
+  kind: RouteKind;
+  title: string;
+  body: string;
+}
+
+export interface RouteOption {
+  kind: RouteKind;
+  /** Why it is closed; null when it is open. */
+  unavailable: string | null;
+  /** Exactly where it goes, when it is open. */
+  destination: string | null;
+  title: string;
+  body: string;
+}
+
+export interface FixRef {
+  base: string;
+  head: string;
+  diffHash: string;
+}
+
+export interface TheirBranch {
+  repo: RepoSlug | null;
+  branch: string;
+  head: string;
+}
+
+/** `fix_routes`. */
+export interface RouteOptions {
+  fix: FixRef;
+  their: TheirBranch;
+  account: string | null;
+  routes: RouteOption[];
+}
+
+/** Exactly where a push goes. */
+export interface PushDestination {
+  /** The remote's name, or null when it is pushed to by URL. */
+  remote: string | null;
+  url: string;
+  repo: RepoSlug;
+  reference: string;
+}
+
+export interface RoutePlan {
+  kind: RouteKind;
+  pullRequest: { repo: RepoSlug; number: number; url: string };
+  their: TheirBranch;
+  fix: FixRef;
+  push: PushDestination;
+  expect: { kind: 'absent' } | { kind: 'at'; sha: string };
+  open: { repo: RepoSlug; base: string; head: string; title: string; body: string } | null;
+}
+
+/** `preview_fix_route`: exactly what a route sends, and the hash approving it takes. */
+export interface RoutePreview {
+  kind: RouteKind;
+  hash: string;
+  plan: RoutePlan | null;
+  steps: string[];
+  /** The follow-up pull request's body as it is sent, its marker included. */
+  body: string | null;
+  suggestions: PublishPreview | null;
+  diffHash: string;
+  head: string;
+}
+
+/** A push route's send, as the Reviews tab shows it. */
+export interface RouteSendView {
+  approval: {
+    id: number;
+    flow: number;
+    intent: 'route';
+    binding: Partial<
+      Record<'remote' | 'ref' | 'diff' | 'commit' | 'head' | 'payload', string>
+    >;
+    grantedAt: number;
+  };
+  plan: RoutePlan;
+  operations: Operation[];
+  state: PublicationState;
+  /** The follow-up pull request, once there is one. */
+  url: string | null;
+}
+
+/** `approve_fix_route`: what approving started. */
+export type ApprovedRoute =
+  | { kind: 'route'; route: RouteSendView }
+  | { kind: 'suggestions'; publication: PublicationView };
 
 // ── a teammate's pull request, reviewed ──
 
@@ -1766,8 +1931,10 @@ export interface PullRequestReview {
   earlier: EarlierHead[];
   /** Oldest first; the last is the current decision. */
   outcomes: ReviewOutcomeRecord[];
-  /** The review's publishes, oldest first. The last is the current one. */
+  /** The review's publishes, oldest first. The last is the current one. A fix's suggestions are one. */
   publications: PublicationView[];
+  /** A local fix's push routes, oldest first. */
+  routes: RouteSendView[];
 }
 
 // ── publishing a review: `wtm_core::flow::{publish, outbox, approval}` ──
@@ -1856,7 +2023,8 @@ export type OperationKind =
   | 'submit_review'
   | 'post_comment'
   | 'move_issue'
-  | 'merge';
+  | 'merge'
+  | 'open_pull_request';
 
 export type OperationState =
   'pending' | 'executing' | 'done' | 'failed' | 'needs_attention' | 'cancelled';
@@ -1879,17 +2047,38 @@ export type OperationPayload =
       commitId: string;
       event: ReviewEvent;
       body: string;
+    }
+  | {
+      kind: 'push_branch';
+      route: string;
+      destination: PushDestination;
+      commit: string;
+      expect: { kind: 'absent' } | { kind: 'at'; sha: string };
+    }
+  | {
+      kind: 'open_pull_request';
+      route: string;
+      pullRequest: {
+        repo: RepoSlug;
+        base: string;
+        head: string;
+        title: string;
+        body: string;
+      };
     };
 
 /** What an operation left on GitHub. */
-export interface OperationResult {
-  kind: 'review';
-  review: number;
-  nodeId: string;
-  url: string;
-  /** Found on GitHub by its marker rather than sent this time. */
-  adopted: boolean;
-}
+export type OperationResult =
+  | {
+      kind: 'review';
+      review: number;
+      nodeId: string;
+      url: string;
+      /** Found on GitHub by its marker rather than sent this time. */
+      adopted: boolean;
+    }
+  | { kind: 'pushed'; url: string; reference: string; commit: string; adopted: boolean }
+  | { kind: 'pull_request'; number: number; url: string; adopted: boolean };
 
 /** Why an operation stopped and waits for you. `wtm_core::flow::Attention`. */
 export type Attention =
@@ -1937,12 +2126,17 @@ export interface PublicationView {
   approval: {
     id: number;
     flow: number;
-    intent: 'post';
-    /** The pins it covers: `payload` (the hash), `commit` and `head`. */
-    binding: Partial<Record<'payload' | 'commit' | 'head', string>>;
+    /** `route` for a local fix posted as suggestions. */
+    intent: 'post' | 'route';
+    /** The pins it covers: `payload` (the hash), `commit` and `head`, and a route's too. */
+    binding: Partial<
+      Record<'payload' | 'commit' | 'head' | 'remote' | 'ref' | 'diff', string>
+    >;
     grantedAt: number;
   };
   review: ReviewPayload;
+  /** Set when this is a local fix posted as suggestions. */
+  suggestions?: { their: TheirBranch; fix: FixRef };
   operations: Operation[];
   state: PublicationState;
   /** The posted review on GitHub, once there is one. */

@@ -1000,6 +1000,9 @@ pub struct App {
     /// Publishing an approved review through the same `gh`, and reading back what an earlier
     /// attempt left. A capability of its own, so only the outbox's executor writes (`flow/outbox.rs`).
     pub review_writer: Arc<dyn ReviewWriter>,
+    /// Opening a local fix's follow-up pull request through the same `gh`. Like the review writer,
+    /// held only by the outbox's executor, for a route you approved (`flow/routes.rs`).
+    pub pr_writer: Arc<dyn wtm_core::ports::PullRequestWriter>,
     /// The app's own database: flows and review rules, one connection for both. Opened on first
     /// use; see `appdb.rs` and [`Self::flow_store`].
     pub appdb: crate::appdb::Handle,
@@ -1127,6 +1130,7 @@ impl App {
             launch_restore: std::sync::atomic::AtomicBool::new(false),
             forge: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
             review_writer: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
+            pr_writer: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
         })
     }
 

@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
@@ -52,6 +52,23 @@ pub(crate) enum Behaviour {
     ProgressThenSubmit(Value),
     /// Ask the app for something with `flow_request`, such as posting a comment, then submit.
     RequestThenSubmit(Value, Value),
+    /// A writer: do these, in its working directory and through its run tools, then end the turn.
+    Acts(Vec<Act>),
+}
+
+/// One thing a fake writer does.
+#[derive(Debug, Clone)]
+pub(crate) enum Act {
+    /// Write a file, relative to its working directory.
+    Write(&'static str, &'static str),
+    /// Put a file back as it was at `HEAD`, as a writer told to undo it would.
+    Restore(&'static str),
+    /// Call `flow_checkpoint` with this message.
+    Checkpoint(&'static str),
+    /// Call `flow_submit` with a handoff saying this.
+    Handoff(&'static str),
+    /// Wait until the flag is set, as a writer still working does.
+    WaitFor(Arc<AtomicBool>),
 }
 
 /// How a script picks a behaviour: by role and attempt (1 for the first).
@@ -59,6 +76,7 @@ pub(crate) type Script = Box<dyn Fn(&str, u32) -> Behaviour + Send + Sync>;
 
 pub(crate) struct FakeSession {
     pub(crate) role: FlowRole,
+    pub(crate) cwd: Option<PathBuf>,
     pub(crate) token: String,
     pub(crate) sink: Arc<dyn AgentSink>,
     pub(crate) behaviour: Behaviour,
@@ -267,6 +285,50 @@ impl FakeHost {
                 self.submit(session, &payload);
                 self.finish_turn(session);
             }
+            Behaviour::Acts(acts) => {
+                let cwd = self
+                    .sessions
+                    .lock()
+                    .get(session)
+                    .and_then(|s| s.cwd.clone())
+                    .expect("a writer works in a directory");
+                for act in acts {
+                    match act {
+                        Act::Write(path, contents) => {
+                            let at = cwd.join(path);
+                            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                            std::fs::write(at, contents).unwrap();
+                        }
+                        Act::Restore(path) => {
+                            std::fs::write(cwd.join(path), at_head(&cwd, path)).unwrap();
+                        }
+                        Act::Checkpoint(message) => {
+                            self.call(session, "flow_checkpoint", json!({ "message": message }));
+                        }
+                        Act::Handoff(summary) => {
+                            self.call(
+                                session,
+                                "flow_submit",
+                                json!({ "kind": "handoff", "payload": {
+                                    "summary": summary,
+                                    "changed": [],
+                                    "checks": [],
+                                    "openQuestions": [],
+                                }}),
+                            );
+                        }
+                        Act::WaitFor(flag) => {
+                            for _ in 0..4_000 {
+                                if flag.load(Ordering::SeqCst) {
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                        }
+                    }
+                }
+                self.finish_turn(session);
+            }
             Behaviour::ProgressThenSubmit(payload) => {
                 for line in [
                     "reading export.rs",
@@ -315,6 +377,7 @@ impl RoleHost for FakeHost {
             id.clone(),
             FakeSession {
                 role: spec.role.clone(),
+                cwd: spec.cwd.clone(),
                 token,
                 sink: Arc::clone(&sink),
                 behaviour,
@@ -360,6 +423,19 @@ impl RoleHost for FakeHost {
             self.open_now.fetch_sub(1, Ordering::SeqCst);
         }
     }
+}
+
+/// `path` as `HEAD` has it in `cwd`: what a writer told to undo a change puts back.
+fn at_head(cwd: &std::path::Path, path: &str) -> Vec<u8> {
+    // A test is a sanctioned place to spawn directly: this is the fake agent's own shell.
+    #[allow(clippy::disallowed_methods)]
+    let out = std::process::Command::new("git")
+        .args(["show", &format!("HEAD:{path}")])
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{path} is not at HEAD");
+    out.stdout
 }
 
 /// Remembers what the engine announced.

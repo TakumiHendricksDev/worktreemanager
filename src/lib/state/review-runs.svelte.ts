@@ -20,8 +20,15 @@ import { listen } from '@tauri-apps/api/event';
 
 import { commands } from '../ipc/commands';
 import type {
+  ApprovedRoute,
+  FixDiffView,
   PublicationView,
   PublishPreview,
+  RouteOptions,
+  RoutePreview,
+  RouteRequest,
+  RouteSendView,
+  StartFix,
   RecipeChoice,
   RerunScope,
   ReviewDraft,
@@ -171,6 +178,66 @@ class ReviewRuns {
     action: () => Promise<PublicationView>,
   ): Promise<void> {
     const key = `publication:${worktree}`;
+    if (this.busy[key]) return;
+    this.busy[key] = true;
+    delete this.errors[key];
+    try {
+      await action();
+      this.latest[worktree] = await commands.reviewRun(flow);
+    } catch (error) {
+      this.errors[key] = message(error);
+    } finally {
+      this.busy[key] = false;
+    }
+  }
+
+  /**
+   * Start a local fix. Rejects with the app's error, which the outcome sheet shows by kind — a
+   * worktree someone holds is its own — so it is not kept as the worktree's error.
+   */
+  async startFix(worktree: string, flow: number, request: StartFix): Promise<void> {
+    this.latest[worktree] = await commands.startLocalFix(flow, request);
+  }
+
+  async cancelFix(worktree: string, flow: number): Promise<void> {
+    await this.act(worktree, () => commands.cancelLocalFix(flow));
+  }
+
+  fixDiff(flow: number): Promise<FixDiffView> {
+    return commands.localFixDiff(flow);
+  }
+
+  fixRoutes(flow: number): Promise<RouteOptions> {
+    return commands.fixRoutes(flow);
+  }
+
+  previewRoute(flow: number, request: RouteRequest): Promise<RoutePreview> {
+    return commands.previewFixRoute(flow, request);
+  }
+
+  /** Approve a route and read the run again, so the Reviews tab shows its send at once. */
+  async approveRoute(
+    worktree: string,
+    flow: number,
+    request: RouteRequest,
+    hash: string,
+  ): Promise<ApprovedRoute> {
+    const approved = await commands.approveFixRoute(flow, request, hash);
+    try {
+      this.latest[worktree] = await commands.reviewRun(flow);
+    } catch {
+      // The approval stands; the next `flow:changed` reads the run again.
+    }
+    return approved;
+  }
+
+  /** Something done to a route from its card: Retry, or stop it. */
+  async route(
+    worktree: string,
+    flow: number,
+    action: () => Promise<RouteSendView>,
+  ): Promise<void> {
+    const key = `route:${worktree}`;
     if (this.busy[key]) return;
     this.busy[key] = true;
     delete this.errors[key];

@@ -6,13 +6,12 @@
  * Pure, as `review-run.ts` is, and for its reason: the maps are keyed by the Rust enums' unions, so
  * a value the engine gains and this file does not name is a type error rather than a blank line.
  *
- * # Two outcomes are live
+ * # Three outcomes
  *
  * Keep private notes writes nothing outside wtm. Publishing goes through the outbox under an
- * approval of exactly what posts, and its words are `publish.ts`'s. Local fixes wait for the
- * writer lease, so the sheet draws them disabled, saying they come next; the push destination is
- * drawn with its real availability today, because whether a fork allows maintainer edits is a fact
- * about the pull request, not about this build.
+ * approval of exactly what posts, and its words are `publish.ts`'s. Local fixes are a writer's,
+ * under the writer lease, and where one goes is a route approved by its destination and diff; their
+ * words are `local-fix.ts`'s.
  */
 
 import type {
@@ -112,18 +111,31 @@ export function outcomeLine(
   return `${when} · ${findings} · nothing was posted`;
 }
 
-/** Whether the outcome sheet can be opened for a run: it has read a head and is not working. */
+/**
+ * Whether the outcome sheet can be opened for a run: it has read a head and is not working. A run
+ * whose local fix is done opens it too, on the fix's diff and its routes.
+ */
 export function canFinish(view: ReviewRunView): boolean {
   return (
     view.pullRequest !== null &&
     view.snapshot !== null &&
     !view.running &&
     view.flow.state.end === null &&
-    view.flow.state.phase === 'consolidated'
+    view.flow.state.hold === null &&
+    (view.flow.state.phase === 'consolidated' || view.flow.state.phase === 'fix_ready')
   );
 }
 
-/** Whether Re-review changes is the thing to do: the pull request moved and the run can rerun. */
+/**
+ * Whether Re-review changes is the thing to do: the pull request moved and the run can rerun. Not
+ * after a local fix: the review worktree holds your commits on top of the head, and moving it would
+ * be a checkout over them.
+ */
 export function canRereview(view: ReviewRunView, moved: string | null): boolean {
-  return moved !== null && canFinish(view) && view.flow.state.hold === null;
+  return (
+    moved !== null &&
+    canFinish(view) &&
+    view.flow.state.hold === null &&
+    view.flow.state.phase === 'consolidated'
+  );
 }

@@ -35,9 +35,11 @@
 //! the rules for retries, fallbacks and usage limits, their consolidation into findings, the record
 //! of the checks the app ran for them, a teammate's pull request followed across its heads
 //! ([`pull_review`]), and the inbox that is the one thing about a run that tells you anything, with
-//! the questions it carries, and publishing a review through the outbox under an approval of exactly
-//! what posts ([`publish`], [`outbox`], [`approval`]). The engine and the outbox's executor are in
-//! the app (`src-tauri/src/flow/`), because one opens sessions and the other reaches the forge.
+//! the questions it carries, publishing a review through the outbox under an approval of exactly
+//! what posts ([`publish`], [`outbox`], [`approval`]), and local fixes: the writer lease, the scope a
+//! fix is held to ([`fix`]), and the routes a fix leaves by ([`route`]). The engine and the
+//! outbox's executor are in the app (`src-tauri/src/flow/`), because one opens sessions and the
+//! other reaches the forge.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -61,6 +63,7 @@ macro_rules! id {
 pub mod approval;
 pub mod consolidate;
 pub mod event;
+pub mod fix;
 pub mod forge;
 pub mod glob;
 pub mod inbox;
@@ -73,6 +76,7 @@ pub mod pull_review;
 pub mod question;
 pub mod recipe;
 pub mod review;
+pub mod route;
 pub mod rule;
 pub mod run;
 pub mod schema;
@@ -90,6 +94,10 @@ pub use consolidate::{
     finding_is_stale, reconcile, role_is_affected,
 };
 pub use event::{FlowEvent, RecordedEvent};
+pub use fix::{
+    ALLOW_OUTLIERS, Fix, FixChange, FixError, FixId, FixScope, FixState, Lease, LeaseId, LeaseKind,
+    LeaseRelease, NewFix, NewLease, OutlierQuestion, lease_conflict,
+};
 pub use forge::{
     BranchProtection, ChecksState, ChecksSummary, ForgeAccount, ForgeKind, GITHUB_HOST, Permission,
     PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug, Reviewer,
@@ -106,16 +114,17 @@ pub use knowledge::{
     RuleSelection, RuleUsage, SelectedRule,
 };
 pub use outbox::{
-    Activity, Attention, NewOperation, Operation, OperationChange, OperationId, OperationKey,
-    OperationKind, OperationPayload, OperationResult, OperationState, OutboxError, Publication,
-    PublicationState, Resolution,
+    Activity, Approved, Attention, NewOperation, Operation, OperationChange, OperationId,
+    OperationKey, OperationKind, OperationPayload, OperationResult, OperationState, OutboxError,
+    Publication, PublicationState, Resolution, RouteSend, SuggestedFix, progress,
 };
 pub use plan::{PlanError, PlannedRole, PlannedStage, RecipePlan, SkipReason, SkippedRole, plan};
 pub use publish::{
     ChangedLines, DraftComment, FileLines, FoldReason, FoldedComment, InlineComment, LineRange,
     Marker, PendingFound, PendingReviewPayload, PublishContext, PublishError, RemoteComment,
     RemoteReview, RemoteReviewState, ReviewDraft, ReviewEvent, ReviewPayload, SubmitFound,
-    SubmitReviewPayload, carries_marker, find_pending, find_submitted, missing_comments, signed,
+    SubmitReviewPayload, carries_marker, find_pending, find_submitted, missing_comments, sha256_of,
+    signed,
 };
 pub use pull_review::{
     EarlierFate, MirroredPr, NewOutcome, NewReviewedHead, Outcome, OutcomeError, OutcomeKind,
@@ -129,6 +138,13 @@ pub use recipe::{
 };
 pub use review::{
     BlobRef, Dismissal, Finding, FindingClass, FindingId, Location, Severity, Snapshot,
+};
+pub use route::{
+    ALWAYS_INTEGRATION, BeforePush, Destination, DiffFile, DiffHunk, DiffStatus, Expect, FixRef,
+    FollowUpPr, IntegrationBranches, OpenPullRequestPayload, PushPayload, Refspec, RouteError,
+    RouteFacts, RouteKind, RoutePlan, RouteTarget, SuggestionContext, SuggestionRoute, TheirBranch,
+    before_push, diff_hash, follow_up, follow_up_branch, parse_unified, push_to_their_branch,
+    route_binding, suggestions, url_like, your_fork,
 };
 pub use rule::{
     ExampleStance, NewRule, Rule, RuleApproval, RuleChange, RuleDraft, RuleError, RuleExample,

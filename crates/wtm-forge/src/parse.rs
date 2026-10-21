@@ -15,6 +15,7 @@ use wtm_core::flow::{
     PrTarget, PullRequest, RemoteComment, RemoteReview, RemoteReviewState, RepoSlug, Reviewer,
 };
 use wtm_core::model::CommitId;
+use wtm_core::ports::forge::RemotePullRequest;
 
 /// `gh version 2.100.0 (2026-09-03)` → `(2, 100, 0)`. `None` for a build that prints something
 /// else, such as `gh version DEV`.
@@ -228,6 +229,36 @@ fn read_review(value: &Value) -> Result<RemoteReview, String> {
         body: value["body"].as_str().unwrap_or_default().to_owned(),
         commit_id: text(value, "commit_id"),
         url: text(value, "html_url").unwrap_or_default(),
+    })
+}
+
+/// Every pull request in a `gh api --paginate --slurp` of `repos/{o}/{r}/pulls`.
+pub(crate) fn remote_pull_requests(json: &str) -> Result<Vec<RemotePullRequest>, String> {
+    pages(json)?.iter().map(read_remote_pull_request).collect()
+}
+
+/// One pull request as the REST API returns it from a create.
+pub(crate) fn remote_pull_request(json: &str) -> Result<RemotePullRequest, String> {
+    read_remote_pull_request(&json_of(json)?)
+}
+
+fn read_remote_pull_request(value: &Value) -> Result<RemotePullRequest, String> {
+    let number = value["number"]
+        .as_u64()
+        .ok_or_else(|| "a pull request without a number".to_owned())?;
+    let state = match (value["state"].as_str(), value["merged_at"].is_string()) {
+        (_, true) => PrState::Merged,
+        (Some("open"), _) => PrState::Open,
+        (Some("closed"), _) => PrState::Closed,
+        _ => PrState::Unknown,
+    };
+    Ok(RemotePullRequest {
+        number,
+        url: text(value, "html_url").unwrap_or_default(),
+        state,
+        head: text(&value["head"], "label").unwrap_or_default(),
+        base: text(&value["base"], "ref").unwrap_or_default(),
+        body: value["body"].as_str().unwrap_or_default().to_owned(),
     })
 }
 

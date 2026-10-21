@@ -45,8 +45,13 @@ pub use config::{ConfigStore, TrustDecision};
 pub use database::{DatabaseConnection, DatabaseHost, DatabaseSession};
 pub use dictate::{DictateError, Utterance};
 pub use exec::{CancelToken, CommandRunner, EnvScrub, Invocation, Output};
-pub use flow::{FlowStore, FlowStoreError, InboxStore, OutboxStore, PullReviewStore, RunStore};
-pub use forge::{Forge, ForgeError, ReviewWriter, SentComment};
+pub use flow::{
+    FixStore, FlowStore, FlowStoreError, InboxStore, LeaseStore, OutboxStore, PullReviewStore,
+    RunStore,
+};
+pub use forge::{
+    Forge, ForgeError, PullRequestWriter, RemotePullRequest, ReviewWriter, SentComment,
+};
 pub use fs::{FileDigest, FileStore};
 pub use git::{AddOptions, BranchFilter, Git, RemoteUrl};
 pub use pipe::{PipeHost, PipeSession, PipeSink};

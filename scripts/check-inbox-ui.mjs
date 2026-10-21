@@ -68,7 +68,8 @@ const run = (flow, dir, steps, findings, more = {}) => ({
   review: { flow, project: '/x/webapp', worktree: id(dir), worktreePath: id(dir), recipe: 'standard', base: 'origin/main', snapshot: 1 },
   snapshot: { headSha: 'a1b2c3d4e5f6', treeSha: '9f00aa', baseSha: 'c0ffee11' },
   steps, invocations: [], inbox: [], running: false, findings, checks: [], expectedChecks: [],
-  applied: { rules: [], sources: [], skills: [] }, ...more });
+  applied: { rules: [], sources: [], skills: [] },
+  pullRequest: null, fixes: [], leases: [], writers: [], ...more });
 const runs = {
   [id('export')]: run(1, 'export', [step(11, 'conventions', 'claude', 'done', { result: done }),
       step(12, 'correctness', 'codex', 'failed', { failures: 2, detail: 'it had no result after 15 min' })], [

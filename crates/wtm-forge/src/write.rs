@@ -1,17 +1,20 @@
-//! [`ReviewWriter`] for [`GhForge`]: a review's writes, and the reads that find them again.
+//! [`ReviewWriter`] and [`PullRequestWriter`] for [`GhForge`]: a review's writes, a fix's follow-up
+//! pull request, and the reads that find them again.
 //!
 //! # Exactly these requests
 //!
-//! Three writes, each a single `gh api` request with its body on stdin, so a comment's text never
+//! Four writes, each a single `gh api` request with its body on stdin, so a comment's text never
 //! reaches an argv, where `ps` and a debug log would see it:
 //!
 //! - `POST repos/{o}/{r}/pulls/{n}/reviews` with no `event`, which starts a pending review;
 //! - GraphQL `addPullRequestReviewThread`, which puts one comment on a pending review — REST has no
 //!   way to add to one that exists;
-//! - `POST repos/{o}/{r}/pulls/{n}/reviews/{id}/events`, which submits it.
+//! - `POST repos/{o}/{r}/pulls/{n}/reviews/{id}/events`, which submits it;
+//! - `POST repos/{o}/{r}/pulls`, which opens a follow-up pull request into someone's branch.
 //!
-//! `tests/gh_write.rs` holds the adapter to that list. The two reads beside them are
-//! `--method GET`, like every other read in this crate.
+//! `tests/gh_write.rs` holds the adapter to that list. The reads beside them are `--method GET`,
+//! like every other read in this crate. Pushing the follow-up's branch is git's, not the forge's
+//! (`wtm_git::push`).
 //!
 //! # GitHub's refusals, told apart
 //!
@@ -23,11 +26,14 @@
 //! before anything is sent again. GraphQL needs one more case: for a line it will not comment on it
 //! answers `thread: null` and no error at all.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use serde_json::{Value, json};
 use wtm_core::flow::{RemoteComment, RemoteReview, RepoSlug, ReviewEvent};
-use wtm_core::ports::forge::{ForgeError, ReviewWriter, SentComment};
+use wtm_core::ports::forge::{
+    ForgeError, PullRequestWriter, RemotePullRequest, ReviewWriter, SentComment,
+};
 
 use crate::gh::{GhForge, READ_TIMEOUT_MS};
 use crate::parse;
@@ -295,4 +301,82 @@ impl ReviewWriter for GhForge {
         )?;
         parse::review(&stdout).map_err(|message| ForgeError::Unreadable { what, message })
     }
+}
+
+impl PullRequestWriter for GhForge {
+    fn pull_requests_from(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        head: &str,
+    ) -> Result<Vec<RemotePullRequest>, ForgeError> {
+        let what = format!("the pull requests from {head} in {repo}");
+        let path = format!(
+            "repos/{}/{}/pulls?head={}&state=all&per_page=100",
+            repo.owner,
+            repo.name,
+            query_value(head)
+        );
+        let stdout = self.list(cwd, repo, &path, &what)?;
+        let mut found = parse::remote_pull_requests(&stdout)
+            .map_err(|message| ForgeError::Unreadable { what, message })?;
+        found.sort_by_key(|pr| std::cmp::Reverse(pr.number));
+        Ok(found)
+    }
+
+    fn open_pull_request(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        base: &str,
+        head: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<RemotePullRequest, ForgeError> {
+        let what = format!("a pull request from {head} into {base} in {repo}");
+        let path = format!("repos/{}/{}/pulls", repo.owner, repo.name);
+        let request = json!({
+            "title": title,
+            "head": head,
+            "base": base,
+            "body": body,
+            "maintainer_can_modify": true,
+            "draft": false,
+        });
+        let stdout = self.send(
+            cwd,
+            &repo.host,
+            &[
+                "api",
+                "--method",
+                "POST",
+                "--hostname",
+                repo.host.as_str(),
+                path.as_str(),
+                "--input",
+                "-",
+            ],
+            &request,
+            &what,
+        )?;
+        parse::remote_pull_request(&stdout)
+            .map_err(|message| ForgeError::Unreadable { what, message })
+    }
+}
+
+/// `text` as a query string value: a branch may hold `/`, which GitHub reads as itself, but `&`,
+/// `#`, `+`, `%` and spaces would change the query.
+fn query_value(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b':' => {
+                out.push(char::from(byte));
+            }
+            other => {
+                let _ = write!(out, "%{other:02X}");
+            }
+        }
+    }
+    out
 }

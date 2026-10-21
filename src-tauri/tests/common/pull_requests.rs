@@ -24,7 +24,7 @@ use wtm_core::model::ProjectId;
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::config::ConfigStore;
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation, Output};
-use wtm_core::ports::forge::{Forge, ReviewWriter};
+use wtm_core::ports::forge::{Forge, PullRequestWriter, ReviewWriter};
 use wtm_core::ports::progress::NullProgress;
 use wtm_core::usecase::ReviewCheckout;
 use wtm_forge::GhForge;
@@ -145,6 +145,7 @@ impl CommandRunner for GhJson {
 /// `findings` as an input: a re-review gives them their earlier findings anyway.
 pub(crate) const WORKFLOW: &str = r#"
 forge = "github"
+integration_branches = ["release/*"]
 
 [role.correctness]
 objective = "Find bugs the change introduces"
@@ -160,12 +161,60 @@ inputs = ["diff"]
 paths = ["docs/**"]
 timeout_ms = 60000
 
+[role.fixer]
+objective = "Fix the findings you are given"
+provider = "claude"
+profile = "writer"
+output = "handoff"
+inputs = ["findings"]
+timeout_ms = 60000
+
 [recipe.standard]
 label = "Standard"
 
 [[recipe.standard.stage]]
 roles = ["correctness", "docs"]
 "#;
+
+/// Where the pull request's branch lives, and who may push to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shape {
+    /// The fixtures' own: a branch in `sam-rivera`'s fork, maintainer edits off.
+    Fork { maintainer_edits: bool },
+    /// A branch of the base repository itself, `feature/csv-export` on the forge.
+    SameRepo,
+}
+
+/// What a harness is built with beyond its agents.
+pub(crate) struct Build {
+    pub(crate) shape: Shape,
+    /// Posts reviews in place of `gh`, for a test that publishes.
+    pub(crate) review_writer: Option<Arc<dyn ReviewWriter>>,
+    /// Opens pull requests in place of `gh`, for a test that sends a follow-up.
+    pub(crate) pr_writer: Option<Arc<dyn PullRequestWriter>>,
+    /// Your own fork of the base repository as a remote of the clone, `mine`.
+    pub(crate) your_fork: bool,
+}
+
+impl Default for Build {
+    fn default() -> Self {
+        Self {
+            shape: Shape::Fork {
+                maintainer_edits: false,
+            },
+            review_writer: None,
+            pr_writer: None,
+            your_fork: false,
+        }
+    }
+}
+
+/// The URL your fork answers to; `dana-lee` is who `gh` is signed in as in the fixtures.
+pub(crate) const YOUR_FORK_URL: &str = "https://github.com/dana-lee/webapp.git";
+/// The URL the pull request author's fork answers to.
+pub(crate) const THEIR_FORK_URL: &str = "https://github.com/sam-rivera/webapp.git";
+/// The pull request's head branch.
+pub(crate) const BRANCH: &str = "feature/csv-export";
 
 pub(crate) struct Harness {
     pub(crate) app: Arc<App>,
@@ -181,6 +230,11 @@ pub(crate) struct Harness {
     /// The pull request's first head, which the review worktree is prepared at.
     pub(crate) first: String,
     pub(crate) worktree: PathBuf,
+    /// Your fork on the forge, when the build has one.
+    pub(crate) yours: Option<GitFixture>,
+    /// The author's fork on the forge, which holds their branch for a fork's pull request.
+    pub(crate) theirs: Option<GitFixture>,
+    pub(crate) shape: Shape,
     pub(crate) _data: tempfile::TempDir,
 }
 
@@ -220,6 +274,18 @@ impl Harness {
 
     /// As [`Self::new`], with `writer` posting reviews in place of `gh`, for a test that publishes.
     pub(crate) fn with_writer(script: Script, writer: Option<Arc<dyn ReviewWriter>>) -> Self {
+        Self::build(
+            script,
+            Build {
+                review_writer: writer,
+                ..Build::default()
+            },
+        )
+    }
+
+    /// A pull request of `build.shape` into acme/webapp's `main`, queued and with a review worktree
+    /// prepared at its first head.
+    pub(crate) fn build(script: Script, build: Build) -> Self {
         let upstream = GitFixture::new();
         let clone = GitFixture::new();
         clone.git(&["remote", "set-url", "origin", FORGE_URL]);
@@ -241,15 +307,65 @@ impl Harness {
             ],
         );
 
+        // The branch lives on the forge under its name: in the base repository for a branch of
+        // its own, in the author's fork for a fork's.
+        let mut theirs = None;
+        match build.shape {
+            Shape::SameRepo => {
+                upstream.git(&["update-ref", &format!("refs/heads/{BRANCH}"), &first]);
+            }
+            Shape::Fork { .. } => {
+                let fork = GitFixture::new();
+                fork.git(&[
+                    "fetch",
+                    "-q",
+                    &upstream.root().display().to_string(),
+                    "refs/pull/4031/head",
+                ]);
+                fork.git(&["update-ref", &format!("refs/heads/{BRANCH}"), &first]);
+                clone.git(&[
+                    "config",
+                    &format!("url.{}.insteadOf", fork.root().display()),
+                    THEIR_FORK_URL,
+                ]);
+                theirs = Some(fork);
+            }
+        }
+        let yours = build.your_fork.then(|| {
+            let fork = GitFixture::new();
+            clone.git(&["remote", "add", "mine", YOUR_FORK_URL]);
+            clone.git(&[
+                "config",
+                &format!("url.{}.insteadOf", fork.root().display()),
+                YOUR_FORK_URL,
+            ]);
+            fork
+        });
+
         let data = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
         let paths = AppPaths::rooted(data.path());
         let config_file = paths.config_file.clone();
         let gh = GhJson::new(&first, &base);
+        match build.shape {
+            Shape::SameRepo => {
+                let mut pr = gh.pr.lock();
+                pr["isCrossRepository"] = json!(false);
+                pr["maintainerCanModify"] = json!(false);
+                pr["headRepository"]["nameWithOwner"] = json!("acme/webapp");
+                pr["headRepositoryOwner"]["login"] = json!("acme");
+            }
+            Shape::Fork { maintainer_edits } => {
+                gh.pr.lock()["maintainerCanModify"] = json!(maintainer_edits);
+            }
+        }
         let mut app = App::with_paths(paths).unwrap();
         app.forge =
             Arc::new(GhForge::new(Arc::clone(&gh) as Arc<dyn CommandRunner>)) as Arc<dyn Forge>;
-        if let Some(writer) = writer {
+        if let Some(writer) = build.review_writer {
             app.review_writer = writer;
+        }
+        if let Some(writer) = build.pr_writer {
+            app.pr_writer = writer;
         }
         let root = app.register(clone.root()).unwrap();
         app.config.set_user_pref(WORK_VIEW_PREF, "on").unwrap();
@@ -336,6 +452,9 @@ impl Harness {
             clone,
             first,
             worktree,
+            yours,
+            theirs,
+            shape: build.shape,
             _data: data,
         }
     }
@@ -370,8 +489,40 @@ impl Harness {
     /// The author pushes another commit on top of `on`, changing `files`, and the forge says so.
     pub(crate) fn push(&self, on: &str, files: &[(&str, &str)]) -> String {
         let head = contribute(&self.upstream, on, files);
+        match self.shape {
+            Shape::SameRepo => {
+                self.upstream
+                    .git(&["update-ref", &format!("refs/heads/{BRANCH}"), &head]);
+            }
+            Shape::Fork { .. } => {
+                if let Some(fork) = &self.theirs {
+                    fork.git(&[
+                        "fetch",
+                        "-q",
+                        &self.upstream.root().display().to_string(),
+                        "refs/pull/4031/head",
+                    ]);
+                    fork.git(&["update-ref", &format!("refs/heads/{BRANCH}"), &head]);
+                }
+            }
+        }
         self.gh.pushed(&head);
         head
+    }
+
+    /// Where the pull request's branch is on the forge now.
+    pub(crate) fn their_branch(&self) -> Option<String> {
+        let repo = match self.shape {
+            Shape::SameRepo => &self.upstream,
+            Shape::Fork { .. } => self.theirs.as_ref()?,
+        };
+        let (code, out) = repo.git_try(&[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/heads/{BRANCH}"),
+        ]);
+        (code == 0).then(|| out.trim().to_owned())
     }
 
     /// The window coming back into focus: the pull request is read again.

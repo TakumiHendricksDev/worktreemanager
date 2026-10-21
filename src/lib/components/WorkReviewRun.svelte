@@ -61,10 +61,12 @@
     outcomeLine,
     short,
   } from '../pr-review';
+  import { fixToSend, leaseLine } from '../local-fix';
   import {
     canResume,
     canRunAgain,
     canStop,
+    canStopFix,
     CHECK_TONE,
     CHECK_WORDS,
     checkLines,
@@ -94,6 +96,7 @@
   import WorkFinding from './WorkFinding.svelte';
   import WorkPrOutcome from './WorkPrOutcome.svelte';
   import WorkPublication from './WorkPublication.svelte';
+  import WorkRoute from './WorkRoute.svelte';
 
   const {
     visible,
@@ -135,6 +138,9 @@
   const outcome = $derived(prReview ? currentOutcome(prReview) : null);
   /** The review's current publish, if it has been published or tried. */
   const publication = $derived(prReview?.publications.at(-1) ?? null);
+  /** A local fix's routes, oldest first: each send as far as it got. */
+  const routes = $derived(prReview?.routes ?? []);
+  const lease = $derived(run ? leaseLine(run.leases) : null);
   let finishing = $state(false);
   const showRerun = $derived(
     run !== undefined &&
@@ -200,7 +206,8 @@
         ? shown.findings.some((f) => f.id === focus.id)
         : focus.kind === 'publication'
           ? (shown.pullRequest?.publications.some((p) => p.approval.id === focus.id) ??
-            false)
+              false) ||
+            (shown.pullRequest?.routes.some((r) => r.approval.id === focus.id) ?? false)
           : shown.steps.some((s) => s.id === focus.id);
     // Not in this run yet, or ever: a newer run of the worktree, or one still loading. The next
     // read of the run tries again; a finding superseded since is simply not marked.
@@ -216,7 +223,9 @@
       focus.kind === 'finding'
         ? `work-finding-${focus.id}`
         : focus.kind === 'publication'
-          ? `work-publication-${focus.id}`
+          ? shown.pullRequest?.routes.some((r) => r.approval.id === focus.id)
+            ? `work-route-${focus.id}`
+            : `work-publication-${focus.id}`
           : `work-role-${focus.id}`;
     queueMicrotask(() => {
       const element = document.getElementById(id);
@@ -454,6 +463,15 @@
             >Stop review</Button
           >
         {/if}
+        {#if canStopFix(run)}
+          <Button
+            variant="quiet"
+            size="sm"
+            disabled={busy}
+            onclick={() => void reviewRuns.cancelFix(worktreeId, run.flow.id)}
+            >Stop fix</Button
+          >
+        {/if}
         {#if canRereview(run, moved)}
           <Button
             variant="accent"
@@ -470,7 +488,10 @@
             variant={showRerun || moved ? 'neutral' : 'accent'}
             size="sm"
             disabled={busy}
-            onclick={() => (finishing = true)}>Finish review…</Button
+            onclick={() => (finishing = true)}
+            >{fixToSend(run)
+              ? 'Read the diff and choose where it goes…'
+              : 'Finish review…'}</Button
           >
         {/if}
         {#if canRunAgain(run) && !showRerun && !moved && recipe}
@@ -483,6 +504,9 @@
           whose files changed, asking each to verify its earlier findings were addressed. The
           results at {short(run.snapshot?.headSha ?? '')} are kept below.
         </p>
+      {/if}
+      {#if lease}
+        <p class="c-work-state__note"><CodeText text={lease} /></p>
       {/if}
       {#if outcome}
         <p class="c-work-state__note">
@@ -515,6 +539,23 @@
         onopen={(url) => void commands.openUrl(url)}
       />
     {/if}
+
+    {#each routes as route (route.approval.id)}
+      <WorkRoute
+        view={route}
+        busy={reviewRuns.busy[`route:${worktreeId}`] ?? false}
+        error={reviewRuns.errors[`route:${worktreeId}`] ?? null}
+        onretry={() =>
+          void reviewRuns.route(worktreeId, run.flow.id, () =>
+            commands.retryFixRoute(route.approval.id),
+          )}
+        onleave={() =>
+          void reviewRuns.route(worktreeId, run.flow.id, () =>
+            commands.cancelFixRoute(route.approval.id),
+          )}
+        onopen={(url) => void commands.openUrl(url)}
+      />
+    {/each}
 
     {#each groups as section (section.group)}
       {#if section.group === 'suggestion'}
@@ -742,6 +783,12 @@
       void reviewRuns
         .rereview(projectId, worktreeId, run.flow.id, head)
         .then(() => workspace.refreshWorktrees())}
+    onstartfix={(request) => reviewRuns.startFix(worktreeId, run.flow.id, request)}
+    onfixdiff={() => reviewRuns.fixDiff(run.flow.id)}
+    onroutes={() => reviewRuns.fixRoutes(run.flow.id)}
+    onpreviewroute={(request) => reviewRuns.previewRoute(run.flow.id, request)}
+    onapproveroute={(request, hash) =>
+      reviewRuns.approveRoute(worktreeId, run.flow.id, request, hash)}
   />
 {/if}
 

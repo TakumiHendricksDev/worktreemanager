@@ -440,6 +440,12 @@ pub(crate) fn hash_of<T: Serialize>(value: &T) -> String {
     format!("sha256:{}", hex(&Sha256::digest(&bytes)))
 }
 
+/// `sha256:<hex>` of `bytes` as they are, for text that is hashed as it was read, such as a diff.
+#[must_use]
+pub fn sha256_of(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex(&Sha256::digest(bytes)))
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

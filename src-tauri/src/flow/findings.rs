@@ -678,6 +678,7 @@ impl Engine {
         if state.phase != Phase::Consolidated {
             return Err("only a finished review can be run again".into());
         }
+        self.refuse_if_written(&review.worktree_path)?;
         let project = self.app.project(review.project.as_str()).map_err(text)?;
         let workflow = project
             .workflow
@@ -817,7 +818,17 @@ impl Engine {
             },
         )?;
         self.notice.changed(flow);
-        self.spawn(flow)?;
+        if let Err(reason) = self.spawn(flow) {
+            // A writer took the worktree between the check and the lease: the review stands as
+            // it was, consolidated, rather than reviewing with nothing behind it.
+            let _ = self.record(
+                flow,
+                &FlowEvent::Advanced {
+                    to: Phase::Consolidated,
+                },
+            );
+            return Err(reason.into());
+        }
         Ok(roles.into_iter().collect())
     }
 

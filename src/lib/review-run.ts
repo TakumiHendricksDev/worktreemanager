@@ -12,6 +12,7 @@
  * can't run for want of a skill.
  */
 
+import { fixHeadline } from './local-fix';
 import type {
   CheckRun,
   CheckStatus,
@@ -135,6 +136,9 @@ export function headline(
   const kept = `${done} of ${total} roles had finished; their results are kept.`;
   const tree = view.snapshot ? view.snapshot.headSha.slice(0, 7) : null;
 
+  // A local fix is the run's news while it is being written or waits to be sent.
+  const fixing = fixHeadline(view);
+  if (fixing) return fixing;
   if (state.end?.kind === 'cancelled') {
     return {
       eyebrow: 'Stopped',
@@ -358,9 +362,21 @@ export function resumeWords(view: ReviewRunView): string {
   return 'Resume';
 }
 
-/** Whether the run can be stopped: it has not ended. */
+/**
+ * Whether the run can be stopped: it has not ended. A run that is fixing is stopped by Stop fix,
+ * which ends the fix and keeps the review; stopping the review would end both.
+ */
 export function canStop(view: ReviewRunView): boolean {
-  return view.flow.state.end === null && (view.running || view.flow.state.hold !== null);
+  return (
+    view.flow.state.end === null &&
+    view.flow.state.phase !== 'fixing' &&
+    (view.running || view.flow.state.hold !== null)
+  );
+}
+
+/** Whether the fix being written can be stopped. */
+export function canStopFix(view: ReviewRunView): boolean {
+  return view.flow.state.end === null && view.flow.state.phase === 'fixing';
 }
 
 /** Whether a new run of the same worktree would start rather than focus this one. */

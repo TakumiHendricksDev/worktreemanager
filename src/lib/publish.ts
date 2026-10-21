@@ -87,15 +87,16 @@ export function eyebrow(view: PublicationView): string {
 /** "Review on #4031: 1 of 2 steps done", or what happened when there is one word for it. */
 export function publicationTitle(view: PublicationView): string {
   const number = view.review.number;
+  const what = view.suggestions ? 'Suggestions' : 'Review';
   switch (view.state) {
     case 'published':
-      return `Review on #${number} published`;
+      return `${what} on #${number} published`;
     case 'stale':
       return `#${number} changed after you approved`;
     case 'checking':
       return `wtm stopped while posting to #${number}`;
     default:
-      return `Review on #${number}: ${doneCount(view)} of ${view.operations.length} steps done`;
+      return `${what} on #${number}: ${doneCount(view)} of ${view.operations.length} steps done`;
   }
 }
 
@@ -219,6 +220,12 @@ export interface PublicationActions {
   pending: { url: string; comments: number; startedByWtm: boolean } | null;
   /** The head moved: re-review, or publish against the reviewed commit anyway. */
   moved: { approved: string; current: string } | null;
+  /**
+   * Whether "publish against the reviewed commit anyway" is offered. Not for a fix's suggestions:
+   * they replace lines of the head the fix was made from, and on a newer head those lines may be
+   * other lines.
+   */
+  against: boolean;
   /** Stop it here. */
   leave: boolean;
 }
@@ -246,6 +253,7 @@ export function publicationActions(view: PublicationView): PublicationActions {
       stopped?.attention.kind === 'refused',
     pending,
     moved,
+    against: !view.suggestions,
     leave:
       view.state !== 'published' &&
       view.state !== 'cancelled' &&

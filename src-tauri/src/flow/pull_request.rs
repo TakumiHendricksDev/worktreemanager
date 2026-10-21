@@ -30,7 +30,7 @@
 //! Keep private notes records an outcome in wtm and writes nowhere else. Publishing a review is an
 //! approval of exactly what posts and the outbox's operations that post it (`publish.rs`,
 //! `outbox.rs`); its record is that approval and those operations, shown beside the private outcomes.
-//! Local fixes are drawn in the outcome sheet and disabled until the writer lease exists (P3).
+//! A local fix is the writer's (`fix.rs`), and where it goes is a route you approve (`routes.rs`).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -74,8 +74,11 @@ pub struct PullRequestReview {
     /// What you decided, oldest first. The last is the current decision.
     pub outcomes: Vec<Outcome>,
     /// The review's publishes, oldest first: each approval with exactly what it covered and how
-    /// far its writes got. The last is the current one.
+    /// far its writes got. The last is the current one. A local fix sent as suggestions is one.
     pub publications: Vec<super::publish::PublicationView>,
+    /// A local fix's push routes, oldest first: a follow-up pull request, or a push to their
+    /// branch, each with exactly what it was approved to send and how far it got.
+    pub routes: Vec<super::routes::RouteSendView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -554,6 +557,7 @@ impl Engine {
             reviewing: db.claim(item.id).map_err(text)?,
             outcomes: db.outcomes(state.id).map_err(text)?,
             publications: self.publication_views(state.id)?,
+            routes: self.route_views(state.id)?,
             mirror,
             reviewed_head,
             moved_to,

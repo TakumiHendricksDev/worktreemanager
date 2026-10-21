@@ -23,6 +23,7 @@
 pub mod checkpoint;
 pub mod cli;
 pub mod porcelain;
+pub mod push;
 
 pub use cli::{GitCli, track_flag};
 pub use porcelain::{parse_ahead_behind, parse_branch_lines, parse_status, parse_worktree_list};

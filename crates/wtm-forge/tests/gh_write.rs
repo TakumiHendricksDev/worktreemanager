@@ -2,7 +2,7 @@
 //!
 //! The replies are what `gh` 2.100.0 printed on 2026-10-21 for a throwaway pull request, with the
 //! names replaced (`fixtures/README.md`). Three things are protected. That a write is exactly one
-//! of the three requests the write side may make, with its text on stdin and never in the argv.
+//! of the four requests the write side may make, with its text on stdin and never in the argv.
 //! That GitHub's refusals are told apart the way the outbox needs them: the one-pending-review 422,
 //! a refusal that would recur, and a failure whose outcome is unknown — including GraphQL's silent
 //! `thread: null`. And that the reads the outbox reconciles with find a marker where GitHub put it.
@@ -15,9 +15,9 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use wtm_core::error::ExecError;
-use wtm_core::flow::{FileLines, LineRange, RemoteReviewState, RepoSlug, ReviewEvent};
+use wtm_core::flow::{FileLines, LineRange, PrState, RemoteReviewState, RepoSlug, ReviewEvent};
 use wtm_core::ports::exec::Output;
-use wtm_core::ports::forge::{Forge, ForgeError, ReviewWriter, SentComment};
+use wtm_core::ports::forge::{Forge, ForgeError, PullRequestWriter, ReviewWriter, SentComment};
 use wtm_forge::GhForge;
 use wtm_testkit::FakeRunner;
 
@@ -85,7 +85,8 @@ fn is_allowed(argv: &[String]) -> bool {
             let parts: Vec<&str> = path.split('/').collect();
             matches!(
                 parts.as_slice(),
-                ["repos", _, _, "pulls", _, "reviews"]
+                ["repos", _, _, "pulls"]
+                    | ["repos", _, _, "pulls", _, "reviews"]
                     | ["repos", _, _, "pulls", _, "reviews", _, "events"]
             )
         }
@@ -384,4 +385,91 @@ fn every_call_the_write_side_makes_is_one_of_its_three_writes_or_a_read() {
         assert!(is_allowed(&argv), "not an allowed call: {}", argv.join(" "));
     }
     assert_eq!(runner.call_count(), 6);
+}
+
+#[test]
+fn a_follow_up_pull_request_is_opened_into_their_branch_with_its_text_on_stdin() {
+    let (forge, runner) = harness(vec![FakeRunner::ok(&fixture("pull_created.json"))]);
+    let opened = forge
+        .open_pull_request(
+            Path::new(ROOT),
+            &repo(),
+            "feature/csv-export",
+            "takumi:wtm/pr-2-fix-f1a2b3c",
+            "Fixes from my review of #2",
+            "Fixes the off-by-one.\n\n<!-- wtm:0123456789abcdef -->",
+        )
+        .unwrap();
+    assert_eq!(opened.number, 2);
+    assert_eq!(opened.state, PrState::Open);
+    assert_eq!(opened.url, "https://github.com/acme/webapp/pull/2");
+
+    let argv = &runner.argvs()[0];
+    assert_eq!(
+        argv,
+        &[
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            "--hostname",
+            "github.com",
+            "repos/acme/webapp/pulls",
+            "--input",
+            "-"
+        ]
+    );
+    assert!(is_allowed(argv));
+    let sent = stdin_of(&runner, 0);
+    assert_eq!(sent["base"], "feature/csv-export");
+    assert_eq!(sent["head"], "takumi:wtm/pr-2-fix-f1a2b3c");
+    assert_eq!(sent["maintainer_can_modify"], true);
+    assert_eq!(sent["draft"], false);
+    assert!(
+        !argv.iter().any(|arg| arg.contains("off-by-one")),
+        "the body belongs on stdin"
+    );
+}
+
+#[test]
+fn a_pull_request_that_exists_already_is_a_refusal_that_would_recur() {
+    let (forge, _) = harness(vec![refused("pull_exists")]);
+    let error = forge
+        .open_pull_request(
+            Path::new(ROOT),
+            &repo(),
+            "main",
+            "feature/csv-export",
+            "t",
+            "b",
+        )
+        .unwrap_err();
+    match &error {
+        ForgeError::Rejected { reason, .. } => {
+            assert!(
+                reason.starts_with("A pull request already exists"),
+                "{reason}"
+            );
+        }
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+    assert!(!error.outcome_unknown());
+}
+
+#[test]
+fn pull_requests_from_a_head_are_read_with_their_head_label_and_base() {
+    let (forge, runner) = harness(vec![FakeRunner::ok(&fixture("pulls_by_head.json"))]);
+    let found = forge
+        .pull_requests_from(Path::new(ROOT), &repo(), "acme:feature/csv-export")
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].head, "acme:feature/csv-export");
+    assert_eq!(found[0].base, "main");
+    assert_eq!(found[0].state, PrState::Open);
+    let argv = &runner.argvs()[0];
+    assert!(is_allowed(argv), "a read: {argv:?}");
+    assert_eq!(
+        argv.last().unwrap(),
+        "repos/acme/webapp/pulls?head=acme:feature/csv-export&state=all&per_page=100"
+    );
 }
