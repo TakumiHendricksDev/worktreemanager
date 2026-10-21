@@ -522,6 +522,7 @@ fn add_worktree_creates_a_new_branch_without_an_upstream() {
                 start_point: "origin/develop".to_owned(),
                 track: TrackMode::NoTrack,
                 create_branch: true,
+                run_hooks: true,
             },
         )
         .unwrap();
@@ -557,6 +558,7 @@ fn add_worktree_can_adopt_a_remote_only_branch_with_tracking() {
                 start_point: "origin/feature-x".to_owned(),
                 track: TrackMode::Track,
                 create_branch: true,
+                run_hooks: true,
             },
         )
         .unwrap();
@@ -586,6 +588,7 @@ fn add_worktree_can_check_out_an_existing_local_branch() {
                 start_point: "existing".to_owned(),
                 track: TrackMode::Detach,
                 create_branch: false,
+                run_hooks: true,
             },
         )
         .unwrap();
@@ -606,6 +609,7 @@ fn add_worktree_can_create_a_detached_worktree() {
                 start_point: "HEAD".to_owned(),
                 track: TrackMode::Detach,
                 create_branch: false,
+                run_hooks: true,
             },
         )
         .unwrap();
@@ -629,6 +633,7 @@ fn add_worktree_fails_when_the_branch_is_already_checked_out_elsewhere() {
                 start_point: "task/shared".to_owned(),
                 track: TrackMode::Detach,
                 create_branch: false,
+                run_hooks: true,
             },
         )
         .unwrap_err();
@@ -656,6 +661,7 @@ fn add_worktree_fails_on_a_non_empty_existing_directory() {
                 start_point: "main".to_owned(),
                 track: TrackMode::NoTrack,
                 create_branch: true,
+                run_hooks: true,
             },
         )
         .is_err(),

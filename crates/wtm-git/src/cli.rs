@@ -1086,32 +1086,36 @@ mod tests {
     #[test]
     fn add_worktree_runs_exactly_the_previewed_argv() {
         // The review screen promises an argv; this is the test that the promise is
-        // kept, because both come from `Git::add_worktree_argv`.
-        let (git, runner) = git_with(vec![
-            FakeRunner::ok(""),
-            FakeRunner::ok(
-                "worktree /repo\0HEAD a\0branch refs/heads/main\0\0\
-                 worktree /wt/new\0HEAD b\0branch refs/heads/task/x\0\0",
-            ),
-        ]);
+        // kept, because both come from `Git::add_worktree_argv`. A review's hooks-off
+        // flag is part of the promise.
+        for run_hooks in [true, false] {
+            let (git, runner) = git_with(vec![
+                FakeRunner::ok(""),
+                FakeRunner::ok(
+                    "worktree /repo\0HEAD a\0branch refs/heads/main\0\0\
+                     worktree /wt/new\0HEAD b\0branch refs/heads/task/x\0\0",
+                ),
+            ]);
 
-        let opts = AddOptions {
-            path: PathBuf::from("/wt/new"),
-            branch: Some(BranchRef::new("task/x")),
-            start_point: "origin/develop".to_owned(),
-            track: TrackMode::NoTrack,
-            create_branch: true,
-        };
-        let previewed = git.add_worktree_argv(&opts);
-        let created = git.add_worktree(&repo(), &opts).unwrap();
+            let opts = AddOptions {
+                path: PathBuf::from("/wt/new"),
+                branch: Some(BranchRef::new("task/x")),
+                start_point: "origin/develop".to_owned(),
+                track: TrackMode::NoTrack,
+                create_branch: true,
+                run_hooks,
+            };
+            let previewed = git.add_worktree_argv(&opts);
+            let created = git.add_worktree(&repo(), &opts).unwrap();
 
-        assert_eq!(created.path, PathBuf::from("/wt/new"));
-        assert!(!created.is_main);
-        assert_eq!(
-            runner.argvs()[0],
-            previewed,
-            "executed argv must equal the previewed argv"
-        );
+            assert_eq!(created.path, PathBuf::from("/wt/new"));
+            assert!(!created.is_main);
+            assert_eq!(
+                runner.argvs()[0],
+                previewed,
+                "executed argv must equal the previewed argv"
+            );
+        }
     }
 
     #[test]
@@ -1131,6 +1135,7 @@ mod tests {
                     start_point: "HEAD".to_owned(),
                     track: TrackMode::NoTrack,
                     create_branch: true,
+                    run_hooks: true,
                 },
             )
             .unwrap();
@@ -1157,6 +1162,7 @@ mod tests {
                     start_point: "HEAD".to_owned(),
                     track: TrackMode::NoTrack,
                     create_branch: true,
+                    run_hooks: true,
                 },
             )
             .unwrap();
