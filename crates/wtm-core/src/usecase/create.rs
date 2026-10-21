@@ -1037,6 +1037,7 @@ impl CreatePipeline {
                 start_point: base_ref.to_owned(),
                 track: *track,
                 create_branch: true,
+                run_hooks: true,
             },
             BranchPlan::UseLocal { branch } => AddOptions {
                 path: directory.to_path_buf(),
@@ -1045,6 +1046,7 @@ impl CreatePipeline {
                 track: TrackMode::Detach,
                 // Already exists locally, so check it out rather than creating it.
                 create_branch: false,
+                run_hooks: true,
             },
             BranchPlan::AdoptRemote { branch, remote } => AddOptions {
                 path: directory.to_path_buf(),
@@ -1053,6 +1055,7 @@ impl CreatePipeline {
                 // Tracking is exactly what you want when adopting a remote branch.
                 track: TrackMode::Track,
                 create_branch: !local.contains(branch),
+                run_hooks: true,
             },
             BranchPlan::Detach => AddOptions {
                 path: directory.to_path_buf(),
@@ -1060,6 +1063,7 @@ impl CreatePipeline {
                 start_point: base_ref.to_owned(),
                 track: TrackMode::Detach,
                 create_branch: false,
+                run_hooks: true,
             },
         }
     }

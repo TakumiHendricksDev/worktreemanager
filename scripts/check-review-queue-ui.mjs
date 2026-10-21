@@ -114,7 +114,7 @@ mockIPC((cmd, args) => {
           setup: { kind: 'not_applicable' }, preflight: [], warnings: [], canCreate: true };
       return { number: 4031, head: HEAD, fetch: { remote: 'origin', refspec: 'pull/4031/head' }, headPresent: false,
         target: { kind: 'create', directory: '/x/webapp-pr-4031', branch: a.args.checkout === 'branch' ? 'pr-4031' : null,
-          gitArgv: ['git', 'worktree', 'add', ...(a.args.checkout === 'branch' ? ['--no-track', '-b', 'pr-4031'] : ['--detach']), '--', '/x/webapp-pr-4031', HEAD] },
+          gitArgv: ['git', '-c', 'core.hooksPath=/dev/null', 'worktree', 'add', ...(a.args.checkout === 'branch' ? ['--no-track', '-b', 'pr-4031'] : ['--detach']), '--', '/x/webapp-pr-4031', HEAD] },
         setup, preflight: [], warnings: [], canCreate: true };
     }
     case 'create_review_worktree': {

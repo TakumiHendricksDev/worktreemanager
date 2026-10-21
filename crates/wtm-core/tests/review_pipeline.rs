@@ -205,6 +205,8 @@ fn a_forks_pull_request_is_fetched_from_its_pull_ref_and_checked_out_detached_at
                 git_argv,
                 &[
                     "git",
+                    "-c",
+                    "core.hooksPath=/dev/null",
                     "worktree",
                     "add",
                     "--detach",
@@ -426,6 +428,8 @@ fn a_branch_checkout_makes_an_untracked_review_branch_and_refuses_one_left_over(
             git_argv,
             &[
                 "git",
+                "-c",
+                "core.hooksPath=/dev/null",
                 "worktree",
                 "add",
                 "--no-track",

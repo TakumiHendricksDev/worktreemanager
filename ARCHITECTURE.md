@@ -237,12 +237,19 @@ groups are signalled together, with one grace period and no app/run lock held wh
 A review worktree is the same pipeline with a pull request in the form's place
 (`usecase/create/review.rs`): stages 1–6 read the remotes, the worktrees and whether the head
 commit is here, and decide; the fetch, the `git worktree add` and setup come after the same
-preflight gate. Three things differ, each for a stated reason:
+preflight gate. Four things differ, each for a stated reason:
 
 - **Setup does not run unless asked.** A project's setup may clone a database or run migrations
   against the branch just checked out, and for a review that is someone else's branch, opened
   before anyone has read it. "Prepare environment" is the opt-in, and the preview shows the exact
   argv when it is on.
+- **Hooks do not run at all.** `git worktree add` runs a `post-checkout` hook in the new worktree,
+  which for a review is the author's tree. The hook is your own, since git looks even a relative
+  `core.hooksPath` up from the checkout it runs in, but one that installs dependencies or builds
+  would run the author's code with nobody watching: setup's reason, without setup's preview. So
+  the add runs with `core.hooksPath=/dev/null`. The flag travels in `AddOptions::run_hooks`
+  through the one argv builder, which keeps the argv the preview shows the one that runs. The New
+  Worktree form keeps hooks on: there they are your setup, on your branch.
 - **The checkout is the head commit, by id.** A fork's commits come from the base repository's
   `pull/<n>/head`, because adding the fork as a remote would change your config to read one pull
   request. The worktree is detached at the head the forge reported, or on a new `pr-<n>` branch with

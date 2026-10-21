@@ -1,10 +1,11 @@
-//! Review worktrees against a real `git`: a fork's pull request ref, and a second review of the
-//! same pull request.
+//! Review worktrees against a real `git`: a fork's pull request ref, a second review of the same
+//! pull request, moving to a new head, and the hooks none of it runs.
 //!
 //! `review_pipeline.rs` proves what the pipeline decides. These prove that what it decides works
 //! on a repository: that `pull/<n>/head` brings a commit no branch of yours can reach, that the
-//! worktree lands detached on exactly that commit without a branch or remote being added, and that
-//! asking twice leaves one worktree. A fake git would agree with any refspec it was handed.
+//! worktree lands detached on exactly that commit without a branch or remote being added, that
+//! asking twice leaves one worktree, and that no `post-checkout` hook runs while it is made. A fake
+//! git would agree with any refspec it was handed, and runs no hooks to begin with.
 //!
 //! The forge is a second [`GitFixture`] playing the base repository: its pull request ref is made
 //! with `update-ref`, the way the forge keeps one, and the reviewing clone reaches it through a
@@ -75,6 +76,16 @@ impl Forge {
         self.upstream.git(&["checkout", "-q", "main"]);
         self.upstream.git(&["branch", "-q", "-D", "contribution"]);
         sha
+    }
+
+    /// [`Self::fork_pull_request`], whose commit also brings an executable
+    /// `.githooks/post-checkout` that touches `marker` when it runs.
+    fn fork_pull_request_with_a_hook(&self, number: u64, marker: &Path) -> String {
+        // Staged on main, the hook rides onto the pull request's branch and into its commit, and
+        // leaves the forge's own checkout when that goes back to main.
+        post_checkout_hook(self.upstream.root(), marker);
+        self.upstream.git(&["add", ".githooks/post-checkout"]);
+        self.fork_pull_request(number)
     }
 
     fn project(&self) -> Project {
@@ -174,6 +185,15 @@ fn same_path(a: &Path, b: &Path) -> bool {
     a.canonicalize().unwrap() == b.canonicalize().unwrap()
 }
 
+/// An executable `.githooks/post-checkout` under `root` that touches `marker` when it runs.
+fn post_checkout_hook(root: &Path, marker: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let hook = root.join(".githooks/post-checkout");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 #[test]
 fn a_forks_pull_request_ref_is_fetched_and_checked_out_detached_at_its_head_commit() {
     let forge = Forge::new();
@@ -224,6 +244,61 @@ fn a_forks_pull_request_ref_is_fetched_and_checked_out_detached_at_its_head_comm
         remotes_before,
         "reviewing a fork must not add the fork as a remote"
     );
+}
+
+#[test]
+fn preparing_a_review_worktree_runs_no_git_hook_neither_yours_nor_the_pull_requests() {
+    let forge = Forge::new();
+    // Hooks kept in the tree, the way a `.husky/` setup keeps them: yours in your checkout, and
+    // the pull request bringing its own to the same place.
+    let yours = forge.clone.parent().join("your-hook-ran");
+    let theirs = forge.clone.parent().join("their-hook-ran");
+    post_checkout_hook(forge.clone.root(), &yours);
+    forge.clone.git(&["add", ".githooks/post-checkout"]);
+    forge
+        .clone
+        .git(&["commit", "-q", "-m", "Run a hook after every checkout"]);
+    forge.clone.git(&["config", "core.hooksPath", ".githooks"]);
+    let sha = forge.fork_pull_request_with_a_hook(7, &theirs);
+
+    let worktree = match forge.execute(&forge.request(7, &sha, true, "main")) {
+        ReviewOutcome::Created {
+            outcome: CreateOutcome::Created { worktree, .. },
+        } => worktree,
+        other => panic!("expected a new worktree, got {other:?}"),
+    };
+
+    assert!(
+        worktree.path.join(".githooks/post-checkout").exists(),
+        "the pull request's files are checked out"
+    );
+    assert!(
+        !yours.exists(),
+        "preparing the review ran your hook inside the pull request's tree"
+    );
+    assert!(
+        !theirs.exists(),
+        "preparing the review ran the pull request's hook"
+    );
+
+    // Both hooks are real and would have run, or the absent markers above prove nothing. The same
+    // `git worktree add` without hooks off runs yours, because git looks a relative hooks path up
+    // from the checkout it runs in, and a plain checkout inside the review worktree runs theirs.
+    let plain = forge.clone.parent().join("plain");
+    forge.clone.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        "--",
+        &plain.to_string_lossy(),
+        &sha,
+    ]);
+    assert!(yours.exists(), "the fixture's own hook never runs at all");
+    forge
+        .clone
+        .git_in(&worktree.path, &["checkout", "-q", "--detach", &sha]);
+    assert!(theirs.exists(), "the pull request's hook never runs at all");
 }
 
 #[test]
@@ -315,14 +390,7 @@ impl Forge {
     /// the push brings a hook.
     fn push_to_pull_request(&self, number: u64, on: &str, marker: &Path) -> String {
         self.upstream.git(&["checkout", "-q", "-b", "again", on]);
-        let hook = self.upstream.root().join(".githooks/post-checkout");
-        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
-        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
-        #[allow(clippy::permissions_set_readonly_false)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        post_checkout_hook(self.upstream.root(), marker);
         self.upstream.git(&["add", ".githooks/post-checkout"]);
         self.upstream
             .commit("export.csv", "id,name,parent\n", "Add the parent column");

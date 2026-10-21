@@ -984,6 +984,7 @@ mod tests {
                 start_point: "main".to_owned(),
                 track: TrackMode::NoTrack,
                 create_branch: true,
+                run_hooks: true,
             },
         )
         .unwrap();

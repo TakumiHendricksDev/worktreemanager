@@ -43,6 +43,9 @@ pub struct AddOptions {
     pub track: TrackMode,
     /// Create the branch (`-b`) versus check out an existing one.
     pub create_branch: bool,
+    /// Let the repository's hooks run, `post-checkout` among them. On for a worktree of your own,
+    /// where they are your setup; off for a review, where a hook runs inside someone else's branch.
+    pub run_hooks: bool,
 }
 
 /// A remote and one URL it is configured with.
@@ -244,9 +247,9 @@ pub trait Git: Send + Sync {
 
     /// A detached checkout of `commit` at `path`, for roles that read a snapshot.
     ///
-    /// Unlike [`Self::add_worktree`], hooks are off. A `post-checkout` hook is the repository's
-    /// code, and this checkout is the app's, made with nobody watching and outside any sandbox.
-    /// A hook directory inside the worktree is one a writer role can edit.
+    /// Hooks are always off, as they are for a review's [`Self::add_worktree`]. A `post-checkout`
+    /// hook is the repository's code, and this checkout is the app's, made with nobody watching
+    /// and outside any sandbox. A hook directory inside the worktree is one a writer role can edit.
     fn add_snapshot_checkout(
         &self,
         worktree_path: &Path,
@@ -276,7 +279,13 @@ pub trait Git: Send + Sync {
     /// implementation is the single source of truth for the flag ordering, which
     /// keeps the preview honest: there is no second code path to drift.
     fn add_worktree_argv(&self, opts: &AddOptions) -> Vec<String> {
-        let mut argv = vec!["git".to_owned(), "worktree".to_owned(), "add".to_owned()];
+        let mut argv = vec!["git".to_owned()];
+        if !opts.run_hooks {
+            // A global option, so it goes before the subcommand. `/dev/null` is not a directory,
+            // so no hook is found under it, whatever the repository configured.
+            argv.extend(["-c".to_owned(), "core.hooksPath=/dev/null".to_owned()]);
+        }
+        argv.extend(["worktree".to_owned(), "add".to_owned()]);
         match (&opts.branch, opts.track, opts.create_branch) {
             (None, _, _) => argv.push("--detach".to_owned()),
             (Some(branch), track, create) => {
@@ -422,6 +431,7 @@ mod tests {
             start_point: "origin/develop".to_owned(),
             track: TrackMode::NoTrack,
             create_branch: true,
+            run_hooks: true,
         });
         assert_eq!(
             argv,
@@ -447,6 +457,7 @@ mod tests {
             start_point: "origin/feature".to_owned(),
             track: TrackMode::Track,
             create_branch: true,
+            run_hooks: true,
         });
         assert!(argv.contains(&"--track".to_owned()));
         assert!(!argv.contains(&"--no-track".to_owned()));
@@ -460,6 +471,7 @@ mod tests {
             start_point: "existing".to_owned(),
             track: TrackMode::Detach,
             create_branch: false,
+            run_hooks: true,
         });
         assert!(!argv.contains(&"-b".to_owned()));
         assert_eq!(argv.last().unwrap(), "existing");
@@ -473,6 +485,7 @@ mod tests {
             start_point: "HEAD".to_owned(),
             track: TrackMode::Detach,
             create_branch: false,
+            run_hooks: true,
         });
         assert!(argv.contains(&"--detach".to_owned()));
     }
@@ -486,6 +499,7 @@ mod tests {
             start_point: "-HEAD".to_owned(),
             track: TrackMode::Detach,
             create_branch: false,
+            run_hooks: true,
         });
         let sep = argv
             .iter()
@@ -493,5 +507,32 @@ mod tests {
             .expect("a `--` separator");
         assert_eq!(&argv[sep + 1], "-sneaky");
         assert_eq!(&argv[sep + 2], "-HEAD");
+    }
+
+    #[test]
+    fn hooks_off_is_a_config_override_ahead_of_the_subcommand() {
+        // After `worktree add`, git would read `-c` as an option of the subcommand and refuse it.
+        let argv = ArgvOnly.add_worktree_argv(&AddOptions {
+            path: PathBuf::from("/x/webapp-pr-4031"),
+            branch: None,
+            start_point: "7c9e1d0".to_owned(),
+            track: TrackMode::Detach,
+            create_branch: false,
+            run_hooks: false,
+        });
+        assert_eq!(
+            argv,
+            vec![
+                "git",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "worktree",
+                "add",
+                "--detach",
+                "--",
+                "/x/webapp-pr-4031",
+                "7c9e1d0",
+            ]
+        );
     }
 }

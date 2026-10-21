@@ -186,6 +186,11 @@ fn preview_and_execute_agree_on_the_argv() {
         "got {previewed:?}"
     );
     assert!(previewed.contains(&"task/thing".to_owned()));
+    // Your own branch, so your hooks run. Only a review worktree turns them off.
+    assert!(
+        !previewed.iter().any(|arg| arg.contains("hooksPath")),
+        "got {previewed:?}"
+    );
 }
 
 #[test]

@@ -15,6 +15,16 @@
 //! setup quietly: [`ReviewRequest::prepare_environment`] is the opt-in, it defaults to off in the
 //! view, and the preview says which of the two will happen and shows the exact argv when it will.
 //!
+//! # Hooks are off
+//!
+//! `git worktree add` runs a `post-checkout` hook with the new worktree as its directory, and for
+//! a review that directory is the author's tree. The hook itself is yours: git looks it up from
+//! the checkout it runs in, even when `core.hooksPath` is relative, as a `.husky/` setup's is. But
+//! one that installs dependencies or builds would run the author's code, before anyone has read
+//! it and with no preview, which is setup's reason again. So a review's add runs with
+//! `core.hooksPath=/dev/null`, and the argv the preview shows carries the flag, because it is the
+//! argv that runs. Asking for setup does not turn hooks back on: setup is shown before it runs.
+//!
 //! # Fetching a fork's commits
 //!
 //! An open pull request from a branch of the base repository is fetched by that branch's name,
@@ -581,6 +591,8 @@ impl CreatePipeline {
                     start_point: pr.head.sha.as_str().to_owned(),
                     track: TrackMode::NoTrack,
                     create_branch: branch.is_some(),
+                    // See the module docs: whatever a hook runs would run in the author's tree.
+                    run_hooks: false,
                 };
                 let target = ReviewTarget::Create {
                     git_argv: self.git.add_worktree_argv(&add),
