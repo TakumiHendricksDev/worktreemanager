@@ -997,9 +997,9 @@ pub struct App {
     /// Pull requests, permissions and branch protection, read through the user's own `gh`. Only
     /// the Work view asks, and only for a project whose workflow names a forge — see `reviews.rs`.
     pub forge: Arc<dyn Forge>,
-    /// The Work view's SQLite store, opened the first time something needs it. See
-    /// [`Self::flow_store`].
-    flow_store: parking_lot::Mutex<Option<Arc<dyn FlowStore>>>,
+    /// The app's own database: flows and review rules, one connection for both. Opened on first
+    /// use; see `appdb.rs` and [`Self::flow_store`].
+    pub appdb: crate::appdb::Handle,
     /// Whether this run's window has already started bringing the last run's sessions back.
     ///
     /// Process state, and that is the point: a webview reload starts the frontend again but not
@@ -1041,6 +1041,7 @@ impl App {
         // Captured before `paths` is moved into the config store below.
         let sessions_file = paths.sessions_file.clone();
         let handles_file = paths.handles_file.clone();
+        let flow_db = paths.flow_db.clone();
 
         // Read the PATH override *before* building the runner, since the override is the
         // documented escape hatch for a bundled app that cannot see Homebrew.
@@ -1113,6 +1114,7 @@ impl App {
             shell_creation: parking_lot::Mutex::new(()),
             creating: Arc::default(),
             dictation: crate::dictate::Dictation::default(),
+            appdb: crate::appdb::Handle::new(flow_db),
             agents: parking_lot::Mutex::new(BTreeMap::new()),
             early_replay: parking_lot::Mutex::new(BTreeMap::new()),
             sessions_file: sessions_file.clone(),
@@ -1121,26 +1123,16 @@ impl App {
             handles_write: parking_lot::Mutex::new(()),
             launch_restore: std::sync::atomic::AtomicBool::new(false),
             forge: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
-            flow_store: parking_lot::Mutex::new(None),
         })
     }
 
-    /// The Work view's store, opening it on first use.
+    /// The Work view's flow store: the app database, as a [`FlowStore`].
     ///
-    /// Lazily, because opening is not free and not only a read: it creates `flow.db`, runs its
-    /// migrations and, before migrating one that exists, copies it aside. Somebody who never turns
-    /// the Work view on should not find a database in their data directory, and a launch should not
-    /// wait on a migration for a view that is not showing. A failure is not cached, so a database
-    /// that was briefly unopenable (a newer wtm holding it, a full disk) is tried again next time.
+    /// The same connection [`Self::appdb`] hands to Settings › Knowledge as a rule store. One
+    /// handle rather than one per port, so the file is opened, and on a first launch migrated, in
+    /// one place. `appdb.rs` says why it opens lazily and why a failure is not remembered.
     pub fn flow_store(&self) -> Result<Arc<dyn FlowStore>, wtm_appdb::AppDbError> {
-        let mut slot = self.flow_store.lock();
-        if let Some(store) = slot.as_ref() {
-            return Ok(Arc::clone(store));
-        }
-        let store: Arc<dyn FlowStore> =
-            Arc::new(wtm_appdb::AppDb::open(&self.config.paths().flow_db)?);
-        *slot = Some(Arc::clone(&store));
-        Ok(store)
+        self.appdb.open().map(|db| db as Arc<dyn FlowStore>)
     }
 
     /// True the first time it is asked in this run of the app, and never again.

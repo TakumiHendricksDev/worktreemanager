@@ -37,6 +37,7 @@ pub mod git;
 pub mod pipe;
 pub mod progress;
 pub mod pty;
+pub mod rules;
 pub mod template;
 
 pub use clock::Clock;
@@ -51,4 +52,5 @@ pub use git::{AddOptions, BranchFilter, Git, RemoteUrl};
 pub use pipe::{PipeHost, PipeSession, PipeSink};
 pub use progress::{ProgressEvent, ProgressSink};
 pub use pty::{PtyHost, PtySession, PtySink, Spawned};
+pub use rules::{RuleStore, RuleStoreError};
 pub use template::TemplateEngine;

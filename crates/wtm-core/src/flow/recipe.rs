@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ForgeKind;
 use super::glob;
+use super::instructions::DEFAULT_INSTRUCTION_SOURCES;
 use crate::model::AgentSkill;
 
 /// How long a role may run when its config does not say. A review with a skill that fans out to
@@ -49,9 +50,10 @@ pub const MAX_RETRIES: u32 = 3;
 
 /// The `[workflow]` table.
 ///
-/// Recipes, roles, the forge and the integration branches so far. The tracker and status mapping
-/// the plan puts here arrive with the items that first read them, and until then a key this build
-/// does not know is an error rather than something silently ignored.
+/// Recipes, roles, the forge, the integration branches and the repository's instruction sources so
+/// far. The tracker and status mapping the plan puts here arrive with the items that first read
+/// them, and until then a key this build does not know is an error rather than something silently
+/// ignored.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowSpec {
@@ -74,6 +76,14 @@ pub struct WorkflowSpec {
     pub role: BTreeMap<String, RoleSpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub recipe: BTreeMap<String, RecipeSpec>,
+    /// Globs naming the repository's own instruction files. `None` means
+    /// [`DEFAULT_INSTRUCTION_SOURCES`]; an empty list means none at all, which is a choice a
+    /// project can make and so is not the same as leaving the key out.
+    ///
+    /// Allowed in a repository's `wtm.toml`, unlike roles: it only names files in the repository
+    /// for a review to read, which anyone who can commit could already have written into them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_sources: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,7 +386,23 @@ impl WorkflowSpec {
             check_id(&format!("recipe.{id}"), id)?;
             self.check_recipe(id, recipe)?;
         }
+        for pattern in self.instruction_sources.iter().flatten() {
+            glob::check(pattern).map_err(|message| {
+                WorkflowError::new("instruction_sources", format!("`{pattern}`: {message}"))
+            })?;
+        }
         Ok(())
+    }
+
+    /// The instruction sources a review reads: the configured list, or the default one.
+    #[must_use]
+    pub fn instruction_sources(&self) -> Vec<String> {
+        self.instruction_sources.clone().unwrap_or_else(|| {
+            DEFAULT_INSTRUCTION_SOURCES
+                .iter()
+                .map(|source| (*source).to_owned())
+                .collect()
+        })
     }
 
     fn check_role(&self, id: &str, role: &RoleSpec) -> Result<(), WorkflowError> {
@@ -1019,6 +1045,34 @@ mod tests {
             "knowledge": { "areas": ["data"] }
         }}}));
         assert_eq!(refusal(&spec).key, "role.correctness.knowledge");
+    }
+
+    #[test]
+    fn a_workflow_that_names_no_instruction_sources_reads_the_default_ones() {
+        assert_eq!(
+            workflow(review()).instruction_sources(),
+            DEFAULT_INSTRUCTION_SOURCES
+        );
+    }
+
+    #[test]
+    fn an_empty_instruction_source_list_means_none_rather_than_the_default() {
+        let none = WorkflowSpec {
+            instruction_sources: Some(Vec::new()),
+            ..workflow(review())
+        };
+        assert!(none.instruction_sources().is_empty());
+    }
+
+    #[test]
+    fn an_instruction_source_outside_the_repository_is_refused() {
+        let outside = WorkflowSpec {
+            instruction_sources: Some(vec!["REVIEW.md".to_owned(), "/etc/passwd".to_owned()]),
+            ..workflow(review())
+        };
+        let error = refusal(&outside);
+        assert_eq!(error.key, "instruction_sources");
+        assert!(error.message.contains("/etc/passwd"), "{error}");
     }
 
     #[test]

@@ -9,6 +9,14 @@
   padding-top: var(--sp-3);
 }
 
+/* A section that scrolls its own columns, Knowledge's list and detail, fills what the tab strip
+   leaves of the dialog body instead of growing it, so the tabs stay in view while either scrolls. */
+.c-settings__panel--fill {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .c-settings__row {
   display: flex;
   align-items: center;

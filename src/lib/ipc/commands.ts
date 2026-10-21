@@ -8,6 +8,13 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { DesignDiscovery, PrototypeState } from '../open-design';
+import type {
+  Finding,
+  InstructionSources,
+  RuleChange,
+  RuleDraft,
+  RuleView,
+} from '../knowledge';
 import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 
 import type {
@@ -109,6 +116,23 @@ export const commands = {
   ) => invoke<void>('set_home_shell_grant', { home, projectId, worktreeId, allow }),
   popupNativeMenu: (rid: number, kind: 'menu' | 'submenu', at?: { x: number; y: number }) =>
     invoke<void>('popup_native_menu', { rid, kind, at }),
+  // ── review knowledge ──
+  /** Every rule of the project, whatever its status, oldest first. */
+  listRules: (projectId: string) => invoke<RuleView[]>('list_rules', { projectId }),
+  /** Which repository instruction files reviews read. Their text stays in Rust. */
+  instructionSources: (projectId: string) =>
+    invoke<InstructionSources>('instruction_sources', { projectId }),
+  createRule: (projectId: string, draft: RuleDraft) =>
+    invoke<RuleView>('create_rule', { projectId, draft }),
+  /** Refused for a dismissed finding. */
+  saveFindingAsRule: (projectId: string, finding: Finding, draft: RuleDraft) =>
+    invoke<RuleView>('save_finding_as_rule', { projectId, finding, draft }),
+  changeRule: (projectId: string, ruleId: number, change: RuleChange) =>
+    invoke<RuleView>('change_rule', { projectId, ruleId, change }),
+  /** Answers with the new rule; the old one is now superseded by it. */
+  replaceRule: (projectId: string, ruleId: number, draft: RuleDraft) =>
+    invoke<RuleView>('replace_rule', { projectId, ruleId, draft }),
+
   // ── projects ──
   listProjects: () => invoke<Project[]>('list_projects'),
   /** Accepts any path inside a repository. Returns the resolved id, not just the list. */

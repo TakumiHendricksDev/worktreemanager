@@ -91,6 +91,7 @@
 @use 'components/inbox';
 @use 'components/inflight';
 @use 'components/input';
+@use 'components/knowledge';
 @use 'components/logo';
 @use 'components/markdown';
 @use 'components/meter';
@@ -107,6 +108,7 @@
 @use 'components/queue';
 @use 'components/remove';
 @use 'components/review';
+@use 'components/rule-form';
 @use 'components/schema-form';
 @use 'components/sidebar';
 @use 'components/sidebar-group';

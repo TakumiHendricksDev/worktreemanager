@@ -2,7 +2,9 @@
   /**
    * Settings.
    *
-   * Four sections. Three of them are preferences that already existed in
+   * Four sections, and a fifth, Knowledge, while the Work view is on: the open project's review
+   * rules, which live in the app's database rather than the config file. Three of the four are
+   * preferences that already existed in
    * `~/.config/wtm/config.toml` with no way to reach it from the app — `ui.opener` was written
    * only as a side effect of using the split button, and `exec.path` was file-only despite
    * being the documented fix for the app's most common failure.
@@ -46,17 +48,31 @@
   import Field from './ui/Field.svelte';
   import Icon from './ui/Icon.svelte';
   import TextInput from './ui/TextInput.svelte';
+  import KnowledgeSettings from './KnowledgeSettings.svelte';
 
-  const { onclose }: { onclose: () => void } = $props();
-
-  type Section = 'appearance' | 'general' | 'notifications' | 'advanced';
+  type Section = 'appearance' | 'general' | 'notifications' | 'knowledge' | 'advanced';
   const SECTIONS: { id: Section; label: string }[] = [
     { id: 'appearance', label: 'Appearance' },
     { id: 'general', label: 'General' },
     { id: 'notifications', label: 'Notifications' },
+    { id: 'knowledge', label: 'Knowledge' },
     { id: 'advanced', label: 'Advanced' },
   ];
+  const { onclose }: { onclose: () => void } = $props();
   let section = $state<Section>('appearance');
+
+  /*
+   * Knowledge is the current project's review rules, part of the Work view, so it is offered only
+   * while Work is turned on and a project is open. Turning Work off with the section showing moves
+   * Settings back to General, where the switch is, rather than leaving a tab that no longer exists.
+   */
+  const knowledgeProject = $derived(view.workEnabled ? workspace.activeProject : null);
+  const sections = $derived(
+    SECTIONS.filter((s) => s.id !== 'knowledge' || knowledgeProject !== null),
+  );
+  $effect(() => {
+    if (section === 'knowledge' && knowledgeProject === null) section = 'general';
+  });
 
   const MODES: { value: ThemeChoice; label: string }[] = [
     { value: 'system', label: 'Follow the system' },
@@ -241,7 +257,7 @@
   let sectionTabs: HTMLElement | undefined;
 
   function onSectionKey(event: KeyboardEvent, current: Section) {
-    const ids = SECTIONS.map((s) => s.id);
+    const ids = sections.map((s) => s.id);
     const at = ids.indexOf(current);
     let next = at;
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = at + 1;
@@ -260,7 +276,7 @@
   }
 </script>
 
-<Dialog title="Settings" {onclose} wide>
+<Dialog title="Settings" {onclose} wide workspace={section === 'knowledge'}>
   {#snippet body()}
     <div
       class="c-tabs"
@@ -268,7 +284,7 @@
       aria-label="Settings sections"
       bind:this={sectionTabs}
     >
-      {#each SECTIONS as tab (tab.id)}
+      {#each sections as tab (tab.id)}
         <button
           role="tab"
           class="c-tabs__tab"
@@ -604,6 +620,13 @@
             in System Settings → Notifications.
           </p>
         {/if}
+      </div>
+    {:else if section === 'knowledge' && knowledgeProject}
+      <div class="c-settings__panel c-settings__panel--fill">
+        <KnowledgeSettings
+          projectId={knowledgeProject.id}
+          projectName={knowledgeProject.name}
+        />
       </div>
     {:else}
       <div class="o-stack o-stack--loose c-settings__panel">

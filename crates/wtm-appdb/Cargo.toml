@@ -1,6 +1,6 @@
 [package]
 name        = "wtm-appdb"
-description = "The app's own SQLite store for work items and flows. impl FlowStore"
+description = "The app's own SQLite store for work items, flows and review rules. impl FlowStore, RuleStore"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
