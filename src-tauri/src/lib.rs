@@ -499,6 +499,10 @@ pub fn run() {
             flow::commands::cancel_review,
             flow::commands::work_inbox,
             flow::commands::resolve_inbox_item,
+            flow::commands::review_staleness,
+            flow::commands::rerun_review,
+            flow::commands::dismiss_finding,
+            flow::commands::review_base,
         ])
         // `build` then `run`, rather than `Builder::run`. The shorthand is exactly
         // `build(context)?.run(|_, _| {})` — an empty event callback — and this app now needs

@@ -1,7 +1,10 @@
 /**
- * Drive the real app's Work view with mocked IPC through every state a review run's readout draws:
- * not reviewed (with a recipe to pick), running, waiting for usage capacity, interrupted by a quit,
- * a role that failed, and reviewed. Plus the run inbox, Run Review's request, and Resume's.
+ * Drive the real app's Work view with mocked IPC through every state the Reviews tab draws — the
+ * design's nine: not reviewed (with a recipe to pick), running, waiting for usage capacity,
+ * interrupted by a quit, a role that failed, stale, clean with a skipped check, can't start over
+ * billing, and can't run for want of a skill — and through a review with findings of every class:
+ * their grouping, evidence, checks, applied rules and sources, Dismiss, Save as rule and Rerun
+ * affected. Plus the run inbox, Run Review's request, and Resume's.
  *
  * No Tauri, no CLI, no credits. What it proves is the readout's words and wiring against the shapes
  * `review_run` returns; the engine behind them is `src-tauri/tests/review_engine.rs`'s.
@@ -54,19 +57,43 @@ const worktrees = [
   wt('interrupted', 'fix/interrupted'),
   wt('failed-role', 'fix/failed-role'),
   wt('reviewed', 'fix/reviewed'),
+  wt('findings', 'fix/findings'),
+  wt('stale', 'fix/stale'),
+  wt('clean', 'fix/clean'),
+  wt('billing', 'fix/billing'),
+  wt('skill', 'fix/skill'),
 ];
 const findings = (n) => ({ kind: 'findings', payload: { findings: Array.from({ length: n }, (_, i) => ({
   title: 'Finding ' + i, severity: 'notable', class: 'suggestion', body: 'x' })) } });
 const step = (n, role, provider, status, extra = {}) => ({ id: n, stage: 0, role, provider,
-  model: provider === 'claude' ? 'sonnet' : null, status, failures: 0, retries: 1,
-  standsInFor: null, detail: null, resetsAt: null, result: null, ...extra });
+  model: provider === 'claude' ? 'sonnet' : null, profile: 'reviewer', workspace: 'snapshot', status,
+  failures: 0, retries: 1, standsInFor: null, detail: null, resetsAt: null, skillProblem: null,
+  result: null, ...extra });
 const invocation = (n, stepId, role, status, extra = {}) => ({ id: n, step: stepId, attempt: 1, role,
-  status, detail: null, progress: null, startedAt: 0, endedAt: null, ...extra });
-const run = (flow, worktree, state, steps, invocations = [], inbox = [], running = false) => ({
+  snapshot: 1, status, detail: null, progress: null, instructionSources: [], startedAt: 0, endedAt: null, ...extra });
+const noKnowledge = { rules: [], sources: [], skills: [] };
+const run = (flow, worktree, state, steps, invocations = [], inbox = [], running = false, more = {}) => ({
   flow: { id: flow, state: { kind: 'review_mine', end: null, hold: null, ...state }, startedAt: 0, updatedAt: 0 },
-  review: { flow, project: '/x/webapp', worktree: id(worktree), worktreePath: id(worktree), recipe: 'standard', base: 'origin/main' },
+  review: { flow, project: '/x/webapp', worktree: id(worktree), worktreePath: id(worktree), recipe: 'standard', base: 'origin/main', snapshot: 1 },
   snapshot: { headSha: 'a1b2c3d4e5f6', treeSha: '9f00aa', baseSha: 'c0ffee11' },
-  steps, invocations, inbox, running });
+  steps, invocations, inbox, running,
+  findings: [], checks: [], expectedChecks: [], applied: noKnowledge, ...more });
+const source = (role, provider, invocationId, ordinal = 0) => ({ step: invocationId, invocation: invocationId,
+  ordinal, role, provider, model: provider === 'claude' ? 'sonnet' : 'gpt-6', workspace: 'snapshot', treeSha: '9f00aa' });
+const reported = (title, cls, extra = {}) => ({ title, severity: 'notable', class: cls, body: 'Why it matters.', ...extra });
+const record = (findingId, flow, cls, title, rationale, location, evidence, extra = {}) => ({
+  id: findingId, flow, class: cls, severity: 'notable', location, title, rationale, requirement: null,
+  treeSha: '9f00aa', dismissed: null, lines: true, evidence, ...extra });
+const at = (path, startLine, endLine = startLine) => ({ path, startLine, endLine });
+const check = (checkId, name, status, extra = {}) => ({ id: checkId, check: name, role: 'correctness', status,
+  detail: null, exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null, treeSha: '9f00aa',
+  startedAt: 0, endedAt: 1, ...extra });
+const done2 = [
+  step(61, 'conventions', 'claude', 'done', { result: findings(2) }),
+  step(62, 'correctness', 'codex', 'done', { result: findings(3) }),
+];
+const ended = [invocation(61, 61, 'conventions', 'submitted', { endedAt: 252000, instructionSources: ['REVIEW.md'] }),
+  invocation(62, 62, 'correctness', 'submitted', { endedAt: 200000 })];
 const runs = {
   [id('running')]: run(1, 'running', { phase: 'reviewing' }, [
       step(11, 'conventions', 'claude', 'done', { result: findings(2) }),
@@ -89,7 +116,67 @@ const runs = {
       step(51, 'conventions', 'claude', 'done', { result: findings(0) }),
       step(52, 'correctness', 'codex', 'replaced', { detail: 'handed over to correctness-claude' }),
       step(53, 'correctness-claude', 'claude', 'done', { result: findings(1), standsInFor: 'correctness' }),
+    ], [], [], false, { findings: [record(50, 5, { kind: 'suggestion' }, 'Finding 0', 'x', at('src/a.rs', 3),
+      [{ source: source('correctness-claude', 'claude', 53), reported: reported('Finding 0', 'suggestion') }])] }),
+  // A review with a finding of every class, two roles agreeing on one, a dismissed one, and checks.
+  [id('findings')]: run(6, 'findings', { phase: 'consolidated' }, done2, ended, [], false, {
+    findings: [
+      record(61, 6, { kind: 'confirmed_bug', verification: 'ran check query_count: 5,003 queries for 5,000 rows (evidence c3)' },
+        'Each row loads unit.parent separately (N+1 queries)', 'The export loop reads \`unit.parent.name\` for every row.',
+        at('exports/export.py', 88, 92), [
+          { source: source('correctness', 'codex', 62), reported: reported('Each row loads unit.parent separately (N+1 queries)', 'confirmed_bug', { verification: 'ran check query_count', evidence: ['c3: 5,003 queries'] }) },
+          { source: source('conventions', 'claude', 61), reported: reported('Parent lookups in a loop', 'suggestion') },
+        ], { severity: 'blocking', requirement: 'AC 2: export 5,000 units in under 10 s' }),
+      record(62, 6, { kind: 'rule_violation', rule: 14, revision: 2 }, 'Confirmation uses BaseModal instead of AppDialog',
+        'AppDialog carries the focus trap and Escape handling this flow needs.', at('src/exports/ExportModal.vue', 12), [
+          { source: source('conventions', 'claude', 61, 1), reported: reported('Confirmation uses BaseModal', 'rule_violation', { rule: { id: 14, revision: 2 } }) },
+        ]),
+      record(63, 6, { kind: 'conflict', between: ['R-21', 'REVIEW.md §Naming'] }, 'R-21 and REVIEW.md disagree about export file names',
+        'R-21 says kebab-case; REVIEW.md says snake_case for downloads.', null, [
+          { source: source('conventions', 'claude', 61, 2), reported: reported('R-21 and REVIEW.md disagree', 'conflict', { between: ['R-21', 'REVIEW.md §Naming'] }) },
+        ]),
+      record(64, 6, { kind: 'suggestion' }, 'Name the export job', 'A named job is easier to find in logs.', at('exports/jobs.py', 1), [
+          { source: source('correctness', 'codex', 62, 1), reported: reported('Name the export job', 'suggestion') },
+        ], { severity: 'minor', lines: false }),
+      record(65, 6, { kind: 'suggestion' }, 'Prefer f-strings', 'Consistency.', at('exports/export.py', 3), [
+          { source: source('correctness', 'codex', 62, 2), reported: reported('Prefer f-strings', 'suggestion') },
+        ], { severity: 'minor', dismissed: { reason: 'the module predates f-strings on purpose', at: 1 } }),
+    ],
+    checks: [check(1, 'lint', 'passed'), check(2, 'unit', 'failed'),
+      check(3, 'e2e', 'skipped', { detail: 'needs \`web\` running, and wtm does not start services yet' })],
+    expectedChecks: [
+      { id: 'lint', label: 'lint', needs: [], roles: ['correctness'] },
+      { id: 'unit', label: 'unit tests', needs: [], roles: ['correctness'] },
+      { id: 'e2e', label: 'browser e2e', needs: ['web'], roles: ['correctness'] },
+      { id: 'build', label: 'build', needs: [], roles: ['correctness'] },
+    ],
+    applied: { rules: [{ rule: 14, revision: 2, kind: 'required', text: 'Use AppDialog for confirm and cancel flows', roles: ['conventions'] },
+      { rule: 3, revision: 1, kind: 'guidance', text: 'Prefer querysets', roles: ['conventions'] }],
+      sources: ['REVIEW.md'], skills: [{ role: 'correctness', provider: 'codex', skill: 'team-review' }] },
+  }),
+  [id('stale')]: run(7, 'stale', { phase: 'consolidated' }, done2, ended, [], false, {
+    findings: [
+      record(71, 7, { kind: 'suggestion' }, 'Export loop', 'x', at('export.py', 3), [{ source: source('correctness', 'codex', 62), reported: reported('Export loop', 'suggestion') }]),
+      record(72, 7, { kind: 'suggestion' }, 'Untouched file', 'x', at('models.py', 9), [{ source: source('conventions', 'claude', 61), reported: reported('Untouched file', 'suggestion') }]),
+    ] }),
+  [id('clean')]: run(8, 'clean', { phase: 'consolidated' }, [
+      step(81, 'conventions', 'claude', 'done', { result: findings(0) }),
+      step(82, 'correctness', 'codex', 'done', { result: findings(0) }),
+    ], ended, [], false, {
+    checks: [check(4, 'lint', 'passed'), check(5, 'e2e', 'skipped', { detail: 'needs \`web\` running, and wtm does not start services yet' })],
+    expectedChecks: [{ id: 'lint', label: 'lint', needs: [], roles: ['correctness'] }, { id: 'e2e', label: 'browser e2e', needs: ['web'], roles: ['correctness'] }],
+    applied: { rules: [{ rule: 3, revision: 1, kind: 'guidance', text: 'Prefer querysets', roles: ['conventions'] }], sources: ['CLAUDE.md'], skills: [] },
+  }),
+  [id('skill')]: run(9, 'skill', { phase: 'consolidated' }, [
+      step(91, 'conventions', 'claude', 'failed', { detail: 'Claude does not list the skill \`team-review\`',
+        skillProblem: { kind: 'missing', role: 'conventions', provider: 'claude', skill: 'team-review' } }),
+      step(92, 'correctness', 'codex', 'done', { result: findings(0) }),
     ]),
+};
+const staleness = {
+  6: { flow: 6, treeSha: '9f00aa', headSha: 'a1b2c3d4e5f6', changed: false, paths: [], complete: true, staleFindings: [], staleChecks: [], affected: [] },
+  7: { flow: 7, treeSha: '4e5f6a', headSha: '4e5f6a7b8c', changed: true, paths: ['export.py', 'ExportModal.vue'], complete: true, staleFindings: [71], staleChecks: [], affected: ['correctness', 'conventions'] },
+  8: { flow: 8, treeSha: '9f00aa', headSha: 'a1b2c3d4e5f6', changed: false, paths: [], complete: true, staleFindings: [], staleChecks: [], affected: [] },
 };
 const inbox = [
   { id: 1, flow: 2, kind: 'capacity', subject: 'correctness', title: '\`correctness\` is paused: Codex limit reached', body: "You've hit your usage limit.", createdAt: 0 },
@@ -118,8 +205,29 @@ mockIPC((cmd, args) => {
     ];
     case 'latest_review': return structuredClone(runs[a.worktree] ?? null);
     case 'review_run': return structuredClone(Object.values(runs).find((r) => r.flow.id === a.flow));
-    case 'start_review': return structuredClone({ ...runs[id('running')], review: { ...runs[id('running')].review, worktree: a.request.worktree, recipe: a.request.recipe } });
+    case 'review_staleness':
+      if (!staleness[a.flow]) throw { kind: 'flow', message: 'no snapshot', detail: null };
+      return structuredClone(staleness[a.flow]);
+    case 'rerun_review': {
+      const r = Object.values(runs).find((x) => x.flow.id === a.flow);
+      return structuredClone({ ...r, running: true, flow: { ...r.flow, state: { ...r.flow.state, phase: 'reviewing' } } });
+    }
+    case 'dismiss_finding': {
+      for (const r of Object.values(runs)) {
+        const f = r.findings.find((x) => x.id === a.finding);
+        if (f) { f.dismissed = a.reason === null ? null : { reason: a.reason, at: 2 }; return structuredClone(f); }
+      }
+      throw { kind: 'flow', message: 'no finding', detail: null };
+    }
+    case 'start_review':
+      if (a.request.worktree === id('billing'))
+        throw { kind: 'billing', message: "Workflow runs won't start until Claude Code is signed in with a claude.ai subscription.", detail: { providers: ['claude'] } };
+      return structuredClone({ ...runs[id('running')], review: { ...runs[id('running')].review, worktree: a.request.worktree, recipe: a.request.recipe } });
     case 'resume_review': return structuredClone({ ...Object.values(runs).find((r) => r.flow.id === a.flow), running: true, flow: { ...Object.values(runs).find((r) => r.flow.id === a.flow).flow, state: { kind: 'review_mine', end: null, hold: null, phase: 'reviewing' } } });
+    // Open in Code lands on the Code tab, which reads the file: a small one is enough to draw.
+    case 'code_tree': return { files: ['src/exports/ExportModal.vue'], ignored: [], dirs: [], symlinks: [], missing: [], truncated: false };
+    case 'code_read_file': return { text: '<template>\\n</template>\\n', size: 22, truncated: false, mtimeMs: 1, symlink: false, outside: false };
+    case 'code_changes': return { scope: 'uncommitted', against: 'HEAD', rev: 'HEAD', changes: [] };
     case 'work_inbox': return structuredClone(inbox);
     case 'resolve_inbox_item': return true;
     default: return cmd.startsWith('list_') ? [] : null;
@@ -130,7 +238,9 @@ await import('/src/styles/main.scss');
 const { default: App } = await import('/src/App.svelte');
 const { workspace } = await import('/src/lib/state/workspace.svelte.ts');
 const { work } = await import('/src/lib/state/work.svelte.ts');
-window.harness = { emit, workspace, work };
+const { view } = await import('/src/lib/state/view.svelte.ts');
+const { codeRequests } = await import('/src/lib/state/code-request.svelte.ts');
+window.harness = { emit, workspace, work, view, codeRequests };
 mount(App, { target: document.getElementById('app') });`;
 
 const server = await createServer({
@@ -204,7 +314,9 @@ try {
             (id) =>
                 document
                     .querySelector('.c-work__meta')
-                    ?.textContent?.includes(id === '/x/webapp' ? 'main' : id.split('/').at(-1)),
+                    ?.textContent?.includes(
+                        id === '/x/webapp' ? 'main' : id.split('/').at(-1),
+                    ),
             target,
         );
     }
@@ -219,7 +331,9 @@ try {
         const page = await open(scheme);
 
         // ── The inbox: the project's open run items, newest first ─────────────────────────────
-        const inboxText = await page.getByRole('complementary', { name: /Inbox/ }).textContent();
+        const inboxText = await page
+            .getByRole('complementary', { name: /Inbox/ })
+            .textContent();
         assert(inboxText.includes('Inbox 2'), inboxText);
         assert(inboxText.includes('correctness is paused: Codex limit reached'), inboxText);
         assert.equal(
@@ -239,14 +353,18 @@ try {
 
         // ── Running: one role done, one on its second attempt, one skipped ───────────────────
         await pick(page, 'running');
-        let text = await readout(page, 'Running', 'Reviewing snapshot a1b2c3d + uncommitted');
+        let text = await readout(
+            page,
+            'Running',
+            'Reviewing snapshot a1b2c3d + uncommitted',
+        );
         assert(text.includes('done · 2 findings'), text);
         assert(text.includes('reading export.py · attempt 2'), text);
         assert(text.includes('Skipped, because none of their paths changed: ui.'), text);
         assert(await panel(page).getByRole('button', { name: 'Stop review' }).isVisible());
         assert.equal(
             await page.locator('.c-work__header .c-badge').textContent(),
-            'Running',
+            'Run: running',
             'the header says the run’s state, not “Not reviewed”',
         );
         await shot(page, join(shots, `running-${scheme}.png`));
@@ -280,7 +398,11 @@ try {
         await pick(page, 'failed-role');
         text = await readout(page, 'A role failed', 'ui did not finish');
         assert(text.includes('failed: it had no result after 15 min'), text);
-        assert(await panel(page).getByRole('button', { name: 'Retry failed roles' }).isVisible());
+        assert(
+            await panel(page)
+                .getByRole('button', { name: 'Retry failed roles' })
+                .isVisible(),
+        );
         await shot(page, join(shots, `role-failed-${scheme}.png`));
 
         // ── Reviewed, with a fallback that stood in for a role ──────────────────────────────
@@ -289,6 +411,219 @@ try {
         assert(text.includes('correctness-claude (for correctness)'), text);
         assert(text.includes('handed over'), text);
         await shot(page, join(shots, `reviewed-${scheme}.png`));
+
+        // ── A review with findings of every class ───────────────────────────────────────────
+        await pick(page, 'findings');
+        text = await readout(page, 'Reviewed', '4 findings from 2 roles');
+        assert(text.includes('lint passed. unit tests failed (exit 1).'), text);
+        assert(text.includes('build was not run, so this is not a runtime pass.'), text);
+        const queueText = await page.locator('.c-work-queue').textContent();
+        assert(
+            queueText.includes('Paused for usage capacity'),
+            'a held run is said to be paused, not working',
+        );
+        const meta = await panel(page).locator('.c-review__meta').textContent();
+        assert(meta.includes('Snapshot a1b2c3d') && meta.includes('origin/main'), meta);
+        assert(meta.includes('4m 12s'), meta);
+        const headings = await panel(page)
+            .locator('.c-findings__heading')
+            .allTextContents();
+        assert.deepEqual(
+            headings.map((h) => h.trim()),
+            [
+                'Confirmed bugs · 1',
+                'Rule violations · 1',
+                'Conflicts to resolve · 1',
+                'Suggestions · 1',
+                'Dismissed · 1',
+                'Checks · run by wtm, never on an agent’s say-so'.replace('’', "'"),
+            ],
+        );
+        const bug = panel(page).locator('.c-finding', { hasText: 'N+1 queries' });
+        const bugText = await bug.textContent();
+        assert(
+            bugText.includes('Blocking') && bugText.includes('exports/export.py:88–92'),
+            bugText,
+        );
+        assert(
+            bugText.includes('correctness · Codex gpt-6 · conventions · Claude sonnet'),
+            bugText,
+        );
+        assert(bugText.includes('Verified: ran check query_count'), bugText);
+        assert(bugText.includes('Requirement: AC 2'), bugText);
+        assert(
+            bugText.includes('Also reported by one more report'),
+            'the second role’s report is kept',
+        );
+        const rule = await panel(page)
+            .locator('.c-finding', { hasText: 'BaseModal' })
+            .textContent();
+        assert(
+            rule.includes('Required rule') &&
+                rule.includes('Rule R-14 v2 (required): "Use AppDialog'),
+            rule,
+        );
+        const conflict = await panel(page)
+            .locator('.c-finding', { hasText: 'disagree' })
+            .textContent();
+        assert(
+            conflict.includes('About the change as a whole') &&
+                conflict.includes('did not pick one'),
+            conflict,
+        );
+        assert.equal(
+            await panel(page).locator('details.c-findings').first().getAttribute('open'),
+            null,
+            'suggestions start folded',
+        );
+        const checksText = await panel(page).locator('.c-review-checks').textContent();
+        for (const line of [
+            'lint · passed',
+            'unit tests · failed: exit 1',
+            'browser e2e · skipped: needs web running',
+            'build · not run',
+        ])
+            assert(checksText.includes(line), `${line} in ${checksText}`);
+        assert(
+            !/e2e · passed/.test(checksText),
+            'a skipped check is never drawn as passed',
+        );
+        const applied = await panel(page).locator('.c-review__applied').textContent();
+        assert(
+            applied.includes('rules R-14 v2, R-3 v1') &&
+                applied.includes('instruction sources REVIEW.md'),
+            applied,
+        );
+        assert(
+            applied.includes('skill /team-review (Codex)') &&
+                applied.includes('read-only in a snapshot copy'),
+            applied,
+        );
+        await shot(page, join(shots, `findings-${scheme}.png`));
+
+        // Dismiss asks why, and sends the reason.
+        await bug.getByRole('button', { name: 'Dismiss…' }).click();
+        await bug
+            .getByRole('textbox', { name: 'Why this finding is dismissed' })
+            .fill('a known trade-off');
+        await bug.getByRole('button', { name: 'Dismiss', exact: true }).click();
+        await page.waitForFunction(() =>
+            window.calls.some((c) => c.cmd === 'dismiss_finding'),
+        );
+        assert.deepEqual((await calls(page, 'dismiss_finding')).at(-1).args, {
+            finding: 61,
+            reason: 'a known trade-off',
+        });
+        await panel(page)
+            .locator('.c-findings__heading', { hasText: 'Dismissed · 2' })
+            .waitFor();
+
+        // Save as rule opens R7's dialog on the stored finding.
+        await panel(page)
+            .locator('.c-finding', { hasText: 'BaseModal' })
+            .getByRole('button', { name: 'Save as rule…' })
+            .click();
+        const dialog = page.getByRole('dialog', { name: 'Save as review rule' });
+        await dialog.waitFor();
+        assert(
+            (await dialog.textContent()).includes('src/exports/ExportModal.vue'),
+            'the dialog names the finding’s file',
+        );
+        await shot(page, join(shots, `save-as-rule-${scheme}.png`));
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await dialog.waitFor({ state: 'detached' });
+
+        // Open in Code asks for the file at its line.
+        await panel(page)
+            .locator('.c-finding', { hasText: 'BaseModal' })
+            .getByRole('button', { name: 'Open in Code' })
+            .click();
+        const request = await page.evaluate(() => window.harness.codeRequests.request);
+        assert.deepEqual(
+            { path: request.path, line: request.line, worktreeId: request.worktreeId },
+            {
+                path: 'src/exports/ExportModal.vue',
+                line: 12,
+                worktreeId: '/x/webapp-wt/findings',
+            },
+        );
+        await page.evaluate(() => window.harness.view.show('work'));
+        await page.getByRole('region', { name: 'Work', exact: true }).waitFor();
+
+        // ── Stale: a new commit touched two files; Rerun affected names the roles ──────────
+        await pick(page, 'stale');
+        text = await readout(page, 'Stale', '2 files changed after this review');
+        assert(
+            text.includes('New commit 4e5f6a7 touched export.py, ExportModal.vue.'),
+            text,
+        );
+        assert(
+            text.includes(
+                '1 finding and the overall result are stale. 1 finding on untouched files still holds.',
+            ),
+            text,
+        );
+        const staleCard = await panel(page)
+            .locator('.c-finding', { hasText: 'Export loop' })
+            .textContent();
+        assert(staleCard.includes('Stale'), staleCard);
+        assert(
+            !(
+                await panel(page)
+                    .locator('.c-finding', { hasText: 'Untouched file' })
+                    .textContent()
+            ).includes('Stale'),
+        );
+        await page.waitForFunction(() =>
+            document
+                .querySelector('.c-work-queue')
+                ?.textContent?.includes('2 findings · review stale'),
+        );
+        await shot(page, join(shots, `stale-${scheme}.png`));
+        await panel(page).getByRole('button', { name: 'Rerun affected roles (2)' }).click();
+        assert.deepEqual((await calls(page, 'rerun_review')).at(-1).args, {
+            flow: 7,
+            scope: 'affected',
+        });
+        await readout(page, 'Running', 'Reviewing snapshot');
+
+        // ── Clean, with a check that was skipped: not a runtime pass ────────────────────────
+        await pick(page, 'clean');
+        text = await readout(page, 'Clean', 'No findings');
+        assert(
+            text.includes(
+                '2 roles, rules R-3 v1 applied. lint passed. browser e2e was skipped (needs web running',
+            ),
+            text,
+        );
+        assert(text.includes('so this is not a runtime pass'), text);
+        await shot(page, join(shots, `clean-skipped-${scheme}.png`));
+
+        // ── Can't run: a role names a skill its provider does not list ──────────────────────
+        await pick(page, 'skill');
+        text = await readout(
+            page,
+            "Can't run: recipe",
+            "/team-review isn't available to Claude here",
+        );
+        assert(text.includes('Providers don’t share skills'.replace('’', "'")), text);
+        await shot(page, join(shots, `missing-skill-${scheme}.png`));
+
+        // ── Can't start: billing — nothing was recorded, so it is the refusal that is drawn ──
+        await pick(page, 'billing');
+        await readout(page, 'Not reviewed yet', 'Review fix/billing');
+        await panel(page).getByRole('button', { name: 'Run Review' }).click();
+        text = await readout(
+            page,
+            "Can't start: billing",
+            'Claude would not bill your subscription',
+        );
+        assert(
+            text.includes('claude /login') && text.includes('nothing was started'),
+            text,
+        );
+        assert(await panel(page).getByRole('button', { name: 'Check again' }).isVisible());
+        await shot(page, join(shots, `billing-${scheme}.png`));
 
         // ── Run Review sends the recipe picked ───────────────────────────────────────────────
         await pick(page, 'webapp');
@@ -307,7 +642,9 @@ try {
         await page.waitForFunction(() =>
             document.querySelector('.c-work__inbox')?.textContent?.includes('Inbox 1'),
         );
-        assert.deepEqual((await calls(page, 'resolve_inbox_item')).at(-1).args, { item: 1 });
+        assert.deepEqual((await calls(page, 'resolve_inbox_item')).at(-1).args, {
+            item: 1,
+        });
         await page.context().close();
     }
 

@@ -23,12 +23,12 @@ use serde::Serialize;
 use wtm_appdb::AppDb;
 use wtm_core::flow::instructions::{self, MAX_DOCUMENT_BYTES, MAX_TOTAL_BYTES};
 use wtm_core::flow::{
-    DEFAULT_INSTRUCTION_SOURCES, Finding, FlowId, InstructionDocument, InstructionSet, NewRule,
-    Rule, RuleChange, RuleDraft, RuleId, RuleUsage, SkippedDocument, UnixMs, WorkflowSpec,
+    DEFAULT_INSTRUCTION_SOURCES, Finding, FindingId, FlowId, InstructionDocument, InstructionSet,
+    NewRule, Rule, RuleChange, RuleDraft, RuleId, RuleUsage, SkippedDocument, UnixMs, WorkflowSpec,
 };
 use wtm_core::model::{Project, ProjectId};
 use wtm_core::ports::git::Git;
-use wtm_core::ports::{FlowStore, RuleStore, RuleStoreError};
+use wtm_core::ports::{FlowStore, RuleStore, RuleStoreError, RunStore};
 
 use crate::app::App;
 use crate::commands::{AppState, Reply, blocking};
@@ -326,26 +326,40 @@ pub async fn create_rule(
 
 /// Save a finding as a rule.
 ///
-/// Takes the finding itself because findings are not stored yet; when they are, this takes the
-/// finding's id and reads it from the store, so the dismissal it checks is the store's and not the
-/// window's copy.
+/// Takes the finding's id and reads it from the store, so the dismissal `NewRule::from_finding`
+/// refuses is the store's and not the window's copy, and the rule's provenance names a finding that
+/// exists. A finding of another project's review is refused as if it did not exist.
 #[tauri::command]
 pub async fn save_finding_as_rule(
     app: AppState<'_>,
     project_id: String,
-    finding: Finding,
+    finding_id: FindingId,
     draft: RuleDraft,
 ) -> Reply<RuleView> {
     let app = Arc::clone(&app);
     blocking(move || {
         let project = app.project(&project_id)?;
+        let db = store(&app)?;
+        let finding = finding_of(&db, &project.id, finding_id)?;
         let new =
             NewRule::from_finding(project.id, &finding, draft).map_err(|e| refused(e.into()))?;
-        let db = store(&app)?;
         let rule = db.create_rule(&new, now(&app)).map_err(refused)?;
         single(&db, rule)
     })
     .await
+}
+
+/// A finding of one of `project`'s reviews, from the store.
+fn finding_of(db: &AppDb, project: &ProjectId, id: FindingId) -> Result<Finding, ErrorView> {
+    let missing = || ErrorView::new("rules", format!("there is no finding {id} in this project"));
+    let record = db
+        .finding(id)
+        .map_err(|e| ErrorView::new("rules", e.to_string()))?
+        .ok_or_else(missing)?;
+    match db.review(record.finding.flow) {
+        Ok(Some(review)) if &review.project == project => Ok(record.finding),
+        _ => Err(missing()),
+    }
 }
 
 #[tauri::command]

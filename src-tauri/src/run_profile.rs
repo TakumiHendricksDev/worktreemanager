@@ -55,26 +55,61 @@ pub fn check(app: &App, provider: &str) -> Option<AuthCheck> {
 ///
 /// Every reason the run cannot start, in one message.
 pub fn preflight(app: &App, providers: &[&str]) -> Result<(EnvScrub, Vec<AuthCheck>), String> {
-    prepare_gh_config_dir(&app.config.paths().run_gh_config_dir)?;
+    preflight_checked(app, providers).map_err(|refused| refused.message)
+}
+
+/// Why [`preflight_checked`] refused: the message, and the providers it refused for how they would
+/// bill, which is what the Reviews tab's "can't start: billing" state names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreflightRefusal {
+    pub message: String,
+    /// Empty when the refusal is about something else, such as a CLI wtm cannot find.
+    pub billing: Vec<String>,
+}
+
+/// [`preflight`], saying which providers it refused over billing.
+///
+/// # Errors
+///
+/// Every reason the run cannot start, in one message.
+pub fn preflight_checked(
+    app: &App,
+    providers: &[&str],
+) -> Result<(EnvScrub, Vec<AuthCheck>), PreflightRefusal> {
+    let other = |message: String| PreflightRefusal {
+        message,
+        billing: Vec::new(),
+    };
+    prepare_gh_config_dir(&app.config.paths().run_gh_config_dir).map_err(other)?;
     let mut checks = Vec::with_capacity(providers.len());
     for provider in providers {
         let label = wtm_agent::entry(provider).map_or(*provider, |entry| entry.label);
         if wtm_agent::run_profile::billing(provider).is_none() {
             // Always `Some` for such a provider; the fallback only keeps the message from being empty.
-            return Err(wtm_agent::run_profile::refusal(
-                provider,
-                &wtm_core::model::AuthMethod::Unreadable,
-            )
-            .unwrap_or_else(|| format!("Workflow runs can't use {label}.")));
+            return Err(PreflightRefusal {
+                message: wtm_agent::run_profile::refusal(
+                    provider,
+                    &wtm_core::model::AuthMethod::Unreadable,
+                )
+                .unwrap_or_else(|| format!("Workflow runs can't use {label}.")),
+                billing: vec![(*provider).to_owned()],
+            });
         }
         let Some(found) = check(app, provider) else {
-            return Err(format!(
+            return Err(other(format!(
                 "Workflow runs can't use {label}: wtm can't find its CLI."
-            ));
+            )));
         };
         checks.push(found);
     }
-    wtm_agent::run_profile::require_subscriptions(&checks)?;
+    wtm_agent::run_profile::require_subscriptions(&checks).map_err(|message| PreflightRefusal {
+        message,
+        billing: checks
+            .iter()
+            .filter(|check| check.refusal.is_some())
+            .map(|check| check.provider.clone())
+            .collect(),
+    })?;
     Ok((scrub(app), checks))
 }
 

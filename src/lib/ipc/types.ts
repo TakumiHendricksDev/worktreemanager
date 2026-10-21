@@ -1,3 +1,5 @@
+import type { Finding } from '../knowledge';
+
 /**
  * The IPC data contract.
  *
@@ -1473,6 +1475,11 @@ export interface ReportedFinding {
   path?: string | null;
   line?: number | null;
   endLine?: number | null;
+  verification?: string | null;
+  rule?: { id: number; revision: number } | null;
+  between?: string[];
+  requirement?: string | null;
+  evidence?: string[];
 }
 
 /** A role's result, exactly as `flow_submit` accepted it. */
@@ -1487,26 +1494,114 @@ export interface ReviewStep {
   role: string;
   provider: RoleProvider;
   model: string | null;
+  /** What the role could do: read and report, or edit the worktree. */
+  profile: 'reviewer' | 'writer';
+  /** What it read: the snapshot checkout, or the worktree itself. */
+  workspace: 'snapshot' | 'worktree';
   status: StepStatus;
   failures: number;
   retries: number;
   standsInFor: string | null;
   detail: string | null;
   resetsAt: number | null;
+  /** Set when the role cannot run at all for want of a skill: the recipe has to change. */
+  skillProblem: SkillProblem | null;
   result: RoleResult | null;
 }
+
+/** R2's `SkillProblem`: which skill, and which provider did not list it. */
+export type SkillProblem =
+  | { kind: 'missing'; role: string; provider: RoleProvider; skill: string }
+  | { kind: 'unlisted'; role: string; provider: RoleProvider };
 
 export interface ReviewInvocation {
   id: number;
   step: number;
   attempt: number;
   role: string;
+  /** The snapshot it read. A rerun's attempts read a newer one than the first round's. */
+  snapshot: number | null;
   status: InvocationStatus;
   detail: string | null;
   progress: string | null;
+  /** The repository instruction files its brief carried. */
+  instructionSources: string[];
   startedAt: number;
   endedAt: number | null;
 }
+
+/** Where one report came from: its attempt, its place in that attempt's submission, its role. */
+export interface FindingSource {
+  step: number;
+  invocation: number;
+  ordinal: number;
+  role: string;
+  provider: RoleProvider;
+  model: string | null;
+  workspace: 'snapshot' | 'worktree';
+  treeSha: string;
+}
+
+/** A consolidated finding with every report it was made of. `wtm_core::flow::FindingRecord`. */
+export interface FindingRecord extends Finding {
+  /** False for a finding about a whole file: it has a path and no lines. */
+  lines: boolean;
+  evidence: { source: FindingSource; reported: ReportedFinding }[];
+}
+
+export type CheckStatus = 'passed' | 'failed' | 'timed_out' | 'skipped' | 'error';
+
+/** One run of a configured check the app made for a role. The only thing that can show a pass. */
+export interface CheckRun {
+  id: number;
+  check: string;
+  role: string | null;
+  status: CheckStatus;
+  detail: string | null;
+  exitCode: number | null;
+  treeSha: string;
+  startedAt: number;
+  endedAt: number;
+}
+
+/** A check the run's roles may ask for. One with no `CheckRun` was not run. */
+export interface CheckChoice {
+  id: string;
+  label: string;
+  needs: string[];
+  roles: string[];
+}
+
+/** What the roles were given to judge by. */
+export interface AppliedKnowledge {
+  rules: {
+    rule: number;
+    revision: number;
+    kind: 'required' | 'guidance';
+    text: string;
+    roles: string[];
+  }[];
+  sources: string[];
+  skills: { role: string; provider: RoleProvider; skill: string }[];
+}
+
+/** Whether a run's results still describe its worktree. `review_staleness`. */
+export interface ReviewStaleness {
+  flow: number;
+  treeSha: string;
+  headSha: string | null;
+  /** Whether the worktree differs from the run's latest snapshot. */
+  changed: boolean;
+  paths: string[];
+  /** False when git could not list every changed file: everything is then stale. */
+  complete: boolean;
+  staleFindings: number[];
+  staleChecks: number[];
+  /** What Rerun affected would run. */
+  affected: string[];
+}
+
+export type RerunScope = 'affected' | 'all';
 
 export type InboxKind = 'failure' | 'capacity' | 'permission' | 'interrupted';
 
@@ -1530,16 +1625,22 @@ export interface ReviewRunView {
     worktreePath: string;
     recipe: string;
     base: string;
+    /** The snapshot the run reads now: its latest, after a rerun. */
+    snapshot: number | null;
   };
   snapshot: { headSha: string; treeSha: string; baseSha: string } | null;
   steps: ReviewStep[];
   invocations: ReviewInvocation[];
   inbox: RunInboxItem[];
   running: boolean;
+  findings: FindingRecord[];
+  checks: CheckRun[];
+  expectedChecks: CheckChoice[];
+  applied: AppliedKnowledge;
 }
 
 export interface RecipeChoice {
   id: string;
   label: string;
-  roles: { id: string; provider: RoleProvider; model: string | null }[];
+  roles: { id: string; provider: RoleProvider; model: string | null; skills: string[] }[];
 }

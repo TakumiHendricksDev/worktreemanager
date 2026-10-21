@@ -6,11 +6,24 @@
  * type error rather than a blank row, which is the only check a wrong word can get here — there is
  * no JS test runner, and `svelte-check` cannot see a string.
  *
- * The states follow the D1 design's Reviews tab: running, waiting for usage capacity, interrupted,
- * a role failed, consolidated. Staleness, consolidation proper and the finding list are R6's.
+ * The states follow the D1 design's Reviews tab, all nine: not reviewed (the component's own),
+ * running, waiting for usage capacity, interrupted, a role failed, stale, reviewed (clean, with any
+ * skipped check said so), can't start over billing (a start refusal, see `startProblem`), and
+ * can't run for want of a skill.
  */
 
-import type { ReviewRunView, ReviewStep, RoleProvider, StepStatus } from './ipc/types';
+import type {
+  CheckRun,
+  CheckStatus,
+  FindingRecord,
+  ReviewRunView,
+  ReviewStaleness,
+  ReviewStep,
+  RoleProvider,
+  StepStatus,
+} from './ipc/types';
+import { isWtmError } from './ipc/types';
+import type { FindingClass } from './knowledge';
 
 /** The class modifier a state is drawn with. A union, so a misspelt tone cannot reach the CSS. */
 export type RunTone = 'info' | 'warn' | 'danger' | 'ok' | 'muted';
@@ -110,8 +123,11 @@ export interface RunHeadline {
   tone: RunTone;
 }
 
-/** The block at the top of the Reviews tab for a run. */
-export function headline(view: ReviewRunView): RunHeadline {
+/** The block at the top of the Reviews tab for a run. `stale` is the run's last staleness read. */
+export function headline(
+  view: ReviewRunView,
+  stale: ReviewStaleness | null = null,
+): RunHeadline {
   const { state } = view.flow;
   const steps = listedSteps(view);
   const done = steps.filter((s) => s.status === 'done').length;
@@ -165,6 +181,70 @@ export function headline(view: ReviewRunView): RunHeadline {
   }
   if (state.end === null && state.phase === 'consolidated') {
     const failed = steps.filter((s) => s.status === 'failed');
+    const blocked = failed.find((s) => s.skillProblem !== null);
+    if (blocked?.skillProblem) {
+      const problem = blocked.skillProblem;
+      const provider = PROVIDER_NAMES[problem.provider];
+      return problem.kind === 'missing'
+        ? {
+            eyebrow: "Can't run: recipe",
+            title: `\`/${problem.skill}\` isn't available to ${provider} here`,
+            prose: `The \`${problem.role}\` role names the skill, but ${provider}'s skill list for this worktree doesn't include it. Providers don't share skills, so wtm checks each role against its own. Change the role's \`skills\` or \`provider\` in your config, then retry it. ${kept}`,
+            tone: 'danger',
+          }
+        : {
+            eyebrow: "Can't run: recipe",
+            title: `${provider} never listed its skills`,
+            prose: `The \`${problem.role}\` role names skills, and ${provider} did not say which it has, so wtm could not check them. ${kept}`,
+            tone: 'danger',
+          };
+    }
+    const live = view.findings.filter((f) => f.dismissed === null);
+    const behind = live.filter((f) => stale?.staleFindings.includes(f.id));
+    if (stale && !stale.changed && behind.length > 0) {
+      // The latest snapshot is current, and a role that was not run again still has a report
+      // from before the change: the review is only partly about the code as it is.
+      const files = [
+        ...new Set(behind.map((f) => f.location?.path).filter((p): p is string => !!p)),
+      ];
+      return {
+        eyebrow: 'Stale',
+        title: `${behind.length === 1 ? '1 finding predates' : `${behind.length} findings predate`} the latest change`,
+        prose: `${
+          files.length > 0 ? files.map((path) => `\`${path}\``).join(', ') : 'Its file'
+        } changed after the role that reported ${behind.length === 1 ? 'it' : 'them'} ran, and that role was not run again. ${
+          stale.affected.length > 0
+            ? `Rerun affected runs ${stale.affected.map((role) => `\`${role}\``).join(', ')} against the latest snapshot.`
+            : ''
+        }`,
+        tone: 'warn',
+      };
+    }
+    if (stale?.changed) {
+      const count = stale.paths.length;
+      const files = stale.paths.slice(0, 3).map((path) => `\`${path}\``);
+      const more = count > 3 ? ` and ${count - 3} more` : '';
+      const head =
+        stale.headSha && view.snapshot && stale.headSha !== view.snapshot.headSha
+          ? `New commit ${stale.headSha.slice(0, 7)} `
+          : 'Edits since the snapshot ';
+      const staleCount = behind.length;
+      const holding = live.length - staleCount;
+      return {
+        eyebrow: 'Stale',
+        title: stale.complete
+          ? `${count} file${count === 1 ? '' : 's'} changed after this review`
+          : 'More files changed after this review than git could list',
+        prose: `${head}touched ${files.join(', ')}${more}. ${
+          staleCount === 1 ? '1 finding' : `${staleCount} findings`
+        } and the overall result are stale.${
+          holding > 0
+            ? ` ${holding === 1 ? '1 finding' : `${holding} findings`} on untouched files still ${holding === 1 ? 'holds' : 'hold'}.`
+            : ''
+        }`,
+        tone: 'warn',
+      };
+    }
     if (failed.length > 0) {
       return {
         eyebrow: 'A role failed',
@@ -175,14 +255,30 @@ export function headline(view: ReviewRunView): RunHeadline {
         tone: 'danger',
       };
     }
-    const findings = steps.reduce((sum, s) => sum + (findingCount(s) ?? 0), 0);
+    const findings = view.findings.filter((f) => f.dismissed === null).length;
+    const checks = checkLines(view, stale);
+    const unproven = checks.filter((c) => c.state !== 'passed');
+    const passed = checks.filter((c) => c.state === 'passed').map((c) => c.label);
+    const rules = view.applied.rules.map((r) => ruleLabel(r.rule, r.revision));
+    const roles = `${done} role${done === 1 ? '' : 's'}`;
+    const ran = `${roles}${rules.length > 0 ? `, rules ${rules.join(', ')} applied` : ''}.`;
+    const proved = passed.length > 0 ? ` ${passed.join(' and ')} passed.` : '';
+    const said = (c: CheckLine) =>
+      `${c.label} ${CHECK_SENTENCE[c.state]}${c.detail ? ` (${c.detail})` : ''}`;
+    const broke = unproven.filter((c) => CHECK_TONE[c.state] === 'danger');
+    const missing = unproven.filter((c) => CHECK_TONE[c.state] !== 'danger');
+    const caveat =
+      (broke.length > 0 ? ` ${broke.map(said).join('; ')}.` : '') +
+      (missing.length > 0
+        ? ` ${missing.map(said).join('; ')}, so this is not a runtime pass.`
+        : '');
     return {
-      eyebrow: 'Reviewed',
+      eyebrow: findings === 0 ? 'Clean' : 'Reviewed',
       title:
         findings === 0
           ? 'No findings'
-          : `${findings} finding${findings === 1 ? '' : 's'} from ${done} role${done === 1 ? '' : 's'}`,
-      prose: `Snapshot ${tree ?? ''} against ${view.review.base}. Each role's results are as it handed them in; grouping and staleness arrive with the full Reviews tab.`,
+          : `${findings} finding${findings === 1 ? '' : 's'} from ${roles}`,
+      prose: `${ran}${proved}${caveat}`,
       tone: findings === 0 ? 'ok' : 'info',
     };
   }
@@ -248,4 +344,207 @@ export function skippedLine(view: ReviewRunView): string | null {
   const skipped = view.steps.filter((s) => s.status === 'skipped').map((s) => s.role);
   if (skipped.length === 0) return null;
   return `Skipped, because none of their paths changed: ${skipped.join(', ')}.`;
+}
+
+// ── findings ──
+
+/** The sections findings are grouped into, in the design's order. A union, as `RunTone` is. */
+export type FindingGroup = FindingClass['kind'];
+
+export const GROUP_ORDER: FindingGroup[] = [
+  'confirmed_bug',
+  'rule_violation',
+  'conflict',
+  'suggestion',
+];
+
+export const GROUP_WORDS: Record<FindingGroup, string> = {
+  confirmed_bug: 'Confirmed bugs',
+  rule_violation: 'Rule violations',
+  conflict: 'Conflicts to resolve',
+  suggestion: 'Suggestions',
+};
+
+/** The findings still standing, grouped by class, empty groups left out. Dismissed ones are not here. */
+export function findingGroups(
+  findings: readonly FindingRecord[],
+): { group: FindingGroup; findings: FindingRecord[] }[] {
+  return GROUP_ORDER.map((group) => ({
+    group,
+    findings: findings.filter((f) => f.dismissed === null && f.class.kind === group),
+  })).filter((section) => section.findings.length > 0);
+}
+
+/** `R-14 v2`, the way a reviewer is told to cite a rule. */
+export function ruleLabel(rule: number, revision: number): string {
+  return `R-${rule} v${revision}`;
+}
+
+/** Where a finding is, as a link reads: `src/export.rs:40–52`, the file alone for a whole file. */
+export function findingPlace(finding: FindingRecord): string | null {
+  const at = finding.location;
+  if (!at) return null;
+  if (!finding.lines) return at.path;
+  return at.startLine === at.endLine
+    ? `${at.path}:${at.startLine}`
+    : `${at.path}:${at.startLine}–${at.endLine}`;
+}
+
+/** Who said it: `correctness · Codex gpt-6`, once per role. */
+export function findingSources(finding: FindingRecord): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const { source } of finding.evidence) {
+    const line = `${source.role} · ${runsOn(source)}`;
+    if (!seen.has(line)) {
+      seen.add(line);
+      out.push(line);
+    }
+  }
+  return out;
+}
+
+/** The finding's evidence of its class: what confirmed the bug, which rule it breaks, which sources disagree. */
+export function classLine(finding: FindingRecord, view: ReviewRunView): string | null {
+  const cls = finding.class;
+  switch (cls.kind) {
+    case 'confirmed_bug':
+      return `Verified: ${cls.verification}`;
+    case 'rule_violation': {
+      const applied = view.applied.rules.find(
+        (r) => r.rule === cls.rule && r.revision === cls.revision,
+      );
+      const label = ruleLabel(cls.rule, cls.revision);
+      return applied
+        ? `Rule ${label} (${applied.kind}): "${applied.text}"`
+        : `Rule ${label}, which this review's roles were not given: check the citation`;
+    }
+    case 'conflict':
+      return `Between ${cls.between.join(' and ')}. The reviewer did not pick one.`;
+    case 'suggestion':
+      return null;
+  }
+}
+
+// ── checks ──
+
+/** A configured check's state in this run. `not_run` has no record at all, which is never a pass. */
+export type CheckState = CheckStatus | 'not_run';
+
+export const CHECK_WORDS: Record<CheckState, string> = {
+  passed: 'passed',
+  failed: 'failed',
+  timed_out: 'timed out',
+  skipped: 'skipped',
+  error: 'could not run',
+  not_run: 'not run',
+};
+
+/** The same states as the verb of a sentence: "unit tests failed", "e2e was skipped". */
+export const CHECK_SENTENCE: Record<CheckState, string> = {
+  passed: 'passed',
+  failed: 'failed',
+  timed_out: 'timed out',
+  skipped: 'was skipped',
+  error: 'could not run',
+  not_run: 'was not run',
+};
+
+export const CHECK_TONE: Record<CheckState, RunTone> = {
+  passed: 'ok',
+  failed: 'danger',
+  timed_out: 'danger',
+  skipped: 'warn',
+  error: 'danger',
+  not_run: 'muted',
+};
+
+export interface CheckLine {
+  id: string;
+  label: string;
+  state: CheckState;
+  /** Why it was skipped or could not run, or how it failed. */
+  detail: string | null;
+  run: CheckRun | null;
+  stale: boolean;
+}
+
+/**
+ * Every check the run's roles may ask for, with its latest record in this run, then any record of a
+ * check no longer configured. A check with no record says "not run"; nothing becomes a pass by
+ * being absent.
+ */
+export function checkLines(
+  view: ReviewRunView,
+  stale: ReviewStaleness | null,
+): CheckLine[] {
+  const latest = (id: string): CheckRun | null =>
+    [...view.checks].reverse().find((run) => run.check === id) ?? null;
+  const line = (id: string, label: string): CheckLine => {
+    const run = latest(id);
+    const state: CheckState = run ? run.status : 'not_run';
+    const detail =
+      run === null
+        ? null
+        : run.status === 'failed'
+          ? `exit ${run.exitCode ?? '?'}`
+          : run.detail;
+    return {
+      id,
+      label,
+      state,
+      detail,
+      run,
+      stale: run !== null && (stale?.staleChecks.includes(run.id) ?? false),
+    };
+  };
+  const listed = view.expectedChecks.map((choice) => line(choice.id, choice.label));
+  const extra = [...new Set(view.checks.map((run) => run.check))]
+    .filter((id) => !view.expectedChecks.some((choice) => choice.id === id))
+    .map((id) => line(id, id));
+  return [...listed, ...extra];
+}
+
+// ── starting ──
+
+/** Why a start was refused, as the Reviews tab draws it. */
+export type StartProblem =
+  | { kind: 'billing'; providers: string[]; message: string }
+  | { kind: 'other'; message: string };
+
+/** Read a refused start, rerun or resume. A billing refusal is its own state in the design. */
+export function startProblem(error: unknown): StartProblem {
+  if (isWtmError(error) && error.kind === 'billing') {
+    const detail = error.detail as { providers?: unknown } | null;
+    const providers = Array.isArray(detail?.providers)
+      ? detail.providers.filter((p): p is string => typeof p === 'string')
+      : [];
+    return { kind: 'billing', providers, message: error.message };
+  }
+  if (isWtmError(error)) return { kind: 'other', message: error.message };
+  return { kind: 'other', message: error instanceof Error ? error.message : String(error) };
+}
+
+/**
+ * When the run's latest round started and how long it took, as `4m 12s`: the attempts that read
+ * its current snapshot, so a rerun is timed on its own rather than from the first round with the
+ * time between them counted. The length is null while running.
+ */
+export function latestRound(view: ReviewRunView): {
+  startedAt: number;
+  length: string | null;
+} {
+  const round = view.invocations.filter(
+    (i) => view.review.snapshot === null || i.snapshot === view.review.snapshot,
+  );
+  const starts = round.map((i) => i.startedAt);
+  const startedAt = starts.length > 0 ? Math.min(...starts) : view.flow.startedAt;
+  const ends = round.map((i) => i.endedAt).filter((at): at is number => at !== null);
+  if (view.running || ends.length === 0) return { startedAt, length: null };
+  const seconds = Math.max(0, Math.round((Math.max(...ends) - startedAt) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return {
+    startedAt,
+    length: minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`,
+  };
 }

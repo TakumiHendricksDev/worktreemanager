@@ -52,6 +52,16 @@
   min-width: 0;
 }
 
+/* The run's badge and the header's two actions, kept together: wrapping one button under the title
+   on its own read as a second heading. */
+.c-work__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 .c-work__title {
   overflow: hidden;
   font-size: var(--step-2);

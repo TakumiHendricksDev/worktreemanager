@@ -32,10 +32,10 @@
 //! This is the skeleton the Work view is built on: the types and the rules that are already
 //! decided, plus recipes and their planning, snapshot staleness, review knowledge (rules, their
 //! retrieval, and the repository's instruction sources), and a review run's steps, invocations and
-//! inbox with the rules for retries, fallbacks and usage limits. The engine that drives them is in
-//! the app (`src-tauri/src/flow/`), because it opens sessions. Consolidation arrives with the backlog
-//! item that first needs it, and so do the store tables for questions, approvals, findings and
-//! operations.
+//! inbox with the rules for retries, fallbacks and usage limits, their consolidation into findings,
+//! and the record of the checks the app ran for them. The engine that drives them is in the app
+//! (`src-tauri/src/flow/`), because it opens sessions. The store tables for questions, approvals and
+//! operations arrive with the backlog items that first need them.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -57,6 +57,7 @@ macro_rules! id {
 }
 
 pub mod approval;
+pub mod consolidate;
 pub mod event;
 pub mod forge;
 pub mod glob;
@@ -78,6 +79,10 @@ pub mod work;
 pub use approval::{
     Approval, ApprovalError, ApprovalId, ApprovalIntent, Binding, PinChange, Pinned, Stale,
 };
+pub use consolidate::{
+    Evidence, EvidenceKey, FindingRecord, Merged, NewFinding, Reconciled, Source, consolidate,
+    finding_is_stale, reconcile, role_is_affected,
+};
 pub use event::{FlowEvent, RecordedEvent};
 pub use forge::{
     BranchProtection, ChecksState, ChecksSummary, ForgeAccount, ForgeKind, GITHUB_HOST, Permission,
@@ -97,9 +102,9 @@ pub use outbox::{
 pub use plan::{PlanError, PlannedRole, PlannedStage, RecipePlan, SkipReason, SkippedRole, plan};
 pub use question::{Answer, ContextLink, Question, QuestionError, QuestionId};
 pub use recipe::{
-    Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleProfile, RoleProvider,
-    RoleSpec, SkillCatalog, SkillError, SkillProblem, StageSpec, WorkflowError, WorkflowSpec,
-    Workspace,
+    CheckSpec, Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleProfile,
+    RoleProvider, RoleSpec, SkillCatalog, SkillError, SkillProblem, StageSpec, WorkflowError,
+    WorkflowSpec, Workspace,
 };
 pub use review::{
     BlobRef, Dismissal, Finding, FindingClass, FindingId, Location, Severity, Snapshot,
@@ -109,10 +114,10 @@ pub use rule::{
     RuleId, RuleKind, RuleOrigin, RuleRevision, RuleScope, RuleSource, RuleStatus,
 };
 pub use run::{
-    AfterFailure, Field, InboxItem, InboxItemId, InboxKind, Invocation, InvocationChange,
-    InvocationId, InvocationStatus, NewInboxItem, NewInvocation, NewReviewRun, NewStep, OnLimit,
-    ReviewRun, SnapshotId, Step, StepChange, StepId, StepStatus, after_failure, on_limit,
-    resume_at,
+    AfterFailure, CheckRun, CheckRunId, CheckStatus, Field, InboxItem, InboxItemId, InboxKind,
+    Invocation, InvocationChange, InvocationId, InvocationStatus, NewCheckRun, NewInboxItem,
+    NewInvocation, NewReviewRun, NewStep, OnLimit, ReviewRun, SnapshotId, Step, StepChange, StepId,
+    StepStatus, after_failure, on_limit, resume_at,
 };
 pub use schema::SchemaProblem;
 pub use snapshot::{FlowDir, ScratchLabel, TreeCheck};

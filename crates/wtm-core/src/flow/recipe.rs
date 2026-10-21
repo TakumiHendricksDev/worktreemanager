@@ -76,6 +76,13 @@ pub struct WorkflowSpec {
     pub role: BTreeMap<String, RoleSpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub recipe: BTreeMap<String, RecipeSpec>,
+    /// Commands the app runs when a role asks, through `flow_run_check`.
+    ///
+    /// Your own config and the local layer only, like roles: a check is a command wtm runs outside
+    /// every sandbox, on a model's request, and a file anyone can commit must not be able to name
+    /// one. The plan's repository-level `[[check]]`, behind the trust prompt, is a later item.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub check: BTreeMap<String, CheckSpec>,
     /// Globs naming the repository's own instruction files. `None` means
     /// [`DEFAULT_INSTRUCTION_SOURCES`]; an empty list means none at all, which is a choice a
     /// project can make and so is not the same as leaving the key out.
@@ -113,6 +120,45 @@ pub struct RecipeSpec {
 #[serde(deny_unknown_fields)]
 pub struct StageSpec {
     pub roles: Vec<String>,
+}
+
+/// A command a role may ask the app to run: tests, a linter, a build.
+///
+/// # Run by the app, so its result is a fact
+///
+/// A role that says "the tests pass" is reporting; the app running them is evidence. A reviewer's
+/// sandbox cannot run most test suites anyway (Codex's read-only one refuses the temporary files
+/// they write), so a role asks with `flow_run_check`, the app runs exactly this argv in the
+/// directory the role reads, outside the sandbox and with the run's credential scrub, and keeps the
+/// exit code and output as the check's record. The role names the check; it never supplies a
+/// command or an argument.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckSpec {
+    /// What the Reviews tab calls it. Falls back to the table key.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The program and its arguments. Never a shell string, for the reason `Invocation::argv`
+    /// gives; write `["sh", "-c", "…"]` to ask for a shell.
+    pub run: Vec<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Services the check needs running, such as `web`. wtm starts no services yet, so a check
+    /// that names any is recorded as skipped with that reason and never run: a browser test against
+    /// nothing would fail for a reason that says nothing about the change, and passing it would be
+    /// worse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
+}
+
+/// How long a check may run when its config does not say.
+pub const DEFAULT_CHECK_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+
+impl CheckSpec {
+    #[must_use]
+    pub fn timeout_ms(&self) -> u64 {
+        self.timeout_ms.unwrap_or(DEFAULT_CHECK_TIMEOUT_MS)
+    }
 }
 
 /// The CLIs a role can run on.
@@ -301,6 +347,10 @@ pub struct RoleSpec {
     /// change. A role whose globs match none of the changed files is skipped for that run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
+    /// Checks from `[workflow.check]` this role may ask the app to run. Empty means none: a check
+    /// costs real time on your machine, so a role is given the ones its objective needs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<String>,
     pub inputs: Vec<RoleInput>,
     #[serde(default)]
     pub output: OutputKind,
@@ -394,6 +444,31 @@ impl WorkflowSpec {
             check_id(&format!("recipe.{id}"), id)?;
             self.check_recipe(id, recipe)?;
         }
+        for (id, check) in &self.check {
+            check_id(&format!("check.{id}"), id)?;
+            if check
+                .run
+                .first()
+                .is_none_or(|program| program.trim().is_empty())
+            {
+                return Err(WorkflowError::new(
+                    format!("check.{id}.run"),
+                    "a check needs a program to run, as `run = [\"just\", \"test\"]`",
+                ));
+            }
+            if check.timeout_ms == Some(0) {
+                return Err(WorkflowError::new(
+                    format!("check.{id}.timeout_ms"),
+                    "a check needs some time to run",
+                ));
+            }
+            if check.needs.iter().any(|service| service.trim().is_empty()) {
+                return Err(WorkflowError::new(
+                    format!("check.{id}.needs"),
+                    "a service name cannot be empty",
+                ));
+            }
+        }
         for pattern in self.instruction_sources.iter().flatten() {
             glob::check(pattern).map_err(|message| {
                 WorkflowError::new("instruction_sources", format!("`{pattern}`: {message}"))
@@ -439,6 +514,18 @@ impl WorkflowSpec {
         for pattern in &role.paths {
             glob::check(pattern)
                 .map_err(|why| WorkflowError::new(key("paths"), format!("`{pattern}`: {why}")))?;
+        }
+        if let Some(missing) = role
+            .checks
+            .iter()
+            .find(|name| !self.check.contains_key(*name))
+        {
+            return Err(WorkflowError::new(
+                key("checks"),
+                format!(
+                    "there is no check `{missing}`; declare it as `[workflow.check.{missing}]`"
+                ),
+            ));
         }
         if role.inputs.is_empty() {
             return Err(WorkflowError::new(
@@ -731,7 +818,7 @@ pub enum SkillError {
 }
 
 /// One role that cannot start for want of a skill.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SkillProblem {
     /// The provider answered, and the skill was not in its answer.
@@ -902,6 +989,42 @@ mod tests {
     #[test]
     fn a_review_recipe_with_parallel_roles_on_two_providers_is_valid() {
         workflow(review()).validate().unwrap();
+    }
+
+    #[test]
+    fn a_role_may_name_only_checks_the_workflow_declares() {
+        let spec = review_with(&json!({
+            "check": { "unit": { "run": ["just", "test"] } },
+            "role": { "correctness": { "checks": ["unit", "e2e"] } },
+        }));
+        let error = refusal(&spec);
+        assert_eq!(error.key, "role.correctness.checks");
+        assert!(error.message.contains("`e2e`"), "{error}");
+
+        review_with(&json!({
+            "check": { "unit": { "run": ["just", "test"] } },
+            "role": { "correctness": { "checks": ["unit"] } },
+        }))
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn a_check_with_nothing_to_run_is_refused() {
+        let spec = review_with(&json!({ "check": { "unit": { "run": [] } } }));
+        assert_eq!(refusal(&spec).key, "check.unit.run");
+        let spec = review_with(&json!({ "check": { "unit": { "run": ["  "] } } }));
+        assert_eq!(refusal(&spec).key, "check.unit.run");
+    }
+
+    #[test]
+    fn a_check_names_the_services_it_needs_and_defaults_its_timeout() {
+        let spec = review_with(&json!({
+            "check": { "e2e": { "run": ["just", "e2e"], "needs": ["web"] } },
+        }));
+        spec.validate().unwrap();
+        assert_eq!(spec.check["e2e"].needs, ["web"]);
+        assert_eq!(spec.check["e2e"].timeout_ms(), DEFAULT_CHECK_TIMEOUT_MS);
     }
 
     #[test]

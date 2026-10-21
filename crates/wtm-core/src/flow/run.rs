@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
-use super::recipe::{RoleProfile, RoleProvider, Workspace};
+use super::recipe::{RoleProfile, RoleProvider, SkillProblem, Workspace};
 use super::state::FlowId;
 use super::submission::Submission;
 use crate::model::ProjectId;
@@ -50,6 +50,11 @@ id! {
 id! {
     /// Something a run needs you to know or decide.
     InboxItemId
+}
+
+id! {
+    /// One run of a check, as the store numbers it.
+    CheckRunId
 }
 
 /// What a review run is of: which worktree, which recipe, measured from which base.
@@ -158,6 +163,11 @@ pub struct Step {
     pub detail: Option<String>,
     /// When a step waiting for capacity may run again, in Unix seconds, when the provider said.
     pub resets_at: Option<u64>,
+    /// Set when the role cannot run at all for want of a skill, which no retry fixes: the recipe
+    /// has to change. Kept as the typed problem so the Reviews tab can say which skill and which
+    /// provider without reading it back out of `detail`.
+    #[serde(default)]
+    pub skill_problem: Option<SkillProblem>,
     pub result: Option<Submission>,
     pub created_at: UnixMs,
     pub updated_at: UnixMs,
@@ -214,6 +224,7 @@ pub struct StepChange {
     pub failures: Option<u32>,
     pub detail: Field<String>,
     pub resets_at: Field<u64>,
+    pub skill_problem: Field<SkillProblem>,
     pub result: Option<Submission>,
 }
 
@@ -280,6 +291,10 @@ pub struct Invocation {
     pub detail: Option<String>,
     /// The role's last `flow_progress` line.
     pub progress: Option<String>,
+    /// The repository instruction files its brief carried, by path, so the Reviews tab can say
+    /// which sources a review applied rather than which ones the config would name today.
+    #[serde(default)]
+    pub instruction_sources: Vec<String>,
     pub started_at: UnixMs,
     pub ended_at: Option<UnixMs>,
 }
@@ -306,6 +321,7 @@ pub struct InvocationChange {
     pub provider_session: Option<String>,
     pub detail: Option<String>,
     pub progress: Option<String>,
+    pub instruction_sources: Option<Vec<String>>,
     /// Set with a status that ends it.
     pub ended_at: Option<UnixMs>,
 }
@@ -367,6 +383,67 @@ pub struct NewInboxItem {
     pub subject: String,
     pub title: String,
     pub body: String,
+}
+
+/// How a check the app ran for a role came out.
+///
+/// There is no "unknown" and nothing that reads as a pass unless the command exited 0: a check that
+/// could not start is an error, one that ran too long timed out, and one whose services are not
+/// running was skipped, with the reason. A check nobody ran has no record at all, which the Reviews
+/// tab shows as not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    Passed,
+    Failed,
+    TimedOut,
+    /// Not run, on purpose, for the reason in the record.
+    Skipped,
+    /// It could not be started at all, such as a program not on the PATH.
+    Error,
+}
+
+/// One run of a configured check, at a role's request. Its record is the evidence: a role can say
+/// a check passed only by pointing at one of these.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckRun {
+    pub id: CheckRunId,
+    pub flow: FlowId,
+    /// The check's id in `[workflow.check]`.
+    pub check: String,
+    pub step: Option<StepId>,
+    pub invocation: Option<InvocationId>,
+    pub role: Option<String>,
+    pub status: CheckStatus,
+    /// Why it was skipped or could not start, or the end of what it printed when it failed.
+    pub detail: Option<String>,
+    pub exit_code: Option<i32>,
+    /// The tree it ran against: the snapshot the asking role read.
+    pub tree_sha: String,
+    /// Where it ran.
+    pub cwd: String,
+    /// Everything it printed, under the flow's directory.
+    pub output: Option<super::review::BlobRef>,
+    pub started_at: UnixMs,
+    pub ended_at: UnixMs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewCheckRun {
+    pub flow: FlowId,
+    pub check: String,
+    pub step: Option<StepId>,
+    pub invocation: Option<InvocationId>,
+    pub role: Option<String>,
+    pub status: CheckStatus,
+    pub detail: Option<String>,
+    pub exit_code: Option<i32>,
+    pub tree_sha: String,
+    pub cwd: String,
+    pub output: Option<super::review::BlobRef>,
+    pub started_at: UnixMs,
 }
 
 /// What follows an attempt that ended without a result.

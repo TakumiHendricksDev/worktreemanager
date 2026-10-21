@@ -30,6 +30,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+mod findings;
 mod migrate;
 mod rules;
 mod runs;

@@ -15,8 +15,13 @@
 //!    `concurrency` at once. Each attempt is one session opened with the role's R4 profile, sent
 //!    one turn, and read only through `flow_submit`. A stage that reads the snapshot gets one
 //!    detached checkout, removed when the stage ends.
-//! 5. **Consolidated**, once every stage has run. Consolidation proper — deduplication and the
-//!    finding classes — is R6's; this records each role's result as it was submitted.
+//! 5. **Consolidated**, once every stage has run. Each role's result is kept as it was submitted,
+//!    and every time one is, the run's findings are consolidated again (`findings.rs`): reports
+//!    about the same place for the same reason merged, every report kept as evidence.
+//!
+//! A consolidated review can be **rerun** against a new snapshot when the worktree has moved on:
+//! only the roles whose files changed, or all of them (`findings.rs`). The run's earlier results
+//! stay until a rerun role replaces its own.
 //!
 //! # Holds
 //!
@@ -43,13 +48,15 @@
 //! port, so a test drives every timeout, retry and reset by moving a fake clock.
 
 pub mod brief;
+pub mod checks;
 pub mod commands;
+pub mod findings;
 pub mod host;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
@@ -58,12 +65,12 @@ use serde::Serialize;
 use wtm_agent::session::AgentSink;
 use wtm_appdb::AppDb;
 use wtm_core::flow::{
-    AfterFailure, Field, Flow, FlowDir, FlowEvent, FlowId, FlowKind, Hold, HoldKind, InboxItem,
-    InboxItemId, InboxKind, InterruptCause, Invocation, InvocationChange, InvocationStatus,
-    NewInboxItem, NewInvocation, NewReviewRun, NewStep, NewWorkItem, OnLimit, OutputKind, Phase,
-    ReviewRun, RoleProvider, RoleSpec, ScratchLabel, Snapshot, SnapshotId, Status, Step,
-    StepChange, StepStatus, Submission, WorkLink, WorkflowSpec, Workspace, after_failure, on_limit,
-    resume_at,
+    AfterFailure, CheckRun, CheckSpec, Field, FindingRecord, Flow, FlowDir, FlowEvent, FlowId,
+    FlowKind, Hold, HoldKind, InboxItem, InboxItemId, InboxKind, InterruptCause, Invocation,
+    InvocationChange, InvocationStatus, NewInboxItem, NewInvocation, NewReviewRun, NewStep,
+    NewWorkItem, OnLimit, OutputKind, Phase, ReviewRun, RoleProvider, RoleSpec, ScratchLabel,
+    SkillProblem, Snapshot, SnapshotId, Status, Step, StepChange, StepId, StepStatus, Submission,
+    WorkLink, WorkflowSpec, Workspace, after_failure, on_limit, resume_at,
 };
 use wtm_core::model::{AgentEvent, AgentSkill, ApprovalRequest, ExitOutcome, ProjectId, SessionId};
 use wtm_core::ports::clock::Clock;
@@ -124,6 +131,37 @@ pub struct StartReview {
     pub base: Option<String>,
 }
 
+/// Why a review did not start, rerun or resume. Nothing was recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Refusal {
+    pub message: String,
+    /// Providers that would not bill a subscription, when that is the reason. The Reviews tab says
+    /// "can't start: billing" and names them; for every other reason this is empty.
+    pub billing: Vec<String>,
+}
+
+impl From<String> for Refusal {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            billing: Vec::new(),
+        }
+    }
+}
+
+impl From<&str> for Refusal {
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 /// Everything the Work view shows about one review run.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,6 +176,15 @@ pub struct FlowView {
     /// Whether this app has a thread working on it now. A flow that is open and not running is
     /// held, consolidated, or was interrupted.
     pub running: bool,
+    /// The run's findings that are still reported, dismissed ones included.
+    pub findings: Vec<FindingRecord>,
+    /// Every check the app ran, or skipped, for a role of this run, oldest first.
+    pub checks: Vec<CheckRun>,
+    /// The checks this run's roles may ask for, from your config, in the order they are listed.
+    /// One with no record in `checks` was not run, which is what the Reviews tab says of it.
+    pub expected_checks: Vec<findings::CheckChoice>,
+    /// What the roles were given to judge by: rule revisions, instruction sources, skills.
+    pub applied: findings::Applied,
 }
 
 /// One run's controls, shared by its thread and its roles.
@@ -161,6 +208,15 @@ enum Signal {
 struct Live {
     output: OutputKind,
     tx: Sender<Signal>,
+    step: StepId,
+    invocation: wtm_core::flow::InvocationId,
+    /// Where the role reads, which is where a check it asks for runs.
+    cwd: PathBuf,
+    /// The snapshot tree the role reads, which a check it asks for is recorded against.
+    tree_sha: String,
+    /// The checks it may ask for, by id.
+    checks: BTreeMap<String, CheckSpec>,
+    dir: FlowDir,
 }
 
 /// The engine's ear on one session: the events it acts on, forwarded to the role thread.
@@ -202,7 +258,7 @@ enum AttemptEnd {
         reason: String,
     },
     /// Cannot succeed however often it is tried: a skill its provider lacks.
-    Unrunnable(String),
+    Unrunnable(String, Option<SkillProblem>),
     Limit {
         resets_at: Option<u64>,
         message: String,
@@ -217,7 +273,7 @@ enum AttemptEnd {
 enum RoleEnd {
     Done,
     Stopped,
-    Failed(String),
+    Failed(String, Option<SkillProblem>),
     Limit {
         resets_at: Option<u64>,
         message: String,
@@ -228,6 +284,7 @@ enum RoleEnd {
 struct RunCtx {
     flow: FlowId,
     project: String,
+    project_id: ProjectId,
     worktree: String,
     worktree_path: PathBuf,
     branch: Option<String>,
@@ -240,6 +297,8 @@ struct RunCtx {
     changed: Option<Vec<String>>,
     /// The recipe's cap on roles running at once within a stage.
     concurrency: Option<u32>,
+    /// The repository instruction sources the project names, or the default ones.
+    patterns: Vec<String>,
 }
 
 impl RunCtx {
@@ -269,6 +328,12 @@ pub struct Engine {
     holds: Mutex<()>,
     /// Held across a start, so two clicks make one flow: the second finds the first's.
     starting: Mutex<()>,
+    /// Held across reading a run's findings and saving their consolidation, so two roles
+    /// submitting at once consolidate one after the other rather than each over a stale list.
+    consolidating: Mutex<()>,
+    /// Numbers the scratch indexes a staleness check uses, so two checks of one run never share
+    /// an `index.lock`.
+    scratch: AtomicU64,
     quitting: AtomicBool,
 }
 
@@ -303,6 +368,8 @@ impl Engine {
             live: Mutex::new(BTreeMap::new()),
             holds: Mutex::new(()),
             starting: Mutex::new(()),
+            consolidating: Mutex::new(()),
+            scratch: AtomicU64::new(0),
             quitting: AtomicBool::new(false),
         })
     }
@@ -333,7 +400,7 @@ impl Engine {
     /// # Errors
     ///
     /// Why it did not start, in a sentence. Nothing was recorded.
-    pub fn start(self: &Arc<Self>, req: &StartReview) -> Result<FlowId, String> {
+    pub fn start(self: &Arc<Self>, req: &StartReview) -> Result<FlowId, Refusal> {
         let _one = self.starting.lock();
         let project = self.app.project(&req.project).map_err(text)?;
         let worktree = self
@@ -341,9 +408,10 @@ impl Engine {
             .worktree(&project, &req.worktree)
             .map_err(|e| format!("that worktree is not available: {e}"))?;
         let workflow = project.workflow.as_ref().ok_or_else(|| {
-            "this project has no review recipes; add `[workflow]` roles and a recipe to your own \
-             config for it"
-                .to_owned()
+            Refusal::from(
+                "this project has no review recipes; add `[workflow]` roles and a recipe to your \
+                 own config for it",
+            )
         })?;
         let plan = wtm_core::flow::plan(workflow, &req.recipe, None).map_err(text)?;
         let providers: Vec<&str> = plan
@@ -364,7 +432,7 @@ impl Engine {
         let item = if let Some(id) = existing {
             db.work_item(id)
                 .map_err(text)?
-                .ok_or_else(|| format!("work item {id} has gone"))?
+                .ok_or_else(|| Refusal::from(format!("work item {id} has gone")))?
         } else {
             let title = worktree
                 .branch()
@@ -395,7 +463,7 @@ impl Engine {
                 let open = db
                     .flow(existing)
                     .map_err(text)?
-                    .ok_or_else(|| format!("flow {existing} has gone"))?;
+                    .ok_or_else(|| Refusal::from(format!("flow {existing} has gone")))?;
                 let superseded = !self.is_running(existing)
                     && open.state.hold.is_none()
                     && open.state.phase == Phase::Consolidated;
@@ -411,7 +479,7 @@ impl Engine {
                 self.notice.changed(existing);
                 db.start_flow(item.id, kind, now).map_err(text)?
             }
-            Err(e) => return Err(text(e)),
+            Err(e) => return Err(text(e).into()),
         };
         db.create_review(
             &NewReviewRun {
@@ -428,6 +496,20 @@ impl Engine {
         self.notice.changed(flow.id);
         self.spawn(flow.id)?;
         Ok(flow.id)
+    }
+
+    /// The ref a review of a worktree would be measured from when none is named.
+    ///
+    /// # Errors
+    ///
+    /// When the worktree cannot be found, or none of the usual base names resolve in it.
+    pub fn default_base(&self, project: &str, worktree: &str) -> Result<String, String> {
+        let project = self.app.project(project).map_err(text)?;
+        let worktree = self
+            .app
+            .worktree(&project, worktree)
+            .map_err(|e| format!("that worktree is not available: {e}"))?;
+        self.resolve_base(&worktree.path, None)
     }
 
     /// The ref a review of `worktree` is measured from.
@@ -629,6 +711,7 @@ impl Engine {
         let ctx = RunCtx {
             flow,
             project: review.project.as_str().to_owned(),
+            project_id: review.project.clone(),
             worktree: review.worktree.clone(),
             worktree_path: worktree.path.clone(),
             branch: worktree.branch().map(|b| b.as_str().to_owned()),
@@ -638,6 +721,7 @@ impl Engine {
                 .recipe
                 .get(&review.recipe)
                 .and_then(|r| r.concurrency),
+            patterns: crate::knowledge::patterns(&project).0,
             workflow,
             dir,
             snapshot,
@@ -673,6 +757,9 @@ impl Engine {
         if self.state(flow)?.end.is_some() {
             return Ok(());
         }
+        // Each submission consolidated as it arrived; this catches a run in which none did, so a
+        // rerun whose roles all failed still supersedes nothing it should not.
+        self.consolidate(flow);
         self.record(
             flow,
             &FlowEvent::Advanced {
@@ -756,7 +843,7 @@ impl Engine {
         loop {
             match self.attempts(ctx, run, snapshots, checkout, &mut step) {
                 RoleEnd::Done | RoleEnd::Stopped => return,
-                RoleEnd::Failed(reason) => {
+                RoleEnd::Failed(reason, problem) => {
                     let already = self.roles_run(ctx.flow);
                     let chain = ctx.workflow.fallback_chain(&step.role);
                     match after_failure(
@@ -772,7 +859,7 @@ impl Engine {
                             }
                         }
                         AfterFailure::Retry | AfterFailure::Ask => {
-                            self.give_up(ctx, &step, &reason);
+                            self.give_up(ctx, &step, &reason, problem);
                             return;
                         }
                     }
@@ -871,7 +958,7 @@ impl Engine {
                 AttemptEnd::Limit { resets_at, message } => {
                     return RoleEnd::Limit { resets_at, message };
                 }
-                AttemptEnd::Unrunnable(reason) => return RoleEnd::Failed(reason),
+                AttemptEnd::Unrunnable(reason, problem) => return RoleEnd::Failed(reason, problem),
                 AttemptEnd::Failed { reason, .. } => {
                     let failures = step.failures + 1;
                     step.failures = failures;
@@ -884,7 +971,7 @@ impl Engine {
                         .detail(reason.clone()),
                     );
                     if failures > step.retries {
-                        return RoleEnd::Failed(reason);
+                        return RoleEnd::Failed(reason, None);
                     }
                     tracing::info!(flow = %ctx.flow, role = %step.role, attempt, %reason, "retrying a role");
                 }
@@ -907,7 +994,7 @@ impl Engine {
         };
         let spec = match ctx.role(&step.role) {
             Ok(spec) => spec.clone(),
-            Err(reason) => return AttemptEnd::Unrunnable(reason),
+            Err(reason) => return AttemptEnd::Unrunnable(reason, None),
         };
         let cwd = match step.workspace {
             Workspace::Snapshot => match Self::checkout_path(ctx, snapshots, checkout) {
@@ -959,16 +1046,31 @@ impl Engine {
             Arc::new(Live {
                 output: spec.output,
                 tx: tx.clone(),
+                step: step.id,
+                invocation: invocation.id,
+                cwd: cwd.clone(),
+                tree_sha: ctx.snapshot.tree_sha.clone(),
+                checks: spec
+                    .checks
+                    .iter()
+                    .filter_map(|id| {
+                        let check = ctx.workflow.check.get(id)?;
+                        Some((id.clone(), check.clone()))
+                    })
+                    .collect(),
+                dir: ctx.dir.clone(),
             }),
         );
-        let end = self.converse(ctx, run, step, &spec, &cwd, invocation.id, tx, &rx);
+        let end = self.converse(ctx, run, step, &spec, &cwd, &invocation, tx, &rx);
         self.live.lock().remove(&key);
 
         if !matches!(end, AttemptEnd::Quitting) {
             let (status, detail) = match &end {
                 AttemptEnd::Submitted => (InvocationStatus::Submitted, None),
                 AttemptEnd::Failed { status, reason } => (*status, Some(reason.clone())),
-                AttemptEnd::Unrunnable(reason) => (InvocationStatus::Failed, Some(reason.clone())),
+                AttemptEnd::Unrunnable(reason, _) => {
+                    (InvocationStatus::Failed, Some(reason.clone()))
+                }
                 AttemptEnd::Limit { message, .. } => {
                     (InvocationStatus::LimitReached, Some(message.clone()))
                 }
@@ -993,13 +1095,30 @@ impl Engine {
         step: &mut Step,
         spec: &RoleSpec,
         cwd: &Path,
-        invocation: wtm_core::flow::InvocationId,
+        invocation: &Invocation,
         tx: Sender<Signal>,
         rx: &Receiver<Signal>,
     ) -> AttemptEnd {
         let Ok(db) = self.db() else {
             return AttemptEnd::Quitting;
         };
+        let (knowledge, sources) = self.knowledge_for(ctx, step, spec, cwd, invocation.attempt);
+        if !sources.is_empty() {
+            let _ = db.update_invocation(
+                invocation.id,
+                &InvocationChange {
+                    instruction_sources: Some(sources),
+                    ..InvocationChange::default()
+                },
+                self.now(),
+            );
+        }
+        let checks: Vec<(String, CheckSpec)> = spec
+            .checks
+            .iter()
+            .filter_map(|id| Some((id.clone(), ctx.workflow.check.get(id)?.clone())))
+            .collect();
+        let earlier = self.earlier_findings(step, &ctx.snapshot.tree_sha);
         let facts = brief::BriefFacts {
             role: &step.role,
             spec,
@@ -1010,7 +1129,11 @@ impl Engine {
             snapshot: &ctx.snapshot,
             changed: ctx.changed.as_deref(),
             handover: step.handover.as_deref(),
+            knowledge: knowledge.as_deref(),
+            checks: &checks,
+            earlier: &earlier,
         };
+        let invocation = invocation.id;
         let session_spec = RoleSession {
             project: ctx.project.clone(),
             worktree: ctx.worktree.clone(),
@@ -1115,13 +1238,14 @@ impl Engine {
                         },
                         self.now(),
                     );
+                    self.consolidate(ctx.flow);
                     submitted = true;
                     settle_at = Some(self.clock.monotonic_ms() + self.tuning.settle_ms);
                 }
                 Ok(Signal::Event(event)) => match event {
                     AgentEvent::SkillsListed { skills } if !skills_checked => {
                         if let Some(problem) = missing_skill(&step.role, spec, &skills) {
-                            return AttemptEnd::Unrunnable(problem);
+                            return AttemptEnd::Unrunnable(problem.to_string(), Some(problem));
                         }
                         skills_checked = true;
                         if let Err(end) = say(&brief::opening_turn(&step.role)) {
@@ -1220,13 +1344,11 @@ impl Engine {
                 return AttemptEnd::Submitted;
             }
             if !skills_checked && now >= skills_deadline {
-                return AttemptEnd::Unrunnable(
-                    wtm_core::flow::SkillProblem::Unlisted {
-                        role: step.role.clone(),
-                        provider: spec.provider,
-                    }
-                    .to_string(),
-                );
+                let problem = SkillProblem::Unlisted {
+                    role: step.role.clone(),
+                    provider: spec.provider,
+                };
+                return AttemptEnd::Unrunnable(problem.to_string(), Some(problem));
             }
             if now >= deadline {
                 if submitted {
@@ -1282,10 +1404,13 @@ impl Engine {
     }
 
     /// A role is out of attempts and fallbacks: say so where you will see it.
-    fn give_up(&self, ctx: &RunCtx, step: &Step, reason: &str) {
+    fn give_up(&self, ctx: &RunCtx, step: &Step, reason: &str, problem: Option<SkillProblem>) {
         self.update_step(
             step,
-            &StepChange::status(StepStatus::Failed).detail(reason.to_owned()),
+            &StepChange {
+                skill_problem: Field::from(problem),
+                ..StepChange::status(StepStatus::Failed).detail(reason.to_owned())
+            },
         );
         let tries = step.retries + 1;
         self.file(&NewInboxItem {
@@ -1476,7 +1601,14 @@ impl Engine {
                  say which you chose and why in the finding it affects, and carry on."
                     .to_owned(),
             ),
-            (FlowCall::Submit(_) | FlowCall::Progress(_) | FlowCall::Ask(_), None) => Err(ended()),
+            (FlowCall::RunCheck { name }, Some(live)) => self.run_check(role, &live, name),
+            (
+                FlowCall::Submit(_)
+                | FlowCall::Progress(_)
+                | FlowCall::Ask(_)
+                | FlowCall::RunCheck { .. },
+                None,
+            ) => Err(ended()),
             _ => return None,
         })
     }
@@ -1511,7 +1643,7 @@ impl Engine {
     ///
     /// When the review has ended, is waiting on something a resume does not answer, or has nothing
     /// left to run.
-    pub fn resume(self: &Arc<Self>, flow: FlowId) -> Result<(), String> {
+    pub fn resume(self: &Arc<Self>, flow: FlowId) -> Result<(), Refusal> {
         if let Some(run) = self.runs.lock().get(&flow) {
             // Still working: whatever waits for capacity runs now rather than at the reset.
             run.wake.store(true, Ordering::SeqCst);
@@ -1524,12 +1656,12 @@ impl Engine {
             .ok_or_else(|| format!("run {flow} is not a review"))?;
         let state = self.state(flow)?;
         if let Some(end) = &state.end {
-            return Err(format!("this review has already ended ({end:?})"));
+            return Err(format!("this review has already ended ({end:?})").into());
         }
         let steps = db.steps(flow).map_err(text)?;
         if state.phase == Phase::Consolidated && !steps.iter().any(|s| s.status.wants_a_run()) {
             return Err(
-                "every role of this review has its result; there is nothing to resume".to_owned(),
+                "every role of this review has its result; there is nothing to resume".into(),
             );
         }
         let project = self.app.project(review.project.as_str()).map_err(text)?;
@@ -1553,7 +1685,8 @@ impl Engine {
                 Some(other) => {
                     return Err(format!(
                         "this review is waiting on {other:?}, which a resume does not answer"
-                    ));
+                    )
+                    .into());
                 }
                 None => {}
             }
@@ -1585,7 +1718,7 @@ impl Engine {
             let _ = db.resolve_inbox(flow, kind, None, self.now());
         }
         self.notice.changed(flow);
-        self.spawn(flow)
+        Ok(self.spawn(flow)?)
     }
 
     /// Cancel a review from wherever it is.
@@ -1812,12 +1945,23 @@ impl Engine {
             Some(id) => db.snapshot(id).map_err(text)?,
             None => None,
         };
+        let steps = db.steps(flow).map_err(text)?;
+        let invocations = db.invocations(flow).map_err(text)?;
+        let workflow = self
+            .app
+            .project(review.project.as_str())
+            .ok()
+            .and_then(|project| project.workflow);
         Ok(FlowView {
             status: state.state.status(),
             flow: state,
             snapshot,
-            steps: db.steps(flow).map_err(text)?,
-            invocations: db.invocations(flow).map_err(text)?,
+            findings: db.findings(flow).map_err(text)?,
+            checks: db.checks(flow).map_err(text)?,
+            expected_checks: findings::expected_checks(workflow.as_ref(), &steps),
+            applied: self.applied(flow, workflow.as_ref(), &steps, &invocations)?,
+            steps,
+            invocations,
             inbox: db.inbox(Some(flow), None).map_err(text)?,
             running: self.is_running(flow),
             review,
@@ -1910,7 +2054,7 @@ impl Engine {
 /// problem is R2's [`SkillProblem`](wtm_core::flow::SkillProblem), so it names the provider. A
 /// Claude run's skills are listed under the plugin `flow_session` wrote them into; that prefix is
 /// taken off before comparing, and nothing else is.
-fn missing_skill(role: &str, spec: &RoleSpec, listed: &[AgentSkill]) -> Option<String> {
+fn missing_skill(role: &str, spec: &RoleSpec, listed: &[AgentSkill]) -> Option<SkillProblem> {
     let prefix = format!("{}:", wtm_agent::authority::RUN_SKILL_PLUGIN);
     let names: BTreeSet<&str> = listed
         .iter()
@@ -1924,13 +2068,10 @@ fn missing_skill(role: &str, spec: &RoleSpec, listed: &[AgentSkill]) -> Option<S
         .collect();
     spec.skill_names()
         .find(|skill| !names.contains(skill))
-        .map(|skill| {
-            wtm_core::flow::SkillProblem::Missing {
-                role: role.to_owned(),
-                provider: spec.provider,
-                skill: skill.to_owned(),
-            }
-            .to_string()
+        .map(|skill| SkillProblem::Missing {
+            role: role.to_owned(),
+            provider: spec.provider,
+            skill: skill.to_owned(),
         })
 }
 

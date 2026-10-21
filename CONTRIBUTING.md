@@ -167,6 +167,12 @@ record of *why* the code looks the way it does, so it is worth writing properly.
   useful information, not an admission — nothing in CI launches the app, so a claim that the UI
   still looks right can only come from someone saying they looked.
 
+  To click through while an installed wtm is running, use `just dev-isolated [root]` rather than
+  `just dev`. `just dev` uses the installed app's `~/.config/wtm` — its projects, resume list,
+  trust approvals and `handoff.sock`, and binding that socket takes it from the running app — and
+  every `just dev` shares one WebKit store. The isolated recipe gives the build its own config,
+  data, socket and storage under `root` (default `~/.cache/wtm-isolated`).
+
 ## Licensing
 
 By contributing you agree that your contributions are licensed under the

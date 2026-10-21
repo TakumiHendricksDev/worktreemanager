@@ -21,6 +21,7 @@
 
 use serde::Serialize;
 
+use crate::flow::{CheckRun, FindingId, FindingRecord, NewCheckRun, Reconciled};
 use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
     UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink,
@@ -52,6 +53,9 @@ pub enum FlowStoreError {
 
     #[error("no flow {0}")]
     UnknownFlow(FlowId),
+
+    #[error("no finding {0}")]
+    UnknownFinding(crate::flow::FindingId),
 
     /// The flow rules refused the event. Nothing was written.
     #[error(transparent)]
@@ -211,4 +215,35 @@ pub trait RunStore: Send + Sync {
         flow: Option<FlowId>,
         project: Option<&ProjectId>,
     ) -> Result<Vec<InboxItem>, FlowStoreError>;
+
+    /// A run's findings that are still reported, dismissed ones included, each with its evidence,
+    /// in the order they were saved.
+    fn findings(&self, flow: FlowId) -> Result<Vec<FindingRecord>, FlowStoreError>;
+
+    /// One finding, superseded or not: a rule saved from it still names it.
+    fn finding(&self, id: FindingId) -> Result<Option<FindingRecord>, FlowStoreError>;
+
+    /// Save a consolidation, as [`reconcile`](crate::flow::reconcile) decided it, in one
+    /// transaction: the superseded findings are marked, and the new ones written with their
+    /// evidence. Returns the run's findings afterwards.
+    fn save_consolidation(
+        &self,
+        flow: FlowId,
+        change: &Reconciled,
+        at: UnixMs,
+    ) -> Result<Vec<FindingRecord>, FlowStoreError>;
+
+    /// Dismiss a finding with a reason, or take a dismissal back with `None`.
+    fn dismiss_finding(
+        &self,
+        id: FindingId,
+        reason: Option<&str>,
+        at: UnixMs,
+    ) -> Result<FindingRecord, FlowStoreError>;
+
+    /// Record a check the app ran, or skipped, for a role. Never changed afterwards.
+    fn record_check(&self, run: &NewCheckRun, at: UnixMs) -> Result<CheckRun, FlowStoreError>;
+
+    /// A run's check records, oldest first.
+    fn checks(&self, flow: FlowId) -> Result<Vec<CheckRun>, FlowStoreError>;
 }

@@ -242,7 +242,9 @@ try {
             'the switch replaces the Home button',
         );
         assert.equal(
-            await views(page).getByRole('button', { name: /^Home/ }).getAttribute('aria-label'),
+            await views(page)
+                .getByRole('button', { name: /^Home/ })
+                .getAttribute('aria-label'),
             'Home — 1 waiting on you (⇧⌘H)',
             'the count the Home button carried rides on its segment',
         );
@@ -289,7 +291,20 @@ try {
             'true',
         );
         await page.getByText('Not reviewed yet', { exact: true }).waitFor();
-        assert(await page.getByRole('button', { name: 'Run Review' }).isDisabled());
+        // The panel's Run Review, which has no recipe to run. The header's is the same action
+        // from outside the tab (R8), and with no recipe it only lands here.
+        assert(
+            await page
+                .locator('#work-panel')
+                .getByRole('button', { name: 'Run Review' })
+                .isDisabled(),
+        );
+        assert(
+            await page
+                .locator('.c-work__header')
+                .getByRole('button', { name: 'Run Review' })
+                .isVisible(),
+        );
         assert(
             (
                 await page.getByRole('complementary', { name: /Inbox/ }).textContent()

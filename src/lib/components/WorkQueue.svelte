@@ -17,13 +17,17 @@
    * Rows are buttons in a list rather than a `role="tree"` like the sidebar's. There is nothing to
    * fold and no second level, so a tree's keyboard model would be ceremony with nothing behind it.
    */
+  import { untrack } from 'svelte';
+
   import {
     myWorktrees,
+    REVIEW_DOT,
     REVIEW_ROW_WORDS,
-    REVIEW_WORDS,
     reviewRows,
+    reviewStatus,
     subjectOf,
   } from '../work';
+  import { reviewRuns } from '../state/review-runs.svelte';
   import { reviews } from '../state/reviews.svelte';
   import { work } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
@@ -48,6 +52,31 @@
   const pullRequests = $derived(reviewRows(queue?.items ?? [], workspace.worktrees));
 
   let pasted = $state('');
+
+  /** Each row's review status, from its newest run once read. */
+  const statuses = $derived(
+    Object.fromEntries(
+      rows.map((row) => {
+        const run = reviewRuns.latest[row.id];
+        return [row.id, reviewStatus(run, run ? reviewRuns.staleness[run.flow.id] : null)];
+      }),
+    ),
+  );
+
+  // Each row's newest run, read once per row when Work shows the project. A run that moves after
+  // that announces itself with `flow:changed`; nothing here polls.
+  const rowIds = $derived(rows.map((row) => row.id).join('\n'));
+  $effect(() => {
+    const projectId = workspace.activeProjectId;
+    void rowIds;
+    if (!visible || !projectId) return;
+    untrack(() => {
+      for (const row of rows) {
+        if (reviewRuns.latest[row.id] === undefined)
+          void reviewRuns.load(projectId, row.id);
+      }
+    });
+  });
 
   // Read on arrival and on a project switch, never on a timer: the queue is local, and each pull
   // request is read from the forge only when it is opened.
@@ -91,15 +120,22 @@
                 title={row.detail}
                 onclick={() => work.pick(row.id)}
               >
-                <!-- Hollow, the shape `c-dot` gives a thing doing nothing; the word beside it is
-                     what says so, so the state is never in the shape alone. -->
-                <span class="c-dot c-dot--idle c-work-row__mark" aria-hidden="true"></span>
+                <!-- The mark is one of `c-dot`'s states; the line beside it is what says the state,
+                     so it is never in the shape alone. -->
+                <span
+                  class="c-dot c-dot--{REVIEW_DOT[
+                    statuses[row.id]?.status ?? 'unreviewed'
+                  ]} c-work-row__mark"
+                  aria-hidden="true"
+                ></span>
                 <span class="c-work-row__text">
                   <span class="c-work-row__name">
                     {#if row.key}<span class="c-work-row__key">{row.key}</span
                       >{#if row.name}{' · '}{/if}{/if}{row.name}
                   </span>
-                  <span class="c-work-row__status">{REVIEW_WORDS[row.review]}</span>
+                  <span class="c-work-row__status"
+                    >{statuses[row.id]?.line ?? 'Not reviewed'}</span
+                  >
                 </span>
               </button>
             </li>

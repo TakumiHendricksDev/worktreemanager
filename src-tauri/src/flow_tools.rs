@@ -24,13 +24,15 @@
 //! What was accepted goes into the [`Ledger`], per run and role. `flow_checkpoint` is real: an app
 //! commit, hooks off, refusing agent config.
 //!
-//! For a review run's roles the engine (`crate::flow`) answers `flow_progress`, `flow_submit` and
-//! `flow_ask` itself: a submission is the role's result, persisted, and only one of the kind the
-//! role's recipe says it hands in is accepted. The ledger still keeps a copy.
+//! For a review run's roles the engine (`crate::flow`) answers `flow_progress`, `flow_submit`,
+//! `flow_ask` and `flow_run_check` itself: a submission is the role's result, persisted, and only
+//! one of the kind the role's recipe says it hands in is accepted; a check is one the role's config
+//! names, run by the app and recorded (`crate::flow::checks`). The ledger still keeps a copy of
+//! what it can.
 //!
 //! What they do not do yet: interrupt the turn after `flow_ask` (a review answers it in place),
-//! publish a `flow_request`, or run a `flow_run_check` (no project declares a check until
-//! `[[check]]` exists). Each says so in its answer rather than pretending.
+//! publish a `flow_request`, or run a check for a session that is not a review role's. Each says so
+//! in its answer rather than pretending.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -521,8 +523,8 @@ pub fn answer_with(
             ))
         }
         FlowCall::RunCheck { name } => Response::failed(format!(
-            "this project configures no check named `{name}`: it declares no checks at all yet. \
-             Report what you would have run instead."
+            "`{name}` was not run: only a review run's roles can ask the app for a check, and \
+             this session is not one. Report what you would have run instead."
         )),
         FlowCall::ProposeRule(proposal) => {
             ledger.with(&role, |record| record.rules.push(proposal));
