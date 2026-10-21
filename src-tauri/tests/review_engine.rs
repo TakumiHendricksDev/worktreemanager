@@ -768,8 +768,12 @@ fn a_review_found_mid_run_at_launch_is_marked_interrupted_by_a_crash_and_nothing
         _ => Behaviour::Submit(vec![finding("x")]),
     }));
     let flow = h.start("pair");
-    h.until(flow, "correctness running", |v| {
+    // Conventions finished too, so every turn the first engine will ever send has been sent before
+    // the count below is taken: a role still opening could send its first turn after it, and the
+    // test would blame the relaunch for it.
+    h.until(flow, "correctness running and conventions done", |v| {
         Harness::statuses(v, "correctness") == [InvocationStatus::Running]
+            && Harness::step(v, "conventions").status == StepStatus::Done
     });
 
     // The process died: no shutdown ran. A new engine is what the next launch has.

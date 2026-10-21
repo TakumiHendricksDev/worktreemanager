@@ -2020,6 +2020,11 @@ impl Engine {
     ///
     /// When it does not exist or the database cannot be read.
     pub fn view(&self, flow: FlowId) -> Result<FlowView, String> {
+        // First, before any record is read. The run's thread lets go of the flow only after its
+        // roles have joined, so "not running" read first means every write they made is already
+        // in the reads below. Read last, it could pair a step still marked running with a thread
+        // that has since finished, and a caller waiting for the run to stop would see both.
+        let running = self.is_running(flow);
         let db = self.db()?;
         let state = db
             .flow(flow)
@@ -2054,7 +2059,7 @@ impl Engine {
             steps,
             invocations,
             inbox: db.inbox(Some(flow), None).map_err(text)?,
-            running: self.is_running(flow),
+            running,
             pull_request,
             review,
         })
