@@ -7,11 +7,15 @@
    *
    * # What it draws, and what it does not yet
    *
-   * The workspace header, Overview and Reviews. Overview is the worktree listing's own facts. Reviews
-   * shows "Not reviewed yet", which is the one true state while nothing can run a review, and its
-   * Run Review is disabled with the reason beside it rather than missing: it is where the view's
-   * main action will be, and a button that appears later moves everything around it. The plan's
-   * other tabs — Changes, Sessions, Activity — come with the items that give them something to show.
+   * For a worktree: the workspace header, Overview and Reviews. Overview is the worktree listing's
+   * own facts. Reviews shows "Not reviewed yet", which is the one true state while nothing can run
+   * a review, and its Run Review is disabled with the reason beside it rather than missing: it is
+   * where the view's main action will be, and a button that appears later moves everything around
+   * it. The plan's other tabs — Changes, Sessions, Activity — come with the items that give them
+   * something to show.
+   *
+   * For a pull request picked in Reviews: `WorkReview`, with what the forge says about it and the
+   * worktree a review of it reads.
    *
    * The inbox is empty and says what will land in it. Approvals from ordinary sessions stay where
    * they are, in Home and on the panes: the plan gives this inbox review runs' questions and
@@ -21,9 +25,11 @@
    * while Work is up.
    */
   import { changesOf, myWorktrees, REVIEW_WORDS, rowTitle, subjectOf } from '../work';
+  import { reviews } from '../state/reviews.svelte';
   import { work, type WorkTab } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
+  import WorkReview from './WorkReview.svelte';
 
   const {
     visible,
@@ -39,6 +45,12 @@
     { id: 'reviews', label: 'Reviews' },
   ];
 
+  /** A pull request picked in Reviews, while it is still in this project's queue. */
+  const reviewItem = $derived(
+    work.review !== null && reviews.projectId === workspace.activeProjectId
+      ? (reviews.queue?.items.find((item) => item.id === work.review) ?? null)
+      : null,
+  );
   const rows = $derived(myWorktrees(workspace.worktrees));
   const subject = $derived(subjectOf(rows, work.picked, workspace.selectedWorktreeId));
   const worktree = $derived(
@@ -74,7 +86,9 @@
 <section class="c-work" class:is-hidden={!visible} aria-label="Work">
   <div class="c-work__columns">
     <div class="c-work__main">
-      {#if subject && worktree}
+      {#if reviewItem}
+        <WorkReview item={reviewItem} {onopenworktree} />
+      {:else if subject && worktree}
         <header class="c-work__header">
           <div class="c-work__heading">
             <h1 class="c-work__title" title={subject.detail}>{rowTitle(subject)}</h1>

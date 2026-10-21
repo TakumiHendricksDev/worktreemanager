@@ -31,6 +31,7 @@ use wtm_core::model::{
     BranchRef, ChangeKind, Checkout, CommitId, FileChange, Hunk, PathList, WorkingTreeStatus,
     Worktree, WorktreeId,
 };
+use wtm_core::ports::git::RemoteUrl;
 
 /// Prefix git uses for local branch refs.
 const HEADS_PREFIX: &str = "refs/heads/";
@@ -285,6 +286,26 @@ pub fn parse_branch_lines(output: &str, strip_remote: Option<&str>) -> Vec<Branc
         })
         .filter(|name| *name != "HEAD" && !name.ends_with("/HEAD"))
         .map(BranchRef::new)
+        .collect()
+}
+
+/// Parse `git config -z --get-regexp '^remote\..+\.url$'`.
+///
+/// `-z` writes each entry as `key\nvalue\0`, which is what lets a URL that is a local path with a
+/// space in it survive. The remote's name is whatever lies between `remote.` and `.url`, dots
+/// included: git allows `remote.my.mirror.url`, and splitting on the first dot would call that
+/// remote `my`.
+pub fn parse_remote_urls(output: &str) -> Vec<RemoteUrl> {
+    output
+        .split('\0')
+        .filter_map(|entry| {
+            let (key, url) = entry.split_once('\n')?;
+            let name = key.strip_prefix("remote.")?.strip_suffix(".url")?;
+            (!name.is_empty() && !url.is_empty()).then(|| RemoteUrl {
+                name: name.to_owned(),
+                url: url.to_owned(),
+            })
+        })
         .collect()
 }
 
@@ -704,5 +725,28 @@ mod tests {
             "an insertion"
         );
         assert!(hunks[2].removed.is_empty());
+    }
+
+    #[test]
+    fn remote_urls_keep_a_dotted_remote_name_and_a_path_with_a_space() {
+        let out = concat!(
+            "remote.origin.url\nhttps://github.com/acme/webapp.git\0",
+            "remote.my.mirror.url\n/srv/git mirrors/webapp.git\0",
+            // Never produced by the regexp, but a stray key must not become a remote.
+            "remote.url\nnowhere\0",
+        );
+        assert_eq!(
+            parse_remote_urls(out),
+            [
+                RemoteUrl {
+                    name: "origin".to_owned(),
+                    url: "https://github.com/acme/webapp.git".to_owned(),
+                },
+                RemoteUrl {
+                    name: "my.mirror".to_owned(),
+                    url: "/srv/git mirrors/webapp.git".to_owned(),
+                },
+            ]
+        );
     }
 }

@@ -477,6 +477,135 @@ export type ExitOutcome =
   | { kind: 'timed_out'; afterMs: number }
   | { kind: 'cancelled' };
 
+// ── reviews: pull requests in the Work view's queue ──
+
+/** The forge a project's `[workflow] forge` names. One, so far. */
+export type ForgeKind = 'github';
+
+/** A pull request in the Reviews queue, as the flow store keeps it. */
+export interface ReviewItem {
+  id: number;
+  /** `owner/name`. */
+  repo: string;
+  number: number;
+  title: string;
+  /** The worktree last used to review it, by path. It may have been removed since. */
+  worktree: string | null;
+}
+
+export interface ReviewQueue {
+  /** Null when the project's workflow names no forge: nothing can be added, and the view says why. */
+  forge: ForgeKind | null;
+  items: ReviewItem[];
+}
+
+export interface RepoSlug {
+  host: string;
+  owner: string;
+  name: string;
+}
+
+export type PrState = 'open' | 'closed' | 'merged' | 'unknown';
+export type ChecksState = 'none' | 'failing' | 'pending' | 'passing';
+export type Permission =
+  'unknown' | 'none' | 'read' | 'triage' | 'write' | 'maintain' | 'admin';
+
+export interface PullRequest {
+  number: number;
+  url: string;
+  title: string;
+  author: string | null;
+  state: PrState;
+  draft: boolean;
+  /** `repo` is null when the fork the pull request came from has been deleted. */
+  head: { repo: RepoSlug | null; branch: string; sha: string };
+  base: { repo: RepoSlug; branch: string; sha: string | null };
+  /** From a fork. */
+  crossRepository: boolean;
+  maintainerCanModify: boolean;
+  requestedReviewers: { name: string; team: boolean }[];
+  checks: { passed: number; failed: number; pending: number; skipped: number };
+}
+
+export interface BranchProtection {
+  branch: string;
+  /** Null when the forge would not say. */
+  protected: boolean | null;
+  rules: string[];
+}
+
+export interface ForgeAccount {
+  host: string;
+  login: string | null;
+  version: string | null;
+}
+
+/** One pull request, as the forge describes it now. */
+export interface ReviewDetail {
+  item: ReviewItem;
+  pullRequest: PullRequest;
+  checksState: ChecksState;
+  permission: Permission;
+  canPush: boolean;
+  /** The base branch is one of the workflow's integration branches. */
+  baseIntegration: boolean;
+  /** Read only when the base is an integration branch. */
+  baseProtection: BranchProtection | null;
+  account: ForgeAccount;
+}
+
+export type ReviewCheckout = 'detached' | 'branch';
+
+export interface ReviewWorktreeArgs {
+  itemId: number;
+  /** The head the view showed. Preparing refuses a different one. */
+  expectedHead: string | null;
+  checkout: ReviewCheckout;
+  /** Run the project's setup in the new worktree. Off unless asked for. */
+  prepareEnvironment: boolean;
+  acknowledged?: string[];
+  rows?: number;
+  cols?: number;
+}
+
+export type ReuseReason =
+  'review_branch' | 'review_directory' | 'pull_request_branch' | 'head_commit';
+
+export type ReviewTarget =
+  | {
+      kind: 'reuse';
+      worktreeId: string;
+      path: string;
+      reason: ReuseReason;
+      atHead: boolean;
+    }
+  | { kind: 'create'; directory: string; branch: string | null; gitArgv: string[] };
+
+export type ReviewSetup =
+  | { kind: 'skipped' }
+  | { kind: 'not_declared' }
+  | { kind: 'not_applicable' }
+  | { kind: 'run'; argv: string[]; cwd: string };
+
+/** What preparing a review worktree would do, before anything has. */
+export interface ReviewPreview {
+  number: number;
+  head: string;
+  fetch: { remote: string; refspec: string } | null;
+  headPresent: boolean;
+  target: ReviewTarget;
+  setup: ReviewSetup;
+  preflight: Preflight[];
+  warnings: string[];
+  canCreate: boolean;
+}
+
+export type ReviewOutcome =
+  | { kind: 'reused'; worktreeId: string; path: string; atHead: boolean }
+  | { kind: 'created'; worktreeId: string; path: string; setupSession: string | null }
+  | { kind: 'setup_failed'; worktreeId: string; path: string; session: string }
+  | { kind: 'cancelled'; worktreeId: string | null };
+
 export type RemoveOutcome =
   | { kind: 'removed'; branchDeleted: boolean; warnings: PlanWarning[] }
   | { kind: 'teardown_failed'; session: string | null; warnings: PlanWarning[] };

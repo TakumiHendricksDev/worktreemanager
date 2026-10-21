@@ -6,7 +6,7 @@
 //! - [`slug`] — the one piece of naming logic that must be bit-compatible with an
 //!   existing shell function.
 //! - [`create`] — the ten-stage create pipeline, built around the rule that stages 1–6
-//!   mutate nothing.
+//!   mutate nothing, with two inputs: the New Worktree form, and a pull request to review.
 //! - [`remove`] — teardown, then `git worktree remove`, then optionally the branch.
 //! - [`snapshot`] — what a review read: a tree, a patch, and a detached checkout of it.
 
@@ -15,7 +15,10 @@ pub mod remove;
 pub mod slug;
 pub mod snapshot;
 
-pub use create::{CreatePipeline, CreateRequest, SetupRequest};
+pub use create::{
+    CreatePipeline, CreateRequest, ReuseReason, ReviewCheckout, ReviewFetch, ReviewOutcome,
+    ReviewPlan, ReviewPreview, ReviewRequest, ReviewSetup, ReviewTarget, SetupRequest,
+};
 pub use remove::{RemoveOutcome, RemovePipeline, RemoveRequest, TeardownStep};
 pub use slug::slugify;
 pub use snapshot::{SnapshotCheckout, SnapshotError, Snapshots};

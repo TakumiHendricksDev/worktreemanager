@@ -1,0 +1,5 @@
+[
+  {"number": 4040, "url": "https://github.com/acme/webapp/pull/4040", "title": "Their main", "state": "OPEN", "headRefName": "main", "headRefOid": "4040404040404040404040404040404040404040", "headRepository": {"name": "webapp", "nameWithOwner": "sam-rivera/webapp"}, "headRepositoryOwner": {"login": "sam-rivera"}, "isCrossRepository": true, "baseRefName": "main"},
+  {"number": 3990, "url": "https://github.com/acme/webapp/pull/3990", "title": "First try", "state": "CLOSED", "headRefName": "main", "headRefOid": "3990399039903990399039903990399039903990", "headRepository": {"name": "webapp", "nameWithOwner": "acme/webapp"}, "headRepositoryOwner": {"login": "acme"}, "isCrossRepository": false, "baseRefName": "release"},
+  {"number": 3950, "url": "https://github.com/acme/webapp/pull/3950", "title": "Older and open", "state": "OPEN", "headRefName": "main", "headRefOid": "3950395039503950395039503950395039503950", "headRepository": {"name": "webapp", "nameWithOwner": "acme/webapp"}, "headRepositoryOwner": {"login": "acme"}, "isCrossRepository": false, "baseRefName": "release"}
+]

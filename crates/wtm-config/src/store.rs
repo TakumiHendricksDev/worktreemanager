@@ -350,13 +350,17 @@ fn most_specific(loaded: &[LoadedLayer], declares: impl Fn(&Value) -> bool) -> O
         })
 }
 
-/// Refuse recipes and roles declared in a repository's `wtm.toml`.
+/// Refuse recipes, roles and a forge declared in a repository's `wtm.toml`.
 ///
 /// A role chooses which of your MCP servers and plugins a run session may load and which provider
 /// account it spends, so it is authority, and a committed file is written by whoever can push to the
 /// branch. The trust prompt is the wrong tool here: it shows commands to approve, and a role is not
 /// a command, so approving one would be a click on something the prompt never showed. Your own
 /// config and the untracked local layer are yours, so both may declare them.
+///
+/// `forge` is refused for the same reason in different words: naming one is the opt-in that lets
+/// the Work view call that forge through your own CLI and credentials (ARCHITECTURE §6a), and that
+/// consent is not the repository's to give.
 fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
     for layer in loaded
         .iter()
@@ -365,20 +369,31 @@ fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
         let Some(workflow) = layer.value.get("workflow") else {
             continue;
         };
+        let refuse = |key: &str, message: &str| ConfigError::Invalid {
+            path: layer.path.clone().unwrap_or_default(),
+            layer: ConfigLayer::Repo,
+            line: None,
+            column: None,
+            key: Some(format!("workflow.{key}")),
+            message: message.to_owned(),
+        };
         for table in ["role", "recipe"] {
             if workflow.get(table).is_some() {
-                return Err(ConfigError::Invalid {
-                    path: layer.path.clone().unwrap_or_default(),
-                    layer: ConfigLayer::Repo,
-                    line: None,
-                    column: None,
-                    key: Some(format!("workflow.{table}")),
-                    message: "recipes and roles belong in your own config \
-                              (~/.config/wtm/config.toml), not in a repository's wtm.toml: a role \
-                              decides which of your MCP servers, plugins and accounts a run uses"
-                        .to_owned(),
-                });
+                return Err(refuse(
+                    table,
+                    "recipes and roles belong in your own config \
+                     (~/.config/wtm/config.toml), not in a repository's wtm.toml: a role \
+                     decides which of your MCP servers, plugins and accounts a run uses",
+                ));
             }
+        }
+        if workflow.get("forge").is_some() {
+            return Err(refuse(
+                "forge",
+                "the forge belongs in your own config (~/.config/wtm/config.toml), not in a \
+                 repository's wtm.toml: naming it lets wtm use your gh sign-in for this \
+                 project, and that is your decision",
+            ));
         }
     }
     Ok(())
@@ -1344,6 +1359,34 @@ roles = ["conventions", "correctness"]
             }
             other => panic!("expected Invalid, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_repository_cannot_name_the_forge_that_spends_your_sign_in() {
+        let h = Harness::new();
+        h.write_repo_config("[workflow]\nforge = \"github\"\nintegration_branches = [\"main\"]\n");
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid { layer, key, .. } => {
+                assert_eq!(layer, ConfigLayer::Repo);
+                assert_eq!(key.as_deref(), Some("workflow.forge"));
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn your_config_names_the_forge_and_a_repository_may_name_its_integration_branches() {
+        let h = Harness::new();
+        h.write_repo_config("[workflow]\nintegration_branches = [\"main\", \"release/*\"]\n");
+        let project_key = h.repo.to_string_lossy().into_owned();
+        h.write_user_config(&format!(
+            "[projects.\"{project_key}\".config.workflow]\nforge = \"github\"\n"
+        ));
+
+        let workflow = h.store.load(&h.repo).unwrap().workflow.unwrap();
+        assert_eq!(workflow.forge, Some(wtm_core::flow::ForgeKind::Github));
+        assert!(workflow.is_integration_branch("release/4.2"));
     }
 
     #[test]

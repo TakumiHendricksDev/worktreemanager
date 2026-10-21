@@ -100,6 +100,29 @@ fn a_work_item_reads_back_as_it_was_created() {
 }
 
 #[test]
+fn a_projects_work_items_list_in_the_order_they_were_added_and_no_other_projects() {
+    let f = fixture();
+    let first =
+        f.db.create_work_item(&new_item(None, Some(pull_request(41))), 1_000)
+            .unwrap();
+    let elsewhere = NewWorkItem {
+        project: ProjectId::from_root(Path::new("/work/other")),
+        ..new_item(None, Some(pull_request(7)))
+    };
+    f.db.create_work_item(&elsewhere, 1_500).unwrap();
+    let second =
+        f.db.create_work_item(&new_item(Some(issue("ACME-12")), None), 2_000)
+            .unwrap();
+
+    assert_eq!(f.db.work_items(&project()).unwrap(), [first, second]);
+    assert!(
+        f.db.work_items(&ProjectId::from_root(Path::new("/work/none")))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn a_second_work_item_for_the_same_issue_is_refused_and_names_the_first() {
     let f = fixture();
     let first = an_issue_item(&f.db);

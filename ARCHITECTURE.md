@@ -55,6 +55,7 @@ wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl 
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
 wtm-appdb    the app's own SQLite store for work items and flows (§9).     impl FlowStore
+wtm-forge    pull requests through the user's own `gh` (§6a). Reads only.  impl Forge
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
 ```
@@ -230,6 +231,25 @@ panes and again before teardown. Main and locked checkouts are unoverridable; no
 unlocks one. Confirmed removal invalidates the named project's caches and reconciles only that
 worktree's panes, even when another project is active. Managed run children and ordinary process
 groups are signalled together, with one grace period and no app/run lock held while waiting.
+
+### A pull request is an input too, and its setup is opt-in
+
+A review worktree is the same pipeline with a pull request in the form's place
+(`usecase/create/review.rs`): stages 1–6 read the remotes, the worktrees and whether the head
+commit is here, and decide; the fetch, the `git worktree add` and setup come after the same
+preflight gate. Three things differ, each for a stated reason:
+
+- **Setup does not run unless asked.** A project's setup may clone a database or run migrations
+  against the branch just checked out, and for a review that is someone else's branch, opened
+  before anyone has read it. "Prepare environment" is the opt-in, and the preview shows the exact
+  argv when it is on.
+- **The checkout is the head commit, by id.** A fork's commits come from the base repository's
+  `pull/<n>/head`, because adding the fork as a remote would change your config to read one pull
+  request. The worktree is detached at the head the forge reported, or on a new `pr-<n>` branch with
+  no upstream, and a head that moved since it was shown is a preflight error.
+- **A worktree that already holds the pull request is the answer.** Planning finds it by the review
+  branch, the review directory, the pull request's own branch, or its head commit, and executing
+  that plan mutates nothing. One that is behind the head is reported, never moved.
 
 ### The relaxation: a snapshot writes objects, never refs
 
@@ -949,7 +969,13 @@ It is a category of its own rather than a variation on the routes above, for thr
   review, posting a comment, marking a pull request ready, moving an issue and merging each wait for
   an approval bound to the exact head or text, and merging has no agent tool at all.
 
-Neither `wtm-forge` nor `wtm-tracker` exists yet. This is the boundary they will be held to.
+`wtm-forge` is the first of them, and so far it only reads: a pull request by URL, number or head
+branch, your permission on the repository, and branch protection. It is handed a `CommandRunner`
+and depends on nothing that could reach the network another way, which `network_boundary.rs` pins.
+It is called only while the Work view is on and only for a project whose *own* config names a
+forge (`[workflow] forge = "github"`); a repository's committed `wtm.toml` may not name one,
+because that is the consent this paragraph is about. `wtm-tracker` does not exist yet. This is the
+boundary it will be held to.
 
 **The egress is in Rust, and that placement is the whole design.** A `fetch` from the webview
 would have been fewer lines and would have widened `connect-src` — after which "the frontend

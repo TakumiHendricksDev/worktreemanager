@@ -1,0 +1,66 @@
+/*
+ * A queued pull request in the Work view: the forge's facts about it, then the panel that prepares
+ * the worktree a review reads.
+ *
+ * Built from blocks that already exist — `.o-facts` for both lists, `.c-work-state` for the
+ * prepare panel, `.c-preflight` for what blocks it — so this file holds only the spacing between
+ * them and the few elements none of those has: the option group, the setup argv, a note under an
+ * option. The prepare panel is a `.c-work-state` because it is one: the state a review is in
+ * before anything has been read, and the one thing to do about it.
+ */
+
+.c-work-review__facts {
+  max-width: 720px;
+  margin-bottom: var(--sp-5);
+}
+
+/* The option group reads as part of the panel's prose, not as a form in a box of its own. */
+.c-work-review__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.c-work-review__legend {
+  margin-bottom: var(--sp-1);
+  padding: 0;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-work-review__note {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+/* What Prepare will run, in the same two columns as the facts above, at the panel's size. */
+.c-work-review__plan {
+  margin-top: var(--sp-2);
+  font-size: var(--step--1);
+}
+
+/* An argv on a line of its own under the sentence that introduces it, wrapping anywhere: a path
+   argument is often longer than the column. */
+.c-work-review__argv {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.c-work-review__warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--step--1);
+}
+
+.c-work-review__error {
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

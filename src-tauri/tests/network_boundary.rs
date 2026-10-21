@@ -2,7 +2,8 @@
 //!
 //! The webview has no direct network access. Rust may reach the fixed transcription host when the
 //! user dictates, a database target that an approved config declared and the user explicitly
-//! connected, or the fixed GitHub releases endpoint to see whether a newer wtm exists. The parts of
+//! connected, the fixed GitHub releases endpoint to see whether a newer wtm exists, or, for a
+//! project whose own config names a forge, that forge through the user's own `gh`. The parts of
 //! that boundary that can be mechanical belong here rather than in prose.
 //!
 //! Three properties, each with a different way of going wrong:
@@ -178,4 +179,25 @@ fn no_crate_in_this_workspace_links_an_http_client() {
         offenders.is_empty(),
         "database protocols and dictation need no linked HTTP client; found: {offenders:?}"
     );
+}
+
+#[test]
+fn the_forge_is_reached_only_through_the_users_own_gh() {
+    // ARCHITECTURE §6a: workflow egress is the user's own CLI, spawned like any other subprocess,
+    // with the credentials it already holds. `wtm-forge` is handed a runner rather than spawning,
+    // and its manifest is the proof: nothing in it can open a socket or a process by itself. A
+    // dependency added here is a second route to GitHub, and that is a decision for ARCHITECTURE,
+    // not for a diff.
+    let manifest = std::fs::read_to_string(repo_root().join("crates/wtm-forge/Cargo.toml"))
+        .expect("wtm-forge manifest");
+    let manifest: toml::Value = toml::from_str(&manifest).expect("valid TOML");
+    let mut dependencies: Vec<&str> = manifest["dependencies"]
+        .as_table()
+        .expect("a dependency table")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    dependencies.sort_unstable();
+    assert_eq!(dependencies, ["serde_json", "wtm-core"]);
+    assert_eq!(wtm_forge::PROGRAM, "gh");
 }

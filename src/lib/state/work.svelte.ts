@@ -21,11 +21,22 @@ export type WorkTab = 'overview' | 'reviews';
 class Work {
   /** The queue row picked, by worktree id. See `subjectOf` for what is shown when it is gone. */
   picked = $state<string | null>(null);
+  /**
+   * The pull request picked in Reviews, by work item id. While set, it is what the workspace
+   * shows; picking a worktree clears it. Two fields rather than one union because a worktree pick
+   * outlives a review pick: closing a pull request's panel lands back on the worktree you had.
+   */
+  review = $state<number | null>(null);
   /** Reviews first: the review slice is what this view is for. */
   tab = $state<WorkTab>('reviews');
 
   pick(worktreeId: string): void {
     this.picked = worktreeId;
+    this.review = null;
+  }
+
+  pickReview(itemId: number): void {
+    this.review = itemId;
   }
 }
 

@@ -66,11 +66,13 @@ the browser pane's isolated-world runtime needs — each restate that table verb
 `unsafe_code = "deny"`. Their `Cargo.toml` headers name the safe wrappers that were rejected and
 why. A third such crate is an open-an-issue-first change.
 
-**The webview cannot reach the network.** Rust has three explicit routes: dictation sends audio to a
+**The webview cannot reach the network.** Rust has four explicit routes: dictation sends audio to a
 compiled-in host through `curl`, the database viewer connects to a target shown by the config
-trust prompt after the user clicks Connect, and the update check asks a compiled-in GitHub endpoint
-for the latest release, also through `curl`. `src-tauri/tests/network_boundary.rs` pins the CSP, both
-fixed hosts, and the absence of a linked HTTP client. A new kind of egress, or reaching
+trust prompt after the user clicks Connect, the update check asks a compiled-in GitHub endpoint
+for the latest release, also through `curl`, and the Work view reads pull requests through the
+user's own `gh`, only for a project whose own config names that forge.
+`src-tauri/tests/network_boundary.rs` pins the CSP, both fixed hosts, `wtm-forge`'s dependency list,
+and the absence of a linked HTTP client. A new kind of egress, or reaching
 for `reqwest`, is an open-an-issue-first change — ARCHITECTURE §6a records the boundary. Browser
 panes are a *separate* webview with their own origin and no capabilities; §6c records what keeps a
 page in one out of the app.

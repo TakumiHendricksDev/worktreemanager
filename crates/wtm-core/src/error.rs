@@ -37,6 +37,9 @@ pub enum WtmError {
     #[error(transparent)]
     Database(#[from] DatabaseError),
 
+    #[error(transparent)]
+    Forge(#[from] ForgeError),
+
     /// The submitted form is not valid. Carries every field's problem at once so
     /// the UI can show all of them inline rather than one per round-trip.
     #[error("{} field(s) need attention", .0.len())]
@@ -277,6 +280,51 @@ pub enum ExecError {
     /// an argv to name.
     #[error("{0}")]
     Refused(String),
+}
+
+/// A forge read that did not produce an answer.
+///
+/// Split by what the person can do about it, which is what the view needs: install or upgrade the
+/// CLI, sign it in, check the number, or read the CLI's own words. `message` fields carry the CLI's
+/// stderr verbatim, as [`GitError::Failed`] does, because its wording is better than a paraphrase
+/// and it holds no credential: the CLIs this wraps never print a token unless asked to.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ForgeError {
+    #[error("`{program}` is not installed, or is not on the PATH wtm uses")]
+    NotInstalled { program: String },
+
+    #[error("{program} {found} is too old: wtm needs {required} or later ({reason})")]
+    TooOld {
+        program: String,
+        found: String,
+        required: String,
+        reason: String,
+    },
+
+    #[error(
+        "{program} is not signed in to {host}. Run `{program} auth login` in a terminal. {message}"
+    )]
+    SignedOut {
+        program: String,
+        host: String,
+        message: String,
+    },
+
+    /// The repository or pull request does not exist, or this account cannot see it. A forge
+    /// answers both the same way on purpose, so this cannot tell them apart either.
+    #[error("{what} was not found, or this account cannot see it")]
+    NotFound { what: String },
+
+    #[error("`{argv}` failed: {message}")]
+    Failed { argv: String, message: String },
+
+    #[error("`{argv}` did not answer within {timeout_ms}ms")]
+    Timeout { argv: String, timeout_ms: u64 },
+
+    /// The CLI answered, in a shape this build cannot read.
+    #[error("could not read {what}: {message}")]
+    Unreadable { what: String, message: String },
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]
