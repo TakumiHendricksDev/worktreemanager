@@ -53,6 +53,9 @@ pub const FLOW_DIRNAME: &str = "flow";
 /// The empty `gh` config directory workflow runs point `GH_CONFIG_DIR` at, under the data root.
 pub const RUN_GH_CONFIG_DIRNAME: &str = "run-gh-config";
 
+/// Where each workflow run session keeps its private files, under the data root.
+pub const RUN_SESSIONS_DIRNAME: &str = "run-sessions";
+
 /// Resolved application paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
@@ -90,6 +93,12 @@ pub struct AppPaths {
     ///
     /// Under the data root for Home's reasons: it is state the app owns, and nobody's dotfiles.
     pub run_gh_config_dir: PathBuf,
+    /// Each workflow run session's private directory sits in here: its MCP config with its bridge
+    /// token, its Codex home, its sandbox canary. See `src-tauri/src/flow_session.rs`.
+    ///
+    /// One root for all of them, so a run's sandbox can deny reads of the whole thing and no run's
+    /// commands can read another run's token.
+    pub run_sessions_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -132,6 +141,7 @@ impl AppPaths {
             flow_db: data_dir.join(FLOW_DB_FILENAME),
             flow_dir: data_dir.join(FLOW_DIRNAME),
             run_gh_config_dir: data_dir.join(RUN_GH_CONFIG_DIRNAME),
+            run_sessions_dir: data_dir.join(RUN_SESSIONS_DIRNAME),
         }
     }
 

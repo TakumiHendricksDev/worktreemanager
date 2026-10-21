@@ -40,6 +40,7 @@ import {
   type ApprovalAnswer,
   type ApprovalRequest,
   type Capability,
+  type FlowRole,
   type PtyExit,
   type BackgroundTask,
   type Brief,
@@ -391,6 +392,12 @@ export interface Pane {
   parentSession: string | null;
   /** Sibling children created by one orchestration call share this id. */
   run: string | null;
+  /**
+   * The run and role, for a workflow run's session: opened by the app with no parent, and kept
+   * behind its run's rail instead of a tile. Not stored with the surface — see `remember` — because
+   * after a quit the run, not the window, decides whether the role resumes.
+   */
+  flow: FlowRole | null;
   /** Human-facing task label supplied by the orchestrator. */
   agentTitle: string | null;
   /**
@@ -1011,10 +1018,15 @@ class Sessions {
     return this.panes.filter((pane) => pane.parentSession === session);
   }
 
-  /** Delegated children in a worktree, in announcement order. */
+  /**
+   * Delegated children in a worktree, in announcement order — and a workflow run's sessions, which
+   * have no parent but live behind a rail all the same.
+   */
   delegatedIn(worktreeId: string): Pane[] {
     return this.panes.filter(
-      (pane) => pane.worktreeId === worktreeId && pane.parentSession !== null,
+      (pane) =>
+        pane.worktreeId === worktreeId &&
+        (pane.parentSession !== null || pane.flow !== null),
     );
   }
 
@@ -1260,6 +1272,7 @@ class Sessions {
         agent.worktree,
         agent.session,
         agent.providerSession,
+        agent.flow ?? null,
       );
     }
     // Only after a *reload*: a browser has no process to outlive a quit, so after a relaunch this
@@ -1372,6 +1385,7 @@ class Sessions {
     pane.mode = spawned.mode;
     pane.parentSession = spawned.parentSession;
     pane.run = spawned.run;
+    pane.flow = spawned.flow ?? null;
     pane.agentTitle = spawned.title;
     // Tiled, below, like a hand-opened pane — `parentSession` is null for these. See the field.
     pane.openedFromHome = spawned.openedBy !== null && spawned.openedBy !== undefined;
@@ -1382,7 +1396,7 @@ class Sessions {
 
     const live = this.paneById(pane.id);
     if (live) this.claimSession(live, spawned.session);
-    if (spawned.parentSession === null) {
+    if (spawned.parentSession === null && pane.flow === null) {
       this.place(spawned.worktree, pane.id, 'right');
     } else {
       // Delegated children stay mounted but do not each consume a tile. The agent rail makes them
@@ -2381,6 +2395,7 @@ class Sessions {
     worktreeId: string,
     session: string,
     providerSession?: string,
+    flow: FlowRole | null = null,
   ): Promise<void> {
     // A reload restores the surface first, so this session probably already has a pane waiting for
     // it. Matched on wtm's own session id before the provider's, because only the first is exact:
@@ -2395,6 +2410,12 @@ class Sessions {
         : undefined);
 
     const pane = restored ?? this.blank(kind, projectId, worktreeId);
+    if (flow) {
+      // Never stored, so never restored: a reloaded window finds a run's session only here.
+      pane.flow = flow;
+      pane.run = `flow-${flow.flow}`;
+      pane.agentTitle = flow.role;
+    }
     if (restored) {
       restored.detached = false;
       // Cleared so the claim below is not skipped as a session it already owns.
@@ -2411,7 +2432,7 @@ class Sessions {
     // A restored pane is already in the tree, in the place the user put it. Placing it again would
     // move it, which is the behaviour this whole path exists to stop. Home's pane is never placed
     // anywhere: it is drawn by Home's surface, and a tile would mount it a second time.
-    if (!restored && !isHome(worktreeId)) this.place(worktreeId, pane.id, 'right');
+    if (!restored && !isHome(worktreeId) && !flow) this.place(worktreeId, pane.id, 'right');
     else this.remember(worktreeId);
   }
 
@@ -2490,6 +2511,7 @@ class Sessions {
       sideOf: null,
       parentSession: null,
       run: null,
+      flow: null,
       agentTitle: null,
       firstPrompt: null,
       openedFromHome: false,
@@ -2662,9 +2684,12 @@ class Sessions {
     return panesOf(this.layoutFor(worktreeId)).length + this.outIn(worktreeId).length;
   }
 
-  /** Panes the user opened. Delegated children are budgeted in `handoff.rs`; see `hasRoom`. */
+  /**
+   * Panes the user opened. Delegated children are budgeted in `handoff.rs`, and a run's sessions by
+   * the run; see `hasRoom`.
+   */
   private ownPanes(): Pane[] {
-    return this.panes.filter((pane) => pane.parentSession === null);
+    return this.panes.filter((pane) => pane.parentSession === null && pane.flow === null);
   }
 
   /**
@@ -4282,7 +4307,9 @@ class Sessions {
     // localStorage is shared by every window on this origin, and a pane window's one-pane surface
     // written here would replace the main window's whole arrangement for the worktree.
     if (inPaneWindow) return;
-    const panes = this.panesIn(worktreeId).filter((pane) => pane.sideOf === null);
+    const panes = this.panesIn(worktreeId).filter(
+      (pane) => pane.sideOf === null && pane.flow === null,
+    );
     // Saved with every popped-out pane back where it came from, because pane windows do not survive
     // a relaunch and a pane with no leaf would come back unreachable. Newest first, so each one is
     // put back into the tree it left — which keeps the exact answer exact.

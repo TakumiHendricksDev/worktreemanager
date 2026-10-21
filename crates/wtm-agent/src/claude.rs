@@ -46,6 +46,7 @@ use wtm_core::model::{
     NoticeLevel, Usage, UsageLimits, UserInputOption, UserInputQuestion,
 };
 
+use crate::authority::RunAuthority;
 use crate::provider::{McpServer, Protocol, Provider, ProviderId, SessionRequest, Step};
 
 pub const ID: &str = "claude";
@@ -132,8 +133,14 @@ fn fast_mode_refusal(reason: &str) -> String {
 /// Merged rather than replacing: `--help` calls this "additional settings", so a user's own
 /// `settings.json` survives. Key order is whatever `serde_json::Map` gives, which is stable for a
 /// given set — argv that reordered between identical launches would be noise in a trust prompt.
+///
+/// A run profile's sandbox and permission rules go in the same object, and first, so the two keys
+/// below are added beside them rather than the other way round.
 fn flag_settings(req: &SessionRequest) -> Option<String> {
-    let mut settings = serde_json::Map::new();
+    let mut settings = match &req.run {
+        Some(RunAuthority::Claude(run)) => run.settings.as_object().cloned().unwrap_or_default(),
+        _ => serde_json::Map::new(),
+    };
     if req.effort.as_deref() == Some(crate::capability::ULTRACODE) {
         settings.insert(ULTRACODE_KEY.to_owned(), Value::Bool(true));
     }
@@ -523,7 +530,31 @@ impl Provider for Claude {
                 argv.push(effort.clone());
             }
         }
-        if let Some(mode) = &req.mode {
+        let run = match &req.run {
+            Some(RunAuthority::Claude(run)) => Some(run),
+            // Refused before spawn by `AgentSession::open`. Reaching here anyway builds the
+            // ordinary argv, which is only safe because nothing can start from it.
+            _ => None,
+        };
+        if let Some(run) = run {
+            // The profile's mode, never the request's: a run's authority is not a picker setting.
+            argv.push("--permission-mode".to_owned());
+            argv.push(run.permission_mode.to_owned());
+            // Both, because each alone leaves something running that a repository chose. F2 found
+            // `--strict-mcp-config` alone still runs the repository's `SessionStart` hook and
+            // `--setting-sources user` brings the user's hooks, plugins and default mode. With no
+            // sources, everything the session needs is in the one `--settings` object below.
+            argv.push("--strict-mcp-config".to_owned());
+            argv.push("--setting-sources".to_owned());
+            argv.push(String::new());
+            // One argument, comma-separated: the flag is variadic and would swallow a positional
+            // prompt after it. This CLI takes prompts on stdin, but the next caller may not.
+            argv.push("--tools".to_owned());
+            argv.push(run.tools.join(","));
+            if !run.persist {
+                argv.push("--no-session-persistence".to_owned());
+            }
+        } else if let Some(mode) = &req.mode {
             argv.push("--permission-mode".to_owned());
             argv.push(canonical_mode(mode).to_owned());
         }
@@ -534,11 +565,19 @@ impl Provider for Claude {
             argv.push("--settings".to_owned());
             argv.push(settings);
         }
-        // One `--mcp-config` carrying every server as JSON. The flag accepts a file path or a
-        // literal object; the literal is used because the alternative is a temp file whose lifetime
-        // nothing here owns — the CLI reads it at some unspecified point after spawn, so deleting it
-        // is a race and leaving it is litter in a directory the user did not choose.
-        if !req.mcp.is_empty() {
+        if let Some(run) = run {
+            // A path, unlike a pane's literal below: this config carries the run's bridge token, and
+            // a literal is in every process listing on the machine for the life of the session. The
+            // composition root owns the file's lifetime, which is what the literal was avoiding.
+            if let Some(path) = &run.mcp_config {
+                argv.push("--mcp-config".to_owned());
+                argv.push(path.clone());
+            }
+        } else if !req.mcp.is_empty() {
+            // One `--mcp-config` carrying every server as JSON. The flag accepts a file path or a
+            // literal object; the literal is used because the alternative is a temp file whose
+            // lifetime nothing here owns — the CLI reads it at some unspecified point after spawn, so
+            // deleting it is a race and leaving it is litter in a directory the user did not choose.
             argv.push("--mcp-config".to_owned());
             argv.push(mcp_config_json(&req.mcp));
         }
@@ -557,7 +596,10 @@ impl Provider for Claude {
         argv.push("--add-dir".to_owned());
         argv.push(req.cwd.clone());
 
-        argv.extend(req.extra_args.iter().cloned());
+        // A repository's argv is not part of a run's profile; see `SessionRequest::run`.
+        if run.is_none() {
+            argv.extend(req.extra_args.iter().cloned());
+        }
         argv
     }
 
@@ -566,6 +608,10 @@ impl Provider for Claude {
             history: claude_history(req),
             side: req.ephemeral,
             fast_wanted: req.fast == Some(true),
+            locked_mode: match &req.run {
+                Some(RunAuthority::Claude(run)) => Some(run.permission_mode),
+                _ => None,
+            },
             ..ClaudeProtocol::default()
         })
     }
@@ -591,7 +637,7 @@ impl Provider for Claude {
 /// is a fact about *this* CLI's flag: Codex takes the same set of servers as a pile of `-c` dotted
 /// overrides, and a caller that pre-serialized for one of them is the reason the other silently
 /// received nothing for an increment.
-fn mcp_config_json(servers: &BTreeMap<String, McpServer>) -> String {
+pub(crate) fn mcp_config_json(servers: &BTreeMap<String, McpServer>) -> String {
     let mut map = serde_json::Map::new();
     for (name, server) in servers {
         map.insert(
@@ -720,6 +766,8 @@ struct ClaudeProtocol {
     fast_wanted: bool,
     /// The last fast-mode refusal already reported, so a standing one is said once and not per turn.
     fast_refusal: Option<String>,
+    /// A workflow run session's permission mode, which is its profile's and no picker's to change.
+    locked_mode: Option<&'static str>,
     /// Every command the CLI has described, by name, from the last list it gave with descriptions.
     ///
     /// Kept because the `init` line that opens the first turn names commands and nothing else, and
@@ -1665,7 +1713,10 @@ impl Protocol for ClaudeProtocol {
                 "model": model,
             })));
         }
-        if let Some(mode) = mode {
+        // A run's mode is part of its authority profile, and `set_permission_mode` would move a
+        // reviewer in `dontAsk` to whatever the pane's picker sent. Ignored rather than refused:
+        // the model and effort in the same call are still the user's to change.
+        if let Some(mode) = mode.filter(|_| self.locked_mode.is_none()) {
             steps.push(Self::control_request(&json!({
                 "subtype": "set_permission_mode",
                 "mode": canonical_mode(mode),

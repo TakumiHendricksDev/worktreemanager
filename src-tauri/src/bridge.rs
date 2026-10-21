@@ -211,13 +211,7 @@ pub fn serve_stdio() {
     let mut stdout = std::io::stdout();
 
     let agents = agents_from_env();
-    let awareness = std::env::var(handoff::AWARENESS_ENV).as_deref() == Ok("on");
-    let browser = std::env::var(handoff::BROWSER_TOOLS_ENV).as_deref() == Ok("on");
-    let code = std::env::var(handoff::CODE_TOOLS_ENV).as_deref() == Ok("on");
-    let design = std::env::var(crate::prototype_tools::ENV).as_deref() == Ok("on");
-    // A Home bridge lists Home's tools *instead of* the worktree ones: Home has no worktree for
-    // those to act on, and offering them would only teach the model they are broken.
-    let home = std::env::var(crate::home::HOME_TOOLS_ENV).as_deref() == Ok("on");
+    let offer = Offer::from_env();
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -238,19 +232,8 @@ pub fn serve_stdio() {
 
         let reply = match method {
             "initialize" => Some(result(&id, &initialize(&params))),
-            "tools/list" if home => Some(result(
-                &id,
-                &json!({ "tools": crate::home_tools::definitions(&agents) }),
-            )),
-            "tools/call" if home => Some(result(&id, &call_home(&params))),
-            "tools/list" => {
-                let mut listed = tools(&agents, awareness, browser, code);
-                if design && let Some(entries) = listed["tools"].as_array_mut() {
-                    entries.extend(crate::prototype_tools::definitions());
-                }
-                Some(result(&id, &listed))
-            }
-            "tools/call" => Some(result(&id, &call(&params, browser, code, design))),
+            "tools/list" => Some(result(&id, &listing(offer, &agents))),
+            "tools/call" => Some(result(&id, &dispatch(offer, &params))),
             // `ping` is in the spec and costs one line. Everything else gets the standard
             // method-not-found rather than silence, so a client waiting on a reply is not wedged.
             "ping" => Some(result(&id, &json!({}))),
@@ -266,6 +249,108 @@ pub fn serve_stdio() {
                 break;
             }
         }
+    }
+}
+
+/// What a bridge was started to offer, read once from the environment the app gave it.
+///
+/// In one value so that the listing a scope gets is a function of it, testable without a process,
+/// and so the precedence between the kinds of bridge is written down in one place: [`listing`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+struct Offer {
+    awareness: bool,
+    browser: bool,
+    code: bool,
+    design: bool,
+    /// A Home bridge lists Home's tools *instead of* the worktree ones: Home has no worktree for
+    /// those to act on, and offering them would only teach the model they are broken.
+    home: bool,
+    /// A workflow run's bridge, and the authority of its role.
+    flow: Option<wtm_agent::authority::Authority>,
+}
+
+impl Offer {
+    fn from_env() -> Self {
+        let on = |name: &str| std::env::var(name).as_deref() == Ok("on");
+        Self {
+            awareness: on(handoff::AWARENESS_ENV),
+            browser: on(handoff::BROWSER_TOOLS_ENV),
+            code: on(handoff::CODE_TOOLS_ENV),
+            design: on(crate::prototype_tools::ENV),
+            home: on(crate::home::HOME_TOOLS_ENV),
+            flow: std::env::var(crate::flow_tools::ENV)
+                .ok()
+                .as_deref()
+                .and_then(crate::flow_tools::authority_from),
+        }
+    }
+}
+
+/// The `tools/list` answer for `offer`.
+///
+/// A run's bridge lists its run tools and nothing else, whatever else its environment turned on:
+/// a run's authority profile was built without delegation, browsers and prototypes, and a tool
+/// listed is a tool a model will try. It comes first so that no flag a later change adds to every
+/// session's bridge can put something back on a run's.
+fn listing(offer: Offer, agents: &[(String, String)]) -> Value {
+    if let Some(authority) = offer.flow {
+        return json!({ "tools": crate::flow_tools::definitions(authority) });
+    }
+    if offer.home {
+        return json!({ "tools": crate::home_tools::definitions(agents) });
+    }
+    let mut listed = tools(agents, offer.awareness, offer.browser, offer.code);
+    if offer.design
+        && let Some(entries) = listed["tools"].as_array_mut()
+    {
+        entries.extend(crate::prototype_tools::definitions());
+    }
+    listed
+}
+
+/// Route a `tools/call` the way [`listing`] listed it.
+fn dispatch(offer: Offer, params: &Value) -> Value {
+    if let Some(authority) = offer.flow {
+        return call_flow(params, authority);
+    }
+    if offer.home {
+        return call_home(params);
+    }
+    call(params, offer.browser, offer.code, offer.design)
+}
+
+/// Forward one run tool call. A name this role's bridge did not list is refused here, before the
+/// socket — which refuses it again, from the token.
+fn call_flow(params: &Value, authority: wtm_agent::authority::Authority) -> Value {
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    if !crate::flow_tools::tools_for(authority).contains(&name) {
+        return tool_error(&format!("no tool named `{name}`"));
+    }
+    let Ok(token) = std::env::var(handoff::TOKEN_ENV) else {
+        return tool_error("this bridge was started without a session token");
+    };
+    let socket = std::env::var(handoff::SOCKET_ENV)
+        .map_or_else(|_| socket_path().unwrap_or_default(), PathBuf::from);
+    let request = Request {
+        token,
+        action: handoff::Action::Flow,
+        flow: Some(handoff::CodeCall {
+            tool: name.to_owned(),
+            args: params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        }),
+        ..Request::default()
+    };
+    match ask(&socket, &request) {
+        Ok(response) if response.ok => json!({
+            "content": [{ "type": "text", "text": response.text.unwrap_or_default() }],
+            "isError": false,
+        }),
+        Ok(response) => tool_error(response.error.as_deref().unwrap_or("the run tool failed")),
+        Err(error) => tool_error(&error),
     }
 }
 
@@ -602,6 +687,7 @@ fn call(params: &Value, browser: bool, code: bool, design: bool) -> Value {
             code: None,
             design: None,
             home: None,
+            flow: None,
         },
     ) {
         Ok(response) if response.ok => json!({
@@ -977,6 +1063,143 @@ mod tests {
             false,
             false,
             false,
+        );
+        assert_eq!(reply["isError"], true);
+        assert!(
+            reply["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("no tool named"),
+            "{reply}"
+        );
+    }
+
+    fn listed_names(offer: Offer) -> Vec<String> {
+        let agents = [
+            ("claude".to_owned(), "Claude Code".to_owned()),
+            ("codex".to_owned(), "Codex".to_owned()),
+        ];
+        listing(offer, &agents)["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// Every flag a bridge can be started with, all on.
+    fn everything() -> Offer {
+        Offer {
+            awareness: true,
+            browser: true,
+            code: true,
+            design: true,
+            home: false,
+            flow: None,
+        }
+    }
+
+    const RUN_TOOLS: [&str; 7] = [
+        "flow_context",
+        "flow_progress",
+        "flow_ask",
+        "flow_submit",
+        "flow_request",
+        "flow_run_check",
+        "flow_propose_rule",
+    ];
+
+    #[test]
+    fn a_reviewers_run_bridge_lists_the_run_tools_and_nothing_else_whatever_else_is_on() {
+        let offer = Offer {
+            flow: Some(wtm_agent::authority::Authority::Reviewer),
+            home: true,
+            ..everything()
+        };
+        assert_eq!(listed_names(offer), RUN_TOOLS);
+    }
+
+    #[test]
+    fn a_writers_run_bridge_adds_only_checkpoint() {
+        let offer = Offer {
+            flow: Some(wtm_agent::authority::Authority::Writer),
+            ..everything()
+        };
+        let names = listed_names(offer);
+        assert_eq!(names[..7], RUN_TOOLS);
+        assert_eq!(names[7..], ["flow_checkpoint"]);
+    }
+
+    #[test]
+    fn no_run_bridge_lists_a_delegation_browser_code_or_prototype_tool() {
+        for authority in [
+            wtm_agent::authority::Authority::Reviewer,
+            wtm_agent::authority::Authority::Writer,
+        ] {
+            let names = listed_names(Offer {
+                flow: Some(authority),
+                ..everything()
+            });
+            for name in &names {
+                assert!(
+                    name.starts_with(crate::flow_tools::PREFIX),
+                    "{authority:?} lists {name}"
+                );
+            }
+            for absent in [TOOL, SPAWN_TOOL, CLOSE_TOOL, LIST_TOOL] {
+                assert!(
+                    !names.iter().any(|n| n == absent),
+                    "{authority:?} lists {absent}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_worktree_bridge_and_a_home_bridge_list_no_run_tool() {
+        let worktree = listed_names(everything());
+        assert!(worktree.iter().any(|name| name == TOOL), "{worktree:?}");
+        let home = listed_names(Offer {
+            home: true,
+            ..everything()
+        });
+        assert!(home.iter().any(|name| name == "open_session"), "{home:?}");
+        for names in [worktree, home] {
+            assert!(
+                names.iter().all(|name| !name.starts_with("flow_")),
+                "{names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_bridge_refuses_a_tool_its_role_lacks_before_reaching_the_socket() {
+        // No token in the environment: a call that got as far as the socket would say so instead.
+        let reviewer = wtm_agent::authority::Authority::Reviewer;
+        for name in ["ask_agent", "browser_snapshot", "flow_checkpoint"] {
+            let reply = dispatch(
+                Offer {
+                    flow: Some(reviewer),
+                    ..Offer::default()
+                },
+                &json!({ "name": name, "arguments": {} }),
+            );
+            assert_eq!(reply["isError"], true, "{name}");
+            assert!(
+                reply["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("no tool named"),
+                "{name}: {reply}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_worktree_bridge_does_not_forward_a_run_tool() {
+        let reply = dispatch(
+            everything(),
+            &json!({ "name": "flow_submit", "arguments": {} }),
         );
         assert_eq!(reply["isError"], true);
         assert!(

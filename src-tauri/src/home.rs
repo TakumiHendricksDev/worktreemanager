@@ -1339,6 +1339,8 @@ pub fn session_request(
         env: BTreeMap::new(),
         // Home is driven by a person at its prompt, like a pane, so it keeps the app's environment.
         scrub: wtm_core::ports::EnvScrub::default(),
+        // And no run profile, for the same reason.
+        run: None,
         resume: choices.resume,
         fork: None,
         ephemeral: false,

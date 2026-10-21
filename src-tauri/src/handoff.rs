@@ -110,6 +110,9 @@ pub enum Action {
     Design,
     /// One of the Home tools, carried in [`Request::home`]. Only a Home caller may take it.
     Home,
+    /// One of a workflow run's `flow_*` tools, carried in [`Request::flow`]. Only a run session may
+    /// take it, and a run session may take nothing else — see [`scope_refusal`].
+    Flow,
 }
 
 /// A browser tool call, carried through the socket untouched.
@@ -180,6 +183,9 @@ pub struct Request {
     /// The Home tool call, when `action` is [`Action::Home`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<HomeCall>,
+    /// The run tool call, when `action` is [`Action::Flow`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<CodeCall>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -639,6 +645,12 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Resp
                 None => Response::failed("a Home request has to name a tool"),
             };
         }
+        Action::Flow => {
+            return match &request.flow {
+                Some(call) => crate::flow_tools::run(handle, app, &request.token, call),
+                None => Response::failed("a run tool request has to name a tool"),
+            };
+        }
         Action::Delegate => {}
     }
     let tasks = match delegated_tasks(app, request) {
@@ -1006,7 +1018,25 @@ pub fn mode_description(agents: &[(String, String)]) -> String {
 /// action that exists today is about the caller's own worktree — its children open there, its peers
 /// are there, its browsers and comments are there — so a Home caller, which has no worktree, is
 /// refused all of them. Pure so the rule can be tested without a socket or a window.
-fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Response> {
+pub(crate) fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Response> {
+    // A run session first, because its rule is the narrowest: the run tools and nothing else. Its
+    // bridge lists nothing else either, but a bridge is a process the CLI started, and what it
+    // forwards is not the rule. Every other action is something a run's authority profile was built
+    // without — another agent, a browser, a pane the user opened, a comment thread — so each is
+    // refused here, before any handler resolves the token for itself.
+    if let Some(role) = scope.flow() {
+        return (action != Action::Flow).then(|| {
+            Response::failed(format!(
+                "this is a workflow run's {} session, and it has only its run tools (`flow_*`)",
+                role.authority.as_str()
+            ))
+        });
+    }
+    if action == Action::Flow {
+        return Some(Response::failed(
+            "the run tools are only for a workflow run's sessions, and this is not one",
+        ));
+    }
     // The other direction, and the one that matters most: Home's tools reach across worktrees,
     // so a worktree session must never get them by sending the action its bridge does not list.
     if action == Action::Home {
@@ -1026,7 +1056,7 @@ fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Response> {
         Action::Browser => "browser panes belong to a worktree",
         Action::Code => "code comments belong to a worktree",
         Action::Design => "prototypes belong to a worktree",
-        Action::Home => unreachable!("handled above"),
+        Action::Home | Action::Flow => unreachable!("handled above"),
     };
     Some(Response::failed(format!(
         "{what}, and the Home agent has none. Use the Home tools instead."
@@ -1405,6 +1435,7 @@ pub(crate) fn open_pane(
             run: placement.run.map(str::to_owned),
             title: task.title.clone(),
             opened_by: placement.opened_by.map(str::to_owned),
+            flow: None,
         },
     );
 
@@ -1575,6 +1606,96 @@ mod tests {
             .expect("a worktree caller must not reach the Home tools");
         assert!(!refusal.ok);
         assert!(scope_refusal(&SessionScope::Home, Action::Home).is_none());
+    }
+
+    /// Every action there is, so a new one cannot be added without these tests deciding it.
+    const ALL_ACTIONS: [Action; 8] = [
+        Action::Delegate,
+        Action::CloseChildren,
+        Action::ListSessions,
+        Action::Browser,
+        Action::Code,
+        Action::Design,
+        Action::Home,
+        Action::Flow,
+    ];
+
+    fn run_scope(authority: wtm_agent::authority::Authority) -> SessionScope {
+        SessionScope::run(
+            "/repo",
+            "wt-a",
+            crate::app::FlowRole {
+                flow: wtm_core::flow::FlowId(7),
+                role: "conventions".to_owned(),
+                authority,
+            },
+        )
+    }
+
+    #[test]
+    fn a_run_token_is_refused_every_action_but_its_run_tools_whatever_its_bridge_sends() {
+        // The bridge lists only the run tools for these, but a bridge is the CLI's child and its
+        // listing is no defence: this is what holds when it sends `ask_agent` or a browser call.
+        for authority in [
+            wtm_agent::authority::Authority::Reviewer,
+            wtm_agent::authority::Authority::Writer,
+        ] {
+            let scope = run_scope(authority);
+            for action in ALL_ACTIONS {
+                let refusal = scope_refusal(&scope, action);
+                if action == Action::Flow {
+                    assert!(refusal.is_none(), "{authority:?} must reach its run tools");
+                } else {
+                    let refusal = refusal
+                        .unwrap_or_else(|| panic!("{authority:?} must not reach {action:?}"));
+                    assert!(
+                        refusal
+                            .error
+                            .as_deref()
+                            .is_some_and(|error| error.contains("only its run tools")),
+                        "{action:?}: {refusal:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_run_tools_are_refused_to_every_session_that_is_not_a_runs() {
+        for scope in [SessionScope::worktree("/repo", "wt-a"), SessionScope::Home] {
+            let refusal = scope_refusal(&scope, Action::Flow)
+                .unwrap_or_else(|| panic!("{scope:?} must not reach the run tools"));
+            assert!(!refusal.ok);
+        }
+    }
+
+    #[test]
+    fn a_run_token_still_names_its_worktree_so_place_and_removal_treat_it_as_one() {
+        let hub = Hub::default();
+        let token = hub.issue(Caller {
+            scope: run_scope(wtm_agent::authority::Authority::Reviewer),
+            ..caller("wt-a")
+        });
+        let resolved = hub.resolve(&token).unwrap();
+        assert_eq!(resolved.scope.place(), Some(("/repo", "wt-a")));
+        assert_eq!(
+            resolved.scope.flow().map(|role| role.role.as_str()),
+            Some("conventions")
+        );
+        hub.forget_worktree("wt-a");
+        assert!(hub.resolve(&token).is_none());
+    }
+
+    #[test]
+    fn a_run_tool_request_round_trips_its_tool_and_arguments() {
+        let request: Request = serde_json::from_str(
+            r#"{"token":"t","action":"flow","flow":{"tool":"flow_submit","args":{"kind":"plan"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(request.action, Action::Flow);
+        let call = request.flow.unwrap();
+        assert_eq!(call.tool, "flow_submit");
+        assert_eq!(call.args["kind"], "plan");
     }
 
     #[test]
