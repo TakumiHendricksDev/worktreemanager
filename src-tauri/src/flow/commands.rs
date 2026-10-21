@@ -15,9 +15,10 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
-use wtm_core::flow::{FlowId, InboxItem, InboxItemId, RoleProvider};
+use wtm_core::flow::{FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, RoleProvider};
 
-use super::{Engine, FlowView, Notice, StartReview};
+use super::findings::{Rerun, Staleness};
+use super::{Engine, FlowView, Notice, Refusal, StartReview};
 use crate::commands::{AppState, Reply, blocking};
 use crate::view::ErrorView;
 
@@ -68,6 +69,17 @@ fn refused(message: String) -> ErrorView {
     ErrorView::new("flow", message)
 }
 
+/// A start, rerun or resume refused. A refusal over billing has its own kind and names the
+/// providers, because the Reviews tab draws it as its own state rather than as a line of red text.
+fn refused_start(refusal: Refusal) -> ErrorView {
+    if refusal.billing.is_empty() {
+        ErrorView::new("flow", refusal.message)
+    } else {
+        ErrorView::new("billing", refusal.message)
+            .with_detail(serde_json::json!({ "providers": refusal.billing }))
+    }
+}
+
 /// A recipe the Reviews tab can offer, with who would run it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +95,8 @@ pub struct RoleChoice {
     pub id: String,
     pub provider: RoleProvider,
     pub model: Option<String>,
+    /// Skills it names, without the leading `/`.
+    pub skills: Vec<String>,
 }
 
 /// The recipes a project's workflow config declares, in the order the config lists them.
@@ -110,6 +124,7 @@ pub async fn review_recipes(app: AppState<'_>, project: String) -> Reply<Vec<Rec
                             id: role.clone(),
                             provider: spec.provider,
                             model: spec.model.clone(),
+                            skills: spec.skill_names().map(str::to_owned).collect(),
                         })
                     })
                     .collect(),
@@ -133,7 +148,7 @@ pub async fn start_review(
     }
     let engine = Arc::clone(&engine);
     blocking(move || {
-        let flow = engine.start(&request).map_err(refused)?;
+        let flow = engine.start(&request).map_err(refused_start)?;
         engine.view(flow).map_err(refused)
     })
     .await
@@ -162,7 +177,7 @@ pub async fn latest_review(
 pub async fn resume_review(engine: EngineState<'_>, flow: i64) -> Reply<FlowView> {
     let engine = Arc::clone(&engine);
     blocking(move || {
-        engine.resume(FlowId(flow)).map_err(refused)?;
+        engine.resume(FlowId(flow)).map_err(refused_start)?;
         engine.view(FlowId(flow)).map_err(refused)
     })
     .await
@@ -191,4 +206,61 @@ pub async fn work_inbox(engine: EngineState<'_>, project: Option<String>) -> Rep
 pub async fn resolve_inbox_item(engine: EngineState<'_>, item: i64) -> Reply<bool> {
     let engine = Arc::clone(&engine);
     blocking(move || engine.resolve(InboxItemId(item)).map_err(refused)).await
+}
+
+/// Whether a review's results still describe its worktree: what changed since, which findings and
+/// checks that makes stale, and which roles a rerun would run. Asks git, so the window calls it when
+/// the worktree's listing changes and when a run settles, never on a timer.
+#[tauri::command]
+pub async fn review_staleness(engine: EngineState<'_>, flow: i64) -> Reply<Staleness> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.staleness(FlowId(flow)).map_err(refused)).await
+}
+
+/// Run a finished review's affected roles, or all of them, against a new snapshot.
+#[tauri::command]
+pub async fn rerun_review(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+    scope: Rerun,
+) -> Reply<FlowView> {
+    if !app.work_view_enabled() {
+        return Err(refused(
+            "reviews run from the Work view, which is turned off".to_owned(),
+        ));
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine.rerun(FlowId(flow), scope).map_err(refused_start)?;
+        engine.view(FlowId(flow)).map_err(refused)
+    })
+    .await
+}
+
+/// Dismiss a finding with a reason, or take the dismissal back when `reason` is absent.
+#[tauri::command]
+pub async fn dismiss_finding(
+    engine: EngineState<'_>,
+    finding: i64,
+    reason: Option<String>,
+) -> Reply<FindingRecord> {
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine
+            .dismiss(FindingId(finding), reason.as_deref())
+            .map_err(refused)
+    })
+    .await
+}
+
+/// The base a review of a worktree would be measured from, before it starts.
+#[tauri::command]
+pub async fn review_base(
+    engine: EngineState<'_>,
+    project: String,
+    worktree: String,
+) -> Reply<String> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.default_base(&project, &worktree).map_err(refused)).await
 }

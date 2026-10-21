@@ -10,8 +10,9 @@
  * The queue's review slice has two sections: the worktrees you are working in, and pull requests
  * you are reviewing. The first comes from the project's worktree listing; the second from the
  * flow store, where adding a pull request makes a work item, with what the forge says about each
- * read on demand. Every worktree row's review status is the one value a row can honestly have
- * before review runs exist. Nothing here is invented to fill the space.
+ * read on demand. A worktree row's review status is its newest review run's, once the queue has
+ * read it, and "Not reviewed" until then or when it has none. Nothing here is invented to fill the
+ * space.
  */
 
 import type {
@@ -21,7 +22,9 @@ import type {
   PullRequest,
   ReuseReason,
   ReviewItem,
+  ReviewRunView,
   ReviewSetup,
+  ReviewStaleness,
   Worktree,
 } from './ipc/types';
 import { worktreeLabel } from './worktree-label';
@@ -29,16 +32,64 @@ import { worktreeLabel } from './worktree-label';
 /**
  * Where a row's review stands.
  *
- * One value until review runs exist. A union rather than a string all the same, because the
- * stylesheet is global and a typed value is the only thing that catches a status word, or a class
- * built from one, that does not exist.
+ * A union rather than a string, because the stylesheet is global and a typed value is the only
+ * thing that catches a status word, or a class built from one, that does not exist.
  */
-export type ReviewStatus = 'unreviewed';
+export type ReviewStatus =
+  'unreviewed' | 'running' | 'waiting' | 'stale' | 'failed' | 'findings' | 'clean';
 
 /** The words a status reads as, wherever it is shown: queue row, header pill, Reviews tab. */
 export const REVIEW_WORDS: Record<ReviewStatus, string> = {
   unreviewed: 'Not reviewed',
+  running: 'Reviewing',
+  waiting: 'Review waiting on you',
+  stale: 'Review stale',
+  failed: 'A review role failed',
+  findings: 'Reviewed',
+  clean: 'Reviewed · no findings',
 };
+
+/** The queue mark a status is drawn with: one of `c-dot`'s own states. */
+export const REVIEW_DOT: Record<
+  ReviewStatus,
+  'idle' | 'working' | 'attention' | 'failed' | 'done'
+> = {
+  unreviewed: 'idle',
+  running: 'working',
+  waiting: 'attention',
+  stale: 'attention',
+  failed: 'failed',
+  findings: 'done',
+  clean: 'done',
+};
+
+/** A worktree's review status, and its line, from its newest run and that run's staleness. */
+export function reviewStatus(
+  run: ReviewRunView | null | undefined,
+  stale: ReviewStaleness | null | undefined,
+): { status: ReviewStatus; line: string } {
+  const say = (status: ReviewStatus, line = REVIEW_WORDS[status]) => ({ status, line });
+  if (!run || run.flow.state.end?.kind === 'cancelled') return say('unreviewed');
+  const { state } = run.flow;
+  if (state.end?.kind === 'failed') return say('failed', 'Review could not run');
+  // A hold before running: a run paused for capacity still has its thread, and what the row
+  // should say is that it is paused, not that it is working.
+  if (state.hold?.kind === 'waiting_capacity')
+    return say('waiting', 'Paused for usage capacity');
+  if (state.hold?.kind === 'interrupted') return say('waiting', 'Review interrupted');
+  if (state.hold !== null) return say('waiting');
+  if (run.running) return say('running');
+  if (state.phase !== 'consolidated' && state.end === null) return say('waiting');
+  const open = run.findings.filter((f) => f.dismissed === null).length;
+  const counted = `${open} finding${open === 1 ? '' : 's'}`;
+  const behind = run.findings.some(
+    (f) => f.dismissed === null && (stale?.staleFindings.includes(f.id) ?? false),
+  );
+  if (stale?.changed || behind)
+    return say('stale', open > 0 ? `${counted} · review stale` : 'Review stale');
+  if (run.steps.some((s) => s.status === 'failed')) return say('failed');
+  return open > 0 ? say('findings', `Reviewed · ${counted}`) : say('clean');
+}
 
 export interface QueueRow {
   /** The worktree's id. Actions take this, never the label. */

@@ -28,7 +28,7 @@
    * # The conflict check is shown, and off
    *
    * The approved design checks a new rule against the repository's instructions before saving, with
-   * a short read-only review pass. That pass needs review runs, which this build does not have, so
+   * a short read-only review pass. Review runs exist now, but that pass is not one of them yet, so
    * the box is drawn disabled and says so rather than being left out: leaving it out would read as a
    * decision not to check, which nobody made.
    */
@@ -180,7 +180,7 @@
           saved = await commands.createRule(projectId, d);
           break;
         case 'finding':
-          saved = await commands.saveFindingAsRule(projectId, mode.finding, d);
+          saved = await commands.saveFindingAsRule(projectId, mode.finding.id, d);
           break;
         case 'edit':
           saved = await commands.changeRule(projectId, mode.rule.id, {
@@ -314,8 +314,8 @@
         <span class="c-badge">later</span>
       </Choice>
       <p class="c-field__help c-rule-form__later">
-        A short read-only pass that reports a conflict before saving. It needs review runs,
-        which this build does not have yet.
+        A short read-only pass that reports a conflict before saving. It is not built yet:
+        until it is, a review's conventions role reports a conflict as a finding.
       </p>
 
       <p class="c-rule-form__note">{note}</p>

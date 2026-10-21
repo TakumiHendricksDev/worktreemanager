@@ -7,14 +7,16 @@
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use wtm_core::flow::{
-    BlobRef, FlowId, InboxItem, InboxItemId, InboxKind, Invocation, InvocationChange, InvocationId,
-    NewInboxItem, NewInvocation, NewReviewRun, NewStep, ReviewRun, Snapshot, SnapshotId, Step,
-    StepChange, StepId, UnixMs, WorkItemId,
+    BlobRef, CheckRun, FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, InboxKind,
+    Invocation, InvocationChange, InvocationId, NewCheckRun, NewInboxItem, NewInvocation,
+    NewReviewRun, NewStep, Reconciled, ReviewRun, Snapshot, SnapshotId, Step, StepChange, StepId,
+    UnixMs, WorkItemId,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStoreError, RunStore};
 
 use crate::AppDb;
+use crate::findings;
 use crate::store::{from_json, is_unique_violation, json, storage, tag, untag};
 
 const REVIEW_COLUMNS: &str =
@@ -22,10 +24,11 @@ const REVIEW_COLUMNS: &str =
 
 const STEP_COLUMNS: &str = "id, flow_id, stage, role, provider, model, profile, workspace, \
      timeout_ms, retries, status, failures, stands_in_for, handover, detail, resets_at, result, \
-     created_at, updated_at";
+     created_at, updated_at, skill_problem";
 
 const INVOCATION_COLUMNS: &str = "id, flow_id, step_id, attempt, role, provider, model, profile, \
-     snapshot_id, cwd, session, provider_session, status, detail, progress, started_at, ended_at";
+     snapshot_id, cwd, session, provider_session, status, detail, progress, started_at, ended_at, \
+     instruction_sources";
 
 const INBOX_COLUMNS: &str = "id, flow_id, kind, subject, title, body, created_at, resolved_at";
 
@@ -267,14 +270,16 @@ impl RunStore for AppDb {
         }
         change.detail.apply(&mut current.detail);
         change.resets_at.apply(&mut current.resets_at);
+        change.skill_problem.apply(&mut current.skill_problem);
         if let Some(result) = &change.result {
             current.result = Some(result.clone());
         }
         let result = current.result.as_ref().map(json).transpose()?;
+        let skill_problem = current.skill_problem.as_ref().map(json).transpose()?;
         tx.execute(
             "UPDATE steps SET status = ?1, failures = ?2, detail = ?3, resets_at = ?4, result = ?5,
-                              updated_at = ?6
-             WHERE id = ?7",
+                              updated_at = ?6, skill_problem = ?7
+             WHERE id = ?8",
             params![
                 tag(&current.status)?,
                 current.failures,
@@ -282,6 +287,7 @@ impl RunStore for AppDb {
                 current.resets_at,
                 result,
                 at,
+                skill_problem,
                 step.0
             ],
         )
@@ -342,13 +348,16 @@ impl RunStore for AppDb {
         if let Some(progress) = &change.progress {
             current.progress = Some(progress.clone());
         }
+        if let Some(sources) = &change.instruction_sources {
+            current.instruction_sources.clone_from(sources);
+        }
         if let Some(ended_at) = change.ended_at {
             current.ended_at = Some(ended_at);
         }
         tx.execute(
             "UPDATE invocations SET status = ?1, session = ?2, provider_session = ?3, detail = ?4,
-                                    progress = ?5, ended_at = ?6
-             WHERE id = ?7",
+                                    progress = ?5, ended_at = ?6, instruction_sources = ?7
+             WHERE id = ?8",
             params![
                 tag(&current.status)?,
                 current.session,
@@ -356,6 +365,7 @@ impl RunStore for AppDb {
                 current.detail,
                 current.progress,
                 current.ended_at,
+                json(&current.instruction_sources)?,
                 invocation.0
             ],
         )
@@ -464,6 +474,44 @@ impl RunStore for AppDb {
         .map(InboxRow::into_item)
         .collect()
     }
+
+    fn findings(&self, flow: FlowId) -> Result<Vec<FindingRecord>, FlowStoreError> {
+        findings::findings(&self.conn.lock(), flow)
+    }
+
+    fn finding(&self, id: FindingId) -> Result<Option<FindingRecord>, FlowStoreError> {
+        findings::finding(&self.conn.lock(), id)
+    }
+
+    fn save_consolidation(
+        &self,
+        flow: FlowId,
+        change: &Reconciled,
+        at: UnixMs,
+    ) -> Result<Vec<FindingRecord>, FlowStoreError> {
+        let mut conn = self.conn.lock();
+        ensure_flow(&conn, flow)?;
+        findings::save_consolidation(&mut conn, flow, change, at)
+    }
+
+    fn dismiss_finding(
+        &self,
+        id: FindingId,
+        reason: Option<&str>,
+        at: UnixMs,
+    ) -> Result<FindingRecord, FlowStoreError> {
+        findings::dismiss(&self.conn.lock(), id, reason, at)
+    }
+
+    fn record_check(&self, run: &NewCheckRun, at: UnixMs) -> Result<CheckRun, FlowStoreError> {
+        let conn = self.conn.lock();
+        ensure_flow(&conn, run.flow)?;
+        findings::record_check(&conn, run, at)
+    }
+
+    fn checks(&self, flow: FlowId) -> Result<Vec<CheckRun>, FlowStoreError> {
+        findings::checks(&self.conn.lock(), flow)
+    }
 }
 
 fn query<T>(
@@ -549,6 +597,7 @@ struct StepRow {
     result: Option<String>,
     created_at: UnixMs,
     updated_at: UnixMs,
+    skill_problem: Option<String>,
 }
 
 impl StepRow {
@@ -573,6 +622,7 @@ impl StepRow {
             result: row.get(16)?,
             created_at: row.get(17)?,
             updated_at: row.get(18)?,
+            skill_problem: row.get(19)?,
         })
     }
 
@@ -594,6 +644,7 @@ impl StepRow {
             handover: self.handover,
             detail: self.detail,
             resets_at: self.resets_at,
+            skill_problem: self.skill_problem.as_deref().map(from_json).transpose()?,
             result: self.result.as_deref().map(from_json).transpose()?,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -620,6 +671,7 @@ struct InvocationRow {
     progress: Option<String>,
     started_at: UnixMs,
     ended_at: Option<UnixMs>,
+    instruction_sources: Option<String>,
 }
 
 impl InvocationRow {
@@ -642,6 +694,7 @@ impl InvocationRow {
             progress: row.get(14)?,
             started_at: row.get(15)?,
             ended_at: row.get(16)?,
+            instruction_sources: row.get(17)?,
         })
     }
 
@@ -662,6 +715,10 @@ impl InvocationRow {
             status: untag(self.status)?,
             detail: self.detail,
             progress: self.progress,
+            instruction_sources: match self.instruction_sources {
+                Some(text) => from_json(&text)?,
+                None => Vec::new(),
+            },
             started_at: self.started_at,
             ended_at: self.ended_at,
         })

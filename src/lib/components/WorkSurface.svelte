@@ -8,9 +8,10 @@
    * # What it draws, and what it does not yet
    *
    * For a worktree: the workspace header, Overview and Reviews. Overview is the worktree listing's
-   * own facts. Reviews is `WorkReviewRun`: Run Review, then the run's state and each role's line.
-   * The plan's other tabs — Changes, Sessions, Activity — come with the items that give them
-   * something to show.
+   * own facts. Reviews is `WorkReviewRun`: Run Review, then the run's state, its findings, its checks
+   * and what its roles applied. The header's Run Review is the same action as the worktree bar's
+   * (`run-review.ts`), and lands on Reviews. The plan's other tabs — Changes, Sessions, Activity —
+   * come with the items that give them something to show.
    *
    * For a pull request picked in Reviews: `WorkReview`, with what the forge says about it and the
    * worktree a review of it reads.
@@ -24,6 +25,7 @@
    */
   import { changesOf, myWorktrees, REVIEW_WORDS, rowTitle, subjectOf } from '../work';
   import { headline } from '../review-run';
+  import { runReview } from '../run-review';
   import { reviewRuns } from '../state/review-runs.svelte';
   import { reviews } from '../state/reviews.svelte';
   import { work, type WorkTab } from '../state/work.svelte';
@@ -61,7 +63,7 @@
   /** The newest review run's state, which the header says instead of "Not reviewed" once there is one. */
   const runState = $derived.by(() => {
     const run = worktree ? reviewRuns.latest[worktree.id] : null;
-    return run ? headline(run) : null;
+    return run ? headline(run, reviewRuns.staleness[run.flow.id] ?? null) : null;
   });
   /** What the review would be of: the branch, which is what a reviewer names it by. */
   const reviewing = $derived(
@@ -109,12 +111,34 @@
               <span>{changesOf(worktree)}</span>
             </p>
           </div>
-          <span class="c-badge"
-            >{runState ? runState.eyebrow : REVIEW_WORDS[subject.review]}</span
-          >
-          <Button size="sm" onclick={() => onopenworktree(worktree.id)}
-            >Open in Worktrees</Button
-          >
+          <div class="c-work__actions">
+            <span class="c-badge"
+              >{runState
+                ? `Run: ${runState.eyebrow.toLowerCase()}`
+                : REVIEW_WORDS[subject.review]}</span
+            >
+            <Button size="sm" onclick={() => onopenworktree(worktree.id)}
+              >Open in Worktrees</Button
+            >
+            {#if workspace.activeProjectId}
+              {@const projectId = workspace.activeProjectId}
+              <Button
+                variant="accent"
+                size="sm"
+                ariaHaspopup="menu"
+                title="Review this worktree's committed and uncommitted work against its merge base"
+                onclick={(event) =>
+                  void runReview(
+                    event.currentTarget as Element,
+                    projectId,
+                    worktree.id,
+                    () => {
+                      work.tab = 'reviews';
+                    },
+                  )}>Run Review</Button
+              >
+            {/if}
+          </div>
         </header>
 
         <div
@@ -149,8 +173,9 @@
           {#if work.tab === 'reviews' && workspace.activeProjectId}
             <WorkReviewRun
               projectId={workspace.activeProjectId}
-              worktreeId={worktree.id}
+              {worktree}
               reviewing={reviewing ?? rowTitle(subject)}
+              subject={worktree.issueKey ?? worktree.branch}
             />
           {:else}
             <dl class="o-facts o-facts--wide">

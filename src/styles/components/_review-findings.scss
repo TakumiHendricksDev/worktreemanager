@@ -1,0 +1,218 @@
+/*
+ * The Reviews tab beyond its state block: the run's facts line, its findings grouped by class, the
+ * checks the app ran, and what the roles applied.
+ *
+ * A component after `work-run`, because it lays out inside `c-work__panel` beside `c-work-state`
+ * and reuses none of their rules. Severity and check tones are modifiers named by unions in
+ * TypeScript (`Severity` in `knowledge.ts`, `RunTone` in `review-run.ts`), so a modifier the CSS
+ * does not have cannot be written in the markup.
+ */
+
+.c-review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-width: 820px;
+}
+
+.c-review__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+
+  code {
+    color: var(--fg);
+    font-family: var(--font-mono);
+  }
+}
+
+.c-review__applied {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* One class of finding: a heading, then its cards. Suggestions and dismissed findings are a
+   `<details>`, folded, which is the design's "collapsed". */
+.c-findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-findings__heading {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: default;
+}
+
+.c-finding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+
+  &.is-dismissed {
+    opacity: 0.75;
+  }
+}
+
+.c-finding__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  font-size: var(--step--2);
+}
+
+.c-finding__severity {
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+.c-finding__severity--blocking {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.c-finding__severity--notable {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.c-finding__severity--minor {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.c-finding__stale {
+  padding: 1px 6px;
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-sm);
+  color: var(--warn);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-finding__where {
+  color: var(--fg-muted);
+}
+
+.c-finding__sources {
+  margin-left: auto;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.c-finding__title {
+  font-size: var(--step-0);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-finding__body,
+.c-finding__note {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-finding__note--verified {
+  color: var(--fg);
+}
+
+.c-finding__refs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding-left: var(--sp-4);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  overflow-wrap: anywhere;
+}
+
+.c-finding__reports {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-finding__actions,
+.c-finding__dismiss {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.c-finding__dismiss > .c-input {
+  flex: 1 1 240px;
+}
+
+.c-review-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-review-checks__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--step--1);
+}
+
+.c-review-checks__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  overflow-wrap: anywhere;
+}
+
+.c-review-checks__mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+/* The mark takes the tone; the words beside it always say the state, so it is never colour alone.
+   A pass is filled and everything else is hollow, which keeps "not a pass" legible without colour. */
+.c-review-checks__item--ok > .c-review-checks__mark {
+  color: var(--ok);
+  background: currentColor;
+}
+
+.c-review-checks__item--danger > .c-review-checks__mark {
+  color: var(--danger);
+}
+
+.c-review-checks__item--warn > .c-review-checks__mark {
+  color: var(--warn);
+}
+
+.c-review-checks__item--info > .c-review-checks__mark {
+  color: var(--info);
+}
+
+.c-review-checks__item--muted > .c-review-checks__mark {
+  color: var(--fg-subtle);
+}

@@ -350,7 +350,7 @@ fn most_specific(loaded: &[LoadedLayer], declares: impl Fn(&Value) -> bool) -> O
         })
 }
 
-/// Refuse recipes, roles and a forge declared in a repository's `wtm.toml`.
+/// Refuse recipes, roles, checks and a forge declared in a repository's `wtm.toml`.
 ///
 /// A role chooses which of your MCP servers and plugins a run session may load and which provider
 /// account it spends, so it is authority, and a committed file is written by whoever can push to the
@@ -393,6 +393,14 @@ fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
                 "the forge belongs in your own config (~/.config/wtm/config.toml), not in a \
                  repository's wtm.toml: naming it lets wtm use your gh sign-in for this \
                  project, and that is your decision",
+            ));
+        }
+        if workflow.get("check").is_some() {
+            return Err(refuse(
+                "check",
+                "review checks belong in your own config (~/.config/wtm/config.toml), not in a \
+                 repository's wtm.toml: a check is a command wtm runs outside every sandbox when \
+                 a review role asks",
             ));
         }
     }
@@ -1356,6 +1364,23 @@ roles = ["conventions", "correctness"]
                 assert_eq!(path, h.repo.join("wtm.toml"));
                 assert_eq!(layer, ConfigLayer::Repo);
                 assert_eq!(key.as_deref(), Some("workflow.role"));
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_repository_cannot_declare_a_check_wtm_would_run_outside_the_sandbox() {
+        let h = Harness::new();
+        h.write_repo_config("[workflow.check.unit]\nrun = ['curl', 'https://example.invalid']\n");
+        // Trusting the file is not enough: the trust prompt approves commands for setup, and a
+        // check is run at a model's request, which is not what the prompt asked about.
+        h.approve("wtm.toml");
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid { layer, key, .. } => {
+                assert_eq!(layer, ConfigLayer::Repo);
+                assert_eq!(key.as_deref(), Some("workflow.check"));
             }
             other => panic!("expected Invalid, got {other:?}"),
         }

@@ -11,14 +11,18 @@
 //!
 //! # Inputs that are not here yet
 //!
-//! A role may ask for the issue, a plan, a design, your rules, earlier findings or answers. A review
-//! of your own work in this build has none of those to give, and the brief says so by name rather
-//! than leaving a role to wonder whether it missed them.
+//! A role may ask for the issue, a plan, a design, earlier findings or answers. A review of your own
+//! work in this build has no issue, plan, design or answers to give, and the brief says so by name
+//! rather than leaving a role to wonder whether it missed them. Your rules and the repository's
+//! instruction sources are given as R7 retrieves them; earlier findings are given when a role runs
+//! again after the code changed, as the reports it made on the snapshot before.
 
 use std::fmt::Write as _;
 
 use wtm_core::flow::submission::{self, kind_name};
-use wtm_core::flow::{OutputKind, RoleInput, RoleProvider, RoleSpec, Snapshot, Workspace};
+use wtm_core::flow::{
+    CheckSpec, OutputKind, ReportedFinding, RoleInput, RoleProvider, RoleSpec, Snapshot, Workspace,
+};
 
 /// What a brief is written from.
 #[derive(Debug, Clone)]
@@ -34,6 +38,13 @@ pub struct BriefFacts<'a> {
     pub changed: Option<&'a [String]>,
     /// For a fallback: what the role it stands in for got to.
     pub handover: Option<&'a str>,
+    /// The repository's instructions and your rules, as `wtm_core::flow::knowledge::brief` wrote
+    /// them, when the role takes either.
+    pub knowledge: Option<&'a str>,
+    /// The checks this role may ask the app to run, by id.
+    pub checks: &'a [(String, CheckSpec)],
+    /// What this role reported on an earlier snapshot, when it is run again after the code changed.
+    pub earlier: &'a [ReportedFinding],
 }
 
 /// How many changed files a brief lists before it says how to list the rest.
@@ -146,25 +157,65 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
         );
     }
 
-    let missing: Vec<&str> = spec
-        .inputs
-        .iter()
-        .filter_map(|input| match input {
-            RoleInput::Issue => Some("the issue"),
-            RoleInput::Plan => Some("an approved plan"),
-            RoleInput::Design => Some("a design"),
-            RoleInput::Rules => Some("your review rules"),
-            RoleInput::Findings => Some("earlier findings"),
-            RoleInput::Answers => Some("answers to questions"),
-            RoleInput::Diff | RoleInput::Instructions => None,
-        })
-        .collect();
-    if spec.inputs.contains(&RoleInput::Instructions) {
+    let mut missing: Vec<&str> = Vec::new();
+    for name in spec.inputs.iter().filter_map(|input| match input {
+        RoleInput::Issue => Some("the issue"),
+        RoleInput::Plan => Some("an approved plan"),
+        RoleInput::Design => Some("a design"),
+        RoleInput::Rules | RoleInput::Instructions if facts.knowledge.is_none() => {
+            Some("your review rules and the repository's instructions")
+        }
+        RoleInput::Findings if facts.earlier.is_empty() => Some("earlier findings"),
+        RoleInput::Answers => Some("answers to questions"),
+        RoleInput::Diff | RoleInput::Instructions | RoleInput::Rules | RoleInput::Findings => None,
+    }) {
+        // Rules and instructions arrive together, so a role asking for both is told once.
+        if !missing.contains(&name) {
+            missing.push(name);
+        }
+    }
+    if let Some(knowledge) = facts.knowledge.filter(|text| !text.trim().is_empty()) {
+        let _ = writeln!(out, "\n{}", knowledge.trim_end());
+    }
+    if spec.inputs.contains(&RoleInput::Findings) && !facts.earlier.is_empty() {
         let _ = writeln!(
             out,
-            "\nThe repository's own instruction files at the root of your working directory \
-             (such as CLAUDE.md, AGENTS.md or a review guide) are its rules; read them."
+            "\nYou reviewed an earlier snapshot of this change and reported the findings below. \
+             The code has changed since. Check each one against the code as it is now: report it \
+             again if it still holds, and leave it out if it was addressed."
         );
+        for earlier in facts.earlier {
+            let place = match (&earlier.path, earlier.line) {
+                (Some(path), Some(line)) => format!(" ({path}:{line})"),
+                (Some(path), None) => format!(" ({path})"),
+                _ => String::new(),
+            };
+            let _ = writeln!(out, "- {}{place}", earlier.title);
+        }
+    }
+    if !facts.checks.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nChecks you may ask the app to run with `flow_run_check`, by name. The app runs \
+             them outside your sandbox, in your working directory, and records the result as \
+             evidence; cite a check's result only from what that call returned, never from what \
+             you expect it to do."
+        );
+        for (id, check) in facts.checks {
+            let label = check
+                .label
+                .as_deref()
+                .map_or_else(String::new, |label| format!(" ({label})"));
+            let needs = if check.needs.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " — needs {} running, which wtm does not start yet, so it will be skipped",
+                    check.needs.join(", ")
+                )
+            };
+            let _ = writeln!(out, "- `{id}`{label}: `{}`{needs}", check.run.join(" "));
+        }
     }
     if !missing.is_empty() {
         let _ = writeln!(
@@ -284,6 +335,9 @@ mod tests {
             snapshot: &snapshot(),
             changed: Some(&changed),
             handover: None,
+            knowledge: None,
+            checks: &[],
+            earlier: &[],
         });
         assert!(text.contains("`wtm:team-conventions`"), "{text}");
         assert!(text.contains("Skill tool"));

@@ -8,19 +8,16 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { DesignDiscovery, PrototypeState } from '../open-design';
-import type {
-  Finding,
-  InstructionSources,
-  RuleChange,
-  RuleDraft,
-  RuleView,
-} from '../knowledge';
+import type { InstructionSources, RuleChange, RuleDraft, RuleView } from '../knowledge';
 import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 
 import type {
   AccountUsage,
+  FindingRecord,
   RecipeChoice,
+  RerunScope,
   ReviewRunView,
+  ReviewStaleness,
   RunInboxItem,
   DictationStatus,
   DatabaseColumn,
@@ -128,8 +125,8 @@ export const commands = {
   createRule: (projectId: string, draft: RuleDraft) =>
     invoke<RuleView>('create_rule', { projectId, draft }),
   /** Refused for a dismissed finding. */
-  saveFindingAsRule: (projectId: string, finding: Finding, draft: RuleDraft) =>
-    invoke<RuleView>('save_finding_as_rule', { projectId, finding, draft }),
+  saveFindingAsRule: (projectId: string, findingId: number, draft: RuleDraft) =>
+    invoke<RuleView>('save_finding_as_rule', { projectId, findingId, draft }),
   changeRule: (projectId: string, ruleId: number, change: RuleChange) =>
     invoke<RuleView>('change_rule', { projectId, ruleId, change }),
   /** Answers with the new rule; the old one is now superseded by it. */
@@ -793,6 +790,17 @@ export const commands = {
 
   cancelReview: (flow: number) => invoke<ReviewRunView>('cancel_review', { flow }),
 
+  /** Whether a run's results still describe its worktree. Asks git; call it on change, not on a timer. */
+  reviewStaleness: (flow: number) => invoke<ReviewStaleness>('review_staleness', { flow }),
+  /** Run a finished review's affected roles, or all of them, against a new snapshot. */
+  rerunReview: (flow: number, scope: RerunScope) =>
+    invoke<ReviewRunView>('rerun_review', { flow, scope }),
+  /** Dismiss a finding with a reason, or take the dismissal back with `null`. */
+  dismissFinding: (finding: number, reason: string | null) =>
+    invoke<FindingRecord>('dismiss_finding', { finding, reason }),
+  /** The base a review of a worktree would be measured from, before it starts. */
+  reviewBase: (project: string, worktree: string) =>
+    invoke<string>('review_base', { project, worktree }),
   /** Open run inbox items, newest first, for one project or all. */
   workInbox: (project: string | null) => invoke<RunInboxItem[]>('work_inbox', { project }),
 

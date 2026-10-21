@@ -138,9 +138,13 @@ mockIPC((cmd, args) => {
       ],
       unmatched: ['AGENTS.md'], skipped: [], incomplete: false };
     case 'create_rule': return structuredClone(create({}, a.draft));
-    case 'save_finding_as_rule':
-      if (a.finding.dismissed) refuse('a dismissed finding cannot become a rule', { kind: 'dismissed_finding' });
-      return structuredClone(create({ source: { kind: 'finding', flow: a.finding.flow, finding: a.finding.id, location: a.finding.location }, sourceSubject: 'APP-8701' }, a.draft));
+    case 'save_finding_as_rule': {
+      // The command takes the finding's id and reads the stored finding; this is that store.
+      const finding = window.openedFinding;
+      if (!finding || finding.id !== a.findingId) refuse('there is no finding ' + a.findingId);
+      if (finding.dismissed) refuse('a dismissed finding cannot become a rule', { kind: 'dismissed_finding' });
+      return structuredClone(create({ source: { kind: 'finding', flow: finding.flow, finding: finding.id, location: finding.location }, sourceSubject: 'APP-8701' }, a.draft));
+    }
     case 'change_rule': return structuredClone(change(find(a.ruleId), a.change));
     case 'replace_rule': {
       const old = find(a.ruleId);
@@ -161,6 +165,7 @@ const { workspace } = await import('/src/lib/state/workspace.svelte.ts');
 window.harness = {
   emit, view, workspace,
   openFinding(finding) {
+    window.openedFinding = finding;
     const target = document.createElement('div');
     document.body.append(target);
     const dialog = mount(RuleDialog, { target, props: {
@@ -250,7 +255,10 @@ try {
 
     const shot = (page, path) => page.screenshot({ path, animations: 'disabled' });
     const calls = (page, cmd) =>
-        page.evaluate((c) => window.calls.filter((x) => x.cmd === c).map((x) => x.args), cmd);
+        page.evaluate(
+            (c) => window.calls.filter((x) => x.cmd === c).map((x) => x.args),
+            cmd,
+        );
     const settings = (page) => page.getByRole('dialog', { name: 'Settings' });
     const filter = (page, name) =>
         settings(page)
@@ -259,7 +267,8 @@ try {
                 name: new RegExp(`^${name}`),
             });
     const rows = (page) => settings(page).locator('.c-rule-row');
-    const detail = (page) => settings(page).getByRole('region', { name: 'Rule', exact: true });
+    const detail = (page) =>
+        settings(page).getByRole('region', { name: 'Rule', exact: true });
 
     async function openKnowledge(page) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -349,7 +358,11 @@ try {
             { projectId: '/x/webapp', ruleId: 30, change: { kind: 'approve' } },
         ]);
         assert.equal(await filter(page, 'Active').textContent(), 'Active 5');
-        assert((await detail(page).textContent()).includes('R-30 · version 1 · active · an agent'));
+        assert(
+            (await detail(page).textContent()).includes(
+                'R-30 · version 1 · active · an agent',
+            ),
+        );
 
         // New rule, with a glob the backend refuses first.
         await settings(page).getByRole('button', { name: 'New rule' }).click();
@@ -395,12 +408,18 @@ try {
             await edit.getByLabel('Rule', { exact: true }).inputValue(),
             'Use AppDialog for confirm and cancel flows',
         );
-        await edit.getByLabel('Rule', { exact: true }).fill('Use AppDialog for every confirmation');
+        await edit
+            .getByLabel('Rule', { exact: true })
+            .fill('Use AppDialog for every confirmation');
         await edit.getByRole('button', { name: 'Save version 3' }).click();
         await edit.waitFor({ state: 'detached' });
         assert.equal((await calls(page, 'change_rule')).at(-1).change.kind, 'revise');
         const history = await detail(page).locator('.c-revision__meta').allTextContents();
-        assert.deepEqual(history, ['v3 · Oct 21 · you', 'v2 · Oct 15 · you', 'v1 · Oct 12 · you']);
+        assert.deepEqual(history, [
+            'v3 · Oct 21 · you',
+            'v2 · Oct 15 · you',
+            'v1 · Oct 12 · you',
+        ]);
 
         // Off, then on again, following the rule between filters.
         await detail(page).getByRole('button', { name: 'Disable', exact: true }).click();
@@ -423,7 +442,9 @@ try {
         assert.deepEqual((await calls(page, 'replace_rule')).at(-1).ruleId, 22);
         assert((await detail(page).textContent()).includes('You, replacing R-22'));
         await filter(page, 'Superseded').click();
-        await rows(page).filter({ hasText: 'No new dependencies without a ticket note' }).click();
+        await rows(page)
+            .filter({ hasText: 'No new dependencies without a ticket note' })
+            .click();
         await detail(page).getByRole('button', { name: 'Show R-41' }).click();
         assert((await detail(page).textContent()).includes('R-41 · version 1 · active'));
 
@@ -436,7 +457,10 @@ try {
                 .getAttribute('aria-selected'),
             'true',
         );
-        assert.equal(await settings(page).getByRole('tab', { name: 'Knowledge' }).count(), 0);
+        assert.equal(
+            await settings(page).getByRole('tab', { name: 'Knowledge' }).count(),
+            0,
+        );
         await page.context().close();
     }
 
@@ -470,10 +494,15 @@ try {
         const dialog = page.getByRole('dialog', { name: 'Save as review rule' });
         await dialog.waitFor();
         assert.equal(
-            (await dialog.locator('.c-rule-form__from').textContent()).replace(/\s+/g, ' ').trim(),
+            (await dialog.locator('.c-rule-form__from').textContent())
+                .replace(/\s+/g, ' ')
+                .trim(),
             'From finding Notable exports/export.py:88 on APP-8701',
         );
-        assert.equal(await dialog.getByLabel('Rule', { exact: true }).inputValue(), FINDING.title);
+        assert.equal(
+            await dialog.getByLabel('Rule', { exact: true }).inputValue(),
+            FINDING.title,
+        );
         assert.equal(
             await dialog.getByLabel('Why', { exact: true }).inputValue(),
             FINDING.rationale,
@@ -487,7 +516,7 @@ try {
             await dialog
                 .getByRole('checkbox', { name: /Check it against the repository/ })
                 .isDisabled(),
-            'the conflict check needs review runs and says so',
+            'the conflict check is not built yet and says so',
         );
         assert(
             (await dialog.textContent()).includes(
@@ -496,18 +525,27 @@ try {
         );
         await dialog.getByLabel('Areas', { exact: true }).fill('exports, backend');
         await dialog.getByLabel('Files', { exact: true }).fill('exports/**/*.py');
-        await dialog.getByLabel('Preferred example', { exact: true }).fill('exports/sites.py:30');
+        await dialog
+            .getByLabel('Preferred example', { exact: true })
+            .fill('exports/sites.py:30');
         await shot(page, join(shots, `save-as-rule-${scheme}.png`));
         if (scheme === 'light') {
             await dialog.getByRole('button', { name: 'Save rule' }).click();
             await dialog.waitFor({ state: 'detached' });
             const [sent] = await calls(page, 'save_finding_as_rule');
-            assert.equal(sent.finding.id, 31);
+            assert.equal(
+                sent.findingId,
+                31,
+                'the dialog sends the stored finding by its id',
+            );
             assert.deepEqual(sent.draft.scope, {
                 areas: ['exports', 'backend'],
                 paths: ['exports/**/*.py'],
             });
-            assert.equal(await page.evaluate(() => window.savedFromFinding.source.kind), 'finding');
+            assert.equal(
+                await page.evaluate(() => window.savedFromFinding.source.kind),
+                'finding',
+            );
         }
         await page.context().close();
     }
@@ -518,7 +556,10 @@ try {
         await openKnowledge(page);
         const list = await settings(page).locator('.c-knowledge__rules').boundingBox();
         const pane = await detail(page).boundingBox();
-        assert(pane.y >= list.y + list.height - 1, 'narrow, the detail sits below the list');
+        assert(
+            pane.y >= list.y + list.height - 1,
+            'narrow, the detail sits below the list',
+        );
         await shot(page, join(shots, 'knowledge-narrow-dark.png'));
         await page.context().close();
     }

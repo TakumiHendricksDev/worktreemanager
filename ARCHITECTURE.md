@@ -1240,10 +1240,44 @@ provider's permission prompt, an interruption — is a durable inbox row, filed 
 `(flow, kind, subject)` by a partial unique index, kept until resolved, and the only thing that
 notifies. Dismissing a notification resolves nothing.
 
+**One finding per problem, every report kept.** Roles that read the same change report the same
+thing in their own words, and a list with both would look twice as worried as it is. So each
+accepted submission is consolidated with the others' as it arrives (`wtm_core::flow::consolidate`):
+reports in the same file, on overlapping lines, citing the same rule — or none — are one finding,
+merged transitively so the result does not depend on which role finished first. Nothing compares
+titles or prose, which would make the merge whatever two models happened to write. The finding
+takes the strongest class among its reports (a confirmed bug over a rule violation over a conflict
+over a suggestion) and the highest severity, and keeps every report as evidence: who said it, on
+which snapshot, with what verification. Findings are saved (migration 4), because a dismissal, a
+rule saved from one and the window all point at its id; a consolidation after a rerun keeps the
+ids of findings made of the same reports and supersedes the rest without deleting them, and a
+dismissal follows the problem rather than the row, so a role run again that reports the same thing
+finds it still dismissed.
+
+**A check is the app's evidence, never a role's claim.** `flow_run_check` runs a check from
+`[workflow.check]` — your config, never a repository's, since it runs outside every sandbox at a
+model's request — with exactly its argv, in the directory the asking role reads, under the run's
+credential scrub, and records the exit code and output (`check_runs`). The store refuses a pass
+that did not exit 0. A check that needs a service wtm does not start yet is recorded as skipped,
+with the reason, and never started, and a configured check nobody ran is drawn as not run. None of
+those reads as a pass.
+
+**Stale is measured, and a rerun is the same review moved forward.** Whether a finding still holds
+is git's answer, asked when the window asks: the worktree's tree now, uncommitted and untracked
+work included, against the tree each report was found on. A report goes stale when its file
+changed, and a finding when all its reports have; a check ran against the whole tree, so any change
+makes it stale. Rerun records a new snapshot on the same run and runs again only the roles whose
+paths changed, whose own reports went stale, or that failed; the rest keep their results, still
+measured against the trees they read. The first real run found the middle case: a role scoped to
+one directory reported a bug in another, and its paths alone would have left that report stale with
+nothing offering to run it again.
+
 **Tested twice, at two depths.** `review_engine.rs` drives the engine with fake agents that call the
 real run tools with real tokens, against a real repository and database and a fake clock.
 `review_real_cli.rs` runs one recipe with a Claude role and a Codex role on the real CLIs; its skill
 lists need no model turn and always run, and the review itself spends turns, so it runs on request.
+A change to the Work view is also clicked through in a dev build that shares nothing with an
+installed app (`just dev-isolated`): its own config, data, handoff socket and WebKit storage.
 
 ## 7. Toolchain policy
 

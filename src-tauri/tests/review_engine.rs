@@ -24,16 +24,18 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use wtm_agent::session::AgentSink;
 use wtm_app_lib::app::{App, FlowRole, SessionScope};
+use wtm_app_lib::flow::findings::Rerun;
 use wtm_app_lib::flow::host::RoleHost;
-use wtm_app_lib::flow::{Engine, FlowView, Notice, StartReview, Tuning};
+use wtm_app_lib::flow::{Engine, FlowView, Notice, Refusal, StartReview, Tuning};
 use wtm_app_lib::flow_session::RoleSession;
 use wtm_app_lib::handoff::{Caller, CodeCall};
 use wtm_config::AppPaths;
 use wtm_core::flow::{
-    FlowId, Hold, InboxItem, InboxKind, InterruptCause, InvocationStatus, Phase, StepStatus,
-    Submission,
+    CheckStatus, FlowId, Hold, InboxItem, InboxKind, InterruptCause, InvocationStatus, NewRule,
+    Phase, RoleProvider, RuleDraft, RuleKind, RuleScope, SkillProblem, StepStatus, Submission,
 };
 use wtm_core::model::{AgentEvent, AgentSkill, ApprovalRequest, ProjectId, SessionId, Usage};
+use wtm_core::ports::RuleStore;
 use wtm_core::ports::clock::Clock;
 use wtm_testkit::{FakeClock, GitFixture};
 
@@ -59,6 +61,8 @@ enum Behaviour {
     Limit(Option<u64>),
     /// Ask for a permission twice, then submit.
     AskPermissionThenSubmit(Value),
+    /// Ask the app to run these checks, by name, then submit.
+    CheckThenSubmit(Vec<&'static str>, Value),
 }
 
 /// How a script picks a behaviour: by role and attempt (1 for the first).
@@ -257,14 +261,24 @@ impl FakeHost {
                 self.submit(session, &payload);
                 self.finish_turn(session);
             }
+            Behaviour::CheckThenSubmit(names, payload) => {
+                for name in names {
+                    self.call(session, "flow_run_check", json!({ "name": name }));
+                }
+                self.submit(session, &payload);
+                self.finish_turn(session);
+            }
         }
     }
 }
 
 impl RoleHost for FakeHost {
-    fn preflight(&self, _providers: &[&str]) -> Result<(), String> {
+    fn preflight(&self, providers: &[&str]) -> Result<(), Refusal> {
         match self.refuse_preflight.lock().clone() {
-            Some(refusal) => Err(refusal),
+            Some(message) => Err(Refusal {
+                message,
+                billing: providers.iter().map(|p| (*p).to_owned()).collect(),
+            }),
             None => Ok(()),
         }
     }
@@ -426,6 +440,44 @@ roles = ["skilled", "skilled-claude"]
 
 [[defaults.workflow.recipe.fallback.stage]]
 roles = ["limited"]
+
+[defaults.workflow.role.export-only]
+objective = "Review the export"
+provider = "codex"
+paths = ["src/export.rs"]
+inputs = ["diff", "findings"]
+timeout_ms = 60000
+
+[defaults.workflow.role.draft-only]
+objective = "Review the draft"
+provider = "claude"
+paths = ["src/draft.rs"]
+inputs = ["diff", "rules", "instructions"]
+timeout_ms = 60000
+
+[[defaults.workflow.recipe.scoped.stage]]
+roles = ["export-only", "draft-only"]
+
+[defaults.workflow.check.passes]
+run = ["true"]
+
+[defaults.workflow.check.fails]
+label = "Unit tests"
+run = ["sh", "-c", "echo '2 of 3 tests failed'; exit 1"]
+
+[defaults.workflow.check.e2e]
+run = ["sh", "-c", "touch ran-e2e"]
+needs = ["web"]
+
+[defaults.workflow.role.checker]
+objective = "Run the checks"
+provider = "codex"
+checks = ["passes", "fails", "e2e"]
+inputs = ["diff"]
+timeout_ms = 60000
+
+[[defaults.workflow.recipe.checks.stage]]
+roles = ["checker"]
 "#;
 
 struct Harness {
@@ -437,7 +489,7 @@ struct Harness {
     project: String,
     worktree: String,
     worktree_path: PathBuf,
-    _fixture: GitFixture,
+    fixture: GitFixture,
     _data: tempfile::TempDir,
 }
 
@@ -449,6 +501,17 @@ fn finding(title: &str) -> Value {
         "body": "Worth a look.",
         "path": "src/export.rs",
         "line": 3,
+    }]})
+}
+
+fn finding_at(title: &str, path: &str, line: u32) -> Value {
+    json!({ "findings": [{
+        "title": title,
+        "severity": "notable",
+        "class": "suggestion",
+        "body": "Worth a look.",
+        "path": path,
+        "line": line,
     }]})
 }
 
@@ -491,7 +554,7 @@ fn harness(script: Script) -> Harness {
         project,
         worktree,
         worktree_path,
-        _fixture: fixture,
+        fixture,
         _data: data,
     }
 }
@@ -532,6 +595,27 @@ impl Harness {
 
     fn view(&self, flow: FlowId) -> FlowView {
         self.engine.view(flow).unwrap()
+    }
+
+    /// Commit a change to `path` in the reviewed worktree, as you would between two reviews.
+    fn commit(&self, path: &str, contents: &str) {
+        std::fs::write(self.worktree_path.join(path), contents).unwrap();
+        self.fixture.git_in(&self.worktree_path, &["add", "."]);
+        self.fixture.git_in(
+            &self.worktree_path,
+            &["commit", "-m", "A change after the review"],
+        );
+    }
+
+    /// The briefs a role was opened with, oldest first.
+    fn briefs(&self, role: &str) -> Vec<String> {
+        self.host
+            .opened
+            .lock()
+            .iter()
+            .filter(|o| o.role == role)
+            .map(|o| o.brief.clone())
+            .collect()
     }
 
     /// Wait, in real time, for the engine's threads to get somewhere. Bounded, so a property that
@@ -1032,6 +1116,15 @@ fn a_role_whose_provider_lacks_its_skill_fails_before_any_turn_and_names_the_pro
         detail.contains("Codex does not list the skill `team-review`"),
         "{detail}"
     );
+    assert_eq!(
+        step.skill_problem,
+        Some(SkillProblem::Missing {
+            role: "skilled".to_owned(),
+            provider: RoleProvider::Codex,
+            skill: "team-review".to_owned(),
+        }),
+        "the problem is kept typed, so the Reviews tab can say it without reading prose"
+    );
     assert_eq!(h.host.attempts_of("skilled"), 1, "no retry can add a skill");
     assert_eq!(
         Harness::step(&view, "skilled-claude").status,
@@ -1068,7 +1161,13 @@ fn a_refused_preflight_starts_nothing_and_records_nothing() {
         base: None,
     });
 
-    assert!(refused.is_err_and(|why| why.contains("API key")));
+    let refused = refused.unwrap_err();
+    assert!(refused.message.contains("API key"), "{refused}");
+    assert_eq!(
+        refused.billing,
+        ["claude", "codex"],
+        "a billing refusal names the providers, which the Reviews tab says by name"
+    );
     assert!(h.host.opened_roles().is_empty());
     assert!(h.engine.latest(&h.project, &h.worktree).unwrap().is_none());
 }
@@ -1127,4 +1226,384 @@ fn the_worktree_path_reviewed_is_the_worktrees_own() {
         h.worktree_path.canonicalize().unwrap()
     );
     assert_eq!(view.review.base, "main");
+}
+
+// ═══════════════════════════════ consolidation, staleness, reruns ═══════════════════════════════
+
+#[test]
+fn two_roles_reporting_overlapping_lines_become_one_finding_with_both_reports_as_its_evidence() {
+    let h = harness(Box::new(|role, _| match role {
+        "conventions" => Behaviour::Submit(vec![finding_at("Loop ends early", "src/export.rs", 3)]),
+        _ => Behaviour::Submit(vec![json!({ "findings": [
+            {
+                "title": "Off by one in export",
+                "severity": "blocking",
+                "class": "confirmed_bug",
+                "verification": "ran the range test; the last row is missing",
+                "body": "The loop stops one row early.",
+                "path": "src/export.rs",
+                "line": 2,
+                "endLine": 4,
+            },
+            {
+                "title": "Draft left in",
+                "severity": "minor",
+                "class": "suggestion",
+                "body": "Remove before merging.",
+                "path": "src/draft.rs",
+            },
+        ]})]),
+    }));
+
+    let flow = h.start("pair");
+    let view = h.consolidated(flow);
+
+    assert_eq!(view.findings.len(), 2, "{:#?}", view.findings);
+    let merged = view
+        .findings
+        .iter()
+        .find(|f| {
+            f.finding
+                .location
+                .as_ref()
+                .is_some_and(|l| l.path == "src/export.rs")
+        })
+        .unwrap();
+    assert_eq!(
+        merged.finding.title, "Off by one in export",
+        "the confirmed bug leads"
+    );
+    assert_eq!(merged.finding.severity, wtm_core::flow::Severity::Blocking);
+    let roles: Vec<&str> = merged
+        .evidence
+        .iter()
+        .map(|e| e.source.role.as_str())
+        .collect();
+    assert_eq!(roles.len(), 2);
+    assert!(
+        roles.contains(&"conventions") && roles.contains(&"correctness"),
+        "{roles:?}"
+    );
+    let whole_file = view
+        .findings
+        .iter()
+        .find(|f| {
+            f.finding
+                .location
+                .as_ref()
+                .is_some_and(|l| l.path == "src/draft.rs")
+        })
+        .unwrap();
+    assert!(
+        !whole_file.lines,
+        "a report with a file and no line is about the whole file"
+    );
+}
+
+#[test]
+fn a_new_commit_marks_findings_on_the_files_it_touched_stale_and_leaves_the_rest_current() {
+    let h = harness(Box::new(|role, _| match role {
+        "export-only" => Behaviour::Submit(vec![finding_at("Export", "src/export.rs", 1)]),
+        _ => Behaviour::Submit(vec![finding_at("Draft", "src/draft.rs", 1)]),
+    }));
+    let flow = h.start("scoped");
+    let view = h.consolidated(flow);
+    assert!(
+        !h.engine.staleness(flow).unwrap().changed,
+        "nothing moved yet"
+    );
+
+    h.commit("src/export.rs", "fn export() { todo!() }\n");
+    let stale = h.engine.staleness(flow).unwrap();
+
+    assert!(stale.changed);
+    assert_eq!(stale.paths, ["src/export.rs"]);
+    let id_of = |title: &str| {
+        view.findings
+            .iter()
+            .find(|f| f.finding.title == title)
+            .unwrap()
+            .finding
+            .id
+    };
+    assert_eq!(stale.stale_findings, [id_of("Export")]);
+    assert_eq!(
+        stale.affected,
+        ["export-only"],
+        "the draft role's file did not change, so nothing it said is out of date"
+    );
+}
+
+#[test]
+fn a_role_that_reported_on_a_file_outside_its_paths_is_rerun_when_that_file_changes() {
+    // Found by the first real run: a conventions role scoped to one directory reported a bug in a
+    // file elsewhere, the file was fixed, and Rerun affected left that stale report with no role
+    // to run again.
+    let h = harness(Box::new(|_, _| {
+        Behaviour::Submit(vec![finding_at("Draft", "src/draft.rs", 1)])
+    }));
+    let flow = h.start("scoped");
+    h.consolidated(flow);
+
+    h.commit("src/draft.rs", "// reviewed\n");
+    let stale = h.engine.staleness(flow).unwrap();
+
+    assert_eq!(
+        stale.affected,
+        ["export-only", "draft-only"],
+        "export-only's paths did not change, but its own report did"
+    );
+}
+
+#[test]
+fn committing_exactly_the_uncommitted_work_a_review_read_changes_nothing_about_it() {
+    let h = harness(Box::new(|_, _| {
+        Behaviour::Submit(vec![finding_at("Draft", "src/draft.rs", 1)])
+    }));
+    let flow = h.start("pair");
+    h.consolidated(flow);
+
+    // The review read the untracked draft. Committing it moves the head and not the tree.
+    h.fixture.git_in(&h.worktree_path, &["add", "."]);
+    h.fixture
+        .git_in(&h.worktree_path, &["commit", "-m", "Commit the draft"]);
+
+    let stale = h.engine.staleness(flow).unwrap();
+    assert!(!stale.changed, "{stale:#?}");
+    assert!(stale.stale_findings.is_empty());
+}
+
+#[test]
+fn rerun_affected_runs_only_the_roles_whose_files_changed_and_keeps_the_other_roles_findings() {
+    let h = harness(Box::new(|role, attempt| match (role, attempt) {
+        ("export-only", 1) => {
+            Behaviour::Submit(vec![finding_at("Export, first", "src/export.rs", 1)])
+        }
+        ("export-only", _) => {
+            Behaviour::Submit(vec![finding_at("Export, again", "src/export.rs", 1)])
+        }
+        _ => Behaviour::Submit(vec![finding_at("Draft", "src/draft.rs", 1)]),
+    }));
+    let flow = h.start("scoped");
+    let first = h.consolidated(flow);
+    let draft_finding = first
+        .findings
+        .iter()
+        .find(|f| f.finding.title == "Draft")
+        .unwrap()
+        .finding
+        .id;
+    let first_snapshot = first.review.snapshot.unwrap();
+
+    h.commit("src/export.rs", "fn export() { todo!() }\n");
+    h.engine.rerun(flow, Rerun::Affected).unwrap();
+    let after = h.until(flow, "consolidated after the rerun", |v| {
+        v.flow.state.phase == Phase::Consolidated
+            && !v.running
+            && h.host.attempts_of("export-only") == 2
+    });
+
+    assert_eq!(h.host.attempts_of("export-only"), 2);
+    assert_eq!(
+        h.host.attempts_of("draft-only"),
+        1,
+        "its file did not change"
+    );
+    assert_ne!(
+        after.review.snapshot,
+        Some(first_snapshot),
+        "a rerun reads a new snapshot"
+    );
+    let titles: Vec<&str> = after
+        .findings
+        .iter()
+        .map(|f| f.finding.title.as_str())
+        .collect();
+    assert_eq!(titles.len(), 2, "{titles:?}");
+    assert!(titles.contains(&"Export, again") && !titles.contains(&"Export, first"));
+    assert!(
+        after.findings.iter().any(|f| f.finding.id == draft_finding),
+        "the role that did not run keeps its finding, id and all"
+    );
+    let rerun_brief = h.briefs("export-only").pop().unwrap();
+    assert!(
+        rerun_brief.contains("- Export, first (src/export.rs:1)"),
+        "the rerun role is asked to check what it said before: {rerun_brief}"
+    );
+    let stale = h.engine.staleness(flow).unwrap();
+    assert!(
+        !stale.changed && stale.stale_findings.is_empty(),
+        "{stale:#?}"
+    );
+}
+
+#[test]
+fn a_rerun_with_nothing_changed_is_refused_and_runs_nothing() {
+    let h = harness(Box::new(|_, _| Behaviour::Submit(vec![finding("x")])));
+    let flow = h.start("scoped");
+    h.consolidated(flow);
+
+    let refused = h.engine.rerun(flow, Rerun::Affected).unwrap_err();
+
+    assert!(
+        refused.message.contains("nothing to run again"),
+        "{refused}"
+    );
+    assert_eq!(h.host.opened_roles().len(), 2);
+}
+
+#[test]
+fn a_dismissal_survives_a_rerun_whose_role_reports_the_same_problem_again() {
+    let h = harness(Box::new(|_, _| {
+        Behaviour::Submit(vec![finding_at("Export", "src/export.rs", 1)])
+    }));
+    let flow = h.start("scoped");
+    let view = h.consolidated(flow);
+    let id = view.findings[0].finding.id;
+    h.engine.dismiss(id, Some("the stub is intended")).unwrap();
+
+    h.commit("src/export.rs", "// moved\nfn export() {}\n");
+    h.engine.rerun(flow, Rerun::Affected).unwrap();
+    let after = h.until(flow, "consolidated after the rerun", |v| {
+        v.flow.state.phase == Phase::Consolidated
+            && !v.running
+            && h.host.attempts_of("export-only") == 2
+    });
+
+    let again = &after.findings[0];
+    assert_ne!(again.finding.id, id, "a new report is a new finding");
+    assert_eq!(
+        again.finding.dismissed.as_ref().map(|d| d.reason.as_str()),
+        Some("the stub is intended")
+    );
+    assert!(
+        h.engine.dismiss(id, Some("  ")).is_err(),
+        "a dismissal says why"
+    );
+}
+
+#[test]
+fn a_check_a_role_asks_for_is_run_by_the_app_and_only_an_exit_of_zero_reads_as_passed() {
+    let h = harness(Box::new(|_, _| {
+        Behaviour::CheckThenSubmit(vec!["passes", "fails", "e2e", "deploy"], finding("x"))
+    }));
+    let flow = h.start("checks");
+    let view = h.consolidated(flow);
+
+    let status = |check: &str| {
+        view.checks
+            .iter()
+            .find(|c| c.check == check)
+            .map(|c| (c.status, c.exit_code))
+    };
+    assert_eq!(status("passes"), Some((CheckStatus::Passed, Some(0))));
+    assert_eq!(status("fails"), Some((CheckStatus::Failed, Some(1))));
+    assert_eq!(status("e2e"), Some((CheckStatus::Skipped, None)));
+    assert_eq!(
+        status("deploy"),
+        None,
+        "a check the role was not given leaves no record"
+    );
+
+    let checkout = view.invocations[0].cwd.clone();
+    assert!(
+        !PathBuf::from(&checkout).join("ran-e2e").exists()
+            && !h.worktree_path.join("ran-e2e").exists(),
+        "a check that needs a service is never started"
+    );
+    assert!(
+        view.checks.iter().all(|c| c.cwd == checkout),
+        "a check runs where its role reads"
+    );
+    let answers = h.host.answers.lock().clone();
+    let said = |needle: &str| {
+        answers
+            .iter()
+            .find(|(_, _, text)| text.contains(needle))
+            .cloned()
+    };
+    let (_, ok, text) = said("`fails` failed").unwrap();
+    assert!(ok && text.contains("2 of 3 tests failed"), "{text}");
+    let (_, ok, _) = said("`deploy` is not one of this role's checks").unwrap();
+    assert!(!ok);
+    let (_, _, skipped) = said("`e2e` was skipped").unwrap();
+    assert!(skipped.contains("neither passed nor failed"), "{skipped}");
+    assert_eq!(
+        view.expected_checks
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        ["passes", "fails", "e2e"]
+    );
+
+    h.commit("src/export.rs", "fn export() { 1 }\n");
+    let stale = h.engine.staleness(flow).unwrap();
+    assert_eq!(
+        stale.stale_checks.len(),
+        3,
+        "a check ran against the whole tree"
+    );
+}
+
+#[test]
+fn a_rule_and_the_instruction_files_for_the_change_are_in_the_roles_brief_and_listed_as_applied() {
+    let h = harness(Box::new(|_, _| Behaviour::Submit(vec![finding("x")])));
+    std::fs::write(
+        h.worktree_path.join("CLAUDE.md"),
+        "Prefer small functions.\n",
+    )
+    .unwrap();
+    let project = wtm_core::model::ProjectId::from_root(std::path::Path::new(&h.project));
+    let db = h.app.appdb.get().unwrap();
+    let rule = db
+        .create_rule(
+            &NewRule::written(
+                project,
+                RuleDraft {
+                    kind: RuleKind::Required,
+                    text: "Drafts never land on main".to_owned(),
+                    rationale: String::new(),
+                    scope: RuleScope {
+                        areas: Vec::new(),
+                        paths: vec!["src/draft.rs".to_owned()],
+                    },
+                    examples: Vec::new(),
+                    references: Vec::new(),
+                },
+            )
+            .unwrap(),
+            1,
+        )
+        .unwrap();
+
+    let flow = h.start("scoped");
+    let view = h.consolidated(flow);
+
+    let brief = h.briefs("draft-only").pop().unwrap();
+    assert!(
+        brief.contains(&format!("<rule id=\"R-{}\" revision=\"1\"", rule.id)),
+        "{brief}"
+    );
+    assert!(
+        brief.contains("<instructions path=\"CLAUDE.md\">"),
+        "{brief}"
+    );
+    assert!(
+        brief.contains("Prefer small functions."),
+        "read from the snapshot checkout"
+    );
+    assert_eq!(view.applied.rules.len(), 1);
+    assert_eq!(view.applied.rules[0].rule, rule.id);
+    assert_eq!(view.applied.rules[0].roles, ["draft-only"]);
+    assert_eq!(view.applied.sources, ["CLAUDE.md"]);
+    assert_eq!(
+        db.applications(flow).unwrap().len(),
+        1,
+        "recorded once, for that attempt"
+    );
+    let export_brief = h.briefs("export-only").pop().unwrap();
+    assert!(
+        !export_brief.contains("<rule"),
+        "a role without the rules input is given none"
+    );
 }

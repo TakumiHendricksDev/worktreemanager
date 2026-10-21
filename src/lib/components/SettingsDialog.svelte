@@ -454,8 +454,8 @@
           <p class="c-field__help">
             Adds Work beside Worktrees and Home in the title bar, and to the Go menu: a
             queue of this project’s worktrees, a workspace for reviewing one, and an inbox.
-            Review runs are not in this build yet, so every worktree reads Not reviewed and
-            the inbox stays empty.
+            Reviews run the recipes in your own config; a project without one has nothing to
+            run, and its worktrees read Not reviewed.
           </p>
         </div>
 

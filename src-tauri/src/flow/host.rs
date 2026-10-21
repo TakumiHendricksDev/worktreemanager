@@ -24,8 +24,19 @@ use tauri::Manager;
 use wtm_agent::session::AgentSink;
 use wtm_core::model::{AgentEvent, ExitOutcome, SessionId};
 
+use super::Refusal;
 use crate::app::App;
 use crate::flow_session::RoleSession;
+
+/// Both real hosts' preflight: F3's, with the providers it refused over billing kept apart.
+fn checked(app: &App, providers: &[&str]) -> Result<(), Refusal> {
+    crate::run_profile::preflight_checked(app, providers)
+        .map(|_| ())
+        .map_err(|refused| Refusal {
+            message: refused.message,
+            billing: refused.billing,
+        })
+}
 
 /// Opens, drives and closes a run's role sessions.
 pub trait RoleHost: Send + Sync {
@@ -35,7 +46,7 @@ pub trait RoleHost: Send + Sync {
     /// # Errors
     ///
     /// The refusal, naming the provider and how it is signed in.
-    fn preflight(&self, providers: &[&str]) -> Result<(), String>;
+    fn preflight(&self, providers: &[&str]) -> Result<(), Refusal>;
 
     /// Open `spec`'s session, with `sink` hearing everything it says from its first event.
     ///
@@ -82,8 +93,8 @@ impl TauriHost {
 }
 
 impl RoleHost for TauriHost {
-    fn preflight(&self, providers: &[&str]) -> Result<(), String> {
-        crate::run_profile::preflight(&*self.app()?, providers).map(|_| ())
+    fn preflight(&self, providers: &[&str]) -> Result<(), Refusal> {
+        checked(&*self.app()?, providers)
     }
 
     fn open(&self, spec: &RoleSession, sink: Arc<dyn AgentSink>) -> Result<SessionId, String> {
@@ -130,8 +141,8 @@ impl HeadlessHost {
 }
 
 impl RoleHost for HeadlessHost {
-    fn preflight(&self, providers: &[&str]) -> Result<(), String> {
-        crate::run_profile::preflight(&self.app, providers).map(|_| ())
+    fn preflight(&self, providers: &[&str]) -> Result<(), Refusal> {
+        checked(&self.app, providers)
     }
 
     fn open(&self, spec: &RoleSession, sink: Arc<dyn AgentSink>) -> Result<SessionId, String> {

@@ -68,6 +68,12 @@ doctor:
 dev:
     {{ pmx }} tauri dev
 
+# The app with nothing shared with an installed wtm: its own config, data, handoff socket and
+# WebKit storage, under `root` (default ~/.cache/wtm-isolated). For clicking through a change while
+# the installed app runs live sessions; `just dev` uses the installed app's ~/.config/wtm.
+dev-isolated root="":
+    @bash scripts/dev-isolated.sh "{{ root }}"
+
 # Rust watch loop for a second pane: check -> clippy -> nextest.
 watch:
     bacon

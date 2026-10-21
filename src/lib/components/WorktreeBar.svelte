@@ -16,6 +16,9 @@
    *     the rest. They were a submenu of ⋯ until it was clear that most people open the same link
    *     every time, and three steps to reach it was the cost — see `LinksButton.svelte`.
    *   * **⋯** is what you reach for occasionally: Details and Remove.
+   *   * **Review** appears only while the Work view is on. It runs a review of this worktree's
+   *     committed and uncommitted work against its merge base, or shows the one it has, and lands
+   *     on Work's Reviews tab — the same action as Work's own Run Review (`run-review.ts`).
    *
    * The menus are native — see `native-menu.ts` — so they cost no `z-index`, which is what keeps
    * `settings/_config.scss`'s rule intact.
@@ -44,7 +47,10 @@
   import { sessions } from '../state/sessions.svelte';
   import { INSPECTOR_SHORTCUT, SHELL_SHORTCUT } from '../state/sessions.svelte';
   import { summaryText, tightest, usage } from '../state/usage.svelte';
+  import { view as mainView } from '../state/view.svelte';
+  import { work } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import { runReview } from '../run-review';
   import {
     choice,
     heading,
@@ -276,6 +282,23 @@
     >
       New <Icon name="chevron-down" size={11} />
     </Button>
+
+    {#if mainView.workEnabled}
+      <Button
+        variant="quiet"
+        size="sm"
+        title="Review this worktree's committed and uncommitted work against its merge base"
+        ariaHaspopup="menu"
+        onclick={(event) =>
+          void runReview(event.currentTarget as Element, projectId, worktree.id, () => {
+            work.pick(worktree.id);
+            work.tab = 'reviews';
+            mainView.show('work');
+          })}
+      >
+        Review
+      </Button>
+    {/if}
 
     <OpenInButton {projectId} worktreeId={worktree.id} />
 
