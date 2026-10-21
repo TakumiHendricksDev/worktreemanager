@@ -21,15 +21,18 @@
 
 use serde::Serialize;
 
+use crate::flow::{
+    Answer, InboxItem, InboxItemId, InboxKind, InboxTarget, NewInboxItem, NewQuestion, Question,
+    QuestionError, QuestionId,
+};
 use crate::flow::{CheckRun, FindingId, FindingRecord, NewCheckRun, Reconciled};
 use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
     UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink,
 };
 use crate::flow::{
-    InboxItem, InboxItemId, InboxKind, Invocation, InvocationChange, InvocationId, NewInboxItem,
-    NewInvocation, NewReviewRun, NewStep, ReviewRun, Snapshot, SnapshotId, Step, StepChange,
-    StepId,
+    Invocation, InvocationChange, InvocationId, NewInvocation, NewReviewRun, NewStep, ReviewRun,
+    Snapshot, SnapshotId, Step, StepChange, StepId,
 };
 use crate::flow::{MirroredPr, NewOutcome, NewReviewedHead, Outcome, ReviewClaim, ReviewedHead};
 use crate::model::ProjectId;
@@ -57,6 +60,18 @@ pub enum FlowStoreError {
 
     #[error("no finding {0}")]
     UnknownFinding(crate::flow::FindingId),
+
+    #[error("no question {0}")]
+    UnknownQuestion(QuestionId),
+
+    /// The question refused the answer: it was answered already, or the answer picks nothing.
+    /// Nothing was written. A field rather than a newtype, so its own `kind` tag does not collide
+    /// with this enum's on the wire.
+    #[error("{reason}")]
+    Unanswerable {
+        #[from]
+        reason: QuestionError,
+    },
 
     /// The flow rules refused the event. Nothing was written.
     #[error(transparent)]
@@ -111,8 +126,7 @@ pub trait FlowStore: Send + Sync {
     fn events(&self, flow: FlowId) -> Result<Vec<RecordedEvent>, FlowStoreError>;
 }
 
-/// A review run's working records: what it is of, its snapshot, its steps and their attempts, and
-/// its inbox.
+/// A review run's working records: what it is of, its snapshot, and its steps and their attempts.
 ///
 /// A port of its own beside [`FlowStore`] rather than more methods on it, because the two change
 /// for different reasons: a flow's lifecycle is the same for every kind of work, and these records
@@ -190,33 +204,6 @@ pub trait RunStore: Send + Sync {
     /// A run's invocations, oldest first.
     fn invocations(&self, flow: FlowId) -> Result<Vec<Invocation>, FlowStoreError>;
 
-    /// File an inbox item, unless an open one already covers the same `(flow, kind, subject)`.
-    /// `None` when it was already there, which is what keeps a notification from firing twice.
-    fn file_inbox(
-        &self,
-        item: &NewInboxItem,
-        at: UnixMs,
-    ) -> Result<Option<InboxItem>, FlowStoreError>;
-
-    /// Resolve a run's open items of `kind`, about `subject` when one is given. Returns how many.
-    fn resolve_inbox(
-        &self,
-        flow: FlowId,
-        kind: InboxKind,
-        subject: Option<&str>,
-        at: UnixMs,
-    ) -> Result<usize, FlowStoreError>;
-
-    /// Resolve one item, as a person does. `false` if it was already resolved or never existed.
-    fn resolve_inbox_item(&self, item: InboxItemId, at: UnixMs) -> Result<bool, FlowStoreError>;
-
-    /// Open inbox items, newest first: one run's, one project's, or everyone's.
-    fn inbox(
-        &self,
-        flow: Option<FlowId>,
-        project: Option<&ProjectId>,
-    ) -> Result<Vec<InboxItem>, FlowStoreError>;
-
     /// A run's findings that are still reported, dismissed ones included, each with its evidence,
     /// in the order they were saved.
     fn findings(&self, flow: FlowId) -> Result<Vec<FindingRecord>, FlowStoreError>;
@@ -286,4 +273,77 @@ pub trait PullReviewStore: Send + Sync {
 
     /// A review's outcomes, oldest first. The last is the current one.
     fn outcomes(&self, flow: FlowId) -> Result<Vec<Outcome>, FlowStoreError>;
+}
+
+/// What runs need you for, and the questions they ask: the inbox.
+///
+/// Its own port because it is the one record every kind of flow writes to and every part of the
+/// window reads from — Home, the Work view, the dock badge — where [`RunStore`] is what one kind of
+/// flow keeps while it runs. The same database implements it.
+///
+/// # Once per problem, kept until closed
+///
+/// An item is filed once per `(target, kind)` while it is open, which is what keeps a cause reported
+/// twice from notifying twice. Closing is the only way an item leaves the list, and there are two:
+/// resolved, when the thing it was about is settled, and dismissed, when a person put it away.
+pub trait InboxStore: Send + Sync {
+    /// File an item, unless an open one already has its target and kind. `None` when it was already
+    /// there, which is what keeps a notification from firing twice.
+    fn file_inbox(
+        &self,
+        item: &NewInboxItem,
+        at: UnixMs,
+    ) -> Result<Option<InboxItem>, FlowStoreError>;
+
+    /// Resolve a flow's open items of `kind`, about `target` when one is given. Returns how many.
+    fn resolve_inbox(
+        &self,
+        flow: FlowId,
+        kind: InboxKind,
+        target: Option<&InboxTarget>,
+        at: UnixMs,
+    ) -> Result<usize, FlowStoreError>;
+
+    /// Resolve one item. The item as it now is, or `None` when it was not open.
+    fn resolve_inbox_item(
+        &self,
+        item: InboxItemId,
+        at: UnixMs,
+    ) -> Result<Option<InboxItem>, FlowStoreError>;
+
+    /// Dismiss one item, as a person does. The item as it now is, or `None` when it was not open.
+    fn dismiss_inbox_item(
+        &self,
+        item: InboxItemId,
+        at: UnixMs,
+    ) -> Result<Option<InboxItem>, FlowStoreError>;
+
+    /// One item, open or not.
+    fn inbox_item(&self, item: InboxItemId) -> Result<Option<InboxItem>, FlowStoreError>;
+
+    /// Open items, newest first: one run's, one project's, or everyone's.
+    fn inbox(
+        &self,
+        flow: Option<FlowId>,
+        project: Option<&ProjectId>,
+    ) -> Result<Vec<InboxItem>, FlowStoreError>;
+
+    /// Record a question and file its item, in one transaction, so a question never exists without
+    /// the item that tells you about it. The item is `None` only if one was somehow already open.
+    fn ask(
+        &self,
+        question: &NewQuestion,
+        title: &str,
+        at: UnixMs,
+    ) -> Result<(Question, Option<InboxItem>), FlowStoreError>;
+
+    fn question(&self, id: QuestionId) -> Result<Option<Question>, FlowStoreError>;
+
+    /// A flow's questions, oldest first.
+    fn questions(&self, flow: FlowId) -> Result<Vec<Question>, FlowStoreError>;
+
+    /// Answer a question and resolve its item, in one transaction. The first answer is the one that
+    /// counts: a second is refused with [`QuestionError::AlreadyAnswered`] and changes nothing, so
+    /// answering in two places cannot answer twice.
+    fn answer_question(&self, id: QuestionId, answer: &Answer) -> Result<Question, FlowStoreError>;
 }

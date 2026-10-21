@@ -2,8 +2,8 @@
 //!
 //! These protect what the Work view and recovery at launch read back after the engine that wrote
 //! them is gone: a step's result is exactly the submission that passed its schema, a role has one
-//! step per run, an inbox item is filed once however many times its cause is reported, and only
-//! runs whose flows are still open come back for recovery.
+//! step per run, and only runs whose flows are still open come back for recovery. The inbox has its
+//! own file, `inbox_store.rs`.
 
 #![allow(clippy::unwrap_used)]
 
@@ -13,9 +13,9 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use wtm_appdb::AppDb;
 use wtm_core::flow::{
-    BlobRef, FlowEvent, FlowKind, InboxKind, InvocationChange, InvocationStatus, NewInboxItem,
-    NewInvocation, NewReviewRun, NewStep, NewWorkItem, OutputKind, RoleProfile, RoleProvider,
-    Snapshot, StepChange, StepStatus, WorkLink, Workspace,
+    BlobRef, FlowEvent, FlowKind, InvocationChange, InvocationStatus, NewInvocation, NewReviewRun,
+    NewStep, NewWorkItem, OutputKind, RoleProfile, RoleProvider, Snapshot, StepChange, StepStatus,
+    WorkLink, Workspace,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStore, RunStore};
@@ -242,56 +242,6 @@ fn an_invocation_keeps_its_session_progress_and_how_it_ended() {
     assert_eq!(read.progress.as_deref(), Some("reading export.py"));
     assert_eq!(read.status, InvocationStatus::TimedOut);
     assert_eq!(read.ended_at, Some(3_000));
-}
-
-#[test]
-fn an_inbox_item_is_filed_once_until_it_is_resolved() {
-    let (_dir, db) = open();
-    let run = a_review(&db, "/work/webapp-wt");
-    let limit = NewInboxItem {
-        flow: run.flow,
-        kind: InboxKind::Capacity,
-        subject: "correctness".to_owned(),
-        title: "Codex limit reached".to_owned(),
-        body: "Resets at 3:00 PM.".to_owned(),
-    };
-
-    let first = db.file_inbox(&limit, 2_000).unwrap();
-    assert!(first.is_some());
-    assert_eq!(db.file_inbox(&limit, 2_500).unwrap(), None, "deduplicated");
-    assert_eq!(db.inbox(Some(run.flow), None).unwrap().len(), 1);
-
-    assert_eq!(
-        db.resolve_inbox(run.flow, InboxKind::Capacity, Some("correctness"), 3_000)
-            .unwrap(),
-        1
-    );
-    assert!(db.inbox(None, Some(&project())).unwrap().is_empty());
-    assert!(
-        db.file_inbox(&limit, 4_000).unwrap().is_some(),
-        "a new limit after the last one was resolved is news again"
-    );
-}
-
-#[test]
-fn a_person_resolving_an_item_resolves_only_that_one() {
-    let (_dir, db) = open();
-    let run = a_review(&db, "/work/webapp-wt");
-    let failed = |role: &str| NewInboxItem {
-        flow: run.flow,
-        kind: InboxKind::Failure,
-        subject: role.to_owned(),
-        title: format!("{role} failed"),
-        body: String::new(),
-    };
-    let ui = db.file_inbox(&failed("ui"), 2_000).unwrap().unwrap();
-    db.file_inbox(&failed("correctness"), 2_000).unwrap();
-
-    assert!(db.resolve_inbox_item(ui.id, 3_000).unwrap());
-    assert!(!db.resolve_inbox_item(ui.id, 3_100).unwrap());
-    let open = db.inbox(Some(run.flow), None).unwrap();
-    assert_eq!(open.len(), 1);
-    assert_eq!(open[0].subject, "correctness");
 }
 
 #[test]

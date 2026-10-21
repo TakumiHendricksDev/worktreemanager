@@ -36,6 +36,10 @@ use serde::{Deserialize, Serialize};
 /// `pane_id` is process-local (`pane-<n>`) and best-effort: a notification can outlive the pane
 /// it was about. `(project_id, worktree_id)` is the durable key — the frontend treats a stale
 /// pane as "arrive at the worktree, skip the focus".
+///
+/// A workflow run's notification has no pane: it is about an inbox item, which outlives the
+/// process, so it carries the item's id and the window arrives at whatever the item is about. The
+/// field is left out of the JSON when absent, so a pane's payload is the string it always was.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 // The shared `_id` postfix is the point: these are the frontend's own `projectId` /
@@ -45,6 +49,8 @@ pub struct ClickPayload {
     pub project_id: String,
     pub worktree_id: String,
     pub pane_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox_item: Option<i64>,
 }
 
 /// Whether the OS will deliver, in the three states macOS actually has.
@@ -138,6 +144,7 @@ mod tests {
             project_id: "proj".to_owned(),
             worktree_id: "/repos/thing/wt".to_owned(),
             pane_id: "pane-3".to_owned(),
+            inbox_item: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert_eq!(
@@ -146,5 +153,31 @@ mod tests {
         );
         let back: ClickPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, payload);
+    }
+
+    /// A run's notification names the inbox item it is about, so its click can arrive at the exact
+    /// question, finding or role — and a payload posted by an older build, with no item, still
+    /// reads.
+    #[test]
+    fn a_run_notification_carries_its_inbox_item_through_the_round_trip() {
+        let payload = ClickPayload {
+            project_id: "proj".to_owned(),
+            worktree_id: "/repos/thing/wt".to_owned(),
+            pane_id: "work:run".to_owned(),
+            inbox_item: Some(42),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert_eq!(
+            json,
+            r#"{"projectId":"proj","worktreeId":"/repos/thing/wt","paneId":"work:run","inboxItem":42}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<ClickPayload>(&json).unwrap(),
+            payload
+        );
+        let older: ClickPayload =
+            serde_json::from_str(r#"{"projectId":"p","worktreeId":"w","paneId":"work:run"}"#)
+                .unwrap();
+        assert_eq!(older.inbox_item, None);
     }
 }

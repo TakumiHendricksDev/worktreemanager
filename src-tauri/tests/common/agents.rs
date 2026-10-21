@@ -46,6 +46,10 @@ pub(crate) enum Behaviour {
     AskPermissionThenSubmit(Value),
     /// Ask the app to run these checks, by name, then submit.
     CheckThenSubmit(Vec<&'static str>, Value),
+    /// Ask you this with `flow_ask`, then submit anyway, as a review role is told to.
+    AskThenSubmit(Value, Value),
+    /// Report progress a few times, then submit.
+    ProgressThenSubmit(Value),
 }
 
 /// How a script picks a behaviour: by role and attempt (1 for the first).
@@ -247,6 +251,22 @@ impl FakeHost {
             Behaviour::CheckThenSubmit(names, payload) => {
                 for name in names {
                     self.call(session, "flow_run_check", json!({ "name": name }));
+                }
+                self.submit(session, &payload);
+                self.finish_turn(session);
+            }
+            Behaviour::AskThenSubmit(question, payload) => {
+                self.call(session, "flow_ask", question);
+                self.submit(session, &payload);
+                self.finish_turn(session);
+            }
+            Behaviour::ProgressThenSubmit(payload) => {
+                for line in [
+                    "reading export.rs",
+                    "checking the empty case",
+                    "writing it up",
+                ] {
+                    self.call(session, "flow_progress", json!({ "text": line }));
                 }
                 self.submit(session, &payload);
                 self.finish_turn(session);

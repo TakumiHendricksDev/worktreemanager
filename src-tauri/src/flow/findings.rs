@@ -44,12 +44,12 @@ use serde::{Deserialize, Serialize};
 use wtm_core::flow::knowledge::{RuleQuery, select};
 use wtm_core::flow::{
     CheckRunId, Evidence, EvidenceKey, Field, FindingId, FindingRecord, FlowDir, FlowEvent, FlowId,
-    HoldKind, InboxKind, Invocation, InvocationStatus, Phase, ReportedFinding, ReviewInvocation,
-    RoleInput, RoleProvider, RoleSpec, RuleId, RuleKind, ScratchLabel, Snapshot, SnapshotId,
-    Source, Step, StepChange, StepStatus, Submission, TreeCheck, WorkflowSpec, consolidate,
-    finding_is_stale, reconcile, role_is_affected,
+    HoldKind, InboxKind, InboxTarget, Invocation, InvocationStatus, Phase, ReportedFinding,
+    ReviewInvocation, RoleInput, RoleProvider, RoleSpec, RuleId, RuleKind, ScratchLabel, Snapshot,
+    SnapshotId, Source, Step, StepChange, StepStatus, Submission, TreeCheck, WorkflowSpec,
+    consolidate, finding_is_stale, reconcile, role_is_affected,
 };
-use wtm_core::ports::{RuleStore, RunStore};
+use wtm_core::ports::{InboxStore, RuleStore, RunStore};
 use wtm_core::usecase::snapshot::Snapshots;
 
 use super::{Engine, Refusal, RunCtx, text};
@@ -798,8 +798,18 @@ impl Engine {
                 }
             };
             db.update_step(step.id, &change, self.now()).map_err(text)?;
-            let _ = db.resolve_inbox(flow, InboxKind::Failure, Some(&step.role), self.now());
+            let _ = db.resolve_inbox(
+                flow,
+                InboxKind::Failure,
+                Some(&InboxTarget::Step {
+                    step: step.id,
+                    role: step.role.clone(),
+                }),
+                self.now(),
+            );
         }
+        // Running again, so no longer ready; a new one is filed when it is.
+        let _ = db.resolve_inbox(flow, InboxKind::ReviewReady, None, self.now());
         self.record(
             flow,
             &FlowEvent::Advanced {

@@ -29,8 +29,9 @@
  */
 
 import { commands } from '../ipc/commands';
-import { isWtmError } from '../ipc/types';
+import { isWtmError, type InboxItem, type NotificationClick } from '../ipc/types';
 import { HOME_AGENT, isHome } from '../home';
+import { notificationWords } from '../inbox';
 import { inPaneWindow } from '../window-role';
 import { view } from './view.svelte';
 import { workspace } from './workspace.svelte';
@@ -48,8 +49,9 @@ export type NotifyPref = 'ask' | 'on' | 'off';
 const NOTIFY_PREF = 'ui.notify';
 
 /**
- * The pane id a review run's notification carries instead of a pane's. A run session is headless,
- * so there is no pane to arrive at; the run's worktree in the Work view is where its inbox item is.
+ * The pane id a workflow run's notification carries instead of a pane's. A run session is headless,
+ * so there is no pane to arrive at; the target names the inbox item instead (`inboxItem`), and the
+ * Work view is where whatever the item is about lives.
  */
 export const RUN_TARGET = 'work:run';
 
@@ -114,8 +116,8 @@ function blockedBy(error: unknown): Blocked {
 export interface Toast {
   id: number;
   kind: ToastKind;
-  /** Where clicking it goes. Null for the opt-in card. */
-  target: { projectId: string; worktreeId: string; paneId: string } | null;
+  /** Where clicking it goes: a notification's own address. Null for the opt-in card. */
+  target: NotificationClick | null;
   title: string;
   detail: string;
 }
@@ -287,47 +289,45 @@ class Attention {
   }
 
   /**
-   * Tell the user a review run filed an inbox item: it failed for good, hit a usage limit, asked for
-   * a permission, or was interrupted.
+   * Tell the user a workflow run filed an inbox item: a question, an approval, a role that failed
+   * for good, a usage pause, an interruption, or a review that is ready.
    *
    * The run's one voice, since its sessions' panes are not announced (`announces` in
-   * `sessions.svelte.ts`). The same two gates as `announce`: a notification when no wtm window is in
-   * front, otherwise a toast — unless Work is up, where the item is already in the inbox beside you.
-   * The target names the worktree and `RUN_TARGET` instead of a pane, which `App.goTo` reads as "the
-   * Work view, on this worktree's Reviews tab".
+   * `sessions.svelte.ts`), and called once per item, because the engine files once per (target,
+   * kind) while it is open. The same two gates as `announce`: a notification when no wtm window is
+   * in front, otherwise a toast — unless Home or Work is up, whose Needs you and inbox already list
+   * it, the way Home already stands in for a pane's toast. The target names the item, so a click
+   * arrives at exactly what it is about; following it settles nothing.
    */
-  announceRun(
-    item: { title: string; body: string },
-    projectId: string,
-    worktreeId: string,
-  ): void {
-    if (inPaneWindow) return;
-    const where = workspace.worktrees.find((w) => w.id === worktreeId)?.title ?? 'A review';
-    const title = `${where}: review needs you`;
-    const detail = item.title;
+  announceRun(item: InboxItem): void {
+    if (inPaneWindow || item.project === null || item.worktree === null) return;
+    const where =
+      workspace.worktrees.find((w) => w.id === item.worktree)?.title ??
+      item.worktree.split('/').pop() ??
+      'A review';
+    const { title, detail } = notificationWords(item, where);
+    const target: NotificationClick = {
+      projectId: item.project,
+      worktreeId: item.worktree,
+      paneId: RUN_TARGET,
+      inboxItem: item.id,
+    };
     if (!this.inFront && this.windowFront === null) {
       if (this.pref === 'on') {
-        void commands
-          .postNotification({
-            title,
-            body: detail,
-            projectId,
-            worktreeId,
-            paneId: RUN_TARGET,
-          })
-          .catch(() => {
-            this.blocked ??= 'denied';
-          });
+        void commands.postNotification({ title, body: detail, ...target }).catch(() => {
+          this.blocked ??= 'denied';
+        });
       } else if (this.pref === 'ask') {
         this.earned = true;
       }
-    } else if (!view.work) {
-      this.push({
-        kind: 'attention',
-        target: { projectId, worktreeId, paneId: RUN_TARGET },
-        title,
-        detail,
-      });
+    } else if (!view.work && !view.home) {
+      const kind: ToastKind =
+        item.kind === 'failure'
+          ? 'failed'
+          : item.kind === 'review_ready'
+            ? 'done'
+            : 'attention';
+      this.push({ kind, target, title, detail });
     }
   }
 
@@ -507,19 +507,20 @@ class Attention {
   }
 
   /**
-   * Add a toast, replacing any this pane already has.
+   * Add a toast, replacing any this pane — or this inbox item — already has.
    *
    * One per pane, deliberately: an agent that finishes three turns while you are in another worktree
    * has one thing to say, not three. Replacing in place rather than appending also means the newest
-   * fact wins — a pane that finished and then failed reads as failed.
+   * fact wins — a pane that finished and then failed reads as failed. Every run's toast carries the
+   * same pane id, so for those the item is the key: two runs' items are two things to say.
    */
   private push(toast: Omit<Toast, 'id'>): void {
     this.nextToastId += 1;
-    const mine = toast.target?.paneId;
+    const key = (target: NotificationClick | null | undefined): string | undefined =>
+      target ? `${target.paneId}#${target.inboxItem ?? ''}` : undefined;
+    const mine = key(toast.target);
     const others =
-      mine === undefined
-        ? this.toasts
-        : this.toasts.filter((t) => t.target?.paneId !== mine);
+      mine === undefined ? this.toasts : this.toasts.filter((t) => key(t.target) !== mine);
     const next = [...others, { ...toast, id: this.nextToastId }];
     this.toasts = next.slice(Math.max(0, next.length - MAX_TOASTS));
   }

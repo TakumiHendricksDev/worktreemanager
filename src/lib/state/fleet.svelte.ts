@@ -343,10 +343,15 @@ class Fleet {
     );
   });
 
-  /** Every pending approval outside Home's own pane, oldest first. */
+  /**
+   * Every pending approval outside Home's own pane, oldest first.
+   *
+   * Not a workflow run session's: its provider's prompt is an inbox item, and Needs you lists the
+   * inbox beside these. Listing the pane's copy as well would put one question there twice.
+   */
   needsYou = $derived.by((): Waiting[] =>
     sessions.panes
-      .filter((pane) => listed(pane) && pane.ended === null)
+      .filter((pane) => listed(pane) && pane.flow === null && pane.ended === null)
       .flatMap((pane) => pane.approvals.map((approval) => ({ pane, approval })))
       .sort((a, b) => a.approval.order - b.approval.order),
   );

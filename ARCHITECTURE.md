@@ -1244,10 +1244,34 @@ timeout and reset in the tests be a fake clock moving. The window is told by `fl
 for the run again; §8's ban on polling in the frontend stands.
 
 **One notification owner.** A run session's pane is behind its run's rail and announces nothing
-(`announces` in `sessions.svelte.ts`). What needs you — a role that failed for good, a limit, a
-provider's permission prompt, an interruption — is a durable inbox row, filed once per
-`(flow, kind, subject)` by a partial unique index, kept until resolved, and the only thing that
-notifies. Dismissing a notification resolves nothing.
+(`announces` in `sessions.svelte.ts`), and it is left out of the worktree dots, the dock badge's
+session count and Home's list of approvals, all of which are about panes someone could be looking
+at. What a run needs — a question, a provider's permission prompt, a role that failed for good, a
+usage pause, an interruption, a review ready to read — is a durable inbox item instead
+(`wtm_core::flow::inbox`, migration 6), and the inbox is the only thing about a run that notifies.
+Routine progress files nothing.
+
+- **A kind and a target.** The kind says what the item asks of you; the target — the run, a step, a
+  finding, a question, an approval — is where it is about, and so where a click on it lands: a
+  question or an approval opens in the Work view's focused Inbox, where it is answered, and the rest
+  arrive at the role or the finding in the worktree's Reviews tab. A notification carries the item's
+  id (`ClickPayload::inbox_item`), because the item outlives the process where a pane id does not.
+- **Once per `(target, kind)` while open**, by a partial unique index, so a cause reported twice is
+  one item and one notification, and the same thing happening again after it was dealt with is news
+  again.
+- **Open, resolved or dismissed.** Resolved is the thing being settled — answered, resumed, rerun,
+  read — and dismissed is a person putting it away; nothing else closes an item. Following a
+  notification, a toast or a row goes to the target and settles nothing, and a banner going away is
+  neither: the macOS delegate ignores a dismissal outright. A ready review is the one kind that being
+  read settles, when its run is on screen in a focused window.
+- **One list, read everywhere.** The Work view's column and focused Inbox, Home's Needs you and the
+  dock badge all read the same items, from `flow.db`, so they survive a restart and none of them can
+  disagree about what is open.
+- **Questions are their own records** (`questions`), because the same question is answered from the
+  inbox now and from the issue workspace later, and the first answer is the one that counts: a
+  second is refused in Rust and by a trigger. A review role is not held for an answer — holding a
+  run for hours and resuming its provider session is the planner's machinery — so it chooses a
+  reading and says so, and the answer is given to that role's brief when it runs again.
 
 **One finding per problem, every report kept.** Roles that read the same change report the same
 thing in their own words, and a list with both would look twice as worried as it is. So each

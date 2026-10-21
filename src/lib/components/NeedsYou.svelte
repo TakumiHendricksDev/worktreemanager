@@ -14,9 +14,18 @@
    *
    * Home's own approvals stay in Home's transcript, where the conversation that caused them is. This
    * is the list of everything *else*, which is the thing that had no single place to be answered.
+   *
+   * # Workflow runs' items, from the inbox
+   *
+   * A run's sessions are headless, so what a run needs is an inbox item rather than a pane's
+   * approval, and those are listed here too, each with Open, which goes to exactly what it is
+   * about in the Work view. Their panes' own prompts are left out of the approvals below
+   * (`fleet.needsYou`), so nothing is listed, or notified, twice.
    */
   import { shellRuns } from '../state/shell-runs.svelte';
   import { APPROVAL_WORD, summarize } from '../approvals';
+  import { KIND_WORDS, plain } from '../inbox';
+  import { inbox } from '../state/inbox.svelte';
   import { fleet, type Waiting } from '../state/fleet.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { view } from '../state/view.svelte';
@@ -77,14 +86,35 @@
   }
 </script>
 
-{#if fleet.needsYou.length + shellRuns.pending.length > 0}
+{#if fleet.needsYou.length + shellRuns.pending.length + inbox.items.length > 0}
   <section class="c-inbox" aria-label="Needs you">
     <h2 class="c-inbox__heading">
       <Icon name="inbox" size={14} />
       Needs you
-      <span class="c-inbox__count">{fleet.needsYou.length + shellRuns.pending.length}</span>
+      <span class="c-inbox__count"
+        >{fleet.needsYou.length + shellRuns.pending.length + inbox.items.length}</span
+      >
     </h2>
     <ul class="o-plain-list c-inbox__list" bind:this={listEl}>
+      {#each inbox.items as item (item.id)}
+        <li class="c-inbox__item">
+          <div class="c-inbox__row">
+            <button class="c-inbox__toggle" onclick={() => inbox.open(item)}>
+              <SessionDot status={item.kind === 'review_ready' ? 'done' : 'attention'} />
+              <span class="c-inbox__what">{KIND_WORDS[item.kind]}</span>
+              <span class="c-inbox__line" title={plain(item.title)}
+                >{plain(item.title)}</span
+              >
+              <span class="c-inbox__who">Review run in {inbox.placeOf(item)}</span>
+            </button>
+            <span class="c-inbox__actions">
+              <Button variant="quiet" size="sm" onclick={() => inbox.open(item)}
+                >Open</Button
+              >
+            </span>
+          </div>
+        </li>
+      {/each}
       {#each shellRuns.pending as run (run.id)}
         <li class="c-inbox__item">
           <div class="c-inbox__row">

@@ -1,5 +1,6 @@
-//! A review run's working records: its steps, the sessions each step opened, and what it needs
-//! you for — plus the rules for what happens after an attempt fails or a provider runs dry.
+//! A review run's working records: its steps and the sessions each step opened, plus the rules for
+//! what happens after an attempt fails or a provider runs dry. What a run needs you for is the inbox
+//! (`inbox.rs`).
 //!
 //! # Steps and invocations
 //!
@@ -45,11 +46,6 @@ id! {
 id! {
     /// A snapshot a run recorded.
     SnapshotId
-}
-
-id! {
-    /// Something a run needs you to know or decide.
-    InboxItemId
 }
 
 id! {
@@ -337,52 +333,6 @@ impl InvocationChange {
             ..Self::default()
         }
     }
-}
-
-/// What an inbox item is about.
-///
-/// The minimal set a review run raises. Questions and approvals arrive with the items that first
-/// ask them; until then a provider's own permission prompt is the only thing a run session can ask
-/// you, and it lands here rather than on a pane nobody is looking at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InboxKind {
-    /// A role failed for good: retries spent, no fallback left.
-    Failure,
-    /// A provider's usage limit paused a role, or switched it to its fallback.
-    Capacity,
-    /// A run session's CLI asked for a permission. Under a run's profile it should never need to,
-    /// so this is worth knowing about whether or not anyone answers it.
-    Permission,
-    /// The app went away mid-run, and the run waits for you to resume it.
-    Interrupted,
-}
-
-/// Something a run needs you to know or decide. Kept until resolved; dismissing a notification
-/// about it resolves nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InboxItem {
-    pub id: InboxItemId,
-    pub flow: FlowId,
-    pub kind: InboxKind,
-    /// What within the run it is about, such as a role id. One open item per `(flow, kind,
-    /// subject)`: a role that fails twice is one item, not two.
-    pub subject: String,
-    pub title: String,
-    pub body: String,
-    pub created_at: UnixMs,
-    pub resolved_at: Option<UnixMs>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NewInboxItem {
-    pub flow: FlowId,
-    pub kind: InboxKind,
-    pub subject: String,
-    pub title: String,
-    pub body: String,
 }
 
 /// How a check the app ran for a role came out.

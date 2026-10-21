@@ -26,12 +26,13 @@ use wtm_app_lib::flow::host::RoleHost;
 use wtm_app_lib::flow::{Engine, FlowView, Notice, StartReview, Tuning};
 use wtm_config::AppPaths;
 use wtm_core::flow::{
-    CheckStatus, FlowId, Hold, InboxItem, InboxKind, InterruptCause, InvocationStatus, NewRule,
-    Phase, RoleProvider, RuleDraft, RuleKind, RuleScope, SkillProblem, StepStatus, Submission,
+    CheckStatus, FlowId, Hold, InboxItem, InboxKind, InboxState, InboxTarget, InterruptCause,
+    InvocationStatus, NewRule, Phase, RoleProvider, RuleDraft, RuleKind, RuleScope, SkillProblem,
+    StepStatus, Submission,
 };
 use wtm_core::model::ProjectId;
-use wtm_core::ports::RuleStore;
 use wtm_core::ports::clock::Clock;
+use wtm_core::ports::{InboxStore, RuleStore};
 use wtm_testkit::{FakeClock, GitFixture};
 
 mod common;
@@ -162,7 +163,8 @@ struct Harness {
     worktree: String,
     worktree_path: PathBuf,
     fixture: GitFixture,
-    _data: tempfile::TempDir,
+    /// The app's config and data directories; a test that relaunches opens a second app on them.
+    data: tempfile::TempDir,
 }
 
 fn finding(title: &str) -> Value {
@@ -227,7 +229,7 @@ fn harness(script: Script) -> Harness {
         worktree,
         worktree_path,
         fixture,
-        _data: data,
+        data,
     }
 }
 
@@ -326,6 +328,25 @@ impl Harness {
     }
 }
 
+/// The kinds of a run's open items that wait on you: everything but "review ready".
+fn needs_you(view: &FlowView) -> Vec<InboxKind> {
+    view.inbox
+        .iter()
+        .map(|item| item.kind)
+        .filter(|kind| *kind != InboxKind::ReviewReady)
+        .collect()
+}
+
+/// How many announcements of `kind` the engine made.
+fn heard(h: &Harness, kind: InboxKind) -> usize {
+    h.heard
+        .filed
+        .lock()
+        .iter()
+        .filter(|item| item.kind == kind)
+        .count()
+}
+
 fn titles(view: &FlowView, role: &str) -> Vec<String> {
     match &Harness::step(view, role).result {
         Some(Submission::Findings(report)) => {
@@ -363,7 +384,7 @@ fn the_roles_of_a_stage_run_together_and_the_next_stage_waits_for_all_of_them() 
     }
     assert_eq!(titles(&view, "correctness"), ["from correctness"]);
     assert!(view.flow.state.hold.is_none());
-    assert!(view.inbox.is_empty());
+    assert!(needs_you(&view).is_empty());
 }
 
 #[test]
@@ -439,7 +460,10 @@ fn a_role_that_times_out_is_retried_and_its_second_attempt_counts() {
     assert_eq!(step.status, StepStatus::Done);
     assert_eq!(step.failures, 1);
     assert_eq!(titles(&view, "correctness"), ["correctness attempt 2"]);
-    assert!(view.inbox.is_empty(), "a retry that worked needs nobody");
+    assert!(
+        needs_you(&view).is_empty(),
+        "a retry that worked needs nobody"
+    );
 }
 
 #[test]
@@ -465,10 +489,21 @@ fn a_role_out_of_retries_fails_into_the_inbox_and_the_review_still_consolidates(
             .contains("no result after 1 min")
     );
     assert_eq!(titles(&view, "conventions"), ["kept"]);
-    assert_eq!(view.inbox.len(), 1);
-    assert_eq!(view.inbox[0].kind, InboxKind::Failure);
-    assert_eq!(view.inbox[0].subject, "fragile");
-    assert_eq!(h.heard.filed.lock().len(), 1, "notified once");
+    assert_eq!(needs_you(&view), [InboxKind::Failure]);
+    let failed = view
+        .inbox
+        .iter()
+        .find(|i| i.kind == InboxKind::Failure)
+        .unwrap();
+    assert_eq!(
+        failed.target,
+        InboxTarget::Step {
+            step: step.id,
+            role: "fragile".to_owned()
+        },
+        "a click on it lands on the role"
+    );
+    assert_eq!(heard(&h, InboxKind::Failure), 1, "notified once");
 }
 
 #[test]
@@ -611,8 +646,11 @@ fn a_usage_limit_holds_the_run_until_the_reset_and_then_the_role_runs_again_with
         Harness::statuses(&view, "correctness"),
         [InvocationStatus::LimitReached, InvocationStatus::Submitted]
     );
-    assert!(view.inbox.is_empty(), "the capacity item resolved itself");
-    assert_eq!(h.heard.filed.lock().len(), 1);
+    assert!(
+        needs_you(&view).is_empty(),
+        "the capacity item resolved itself"
+    );
+    assert_eq!(heard(&h, InboxKind::Capacity), 1);
 }
 
 #[test]
@@ -640,8 +678,7 @@ fn a_limit_hands_over_to_the_roles_configured_fallback_on_another_provider_with_
         brief.contains("You run in place of another role"),
         "{brief}"
     );
-    assert_eq!(view.inbox.len(), 1);
-    assert_eq!(view.inbox[0].kind, InboxKind::Capacity);
+    assert_eq!(needs_you(&view), [InboxKind::Capacity]);
 }
 
 #[test]
@@ -710,7 +747,7 @@ fn quitting_mid_review_interrupts_it_keeps_finished_results_and_sends_nothing_ag
         1,
         "a finished role is not re-sent"
     );
-    assert!(view.inbox.is_empty());
+    assert!(needs_you(&view).is_empty());
 }
 
 fn relaunched_consolidated(engine: &Engine, flow: FlowId) -> FlowView {
@@ -857,11 +894,11 @@ fn a_provider_permission_prompt_in_a_run_session_lands_in_the_inbox_once() {
     let asked: Vec<&InboxItem> = view
         .inbox
         .iter()
-        .filter(|i| i.kind == InboxKind::Permission)
+        .filter(|i| i.kind == InboxKind::Approval)
         .collect();
     assert_eq!(asked.len(), 1, "two prompts, one item");
     assert!(asked[0].body.contains("`git push`"));
-    assert_eq!(h.heard.filed.lock().len(), 1);
+    assert_eq!(heard(&h, InboxKind::Approval), 1);
 }
 
 #[test]
@@ -1278,4 +1315,269 @@ fn a_rule_and_the_instruction_files_for_the_change_are_in_the_roles_brief_and_li
         !export_brief.contains("<rule"),
         "a role without the rules input is given none"
     );
+}
+
+// ═══════════════════════════════ the inbox ═══════════════════════════════
+
+fn store(h: &Harness) -> Arc<wtm_appdb::AppDb> {
+    h.app.appdb.get().unwrap()
+}
+
+#[test]
+fn a_finished_review_says_it_is_ready_once_and_a_rerun_makes_way_for_the_next() {
+    let h = harness(Box::new(|role, attempt| {
+        let line = if role == "conventions" { 1 } else { 2 };
+        Behaviour::Submit(vec![finding_at(
+            &format!("{role} {attempt}"),
+            "src/export.rs",
+            line,
+        )])
+    }));
+
+    let flow = h.start("pair");
+    let view = h.consolidated(flow);
+
+    let ready: Vec<&InboxItem> = view
+        .inbox
+        .iter()
+        .filter(|i| i.kind == InboxKind::ReviewReady)
+        .collect();
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].target, InboxTarget::Flow);
+    assert_eq!(ready[0].title, "Review ready: 2 findings");
+    assert!(
+        ready[0].body.contains("(src/export.rs:1)"),
+        "{}",
+        ready[0].body
+    );
+    assert_eq!(
+        ready[0].project.as_ref().map(ToString::to_string),
+        Some(h.project.clone())
+    );
+    assert_eq!(ready[0].worktree.as_deref(), Some(h.worktree.as_str()));
+    assert_eq!(heard(&h, InboxKind::ReviewReady), 1);
+    let first = ready[0].id;
+
+    h.engine.rerun(flow, Rerun::All).unwrap();
+    let view = h.until(flow, "the rerun consolidated", |v| {
+        v.flow.state.phase == Phase::Consolidated
+            && !v.running
+            && v.inbox
+                .iter()
+                .any(|i| i.kind == InboxKind::ReviewReady && i.id != first)
+    });
+
+    assert_eq!(
+        store(&h).inbox_item(first).unwrap().unwrap().state,
+        InboxState::Resolved,
+        "the earlier ready item was settled when the run started again"
+    );
+    assert_eq!(
+        view.inbox
+            .iter()
+            .filter(|i| i.kind == InboxKind::ReviewReady)
+            .count(),
+        1
+    );
+    assert_eq!(heard(&h, InboxKind::ReviewReady), 2);
+}
+
+#[test]
+fn routine_progress_changes_the_run_and_notifies_nothing() {
+    let h = harness(Box::new(|_, _| {
+        Behaviour::ProgressThenSubmit(json!({ "findings": [] }))
+    }));
+
+    let flow = h.start("pair");
+    let view = h.consolidated(flow);
+
+    assert!(
+        view.invocations
+            .iter()
+            .any(|i| i.progress.as_deref() == Some("writing it up")),
+        "the progress was recorded"
+    );
+    let kinds: Vec<InboxKind> = h.heard.filed.lock().iter().map(|i| i.kind).collect();
+    assert_eq!(
+        kinds,
+        [InboxKind::ReviewReady],
+        "the run's one announcement is that it is ready"
+    );
+    assert_eq!(view.inbox[0].title, "Review ready: nothing found");
+}
+
+#[test]
+fn a_question_a_role_asks_is_kept_for_you_and_its_answer_reaches_the_role_when_it_runs_again() {
+    let h = harness(Box::new(|role, attempt| match (role, attempt) {
+        ("correctness", 1) => Behaviour::AskThenSubmit(
+            json!({
+                "question": "Is an empty export an error?",
+                "why": "It decides whether the empty case is a bug.",
+                "refs": ["src/export.rs:1", "ExportWriter"],
+                "recommendation": "Valid: write the header row",
+                "unblocks": "Reporting the empty case one way or the other",
+                "options": ["An error", "Valid, header only"],
+            }),
+            finding_at("assumed valid", "src/export.rs", 1),
+        ),
+        _ => Behaviour::Submit(vec![finding_at(
+            &format!("{role} {attempt}"),
+            "src/export.rs",
+            2,
+        )]),
+    }));
+
+    let flow = h.start("pair");
+    let view = h.consolidated(flow);
+
+    let item = view
+        .inbox
+        .iter()
+        .find(|i| i.kind == InboxKind::Question)
+        .expect("the question is in the inbox");
+    let question = item.question.as_ref().expect("with the question itself");
+    assert_eq!(
+        item.target,
+        InboxTarget::Question {
+            question: question.id
+        }
+    );
+    assert_eq!(question.role.as_deref(), Some("correctness"));
+    assert_eq!(question.options, ["An error", "Valid, header only"]);
+    assert_eq!(
+        question.recommendation.as_deref(),
+        Some("Valid: write the header row")
+    );
+    assert_eq!(
+        question.context,
+        [
+            wtm_core::flow::ContextLink::File {
+                path: "src/export.rs".to_owned(),
+                line: Some(1)
+            },
+            wtm_core::flow::ContextLink::Mention {
+                text: "ExportWriter".to_owned()
+            },
+        ]
+    );
+    assert_eq!(heard(&h, InboxKind::Question), 1);
+    let told = h
+        .host
+        .answers
+        .lock()
+        .iter()
+        .find(|(role, _, text)| role == "correctness" && text.contains("Filed as question"))
+        .cloned()
+        .expect("the role heard back");
+    assert!(told.1, "asking is not an error");
+    assert!(told.2.contains("does not stop for answers"), "{}", told.2);
+    assert_eq!(
+        Harness::step(&view, "correctness").status,
+        StepStatus::Done,
+        "the role carried on rather than waiting"
+    );
+
+    let answered = h
+        .engine
+        .answer(question.id, Some(1), "  and say so in the docs ")
+        .unwrap();
+    assert_eq!(
+        answered.answer.as_ref().unwrap().text,
+        "and say so in the docs"
+    );
+    assert_eq!(
+        store(&h).inbox_item(item.id).unwrap().unwrap().state,
+        InboxState::Resolved
+    );
+    let again = h.engine.answer(question.id, Some(0), "");
+    assert!(
+        again
+            .as_ref()
+            .is_err_and(|e| e.contains("already answered")),
+        "{again:?}"
+    );
+
+    h.engine.rerun(flow, Rerun::All).unwrap();
+    h.until(flow, "the rerun consolidated", |v| {
+        v.flow.state.phase == Phase::Consolidated
+            && !v.running
+            && h.briefs("correctness").len() == 2
+    });
+    let brief = &h.briefs("correctness")[1];
+    assert!(
+        brief.contains(r#"Answer: "Valid, header only", adding "and say so in the docs""#),
+        "{brief}"
+    );
+    assert!(
+        !h.briefs("conventions")[1].contains("Is an empty export an error?"),
+        "only the role that asked is told"
+    );
+}
+
+#[test]
+fn an_item_outlives_the_app_that_filed_it_and_only_a_person_or_its_cause_closes_it() {
+    let h = harness(Box::new(|role, _| match role {
+        "fragile" => Behaviour::Silent,
+        _ => Behaviour::Submit(vec![finding("kept")]),
+    }));
+    let flow = h.start("fragile");
+    h.until(flow, "the fragile role is running", |v| {
+        Harness::statuses(v, "fragile") == [InvocationStatus::Running]
+    });
+    h.clock.advance_ms(60_001);
+    h.consolidated(flow);
+    let before: Vec<InboxItem> = h.engine.inbox(None).unwrap();
+    assert_eq!(before.len(), 2, "{before:#?}");
+    let announced = h.heard.filed.lock().len();
+
+    // Quit and launch again: a new app and engine over the same files. Reading the inbox, as a
+    // window, a badge and a notification click all do, closes nothing.
+    let app = Arc::new(App::with_paths(AppPaths::rooted(h.data.path())).unwrap());
+    let heard_again = Arc::new(Heard::default());
+    let relaunched = engine_for(&app, &h.host, &h.clock, &heard_again);
+    assert_eq!(relaunched.recover().unwrap(), []);
+    for _ in 0..3 {
+        assert_eq!(relaunched.inbox(None).unwrap(), before);
+        relaunched.view(flow).unwrap();
+    }
+    assert_eq!(relaunched.inbox(Some(&h.project)).unwrap(), before);
+    assert!(
+        heard_again.filed.lock().is_empty() && h.heard.filed.lock().len() == announced,
+        "nothing was announced again"
+    );
+
+    // A person dismisses the failure: the item goes, and what it was about does not change.
+    let failure = before
+        .iter()
+        .find(|i| i.kind == InboxKind::Failure)
+        .unwrap();
+    let dismissed = relaunched.dismiss_item(failure.id).unwrap().unwrap();
+    assert_eq!(dismissed.state, InboxState::Dismissed);
+    assert_eq!(relaunched.dismiss_item(failure.id).unwrap(), None);
+    let view = relaunched.view(flow).unwrap();
+    assert_eq!(Harness::step(&view, "fragile").status, StepStatus::Failed);
+    assert_eq!(needs_you(&view), Vec::<InboxKind>::new());
+}
+
+#[test]
+fn stopping_a_review_settles_everything_it_had_asked_of_you() {
+    let h = harness(Box::new(|role, _| match role {
+        "correctness" => Behaviour::AskThenSubmit(
+            json!({
+                "question": "Which base?",
+                "why": "Two bases look plausible.",
+                "unblocks": "Choosing the diff",
+            }),
+            json!({ "findings": [] }),
+        ),
+        _ => Behaviour::Silent,
+    }));
+    let flow = h.start("pair");
+    h.until(flow, "the question was asked", |v| {
+        v.inbox.iter().any(|i| i.kind == InboxKind::Question)
+    });
+
+    h.engine.cancel(flow).unwrap();
+
+    assert!(h.engine.inbox(None).unwrap().is_empty());
 }

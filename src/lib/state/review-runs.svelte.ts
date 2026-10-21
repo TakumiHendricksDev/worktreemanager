@@ -1,6 +1,6 @@
 /**
- * Review runs as the Work view shows them: each worktree's newest run, the recipes a project offers,
- * and the open run inbox.
+ * Review runs as the Work view shows them: each worktree's newest run and the recipes a project
+ * offers. What runs need you for is the inbox's (`inbox.svelte.ts`).
  *
  * # Events, then a fresh read
  *
@@ -14,12 +14,6 @@
  * Whether a run's findings still describe the worktree is a git question (`review_staleness`). It is
  * asked when the Reviews tab shows a run, when a run settles, and when the worktree's listing
  * changes, which the window learns on focus. Nothing here runs it on a timer.
- *
- * # The inbox notifies
- *
- * A run session's own pane does not announce anything (`sessions.svelte.ts`, `announces`), so a run
- * has one voice: `flow:inbox`, filed once per problem by the engine, which this hands to `attention`
- * with the run's worktree as the target.
  */
 
 import { listen } from '@tauri-apps/api/event';
@@ -30,10 +24,8 @@ import type {
   RerunScope,
   ReviewRunView,
   ReviewStaleness,
-  RunInboxItem,
 } from '../ipc/types';
 import { startProblem, type StartProblem } from '../review-run';
-import { attention } from './attention.svelte';
 
 function message(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error) {
@@ -47,10 +39,6 @@ class ReviewRuns {
   latest = $state<Record<string, ReviewRunView | null>>({});
   /** Each project's recipes, by project id. */
   recipes = $state<Record<string, RecipeChoice[]>>({});
-  /** The active project's open run inbox, newest first. */
-  inbox = $state<RunInboxItem[]>([]);
-  /** The project `inbox` is for. */
-  inboxProject = $state<string | null>(null);
   /** Why the last action on a worktree failed, by worktree id. */
   errors = $state<Record<string, string>>({});
   /** Why the last start, rerun or resume of a worktree was refused, typed, by worktree id. */
@@ -65,13 +53,7 @@ class ReviewRuns {
     const offChanged = await listen<{ flow: number }>('flow:changed', (event) => {
       void this.refreshFlow(event.payload.flow);
     });
-    const offInbox = await listen<RunInboxItem>('flow:inbox', (event) => {
-      void this.filed(event.payload);
-    });
-    return () => {
-      offChanged();
-      offInbox();
-    };
+    return offChanged;
   }
 
   async load(project: string, worktree: string): Promise<void> {
@@ -88,15 +70,6 @@ class ReviewRuns {
       this.recipes[project] = (await commands.reviewRecipes(project)) ?? [];
     } catch {
       this.recipes[project] = [];
-    }
-  }
-
-  async loadInbox(project: string | null): Promise<void> {
-    this.inboxProject = project;
-    try {
-      this.inbox = (await commands.workInbox(project)) ?? [];
-    } catch {
-      this.inbox = [];
     }
   }
 
@@ -187,11 +160,6 @@ class ReviewRuns {
     await this.act(worktree, () => commands.cancelReview(flow));
   }
 
-  async resolve(item: RunInboxItem): Promise<void> {
-    await commands.resolveInboxItem(item.id).catch(() => false);
-    this.inbox = this.inbox.filter((open) => open.id !== item.id);
-  }
-
   private async act(worktree: string, action: () => Promise<ReviewRunView>): Promise<void> {
     if (this.busy[worktree]) return;
     this.busy[worktree] = true;
@@ -207,7 +175,7 @@ class ReviewRuns {
     }
   }
 
-  /** A run moved: read it again wherever it is shown, and the inbox it may have changed. */
+  /** A run moved: read it again wherever it is shown. */
   private async refreshFlow(flow: number): Promise<void> {
     const shown = Object.entries(this.latest).find(([, view]) => view?.flow.id === flow);
     if (shown) {
@@ -221,23 +189,6 @@ class ReviewRuns {
         // The window keeps what it last drew; the next event or a reselect reads it again.
       }
     }
-    if (this.inbox.some((item) => item.flow === flow)) {
-      await this.loadInbox(this.inboxProject);
-    }
-  }
-
-  /** An inbox item was filed: show it, and tell the user the way `attention` decides. */
-  private async filed(item: RunInboxItem): Promise<void> {
-    let run: ReviewRunView | null = null;
-    try {
-      run = await commands.reviewRun(item.flow);
-    } catch {
-      return;
-    }
-    if (run.review.project === this.inboxProject) {
-      this.inbox = [item, ...this.inbox.filter((open) => open.id !== item.id)];
-    }
-    attention.announceRun(item, run.review.project, run.review.worktree);
   }
 }
 

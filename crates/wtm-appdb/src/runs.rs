@@ -1,4 +1,4 @@
-//! [`RunStore`] over SQLite: a review run's snapshot, steps, invocations and inbox.
+//! [`RunStore`] over SQLite: a review run's snapshot, steps and invocations.
 //!
 //! Enums are stored as their serde names, the same rule `store.rs` follows, so `sqlite3 flow.db`
 //! reads the way the IPC wire and the event JSON do. A step's result is its `Submission` as JSON,
@@ -7,10 +7,9 @@
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use wtm_core::flow::{
-    BlobRef, CheckRun, FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, InboxKind,
-    Invocation, InvocationChange, InvocationId, NewCheckRun, NewInboxItem, NewInvocation,
-    NewReviewRun, NewStep, Reconciled, ReviewRun, Snapshot, SnapshotId, Step, StepChange, StepId,
-    UnixMs, WorkItemId,
+    BlobRef, CheckRun, FindingId, FindingRecord, FlowId, Invocation, InvocationChange,
+    InvocationId, NewCheckRun, NewInvocation, NewReviewRun, NewStep, Reconciled, ReviewRun,
+    Snapshot, SnapshotId, Step, StepChange, StepId, UnixMs, WorkItemId,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStoreError, RunStore};
@@ -29,8 +28,6 @@ const STEP_COLUMNS: &str = "id, flow_id, stage, role, provider, model, profile, 
 const INVOCATION_COLUMNS: &str = "id, flow_id, step_id, attempt, role, provider, model, profile, \
      snapshot_id, cwd, session, provider_session, status, detail, progress, started_at, ended_at, \
      instruction_sources";
-
-const INBOX_COLUMNS: &str = "id, flow_id, kind, subject, title, body, created_at, resolved_at";
 
 impl RunStore for AppDb {
     fn work_item_for_worktree(
@@ -387,94 +384,6 @@ impl RunStore for AppDb {
         .collect()
     }
 
-    fn file_inbox(
-        &self,
-        item: &NewInboxItem,
-        at: UnixMs,
-    ) -> Result<Option<InboxItem>, FlowStoreError> {
-        let conn = self.conn.lock();
-        ensure_flow(&conn, item.flow)?;
-        let inserted = conn.execute(
-            "INSERT INTO inbox_items (flow_id, kind, subject, title, body, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                item.flow.0,
-                tag(&item.kind)?,
-                item.subject,
-                item.title,
-                item.body,
-                at
-            ],
-        );
-        match inserted {
-            Ok(_) => Ok(Some(InboxItem {
-                id: InboxItemId(conn.last_insert_rowid()),
-                flow: item.flow,
-                kind: item.kind,
-                subject: item.subject.clone(),
-                title: item.title.clone(),
-                body: item.body.clone(),
-                created_at: at,
-                resolved_at: None,
-            })),
-            // An open item already says this. Not refreshed either: its creation time is when the
-            // problem started, which is the useful thing to keep.
-            Err(e) if is_unique_violation(&e) => Ok(None),
-            Err(e) => Err(storage(e)),
-        }
-    }
-
-    fn resolve_inbox(
-        &self,
-        flow: FlowId,
-        kind: InboxKind,
-        subject: Option<&str>,
-        at: UnixMs,
-    ) -> Result<usize, FlowStoreError> {
-        let conn = self.conn.lock();
-        conn.execute(
-            "UPDATE inbox_items SET resolved_at = ?1
-             WHERE flow_id = ?2 AND kind = ?3 AND resolved_at IS NULL
-               AND (?4 IS NULL OR subject = ?4)",
-            params![at, flow.0, tag(&kind)?, subject],
-        )
-        .map_err(storage)
-    }
-
-    fn resolve_inbox_item(&self, item: InboxItemId, at: UnixMs) -> Result<bool, FlowStoreError> {
-        let conn = self.conn.lock();
-        conn.execute(
-            "UPDATE inbox_items SET resolved_at = ?1 WHERE id = ?2 AND resolved_at IS NULL",
-            params![at, item.0],
-        )
-        .map(|changed| changed == 1)
-        .map_err(storage)
-    }
-
-    fn inbox(
-        &self,
-        flow: Option<FlowId>,
-        project: Option<&ProjectId>,
-    ) -> Result<Vec<InboxItem>, FlowStoreError> {
-        let conn = self.conn.lock();
-        query(
-            &conn,
-            &format!(
-                "SELECT {INBOX_COLUMNS} FROM inbox_items
-                 WHERE resolved_at IS NULL
-                   AND (?1 IS NULL OR flow_id = ?1)
-                   AND (?2 IS NULL OR flow_id IN
-                        (SELECT flow_id FROM review_runs WHERE project = ?2))
-                 ORDER BY id DESC"
-            ),
-            params![flow.map(|f| f.0), project.map(ProjectId::as_str)],
-            InboxRow::read,
-        )?
-        .into_iter()
-        .map(InboxRow::into_item)
-        .collect()
-    }
-
     fn findings(&self, flow: FlowId) -> Result<Vec<FindingRecord>, FlowStoreError> {
         findings::findings(&self.conn.lock(), flow)
     }
@@ -514,7 +423,7 @@ impl RunStore for AppDb {
     }
 }
 
-fn query<T>(
+pub(crate) fn query<T>(
     conn: &Connection,
     sql: &str,
     params: impl rusqlite::Params,
@@ -528,7 +437,7 @@ fn query<T>(
         .map_err(storage)
 }
 
-fn ensure_flow(conn: &Connection, flow: FlowId) -> Result<(), FlowStoreError> {
+pub(crate) fn ensure_flow(conn: &Connection, flow: FlowId) -> Result<(), FlowStoreError> {
     let exists = conn
         .query_row("SELECT 1 FROM flows WHERE id = ?1", params![flow.0], |_| {
             Ok(())
@@ -721,46 +630,6 @@ impl InvocationRow {
             },
             started_at: self.started_at,
             ended_at: self.ended_at,
-        })
-    }
-}
-
-/// An `inbox_items` row as SQLite hands it back.
-struct InboxRow {
-    id: i64,
-    flow_id: i64,
-    kind: String,
-    subject: String,
-    title: String,
-    body: String,
-    created_at: UnixMs,
-    resolved_at: Option<UnixMs>,
-}
-
-impl InboxRow {
-    fn read(row: &Row<'_>) -> rusqlite::Result<Self> {
-        Ok(Self {
-            id: row.get(0)?,
-            flow_id: row.get(1)?,
-            kind: row.get(2)?,
-            subject: row.get(3)?,
-            title: row.get(4)?,
-            body: row.get(5)?,
-            created_at: row.get(6)?,
-            resolved_at: row.get(7)?,
-        })
-    }
-
-    fn into_item(self) -> Result<InboxItem, FlowStoreError> {
-        Ok(InboxItem {
-            id: InboxItemId(self.id),
-            flow: FlowId(self.flow_id),
-            kind: untag(self.kind)?,
-            subject: self.subject,
-            title: self.title,
-            body: self.body,
-            created_at: self.created_at,
-            resolved_at: self.resolved_at,
         })
     }
 }

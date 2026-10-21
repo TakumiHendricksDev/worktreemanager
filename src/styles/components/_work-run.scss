@@ -1,8 +1,8 @@
 /*
  * A review run's roles, one line each, and the run inbox beside the workspace.
  *
- * The role mark's tone and an inbox item's kind are modifiers named by unions in TypeScript
- * (`RunTone`, `InboxKind`), so a name the CSS does not have cannot be written in the markup.
+ * The role mark's tone and an inbox item's tone are modifiers named by unions in TypeScript
+ * (`RunTone`, `InboxTone`), so a name the CSS does not have cannot be written in the markup.
  */
 
 .c-run-roles {
@@ -20,6 +20,15 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--sp-1) var(--sp-2);
+  margin: 0 calc(-1 * var(--sp-2));
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+
+  /* Where an inbox item or a notification about this role brought you. */
+  &.is-targeted {
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
 }
 
 .c-run-roles__mark {
@@ -87,17 +96,24 @@
   letter-spacing: 0.06em;
 }
 
-.c-run-inbox__kind--failure {
+.c-run-inbox__kind--info {
+  color: var(--info);
+}
+
+.c-run-inbox__kind--accent {
+  color: var(--accent);
+}
+
+.c-run-inbox__kind--danger {
   color: var(--danger);
 }
 
-.c-run-inbox__kind--capacity,
-.c-run-inbox__kind--interrupted {
+.c-run-inbox__kind--warn {
   color: var(--warn);
 }
 
-.c-run-inbox__kind--permission {
-  color: var(--info);
+.c-run-inbox__kind--ok {
+  color: var(--ok);
 }
 
 .c-run-inbox__title {
@@ -106,10 +122,15 @@
   overflow-wrap: anywhere;
 }
 
-.c-run-inbox__body {
+.c-run-inbox__where {
   color: var(--fg-muted);
   font-size: var(--step--2);
-  line-height: 1.5;
-  white-space: pre-line;
   overflow-wrap: anywhere;
+}
+
+.c-run-inbox__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: 2px;
 }

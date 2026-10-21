@@ -45,7 +45,7 @@ pub use config::{ConfigStore, TrustDecision};
 pub use database::{DatabaseConnection, DatabaseHost, DatabaseSession};
 pub use dictate::{DictateError, Utterance};
 pub use exec::{CancelToken, CommandRunner, EnvScrub, Invocation, Output};
-pub use flow::{FlowStore, FlowStoreError, PullReviewStore, RunStore};
+pub use flow::{FlowStore, FlowStoreError, InboxStore, PullReviewStore, RunStore};
 pub use forge::{Forge, ForgeError};
 pub use fs::{FileDigest, FileStore};
 pub use git::{AddOptions, BranchFilter, Git, RemoteUrl};

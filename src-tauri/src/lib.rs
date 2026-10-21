@@ -500,6 +500,8 @@ pub fn run() {
             flow::commands::cancel_review,
             flow::commands::work_inbox,
             flow::commands::resolve_inbox_item,
+            flow::commands::dismiss_inbox_item,
+            flow::commands::answer_question,
             flow::commands::review_staleness,
             flow::commands::rerun_review,
             flow::commands::start_pull_request_review,

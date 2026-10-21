@@ -48,6 +48,7 @@
   import { fleet } from '../state/fleet.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
+  import { inbox } from '../state/inbox.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { choice, item, popUp, separator, under, type MenuEntry } from '../native-menu';
   import Button from './ui/Button.svelte';
@@ -59,6 +60,8 @@
     home,
     work,
     workEnabled,
+    inboxOpen,
+    oninbox,
     ontogglehome,
     onshow,
     ontogglesidebar,
@@ -74,6 +77,10 @@
     work: boolean;
     /** Whether the Work view exists: `ui.work_view`. Off, the strip keeps its Home button. */
     workEnabled: boolean;
+    /** Whether Work's focused Inbox has its main column. */
+    inboxOpen: boolean;
+    /** Open or close the focused Inbox. Only offered while Work is on screen. */
+    oninbox: () => void;
     ontogglehome: () => void;
     /** A segment of the view switch was chosen. Only fired while `workEnabled`. */
     onshow: (place: 'worktrees' | 'home' | 'work') => void;
@@ -115,6 +122,11 @@
     return `Home${count}${HOME_SHORTCUT ? ` (${HOME_SHORTCUT})` : ''}`;
   });
 
+  /** The Work segment's name, with what its inbox holds: the same items Home's Needs you lists. */
+  const workSegmentLabel = $derived(
+    inbox.items.length > 0 ? `Work — ${inbox.items.length} in the inbox` : 'Work',
+  );
+
   const themeIcons: Record<ThemeChoice, IconName> = {
     system: 'theme-system',
     light: 'theme-light',
@@ -135,13 +147,17 @@
 
         The `●` matters more than it looks. Panes carry a `projectId`, but the sidebar lists only
         the *active* project's worktrees — so the row dots alone still leave a session blocked in
-        another project completely invisible. This and the dock badge are what close that.
+        another project completely invisible. This and the dock badge are what close that. A
+        workflow run's open inbox item counts too: its sessions are left out of the panes' marks.
       */
       ...workspace.projects.map((project) =>
         choice(
           project.name +
             (project.usable ? '' : '  ⚠') +
-            (sessions.wantsAttentionIn(project.id) ? '  ●' : ''),
+            (sessions.wantsAttentionIn(project.id) ||
+            inbox.items.some((item) => item.project === project.id)
+              ? '  ●'
+              : ''),
           project.id === active?.id,
           () => {
             if (project.id !== active?.id) void workspace.selectProject(project.id);
@@ -216,9 +232,14 @@
         class="c-view-switch__option"
         class:is-selected={work}
         aria-current={work ? 'page' : undefined}
+        aria-label={workSegmentLabel}
+        title={workSegmentLabel}
         onclick={() => onshow('work')}
       >
         Work
+        {#if inbox.items.length > 0}
+          <span class="c-view-switch__count" aria-hidden="true">{inbox.items.length}</span>
+        {/if}
       </button>
     </nav>
   {:else}
@@ -282,6 +303,24 @@
   </div>
 
   <div class="c-titlebar__actions">
+    {#if work}
+      <!--
+        The design's Inbox toggle: the focused Inbox takes Work's main column, with its filters and
+        room to answer. Only in Work, where that column is; elsewhere the count rides the segment.
+      -->
+      <Button
+        variant="quiet"
+        size="sm"
+        onclick={oninbox}
+        ariaPressed={inboxOpen}
+        title={inboxOpen ? 'Back to the workspace' : 'The inbox, with filters'}
+      >
+        Inbox
+        {#if inbox.items.length > 0}
+          <span class="c-titlebar__inbox-count">{inbox.items.length}</span>
+        {/if}
+      </Button>
+    {/if}
     <!--
       Here rather than in the worktree bar, because the limits are the account's: the same figures
       hold in every project and every worktree, and the title bar is the one strip that does not

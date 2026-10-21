@@ -14,6 +14,7 @@
    * this component used to select the worktree itself and never switched projects, which is
    * exactly the bug the shared recipe closed.
    */
+  import type { NotificationClick } from '../ipc/types';
   import { attention, type Toast } from '../state/attention.svelte';
   import type { PaneStatus } from '../status';
   import Button from './ui/Button.svelte';
@@ -24,11 +25,7 @@
     onnavigate,
   }: {
     /** Take the user to a toast's target — project, worktree, view and pane. */
-    onnavigate?: (target: {
-      projectId: string;
-      worktreeId: string;
-      paneId: string;
-    }) => void;
+    onnavigate?: (target: NotificationClick) => void;
   } = $props();
 
   /** Which dot a card shows. `ask` and `notice` have no session behind them and render none. */

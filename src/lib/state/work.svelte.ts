@@ -14,9 +14,23 @@
  * So Work keeps its own pick, and arrives at the sidebar's selection only when you ask to open one.
  *
  * Not remembered across a relaunch. The pick falls back to the sidebar's selection, which is.
+ *
+ * # Arriving somewhere exact
+ *
+ * An inbox item or a notification about one lands on the thing it is about: a role or a finding
+ * in a worktree's Reviews tab, or the item itself in the focused Inbox. `focus` is that target, and
+ * it carries a sequence number so arriving at the same finding twice scrolls to it twice; the
+ * Reviews tab acts on a number it has not seen, the same contract `codeRequests` keeps.
  */
 
+import type { ReviewFocus } from '../inbox';
+
 export type WorkTab = 'overview' | 'reviews';
+
+/** Something in the Reviews tab to bring into view, once per `seq`. */
+export interface WorkFocus extends ReviewFocus {
+  seq: number;
+}
 
 class Work {
   /** The queue row picked, by worktree id. See `subjectOf` for what is shown when it is gone. */
@@ -29,10 +43,27 @@ class Work {
   review = $state<number | null>(null);
   /** Reviews first: the review slice is what this view is for. */
   tab = $state<WorkTab>('reviews');
+  /**
+   * Whether the focused Inbox has the main column: the list with its filters beside the item open.
+   * The queue stays where it is; picking a row in it leaves the Inbox for that row's workspace.
+   */
+  inboxOpen = $state(false);
+  /** What the Reviews tab should bring into view and mark. */
+  focus = $state<WorkFocus | null>(null);
+  private focused = 0;
 
   pick(worktreeId: string): void {
     this.picked = worktreeId;
     this.review = null;
+    this.inboxOpen = false;
+  }
+
+  /** A worktree's Reviews tab, with `target` brought into view when there is one. */
+  showReviews(worktreeId: string, target: ReviewFocus | null): void {
+    this.pick(worktreeId);
+    this.tab = 'reviews';
+    this.focused += 1;
+    this.focus = target ? { ...target, seq: this.focused } : null;
   }
 
   /**
@@ -42,6 +73,7 @@ class Work {
   pickReview(itemId: number, tab?: WorkTab): void {
     this.review = itemId;
     if (tab) this.tab = tab;
+    this.inboxOpen = false;
   }
 }
 

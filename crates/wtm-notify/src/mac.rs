@@ -28,8 +28,9 @@ use objc2::{AnyThread, DefinedClass, define_class, msg_send};
 use objc2_foundation::{NSBundle, NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNAuthorizationStatus, UNErrorCode, UNErrorDomain,
-    UNMutableNotificationContent, UNNotificationRequest, UNNotificationResponse,
-    UNNotificationSettings, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+    UNMutableNotificationContent, UNNotificationDismissActionIdentifier, UNNotificationRequest,
+    UNNotificationResponse, UNNotificationSettings, UNUserNotificationCenter,
+    UNUserNotificationCenterDelegate,
 };
 
 use crate::{ClickPayload, Error, OnClick, Permission};
@@ -191,6 +192,15 @@ define_class!(
             response: &UNNotificationResponse,
             completion_handler: &DynBlock<dyn Fn()>,
         ) {
+            // A dismissal is not a click. macOS reports one here only for a category that asks for
+            // it, and none does, but a later one with action buttons would: and a swiped-away
+            // banner must never navigate, let alone settle the inbox item it was about.
+            // SAFETY: an immutable framework constant, read once per response.
+            let dismissed = unsafe { UNNotificationDismissActionIdentifier };
+            if *response.actionIdentifier() == *dismissed {
+                completion_handler.call(());
+                return;
+            }
             let identifier = response.notification().request().identifier().to_string();
             // A notification this build did not post parses as nothing and is ignored — the
             // click still activates the app, which is all it ever did before this crate.

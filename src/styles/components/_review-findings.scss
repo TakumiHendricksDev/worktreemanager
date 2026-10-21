@@ -64,6 +64,12 @@
   &.is-dismissed {
     opacity: 0.75;
   }
+
+  /* Where an inbox item or a notification about this finding brought you. */
+  &.is-targeted {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
 }
 
 .c-finding__meta {

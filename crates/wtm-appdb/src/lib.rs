@@ -1,4 +1,5 @@
-//! The app's own database: work items, flows and their history, and review rules, in SQLite.
+//! The app's own database: work items, flows and their history, review rules and runs, and the
+//! inbox, in SQLite.
 //!
 //! # Why this name
 //!
@@ -31,6 +32,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod findings;
+mod inbox;
 mod migrate;
 mod pull_reviews;
 mod rules;
@@ -76,7 +78,8 @@ pub enum AppDbError {
 }
 
 /// The open database. Implements [`FlowStore`](wtm_core::ports::FlowStore),
-/// [`RuleStore`](wtm_core::ports::RuleStore) and [`RunStore`](wtm_core::ports::RunStore).
+/// [`RuleStore`](wtm_core::ports::RuleStore), [`RunStore`](wtm_core::ports::RunStore) and
+/// [`InboxStore`](wtm_core::ports::InboxStore).
 #[derive(Debug)]
 pub struct AppDb {
     conn: Mutex<Connection>,

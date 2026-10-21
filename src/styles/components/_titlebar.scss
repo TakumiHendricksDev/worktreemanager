@@ -91,6 +91,23 @@
   flex: 0 0 auto;
 }
 
+/* The Work view's Inbox toggle carries its count inline, the way a view segment does: it is a
+   labelled button with room for it, not an icon with a corner to pin it to. */
+.c-titlebar__inbox-count {
+  min-width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1.5px solid var(--warn);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+  text-align: center;
+}
+
 /*
  * Home's button and the count of approvals waiting anywhere. The count is pinned to the button's
  * corner rather than set beside it, so the strip does not shift when it comes and goes.

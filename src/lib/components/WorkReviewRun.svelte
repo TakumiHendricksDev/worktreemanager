@@ -34,6 +34,13 @@
    * from are listed with what became of each finding, and Finish review opens the outcome sheet.
    * Staleness is asked again whenever the window's reading of the pull request names a new head,
    * which it reads on focus.
+   *
+   * # Arriving from the inbox
+   *
+   * An inbox item or a notification about a role or a finding sets `work.focus`; once that target
+   * is in the run shown, it is scrolled to and marked, a folded group opened for it. A ready review
+   * on screen in a focused window has been read, so this tells the inbox (`inbox.seen`), which is
+   * what settles a "review ready" item — and only that kind.
    */
   import { untrack } from 'svelte';
 
@@ -69,7 +76,9 @@
     stepLine,
   } from '../review-run';
   import { codeRequests } from '../state/code-request.svelte';
+  import { inbox } from '../state/inbox.svelte';
   import { reviewRuns } from '../state/review-runs.svelte';
+  import { work, type WorkFocus } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
   import CodeText from './CodeText.svelte';
   import RuleDialog from './RuleDialog.svelte';
@@ -78,12 +87,15 @@
   import WorkPrOutcome from './WorkPrOutcome.svelte';
 
   const {
+    visible,
     projectId,
     worktree,
     reviewing,
     subject,
     pullRequest = null,
   }: {
+    /** Whether the tab is on screen: Work is up and its Inbox is not over it. */
+    visible: boolean;
     projectId: string;
     worktree: Worktree;
     /** What the review is of, as its title says it: the branch, or a short head. */
@@ -157,6 +169,51 @@
     void treeKey;
     if (flow !== null) untrack(() => void reviewRuns.checkStaleness(flow));
   });
+
+  /** A settled run on screen has been read: the inbox's "review ready" for it is done. */
+  $effect(() => {
+    const flow = visible && run && !run.running ? run.flow.id : null;
+    untrack(() => inbox.seen(flow));
+    return () => untrack(() => inbox.seen(null));
+  });
+
+  /** The target the inbox brought you to, once it was found in this run and scrolled to. */
+  let targeted = $state<WorkFocus | null>(null);
+  let actedOn = 0;
+  $effect(() => {
+    const focus = work.focus;
+    const shown = run;
+    if (!visible || !focus || !shown || focus.seq === actedOn) return;
+    const here =
+      focus.kind === 'finding'
+        ? shown.findings.some((f) => f.id === focus.id)
+        : shown.steps.some((s) => s.id === focus.id);
+    // Not in this run yet, or ever: a newer run of the worktree, or one still loading. The next
+    // read of the run tries again; a finding superseded since is simply not marked.
+    if (!here) return;
+    actedOn = focus.seq;
+    targeted = focus;
+    // Taken, so a later mount of this tab — after the Inbox was open over it — does not scroll
+    // back to where an old click went. The mark stays until the next arrival.
+    untrack(() => {
+      work.focus = null;
+    });
+    const id =
+      focus.kind === 'finding' ? `work-finding-${focus.id}` : `work-role-${focus.id}`;
+    queueMicrotask(() => {
+      const element = document.getElementById(id);
+      if (!element) return;
+      // A suggestion or a dismissed finding sits in a folded group; arriving at it opens it.
+      const folded = element.closest('details');
+      if (folded) folded.open = true;
+      element.scrollIntoView({ block: 'center' });
+      element.focus({ preventScroll: true });
+    });
+  });
+
+  function isTargeted(kind: WorkFocus['kind'], id: number): boolean {
+    return targeted?.kind === kind && targeted.id === id;
+  }
 
   function start(): void {
     if (!recipe) return;
@@ -290,7 +347,12 @@
 
       <ul class="c-run-roles" aria-label="Roles">
         {#each listedSteps(run) as step (step.id)}
-          <li class="c-run-roles__row">
+          <li
+            class="c-run-roles__row"
+            class:is-targeted={isTargeted('step', step.id)}
+            id="work-role-{step.id}"
+            tabindex="-1"
+          >
             <span
               class="c-run-roles__mark c-run-roles__mark--{STEP_TONE[step.status]}"
               aria-hidden="true"
@@ -401,6 +463,7 @@
               view={run}
               {busy}
               stale={stale?.staleFindings.includes(finding.id) ?? false}
+              targeted={isTargeted('finding', finding.id)}
               onopen={open}
               onsaverule={(f) => (saving = f)}
               ondismiss={(f, reason) => void reviewRuns.dismiss(worktreeId, f.id, reason)}
@@ -418,6 +481,7 @@
               view={run}
               {busy}
               stale={stale?.staleFindings.includes(finding.id) ?? false}
+              targeted={isTargeted('finding', finding.id)}
               onopen={open}
               onsaverule={(f) => (saving = f)}
               ondismiss={(f, reason) => void reviewRuns.dismiss(worktreeId, f.id, reason)}
@@ -436,6 +500,7 @@
             view={run}
             {busy}
             stale={false}
+            targeted={isTargeted('finding', finding.id)}
             onopen={open}
             onsaverule={(f) => (saving = f)}
             ondismiss={(f, reason) => void reviewRuns.dismiss(worktreeId, f.id, reason)}

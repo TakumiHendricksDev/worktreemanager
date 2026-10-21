@@ -102,6 +102,13 @@
   border-left: 1px solid var(--border);
 }
 
+.c-work__inbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
 .c-work__inbox-title {
   display: flex;
   align-items: baseline;

@@ -19,7 +19,8 @@ import type {
   ReviewOutcomeRecord,
   ReviewRunView,
   ReviewStaleness,
-  RunInboxItem,
+  InboxItem,
+  Question,
   DictationStatus,
   DatabaseColumn,
   DatabaseConnection,
@@ -828,10 +829,20 @@ export const commands = {
   /** Keep a review's result private: notes beside its findings, in wtm only. */
   keepReviewPrivate: (flow: number, notes: string) =>
     invoke<ReviewOutcomeRecord>('keep_review_private', { flow, notes }),
-  /** Open run inbox items, newest first, for one project or all. */
-  workInbox: (project: string | null) => invoke<RunInboxItem[]>('work_inbox', { project }),
+  /** Open inbox items, newest first, for one project or every one. */
+  workInbox: (project: string | null) => invoke<InboxItem[]>('work_inbox', { project }),
 
-  resolveInboxItem: (item: number) => invoke<boolean>('resolve_inbox_item', { item }),
+  /** What an item was about is settled. `null` when it was not open. */
+  resolveInboxItem: (item: number) =>
+    invoke<InboxItem | null>('resolve_inbox_item', { item }),
+
+  /** Put an item away without settling it. `null` when it was not open. */
+  dismissInboxItem: (item: number) =>
+    invoke<InboxItem | null>('dismiss_inbox_item', { item }),
+
+  /** Answer a run's question: an option by index, words, or both. The first answer counts. */
+  answerQuestion: (question: number, choice: number | null, text: string) =>
+    invoke<Question>('answer_question', { question, choice, text }),
 
   postNotification: (args: {
     title: string;
@@ -839,7 +850,8 @@ export const commands = {
     projectId: string;
     worktreeId: string;
     paneId: string;
-  }) => invoke<void>('post_notification', args),
+    inboxItem?: number | null;
+  }) => invoke<void>('post_notification', { inboxItem: null, ...args }),
 
   /** What the OS says about delivering notifications. */
   notificationPermission: () =>

@@ -1,0 +1,468 @@
+/*
+ * The Work view's focused Inbox: the list with its filters, and the item open beside it — a
+ * question's card, or any other item's.
+ *
+ * Tones are modifiers named by `InboxTone` in `inbox.ts`, the same five words the run inbox column
+ * uses, so a kind's colour cannot differ between the column, the list and the card.
+ */
+
+.c-work-inbox {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.c-work-inbox__list {
+  display: flex;
+  flex: 1 1 340px;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 420px;
+  min-height: 0;
+  padding: var(--sp-3) var(--sp-2);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+}
+
+.c-work-inbox__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-1);
+}
+
+.c-work-inbox__title {
+  flex: 0 0 auto;
+  font-size: var(--step-1);
+  font-weight: 600;
+}
+
+.c-work-inbox__count {
+  flex: 1 1 auto;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-work-inbox__foot {
+  padding: 0 var(--sp-1);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+.c-work-inbox__detail {
+  display: flex;
+  flex: 999 1 480px;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  overflow-y: auto;
+}
+
+@container (max-width: 720px) {
+  .c-work-inbox {
+    flex-direction: column;
+  }
+
+  .c-work-inbox__list {
+    flex: 0 0 auto;
+    max-width: none;
+    max-height: 45%;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* The filter chips: one pressed at a time, each with how many items it holds. */
+.c-inbox-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 var(--sp-1);
+}
+
+.c-inbox-filters__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-selected {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--fg);
+  }
+}
+
+.c-inbox-filters__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.c-inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.c-inbox-list__row {
+  display: flex;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-selected {
+    border-color: var(--accent);
+    background: var(--bg-elevated);
+  }
+}
+
+.c-inbox-list__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--fg-muted);
+}
+
+.c-inbox-list__icon--info {
+  color: var(--info);
+}
+
+.c-inbox-list__icon--accent {
+  color: var(--accent);
+}
+
+.c-inbox-list__icon--danger {
+  color: var(--danger);
+}
+
+.c-inbox-list__icon--warn {
+  color: var(--warn);
+}
+
+.c-inbox-list__icon--ok {
+  color: var(--ok);
+}
+
+.c-inbox-list__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.c-inbox-list__title {
+  font-size: var(--step--1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-inbox-list__meta {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Any item but a question, open: its kind, where and when, what it says, and what to do.
+ */
+.c-inbox-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 860px;
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+}
+
+.c-inbox-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-inbox-card__badge {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--step--2);
+  font-weight: 700;
+}
+
+.c-inbox-card__badge--info {
+  border-color: var(--info-line);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.c-inbox-card__badge--accent {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.c-inbox-card__badge--danger {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.c-inbox-card__badge--warn {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.c-inbox-card__badge--ok {
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.c-inbox-card__title {
+  font-size: var(--step-1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-inbox-card__body {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.c-inbox-card__findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-inbox-card__label {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-inbox-card__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--step--1);
+}
+
+.c-inbox-card__where {
+  margin-left: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-inbox-card__approval {
+  max-width: 640px;
+}
+
+.c-inbox-card__note {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+.c-inbox-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-inbox-card__spacer {
+  flex: 1 1 auto;
+}
+
+.c-inbox-card__error {
+  color: var(--danger);
+  font-size: var(--step--1);
+}
+
+/*
+ * A question, laid out the plan's way: why it matters and what it unblocks side by side, the
+ * context it points at, the recommendation, then the answer.
+ */
+.c-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 860px;
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+}
+
+.c-question__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-question__badge {
+  padding: 1px 7px;
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-sm);
+  background: var(--info-soft);
+  color: var(--info);
+  font-size: var(--step--2);
+  font-weight: 700;
+}
+
+.c-question__who {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-question__title {
+  font-size: var(--step-1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-question__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--sp-3);
+}
+
+.c-question__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-question__label {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-question__links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.c-question__excerpt {
+  margin-left: var(--sp-2);
+  color: var(--fg-muted);
+}
+
+.c-question__recommendation {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-question__note {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+.c-question__answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.c-question__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.c-question__legend {
+  padding: 0 0 6px;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-question__option {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+}
+
+.c-question__recommended {
+  color: var(--accent);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-question__note-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-question__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-question__spacer {
+  flex: 1 1 auto;
+}
+
+.c-question__error {
+  color: var(--danger);
+  font-size: var(--step--1);
+}
