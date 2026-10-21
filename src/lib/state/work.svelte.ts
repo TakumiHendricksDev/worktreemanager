@@ -35,8 +35,13 @@ class Work {
     this.review = null;
   }
 
-  pickReview(itemId: number): void {
+  /**
+   * Show a pull request, on `tab` when given: Overview for one with no review worktree yet,
+   * where Prepare is, and Reviews for one that has somewhere to be read.
+   */
+  pickReview(itemId: number, tab?: WorkTab): void {
     this.review = itemId;
+    if (tab) this.tab = tab;
   }
 }
 

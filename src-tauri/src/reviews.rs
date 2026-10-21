@@ -18,11 +18,18 @@
 //! of beside it. A review worktree is recorded against the item as a link, because the plan makes a
 //! worktree something a work item uses, not what it is.
 //!
-//! # Read on demand
+//! # Read on demand, and remembered
 //!
 //! Nothing here polls. A pull request is read when it is added and whenever its row is opened or
-//! refreshed, and its head is read again, and pinned, when a worktree is prepared — §8's polling
-//! ban, and §6a's "sync runs on demand".
+//! refreshed — which the window also does when it comes back into focus — and its head is read
+//! again, and pinned, when a worktree is prepared: §8's polling ban, and §6a's "sync runs on
+//! demand". Each reading is kept as the work item's mirror (`wtm_core::flow::pull_review`), which is
+//! how a review of it learns, without asking the forge again, that the author has pushed since.
+//!
+//! # Yours, beside the forge's
+//!
+//! "I'm reviewing this" is a flag in wtm's own store, set and cleared here. It is not GitHub's
+//! requested reviewers and it changes nothing there.
 //!
 //! # No writes
 //!
@@ -34,10 +41,12 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use wtm_core::flow::{
-    BranchProtection, ChecksState, ForgeAccount, ForgeKind, NewWorkItem, Permission, PrTarget,
-    PullRequest, RepoSlug, WorkItem, WorkItemId, WorkLink, default_host, host_for, remote_for,
+    BranchProtection, ChecksState, ForgeAccount, ForgeKind, MirroredPr, NewWorkItem, Permission,
+    PrTarget, PullRequest, RepoSlug, WorkItem, WorkItemId, WorkLink, default_host, host_for,
+    remote_for,
 };
 use wtm_core::model::{CreateOutcome, PreflightSeverity, Project};
+use wtm_core::ports::PullReviewStore;
 use wtm_core::ports::flow::{FlowStore, FlowStoreError};
 use wtm_core::ports::git::RemoteUrl;
 use wtm_core::usecase::{
@@ -70,6 +79,8 @@ pub struct ReviewItemView {
     /// The worktree most recently used to review it, by path. It may have been removed since,
     /// which the view finds out from the worktree listing it already has.
     pub worktree: Option<String>,
+    /// When you said "I'm reviewing this", if you did.
+    pub reviewing_since: Option<u64>,
 }
 
 /// One pull request, as the forge describes it now.
@@ -182,7 +193,7 @@ fn default_cols() -> u16 {
 }
 
 /// The project, if both gates are open. See the module docs.
-fn forge_project(app: &App, project_id: &str) -> Result<Project, ErrorView> {
+pub(crate) fn forge_project(app: &App, project_id: &str) -> Result<Project, ErrorView> {
     if !app.work_view_enabled() {
         return Err(ErrorView::new(
             "forgeOff",
@@ -204,17 +215,17 @@ fn forge_project(app: &App, project_id: &str) -> Result<Project, ErrorView> {
     }
 }
 
-fn store(app: &App) -> Result<Arc<dyn FlowStore>, ErrorView> {
+pub(crate) fn store(app: &App) -> Result<Arc<dyn FlowStore>, ErrorView> {
     app.flow_store()
         .map_err(|err| ErrorView::new("flowStore", err.to_string()))
 }
 
-fn store_error(err: &FlowStoreError) -> ErrorView {
+pub(crate) fn store_error(err: &FlowStoreError) -> ErrorView {
     ErrorView::new("flowStore", err.to_string())
 }
 
 /// The work item, if it is one of this project's pull requests.
-fn project_item(
+pub(crate) fn project_item(
     store: &dyn FlowStore,
     project: &Project,
     item_id: WorkItemId,
@@ -231,7 +242,11 @@ fn project_item(
         })
 }
 
-fn item_view(store: &dyn FlowStore, item: &WorkItem) -> Result<ReviewItemView, ErrorView> {
+fn item_view(
+    app: &App,
+    store: &dyn FlowStore,
+    item: &WorkItem,
+) -> Result<ReviewItemView, ErrorView> {
     let pull_request = item
         .pull_request
         .as_ref()
@@ -245,18 +260,72 @@ fn item_view(store: &dyn FlowStore, item: &WorkItem) -> Result<ReviewItemView, E
             WorkLink::Worktree { path } => Some(path),
             _ => None,
         });
+    let reviewing_since = pull_reviews(app)?
+        .claim(item.id)
+        .map_err(|err| store_error(&err))?
+        .map(|claim| claim.since);
     Ok(ReviewItemView {
         id: item.id,
         repo: pull_request.repo.clone(),
         number: pull_request.number,
         title: item.title.clone(),
         worktree,
+        reviewing_since,
     })
+}
+
+/// The store's pull-request half: the same database as [`store`].
+pub(crate) fn pull_reviews(app: &App) -> Result<Arc<dyn PullReviewStore>, ErrorView> {
+    app.appdb
+        .open()
+        .map(|db| db as Arc<dyn PullReviewStore>)
+        .map_err(|err| ErrorView::new("flowStore", err.to_string()))
+}
+
+/// Keep what the forge just said as the item's mirror. Losing it costs only the "new commits"
+/// line until the next read, so a failure is logged rather than failing the read it came from.
+fn remember(app: &App, item: WorkItemId, pull_request: &PullRequest, permission: Permission) {
+    let mirror = MirroredPr {
+        item,
+        pull_request: pull_request.clone(),
+        permission,
+        read_at: app.clock.now_unix_ms(),
+    };
+    if let Err(err) = pull_reviews(app)
+        .and_then(|store| store.mirror_pr(&mirror).map_err(|err| store_error(&err)))
+    {
+        tracing::warn!(message = %err.message, "could not keep a pull request's reading");
+    }
+}
+
+/// Read a queued pull request and your permission on it from the forge now, and keep the reading.
+/// The read Run Review and Re-review changes decide on.
+pub(crate) fn read_now(
+    app: &App,
+    project_id: &str,
+    item_id: WorkItemId,
+) -> Result<(Project, WorkItem, PullRequest, Permission), ErrorView> {
+    let project = forge_project(app, project_id)?;
+    let store = store(app)?;
+    let item = project_item(store.as_ref(), &project, item_id)?;
+    let remotes = app.git.remote_urls(&project.root)?;
+    let target = target_of(&item, &remotes)?;
+    let host = target
+        .repo
+        .as_ref()
+        .map_or_else(|| default_host(&remotes), |repo| repo.host.clone());
+    app.forge.check(&project.root, &host)?;
+    let pull_request = app.forge.pull_request(&project.root, &target)?;
+    let permission = app
+        .forge
+        .permission(&project.root, &pull_request.base.repo)?;
+    remember(app, item.id, &pull_request, permission);
+    Ok((project, item, pull_request, permission))
 }
 
 /// The stored pull request as something to ask the forge about. See [`host_for`] for where the
 /// host comes from.
-fn target_of(item: &WorkItem, remotes: &[RemoteUrl]) -> Result<PrTarget, ErrorView> {
+pub(crate) fn target_of(item: &WorkItem, remotes: &[RemoteUrl]) -> Result<PrTarget, ErrorView> {
     let reference = item
         .pull_request
         .as_ref()
@@ -283,6 +352,7 @@ fn detail(
 ) -> Result<ReviewDetailView, ErrorView> {
     let root = project.root.as_path();
     let permission = app.forge.permission(root, &pull_request.base.repo)?;
+    remember(app, item.id, &pull_request, permission);
     let base_integration = project
         .workflow
         .as_ref()
@@ -329,7 +399,7 @@ pub fn queue(app: &App, project_id: &str) -> Result<ReviewQueueView, ErrorView> 
         .map_err(|err| store_error(&err))?
         .iter()
         .filter(|item| item.pull_request.is_some())
-        .map(|item| item_view(store.as_ref(), item))
+        .map(|item| item_view(app, store.as_ref(), item))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ReviewQueueView { forge, items })
 }
@@ -389,7 +459,7 @@ pub fn add(app: &App, project_id: &str, input: &str) -> Result<ReviewDetailView,
             })?,
         Err(other) => return Err(store_error(&other)),
     };
-    let item = item_view(store.as_ref(), &item)?;
+    let item = item_view(app, store.as_ref(), &item)?;
     detail(app, &project, item, pull_request, account)
 }
 
@@ -420,8 +490,36 @@ pub fn refresh(
         .map_or_else(|| default_host(&remotes), |repo| repo.host.clone());
     let account = app.forge.check(&project.root, &host)?;
     let pull_request = app.forge.pull_request(&project.root, &target)?;
-    let item = item_view(store.as_ref(), &item)?;
+    let item = item_view(app, store.as_ref(), &item)?;
     detail(app, &project, item, pull_request, account)
+}
+
+/// Set or clear "I'm reviewing this" on a queued pull request. Reads nothing from the forge and
+/// writes nothing there.
+pub fn set_reviewing(
+    app: &App,
+    project_id: &str,
+    item_id: WorkItemId,
+    on: bool,
+) -> Result<ReviewItemView, ErrorView> {
+    let project = forge_project(app, project_id)?;
+    let store = store(app)?;
+    let item = project_item(store.as_ref(), &project, item_id)?;
+    pull_reviews(app)?
+        .set_claim(item.id, on.then(|| app.clock.now_unix_ms()))
+        .map_err(|err| store_error(&err))?;
+    item_view(app, store.as_ref(), &item)
+}
+
+#[tauri::command]
+pub async fn set_reviewing_pull_request(
+    app: AppState<'_>,
+    project_id: String,
+    item_id: WorkItemId,
+    on: bool,
+) -> Reply<ReviewItemView> {
+    let app = Arc::clone(&app);
+    blocking(move || set_reviewing(&app, &project_id, item_id, on)).await
 }
 
 #[tauri::command]
@@ -555,6 +653,67 @@ fn link_worktree(app: &App, store: &dyn FlowStore, item: WorkItemId, path: &Path
 ///
 /// Re-plans first, like `create_worktree`, and reads the head again: a push since the preview is a
 /// preflight error, not a worktree of a commit nobody looked at.
+pub fn prepare(
+    app: &App,
+    project_id: &str,
+    args: &ReviewWorktreeArgs,
+    progress: &dyn wtm_core::ports::progress::ProgressSink,
+    sink: Arc<dyn wtm_core::ports::pty::PtySink>,
+) -> Result<ReviewOutcomeView, ErrorView> {
+    let (req, store) = review_request(app, project_id, args)?;
+    let _creating = app.start_creating(project_id);
+
+    let outcome = app.create_pipeline().execute_review(
+        &req,
+        progress,
+        sink,
+        &wtm_core::ports::exec::CancelToken::new(),
+    )?;
+    let id = |w: &wtm_core::model::Worktree| w.id.as_str().to_owned();
+    let path = |w: &wtm_core::model::Worktree| w.path.to_string_lossy().into_owned();
+    let view = match &outcome {
+        ReviewOutcome::Reused { worktree, at_head } => ReviewOutcomeView::Reused {
+            worktree_id: id(worktree),
+            path: path(worktree),
+            at_head: *at_head,
+        },
+        ReviewOutcome::Created {
+            outcome:
+                CreateOutcome::Created {
+                    worktree,
+                    setup_session,
+                },
+        } => ReviewOutcomeView::Created {
+            worktree_id: id(worktree),
+            path: path(worktree),
+            setup_session: setup_session.as_ref().map(|s| s.as_str().to_owned()),
+        },
+        ReviewOutcome::Created {
+            outcome:
+                CreateOutcome::SetupFailed {
+                    worktree, session, ..
+                },
+        } => ReviewOutcomeView::SetupFailed {
+            worktree_id: id(worktree),
+            path: path(worktree),
+            session: session.as_str().to_owned(),
+        },
+        ReviewOutcome::Created {
+            outcome: CreateOutcome::Cancelled { worktree, .. },
+        } => ReviewOutcomeView::Cancelled {
+            worktree_id: worktree.as_ref().map(id),
+        },
+    };
+    let used = match &outcome {
+        ReviewOutcome::Reused { worktree, .. } => Some(worktree),
+        ReviewOutcome::Created { outcome } => outcome.worktree(),
+    };
+    if let Some(worktree) = used {
+        link_worktree(app, store.as_ref(), args.item_id, &worktree.path);
+    }
+    Ok(view)
+}
+
 #[tauri::command]
 pub async fn create_review_worktree(
     handle: tauri::AppHandle,
@@ -564,60 +723,9 @@ pub async fn create_review_worktree(
 ) -> Reply<ReviewOutcomeView> {
     let app = Arc::clone(&app);
     blocking(move || {
-        let (req, store) = review_request(&app, &project_id, &args)?;
         let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
         let sink = crate::pty_bridge::EventSink::new(handle);
-        let _creating = app.start_creating(&project_id);
-
-        let outcome = app.create_pipeline().execute_review(
-            &req,
-            &progress,
-            sink,
-            &wtm_core::ports::exec::CancelToken::new(),
-        )?;
-        let id = |w: &wtm_core::model::Worktree| w.id.as_str().to_owned();
-        let path = |w: &wtm_core::model::Worktree| w.path.to_string_lossy().into_owned();
-        let view = match &outcome {
-            ReviewOutcome::Reused { worktree, at_head } => ReviewOutcomeView::Reused {
-                worktree_id: id(worktree),
-                path: path(worktree),
-                at_head: *at_head,
-            },
-            ReviewOutcome::Created {
-                outcome:
-                    CreateOutcome::Created {
-                        worktree,
-                        setup_session,
-                    },
-            } => ReviewOutcomeView::Created {
-                worktree_id: id(worktree),
-                path: path(worktree),
-                setup_session: setup_session.as_ref().map(|s| s.as_str().to_owned()),
-            },
-            ReviewOutcome::Created {
-                outcome:
-                    CreateOutcome::SetupFailed {
-                        worktree, session, ..
-                    },
-            } => ReviewOutcomeView::SetupFailed {
-                worktree_id: id(worktree),
-                path: path(worktree),
-                session: session.as_str().to_owned(),
-            },
-            ReviewOutcome::Created {
-                outcome: CreateOutcome::Cancelled { worktree, .. },
-            } => ReviewOutcomeView::Cancelled {
-                worktree_id: worktree.as_ref().map(id),
-            },
-        };
-        let used = match &outcome {
-            ReviewOutcome::Reused { worktree, .. } => Some(worktree),
-            ReviewOutcome::Created { outcome } => outcome.worktree(),
-        };
-        if let Some(worktree) = used {
-            link_worktree(&app, store.as_ref(), args.item_id, &worktree.path);
-        }
-        Ok(view)
+        prepare(&app, &project_id, &args, &progress, sink)
     })
     .await
 }

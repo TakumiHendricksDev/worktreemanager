@@ -80,7 +80,9 @@ Worth stating because it narrows the surface considerably:
   The optional **Work view** reads pull requests through your own `gh`, signed in with the
   credentials `gh` already holds, and only for a project whose own config names a forge; a
   repository's `wtm.toml` cannot name one for you. It reads only: no review, comment or push is
-  sent. wtm stores no GitHub token.
+  sent, and keeping a review private writes nothing outside wtm. wtm stores no GitHub token.
+  Following a pull request to a new head fetches it into your repository and checks the review
+  worktree out with git hooks off, because the hooks directory may be the author's.
 
   What is unchanged, and is the reason the exceptions are narrow enough to describe in a bullet:
 

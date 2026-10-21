@@ -15,9 +15,12 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
-use wtm_core::flow::{FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, RoleProvider};
+use wtm_core::flow::{
+    FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, Outcome, RoleProvider, WorkItemId,
+};
 
 use super::findings::{Rerun, Staleness};
+use super::pull_request;
 use super::{Engine, FlowView, Notice, Refusal, StartReview};
 use crate::commands::{AppState, Reply, blocking};
 use crate::view::ErrorView;
@@ -263,4 +266,68 @@ pub async fn review_base(
 ) -> Reply<String> {
     let engine = Arc::clone(&engine);
     blocking(move || engine.default_base(&project, &worktree).map_err(refused)).await
+}
+
+/// Run Review on a queued pull request's review worktree, against the pull request's base.
+///
+/// Reads the pull request again first and refuses a head other than the one shown, then brings the
+/// review worktree to the head if a review put it somewhere behind it (`pull_request.rs`).
+#[tauri::command]
+pub async fn start_pull_request_review(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    project: String,
+    item: WorkItemId,
+    recipe: String,
+    expected_head: Option<String>,
+) -> Reply<FlowView> {
+    let app = Arc::clone(&app);
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        let flow = pull_request::start(
+            &app,
+            &engine,
+            &project,
+            item,
+            &recipe,
+            expected_head.as_deref(),
+        )?;
+        engine.view(flow).map_err(refused)
+    })
+    .await
+}
+
+/// Re-review changes: move a pull request's review to its new head and rerun the roles it affects.
+#[tauri::command]
+pub async fn rereview_pull_request(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    project: String,
+    flow: i64,
+    expected_head: Option<String>,
+) -> Reply<FlowView> {
+    let app = Arc::clone(&app);
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        pull_request::rereview(
+            &app,
+            &engine,
+            &project,
+            FlowId(flow),
+            expected_head.as_deref(),
+        )?;
+        engine.view(FlowId(flow)).map_err(refused)
+    })
+    .await
+}
+
+/// Keep a review's result private: notes kept in wtm beside its findings. Writes nowhere else.
+#[tauri::command]
+pub async fn keep_review_private(
+    engine: EngineState<'_>,
+    flow: i64,
+    notes: String,
+) -> Reply<Outcome> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.keep_private(FlowId(flow), &notes).map_err(refused)).await
 }

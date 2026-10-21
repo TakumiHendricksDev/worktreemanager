@@ -254,6 +254,21 @@ pub trait Git: Send + Sync {
         commit: &CommitId,
     ) -> Result<(), GitError>;
 
+    /// Move a review checkout to `commit`, with hooks off: detached, or with `branch` made or
+    /// reset to point at it.
+    ///
+    /// Only for a worktree wtm made to read someone else's pull request, and only after the caller
+    /// has seen that it is clean and holds nothing but the head a review last read: this is
+    /// `git checkout`, which replaces files. Hooks are off for [`Self::add_snapshot_checkout`]'s
+    /// reason and one more: `core.hooksPath` may name a directory inside the worktree, such as a
+    /// `.husky/`, and after this checkout that directory is the pull request author's code.
+    fn checkout_review_head(
+        &self,
+        worktree_path: &Path,
+        branch: Option<&BranchRef>,
+        commit: &CommitId,
+    ) -> Result<(), GitError>;
+
     /// The argv a given [`AddOptions`] will produce, without running it.
     ///
     /// Exists so the review screen can show the exact command before stage 8, and
@@ -384,6 +399,14 @@ mod tests {
             unused!()
         }
         fn add_snapshot_checkout(&self, _: &Path, _: &Path, _: &CommitId) -> Result<(), GitError> {
+            unused!()
+        }
+        fn checkout_review_head(
+            &self,
+            _: &Path,
+            _: Option<&BranchRef>,
+            _: &CommitId,
+        ) -> Result<(), GitError> {
             unused!()
         }
     }

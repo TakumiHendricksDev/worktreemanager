@@ -99,7 +99,7 @@ mockIPC((cmd, args) => {
         fail('forge', '#9 is a pull request on elsewhere/webapp, and no remote of this project points there.');
       if (!/4031/.test(a.input)) fail('forge', 'pull request was not found, or this account cannot see it');
       let item = queue.find((i) => i.number === 4031);
-      if (!item) { item = { id: 1, repo: 'acme/webapp', number: 4031, title: pullRequest.title, worktree: null }; queue.push(item); }
+      if (!item) { item = { id: 1, repo: 'acme/webapp', number: 4031, title: pullRequest.title, worktree: null, reviewingSince: null }; queue.push(item); }
       return detail(item);
     }
     case 'review_detail': return detail(queue.find((i) => i.id === a.itemId));
@@ -203,17 +203,21 @@ try {
     const calls = (page, cmd) =>
         page.evaluate((c) => window.calls.filter((x) => x.cmd === c), cmd);
     const queue = (page) => page.getByRole('navigation', { name: 'Work queue' });
-    const reviewsSection = (page) =>
-        queue(page).getByRole('region', { name: /^Reviews/ });
-    const field = (page) => page.getByRole('textbox', { name: 'Pull request URL or number' });
+    const reviewsSection = (page) => queue(page).getByRole('region', { name: /^Reviews/ });
+    const field = (page) =>
+        page.getByRole('textbox', { name: 'Pull request URL or number' });
     const workspaceTitle = (page) => page.locator('.c-work__title');
-    const plan = (page) => page.getByRole('definition').filter({ hasText: /git (fetch|worktree)/ });
-    const prepareBox = (page) => page.getByRole('checkbox', { name: 'Prepare environment' });
+    const plan = (page) =>
+        page.getByRole('definition').filter({ hasText: /git (fetch|worktree)/ });
+    const prepareBox = (page) =>
+        page.getByRole('checkbox', { name: 'Prepare environment' });
 
     async function add(page, text) {
         await field(page).fill(text);
         await field(page).press('Enter');
-        await page.waitForFunction(() => !document.querySelector('.c-work-queue__add input:disabled'));
+        await page.waitForFunction(
+            () => !document.querySelector('.c-work-queue__add input:disabled'),
+        );
     }
 
     // ── A project with no forge: no field, a reason, and no forge command at all ─────────────
@@ -236,18 +240,32 @@ try {
         await add(page, 'https://github.com/acme/webapp/pull/4031/files');
         assert.deepEqual(
             (await calls(page, 'add_review')).map((c) => c.args),
-            [{ projectId: '/x/webapp', input: 'https://github.com/acme/webapp/pull/4031/files' }],
+            [
+                {
+                    projectId: '/x/webapp',
+                    input: 'https://github.com/acme/webapp/pull/4031/files',
+                },
+            ],
         );
         const rows = reviewsSection(page).locator('.c-work-row');
         await rows.first().waitFor();
         assert.equal(await rows.count(), 1);
         assert.match(await rows.first().innerText(), /#4031 · Export units as CSV/);
         assert.match(await rows.first().innerText(), /No review worktree yet/);
-        assert.equal(await rows.first().getAttribute('aria-current'), 'true', 'the new row is opened');
-        assert.equal(await field(page).inputValue(), '', 'the field empties once it is queued');
+        assert.equal(
+            await rows.first().getAttribute('aria-current'),
+            'true',
+            'the new row is opened',
+        );
+        assert.equal(
+            await field(page).inputValue(),
+            '',
+            'the field empties once it is queued',
+        );
 
         await workspaceTitle(page).filter({ hasText: '#4031' }).waitFor();
-        const panel = page.getByRole('region', { name: 'Pull request', exact: true });
+        // Overview, which a pull request with no review worktree opens on: its facts and Prepare.
+        const panel = page.getByRole('tabpanel', { name: 'Overview', exact: true });
         const text = await panel.innerText();
         for (const fact of [
             'sam-rivera:main',
@@ -260,7 +278,11 @@ try {
             assert(text.includes(fact), `the panel says “${fact}”:\n${text}`);
 
         // ── The preview: environment off, the shown head pinned ────────────────────────────
-        assert.equal(await prepareBox(page).isChecked(), false, 'Prepare environment starts off');
+        assert.equal(
+            await prepareBox(page).isChecked(),
+            false,
+            'Prepare environment starts off',
+        );
         await plan(page).filter({ hasText: 'git fetch origin pull/4031/head' }).waitFor();
         let previews = await calls(page, 'preview_review_worktree');
         assert.deepEqual(previews.at(-1).args.args, {
@@ -270,13 +292,15 @@ try {
             prepareEnvironment: false,
         });
         await panel.getByText('Skipped. Tick Prepare environment to run it.').waitFor();
-        if (scheme === 'light') await shot(page, join(shots, `review-preview-${scheme}.png`));
+        if (scheme === 'light')
+            await shot(page, join(shots, `review-preview-${scheme}.png`));
 
         await prepareBox(page).check();
         await panel.getByText('./bin/setup.sh /x/webapp-pr-4031').waitFor();
         previews = await calls(page, 'preview_review_worktree');
         assert.equal(previews.at(-1).args.args.prepareEnvironment, true);
-        if (scheme === 'dark') await shot(page, join(shots, `review-preview-environment-${scheme}.png`));
+        if (scheme === 'dark')
+            await shot(page, join(shots, `review-preview-environment-${scheme}.png`));
         await prepareBox(page).uncheck();
         await panel.getByText('Skipped. Tick Prepare environment to run it.').waitFor();
 
@@ -288,7 +312,11 @@ try {
         await panel.getByText('Created at /x/webapp-pr-4031.').waitFor();
         const created = await calls(page, 'create_review_worktree');
         assert.equal(created.length, 2);
-        assert.equal(await panel.getByRole('alert').count(), 0, 'the refusal clears on success');
+        assert.equal(
+            await panel.getByRole('alert').count(),
+            0,
+            'the refusal clears on success',
+        );
         assert.deepEqual(created[1].args.args, {
             itemId: 1,
             expectedHead: '1156f977ff6d12d592bc152987b9d9b378f6718d',
@@ -307,7 +335,10 @@ try {
 
         // ── A refusal, where it was typed ──────────────────────────────────────────────────
         await add(page, 'https://github.com/elsewhere/webapp/pull/9');
-        await reviewsSection(page).getByRole('alert').filter({ hasText: 'no remote' }).waitFor();
+        await reviewsSection(page)
+            .getByRole('alert')
+            .filter({ hasText: 'no remote' })
+            .waitFor();
         assert.equal(await rows.count(), 1);
         assert.equal(
             await field(page).inputValue(),
@@ -316,8 +347,12 @@ try {
         );
 
         // ── A worktree row takes the workspace back ────────────────────────────────────────
-        await queue(page).getByRole('button', { name: /fix-date-picker|fix\/date-picker/ }).click();
-        await workspaceTitle(page).filter({ hasText: /date-picker/ }).waitFor();
+        await queue(page)
+            .getByRole('button', { name: /fix-date-picker|fix\/date-picker/ })
+            .click();
+        await workspaceTitle(page)
+            .filter({ hasText: /date-picker/ })
+            .waitFor();
         assert.equal(await rows.first().getAttribute('aria-current'), null);
 
         await page.context().close();

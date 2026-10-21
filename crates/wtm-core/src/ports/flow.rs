@@ -31,6 +31,7 @@ use crate::flow::{
     NewInvocation, NewReviewRun, NewStep, ReviewRun, Snapshot, SnapshotId, Step, StepChange,
     StepId,
 };
+use crate::flow::{MirroredPr, NewOutcome, NewReviewedHead, Outcome, ReviewClaim, ReviewedHead};
 use crate::model::ProjectId;
 
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -246,4 +247,43 @@ pub trait RunStore: Send + Sync {
 
     /// A run's check records, oldest first.
     fn checks(&self, flow: FlowId) -> Result<Vec<CheckRun>, FlowStoreError>;
+}
+
+/// What wtm keeps about a teammate's pull request beyond its review runs: what the forge last
+/// said, your "I'm reviewing this" flag, the heads a review of it left behind, and the outcomes you
+/// chose. See [`crate::flow::pull_review`] for why each is kept.
+///
+/// A port of its own for [`RunStore`]'s reason: a review run is the same for your work and a
+/// teammate's, and these records exist only for the second.
+pub trait PullReviewStore: Send + Sync {
+    /// Keep what the forge just said about a work item's pull request, replacing the last reading.
+    fn mirror_pr(&self, mirror: &MirroredPr) -> Result<(), FlowStoreError>;
+
+    /// The last reading, if the pull request has been read since it was added.
+    fn mirrored_pr(&self, item: WorkItemId) -> Result<Option<MirroredPr>, FlowStoreError>;
+
+    /// Set "I'm reviewing this" (`Some(since)`) or clear it (`None`). Returns the flag as it is now.
+    fn set_claim(
+        &self,
+        item: WorkItemId,
+        since: Option<UnixMs>,
+    ) -> Result<Option<ReviewClaim>, FlowStoreError>;
+
+    fn claim(&self, item: WorkItemId) -> Result<Option<ReviewClaim>, FlowStoreError>;
+
+    /// Record a head a review moved on from. Never changed afterwards.
+    fn record_reviewed_head(
+        &self,
+        head: &NewReviewedHead,
+        at: UnixMs,
+    ) -> Result<ReviewedHead, FlowStoreError>;
+
+    /// The heads a review moved on from, oldest first.
+    fn reviewed_heads(&self, flow: FlowId) -> Result<Vec<ReviewedHead>, FlowStoreError>;
+
+    /// Record an outcome. Never changed afterwards: a later decision is a later row.
+    fn record_outcome(&self, outcome: &NewOutcome, at: UnixMs) -> Result<Outcome, FlowStoreError>;
+
+    /// A review's outcomes, oldest first. The last is the current one.
+    fn outcomes(&self, flow: FlowId) -> Result<Vec<Outcome>, FlowStoreError>;
 }

@@ -493,6 +493,8 @@ export interface ReviewItem {
   title: string;
   /** The worktree last used to review it, by path. It may have been removed since. */
   worktree: string | null;
+  /** When you said "I'm reviewing this". Kept in wtm, never sent to GitHub. */
+  reviewingSince: number | null;
 }
 
 export interface ReviewQueue {
@@ -1599,6 +1601,13 @@ export interface ReviewStaleness {
   staleChecks: number[];
   /** What Rerun affected would run. */
   affected: string[];
+  /**
+   * For a teammate's pull request: its head by the last reading, when that is not the head the
+   * review read. Everything above is then measured against it rather than the worktree.
+   */
+  pullRequestHead: string | null;
+  /** Whether that head's commits are here. When not, every finding is stale until fetched. */
+  pullRequestHeadHere: boolean;
 }
 
 export type RerunScope = 'affected' | 'all';
@@ -1637,6 +1646,68 @@ export interface ReviewRunView {
   checks: CheckRun[];
   expectedChecks: CheckChoice[];
   applied: AppliedKnowledge;
+  /** The pull request a teammate's review is of; null for a review of your own work. */
+  pullRequest: PullRequestReview | null;
+}
+
+// ── a teammate's pull request, reviewed ──
+
+/** Whether a fix could go to the pull request's own branch. `wtm_core::flow::PushToBranch`. */
+export type PushToBranch =
+  'allowed' | 'fork_without_maintainer_edits' | 'head_repository_gone' | 'no_write_access';
+
+/** What became of a finding from a head the review moved on from. */
+export type EarlierFate =
+  'unchanged' | 'still_reported' | 'not_reported_again' | 'dismissed';
+
+/** What the forge said about a pull request the last time wtm read it. */
+export interface MirroredPr {
+  item: number;
+  pullRequest: PullRequest;
+  permission: Permission;
+  readAt: number;
+}
+
+/** What you chose to do with a review. Only `private` exists until publishing does (M1b). */
+export interface ReviewOutcomeRecord {
+  id: number;
+  flow: number;
+  kind: 'private';
+  /** The head the review had read when you decided. */
+  headSha: string;
+  notes: string;
+  findings: number[];
+  decidedAt: number;
+}
+
+export interface EarlierHead {
+  head: {
+    id: number;
+    flow: number;
+    headSha: string;
+    snapshot: number;
+    findings: number[];
+    checks: number[];
+    nextHead: string;
+    leftAt: number;
+  };
+  findings: (FindingRecord & { fate: EarlierFate })[];
+  checks: CheckRun[];
+}
+
+export interface PullRequestReview {
+  item: number;
+  repo: string;
+  number: number;
+  mirror: MirroredPr | null;
+  reviewing: { item: number; since: number } | null;
+  reviewedHead: string | null;
+  /** The pull request's head by the last reading, when it is not the head reviewed. */
+  movedTo: string | null;
+  pushToBranch: PushToBranch | null;
+  earlier: EarlierHead[];
+  /** Oldest first; the last is the current decision. */
+  outcomes: ReviewOutcomeRecord[];
 }
 
 export interface RecipeChoice {

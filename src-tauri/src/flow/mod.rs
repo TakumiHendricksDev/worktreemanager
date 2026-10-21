@@ -21,7 +21,8 @@
 //!
 //! A consolidated review can be **rerun** against a new snapshot when the worktree has moved on:
 //! only the roles whose files changed, or all of them (`findings.rs`). The run's earlier results
-//! stay until a rerun role replaces its own.
+//! stay until a rerun role replaces its own. A teammate's pull request is followed to its new
+//! heads the same way, after its review worktree is brought to the head (`pull_request.rs`).
 //!
 //! # Holds
 //!
@@ -52,6 +53,7 @@ pub mod checks;
 pub mod commands;
 pub mod findings;
 pub mod host;
+pub mod pull_request;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -185,6 +187,8 @@ pub struct FlowView {
     pub expected_checks: Vec<findings::CheckChoice>,
     /// What the roles were given to judge by: rule revisions, instruction sources, skills.
     pub applied: findings::Applied,
+    /// The pull request the review is of, for a teammate's; `None` for a review of your own work.
+    pub pull_request: Option<pull_request::PullRequestReview>,
 }
 
 /// One run's controls, shared by its thread and its roles.
@@ -299,6 +303,10 @@ struct RunCtx {
     concurrency: Option<u32>,
     /// The repository instruction sources the project names, or the default ones.
     patterns: Vec<String>,
+    /// The pull request under review, for a teammate's, as the forge last described it.
+    pull_request: Option<wtm_core::flow::PullRequest>,
+    /// When this round follows the pull request to a new head: the head it moved on from.
+    revision: Option<(String, String)>,
 }
 
 impl RunCtx {
@@ -420,11 +428,16 @@ impl Engine {
             .map(RoleProvider::id)
             .collect();
         self.host.preflight(&providers)?;
-        let base = self.resolve_base(&worktree.path, req.base.as_deref())?;
+        let path = worktree.path.to_string_lossy().into_owned();
+        // A pull request's review is measured from its own base, whichever button started it.
+        let asked = req
+            .base
+            .clone()
+            .or_else(|| self.pull_request_base(&project, &path));
+        let base = self.resolve_base(&worktree.path, asked.as_deref())?;
 
         let db = self.db()?;
         let project_id = ProjectId::from_root(&project.root);
-        let path = worktree.path.to_string_lossy().into_owned();
         let now = self.now();
         let existing = db
             .work_item_for_worktree(&project_id, &path)
@@ -722,6 +735,17 @@ impl Engine {
                 .get(&review.recipe)
                 .and_then(|r| r.concurrency),
             patterns: crate::knowledge::patterns(&project).0,
+            pull_request: db
+                .flow(flow)
+                .ok()
+                .flatten()
+                .filter(|state| state.state.kind == FlowKind::ReviewPr)
+                .and_then(|state| {
+                    use wtm_core::ports::PullReviewStore as _;
+                    db.mirrored_pr(state.work_item).ok().flatten()
+                })
+                .map(|mirror| mirror.pull_request),
+            revision: self.revision(flow, &snapshot),
             workflow,
             dir,
             snapshot,
@@ -1118,7 +1142,10 @@ impl Engine {
             .iter()
             .filter_map(|id| Some((id.clone(), ctx.workflow.check.get(id)?.clone())))
             .collect();
-        let earlier = self.earlier_findings(step, &ctx.snapshot.tree_sha);
+        // Following a pull request to a new head, the earlier findings are what the round is for,
+        // so a role is given them whatever it lists as inputs; the ones you dismissed are settled
+        // and are not asked about again.
+        let earlier = self.earlier_findings(step, &ctx.snapshot.tree_sha, ctx.revision.is_some());
         let facts = brief::BriefFacts {
             role: &step.role,
             spec,
@@ -1132,6 +1159,11 @@ impl Engine {
             knowledge: knowledge.as_deref(),
             checks: &checks,
             earlier: &earlier,
+            pull_request: ctx.pull_request.as_ref(),
+            revision: ctx
+                .revision
+                .as_ref()
+                .map(|(from, to)| (from.as_str(), to.as_str())),
         };
         let invocation = invocation.id;
         let session_spec = RoleSession {
@@ -1952,18 +1984,22 @@ impl Engine {
             .project(review.project.as_str())
             .ok()
             .and_then(|project| project.workflow);
+        let found = db.findings(flow).map_err(text)?;
+        let checks = db.checks(flow).map_err(text)?;
+        let pull_request = self.pull_request_view(&state, snapshot.as_ref(), &found, &checks)?;
         Ok(FlowView {
             status: state.state.status(),
             flow: state,
             snapshot,
-            findings: db.findings(flow).map_err(text)?,
-            checks: db.checks(flow).map_err(text)?,
+            findings: found,
+            checks,
             expected_checks: findings::expected_checks(workflow.as_ref(), &steps),
             applied: self.applied(flow, workflow.as_ref(), &steps, &invocations)?,
             steps,
             invocations,
             inbox: db.inbox(Some(flow), None).map_err(text)?,
             running: self.is_running(flow),
+            pull_request,
             review,
         })
     }

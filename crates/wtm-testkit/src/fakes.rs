@@ -837,6 +837,32 @@ impl Git for FakeGit {
         });
         Ok(())
     }
+
+    fn checkout_review_head(
+        &self,
+        worktree_path: &Path,
+        branch: Option<&BranchRef>,
+        commit: &CommitId,
+    ) -> Result<(), GitError> {
+        self.note(format!(
+            "checkout_review_head {} {} {}",
+            worktree_path.display(),
+            branch.map_or("--detach", BranchRef::as_str),
+            commit.as_str()
+        ));
+        if let Some(worktree) = self
+            .worktrees
+            .lock()
+            .iter_mut()
+            .find(|w| w.path == worktree_path)
+        {
+            worktree.head = Some(commit.clone());
+            worktree.checkout = branch.map_or(Checkout::Detached, |b| Checkout::Branch {
+                branch: b.clone(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// git's id for the tree with nothing in it, the same in every SHA-1 repository.

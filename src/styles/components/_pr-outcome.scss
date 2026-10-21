@@ -1,0 +1,134 @@
+/*
+ * The outcome sheet for a teammate's pull request (`WorkPrOutcome.svelte`): a header line of
+ * facts, then each outcome as a bordered option, the chosen one tinted.
+ *
+ * Options are blocks of their own rather than `.c-choice`, because each holds more than a label —
+ * a description, a notes field, a list of destinations — and `.c-choice` is a one-line control.
+ * The radio inside is the native one, so the keyboard and screen readers treat the set as the
+ * radio group it is. A disabled option is drawn dimmed, never hidden: it says what comes next.
+ */
+
+.c-pr-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.c-pr-outcome__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.c-pr-outcome__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-pr-outcome__option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+
+  &.is-selected {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  &.is-disabled {
+    color: var(--fg-muted);
+  }
+}
+
+.c-pr-outcome__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+/* The radio sits on the title's first line rather than centred on the whole label. */
+.c-pr-outcome__choice > input {
+  margin-top: 3px;
+}
+
+.c-pr-outcome__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-pr-outcome__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--step-0);
+  font-weight: 600;
+}
+
+.c-pr-outcome__desc,
+.c-pr-outcome__note {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+/* Indented to the text's edge, past the radio, as the design has it. */
+.c-pr-outcome__field,
+.c-pr-outcome__note,
+.c-pr-outcome__destinations {
+  margin-left: var(--sp-5);
+}
+
+.c-pr-outcome__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+/* On the label's text only: on the label itself, the weight and size reach the textarea too. */
+.c-pr-outcome__label {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-pr-outcome__destinations {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--step--1);
+}
+
+/* Text with code in it, so inline: a flex row would break the sentence at every element. */
+.c-pr-outcome__destination {
+  overflow-wrap: anywhere;
+
+  &.is-unavailable > .c-pr-outcome__target {
+    text-decoration: line-through;
+  }
+}
+
+.c-pr-outcome__why {
+  margin-left: var(--sp-2);
+  color: var(--fg-muted);
+}
+
+.c-pr-outcome__destination.is-unavailable > .c-pr-outcome__why {
+  color: var(--warn);
+}
+
+/* In the dialog's foot, beside its buttons: it takes the space they do not. */
+.c-pr-outcome__summary {
+  flex: 1 1 280px;
+  align-self: center;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}

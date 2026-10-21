@@ -308,3 +308,175 @@ fn a_pull_request_from_the_same_repository_updates_its_remote_tracking_branch() 
         "refs/heads/main"
     );
 }
+
+impl Forge {
+    /// Another commit on top of pull request `number`'s head, carrying an executable
+    /// `.githooks/post-checkout` that touches `marker` when it runs: the author pushed again, and
+    /// the push brings a hook.
+    fn push_to_pull_request(&self, number: u64, on: &str, marker: &Path) -> String {
+        self.upstream.git(&["checkout", "-q", "-b", "again", on]);
+        let hook = self.upstream.root().join(".githooks/post-checkout");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        #[allow(clippy::permissions_set_readonly_false)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        self.upstream.git(&["add", ".githooks/post-checkout"]);
+        self.upstream
+            .commit("export.csv", "id,name,parent\n", "Add the parent column");
+        let sha = self.upstream.git(&["rev-parse", "HEAD"]).trim().to_owned();
+        self.upstream
+            .git(&["update-ref", &format!("refs/pull/{number}/head"), &sha]);
+        self.upstream.git(&["checkout", "-q", "main"]);
+        self.upstream.git(&["branch", "-q", "-D", "again"]);
+        sha
+    }
+
+    fn listed(&self, path: &Path) -> wtm_core::model::Worktree {
+        self.pipeline
+            .git
+            .list_worktrees(self.clone.root())
+            .unwrap()
+            .into_iter()
+            .find(|w| same_path(&w.path, path))
+            .unwrap()
+    }
+}
+
+#[test]
+fn a_forks_new_head_is_fetched_by_its_pull_ref_and_the_review_worktree_moves_there_with_its_hooks_off()
+ {
+    let forge = Forge::new();
+    let first = forge.fork_pull_request(7);
+    let worktree = match forge.execute(&forge.request(7, &first, true, "main")) {
+        ReviewOutcome::Created {
+            outcome: CreateOutcome::Created { worktree, .. },
+        } => worktree,
+        other => panic!("expected a new worktree, got {other:?}"),
+    };
+    // A repository whose hooks live in the work tree, the way a `.husky/` setup has them. After
+    // the move that directory holds the author's hook.
+    forge.clone.git(&["config", "core.hooksPath", ".githooks"]);
+    let marker = forge.clone.parent().join("hook-ran");
+    let second = forge.push_to_pull_request(7, &first, &marker);
+    let refs_before = forge.refs();
+
+    let mut pr = forge.request(7, &second, true, "main").pull_request;
+    pr.head.sha = CommitId::new(&second);
+    let outcome = forge
+        .pipeline
+        .advance_review(&wtm_core::usecase::AdvanceRequest {
+            project: forge.project(),
+            pull_request: pr,
+            worktree: forge.listed(&worktree.path),
+            reviewed: Some(CommitId::new(&first)),
+        })
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        wtm_core::usecase::AdvanceOutcome::Moved {
+            fetched: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(
+        forge
+            .clone
+            .git_in(&worktree.path, &["rev-parse", "HEAD"])
+            .trim(),
+        second
+    );
+    assert_eq!(
+        forge
+            .clone
+            .git_in(&worktree.path, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .trim(),
+        "HEAD",
+        "the moved review worktree must still be detached"
+    );
+    assert!(
+        worktree.path.join(".githooks/post-checkout").exists(),
+        "the new head's files are checked out"
+    );
+    assert!(!marker.exists(), "moving the review ran the author's hook");
+    assert_eq!(
+        forge.refs(),
+        refs_before,
+        "moving to a fork's new head must not add a branch or a remote-tracking ref"
+    );
+
+    // The hook is real and would have run: a plain checkout, with the author's files now in place,
+    // runs it. Without this the absence of the marker above would prove nothing.
+    forge
+        .clone
+        .git_in(&worktree.path, &["checkout", "-q", "--detach", &second]);
+    assert!(marker.exists(), "the fixture's hook never runs at all");
+}
+
+#[test]
+fn before_any_review_a_worktree_behind_the_head_moves_and_one_with_commits_of_its_own_does_not() {
+    let forge = Forge::new();
+    let first = forge.fork_pull_request(7);
+    let worktree = match forge.execute(&forge.request(7, &first, true, "main")) {
+        ReviewOutcome::Created {
+            outcome: CreateOutcome::Created { worktree, .. },
+        } => worktree,
+        other => panic!("expected a new worktree, got {other:?}"),
+    };
+    let marker = forge.clone.parent().join("hook-ran");
+    let second = forge.push_to_pull_request(7, &first, &marker);
+    let mut pr = forge.request(7, &second, true, "main").pull_request;
+    pr.head.sha = CommitId::new(&second);
+
+    // A commit of yours on top of the reviewed head, detached: the new head does not contain it.
+    forge.clone.git_in(
+        &worktree.path,
+        &["commit", "-q", "--allow-empty", "-m", "mine"],
+    );
+    let mine = forge
+        .clone
+        .git_in(&worktree.path, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    let request = |worktree| wtm_core::usecase::AdvanceRequest {
+        project: forge.project(),
+        pull_request: pr.clone(),
+        worktree,
+        reviewed: None,
+    };
+    let refused = forge
+        .pipeline
+        .advance_review(&request(forge.listed(&worktree.path)))
+        .unwrap_err();
+    assert!(
+        matches!(&refused, wtm_core::WtmError::Preflight(items) if items[0].id == "review_worktree_diverged"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        forge
+            .clone
+            .git_in(&worktree.path, &["rev-parse", "HEAD"])
+            .trim(),
+        mine,
+        "a refused move moved it anyway"
+    );
+
+    // Back on the head it was prepared at, which the new head contains: it moves.
+    forge
+        .clone
+        .git_in(&worktree.path, &["checkout", "-q", "--detach", &first]);
+    forge
+        .pipeline
+        .advance_review(&request(forge.listed(&worktree.path)))
+        .unwrap();
+    assert_eq!(
+        forge
+            .clone
+            .git_in(&worktree.path, &["rev-parse", "HEAD"])
+            .trim(),
+        second
+    );
+}

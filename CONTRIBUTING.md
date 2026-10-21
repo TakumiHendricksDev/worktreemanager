@@ -171,7 +171,8 @@ record of *why* the code looks the way it does, so it is worth writing properly.
   `just dev`. `just dev` uses the installed app's `~/.config/wtm` — its projects, resume list,
   trust approvals and `handoff.sock`, and binding that socket takes it from the running app — and
   every `just dev` shares one WebKit store. The isolated recipe gives the build its own config,
-  data, socket and storage under `root` (default `~/.cache/wtm-isolated`).
+  data, socket and storage under `root` (default `~/.cache/wtm-isolated`), and points `gh` back at
+  your own sign-in, which moving `XDG_CONFIG_HOME` would otherwise hide.
 
 ## Licensing
 

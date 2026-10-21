@@ -94,7 +94,7 @@
     const id = await reviews.add(projectId, input);
     if (id !== null) {
       pasted = '';
-      work.pickReview(id);
+      work.pickReview(id, 'overview');
     }
   }
 </script>
@@ -157,23 +157,39 @@
       {#if pullRequests.length > 0}
         <ul class="o-plain-list">
           {#each pullRequests as row (row.id)}
+            {@const run = row.worktree ? reviewRuns.latest[row.worktree.id] : undefined}
+            {@const reviewed = run
+              ? reviewStatus(run, reviewRuns.staleness[run.flow.id])
+              : null}
             <li>
               <button
                 class="c-work-row"
                 class:is-selected={work.review === row.id}
                 aria-current={work.review === row.id ? 'true' : undefined}
                 title={row.detail}
-                onclick={() => work.pickReview(row.id)}
+                onclick={() =>
+                  work.pickReview(row.id, row.worktree ? 'reviews' : 'overview')}
               >
-                <span
-                  class="c-dot c-work-row__mark"
-                  class:c-dot--idle={row.status === 'no_worktree'}
-                  class:c-dot--done={row.status === 'worktree'}
-                  aria-hidden="true"
-                ></span>
+                {#if reviewed}
+                  <span
+                    class="c-dot c-dot--{REVIEW_DOT[reviewed.status]} c-work-row__mark"
+                    aria-hidden="true"
+                  ></span>
+                {:else}
+                  <span
+                    class="c-dot c-work-row__mark"
+                    class:c-dot--idle={row.status === 'no_worktree'}
+                    class:c-dot--done={row.status === 'worktree'}
+                    aria-hidden="true"
+                  ></span>
+                {/if}
                 <span class="c-work-row__text">
                   <span class="c-work-row__name">{row.name}</span>
-                  <span class="c-work-row__status">{REVIEW_ROW_WORDS[row.status]}</span>
+                  <span class="c-work-row__status"
+                    >{reviewed ? reviewed.line : REVIEW_ROW_WORDS[row.status]}{row.reviewing
+                      ? " · you're reviewing"
+                      : ''}</span
+                  >
                 </span>
               </button>
             </li>

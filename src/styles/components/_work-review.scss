@@ -64,3 +64,8 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+
+/* "I'm reviewing this" sits among the header's actions at their size. */
+.c-work-review__claim {
+  font-size: var(--step--1);
+}

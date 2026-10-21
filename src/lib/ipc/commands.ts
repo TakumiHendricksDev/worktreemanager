@@ -16,6 +16,7 @@ import type {
   FindingRecord,
   RecipeChoice,
   RerunScope,
+  ReviewOutcomeRecord,
   ReviewRunView,
   ReviewStaleness,
   RunInboxItem,
@@ -59,6 +60,7 @@ import type {
   Preflight,
   Preview,
   ReviewDetail,
+  ReviewItem,
   ReviewOutcome,
   ReviewPreview,
   ReviewQueue,
@@ -188,6 +190,9 @@ export const commands = {
   /** Fetch, add, and only if asked, run setup; or hand back the worktree that has it. */
   createReviewWorktree: (projectId: string, args: ReviewWorktreeArgs) =>
     invoke<ReviewOutcome>('create_review_worktree', { projectId, args }),
+  /** Set or clear "I'm reviewing this". Kept in wtm; nothing is sent to GitHub. */
+  setReviewing: (projectId: string, itemId: number, on: boolean) =>
+    invoke<ReviewItem>('set_reviewing_pull_request', { projectId, itemId, on }),
 
   // ── remove ──
   removePreflight: (projectId: string, worktreeId: string, deleteBranch: boolean) =>
@@ -801,6 +806,28 @@ export const commands = {
   /** The base a review of a worktree would be measured from, before it starts. */
   reviewBase: (project: string, worktree: string) =>
     invoke<string>('review_base', { project, worktree }),
+  /**
+   * Run Review on a queued pull request's review worktree, against the pull request's base.
+   * Refused when the forge now reports a head other than `expectedHead`.
+   */
+  startPullRequestReview: (
+    project: string,
+    item: number,
+    recipe: string,
+    expectedHead: string | null,
+  ) =>
+    invoke<ReviewRunView>('start_pull_request_review', {
+      project,
+      item,
+      recipe,
+      expectedHead,
+    }),
+  /** Re-review changes: follow the pull request to `expectedHead` and rerun the roles it affects. */
+  rereviewPullRequest: (project: string, flow: number, expectedHead: string | null) =>
+    invoke<ReviewRunView>('rereview_pull_request', { project, flow, expectedHead }),
+  /** Keep a review's result private: notes beside its findings, in wtm only. */
+  keepReviewPrivate: (flow: number, notes: string) =>
+    invoke<ReviewOutcomeRecord>('keep_review_private', { flow, notes }),
   /** Open run inbox items, newest first, for one project or all. */
   workInbox: (project: string | null) => invoke<RunInboxItem[]>('work_inbox', { project }),
 

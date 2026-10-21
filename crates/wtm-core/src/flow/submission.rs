@@ -121,6 +121,11 @@ pub struct ReportedFinding {
     pub requirement: Option<String>,
     #[serde(default)]
     pub evidence: Vec<String>,
+    /// When a role run again reports a finding from the earlier list its brief gave it, that
+    /// finding's id there (`E12.0`): the role's own word that it still holds, which is how a
+    /// re-review says what was addressed without comparing places that the new commits moved.
+    #[serde(default)]
+    pub repeats: Option<String>,
 }
 
 impl ReportedFinding {
@@ -282,6 +287,7 @@ pub fn schema(kind: OutputKind) -> Value {
                             "between": texts(),
                             "requirement": text(),
                             "evidence": texts(),
+                            "repeats": { "type": "string", "minLength": 1, "description": "Only when this reports again a finding from the earlier list in your brief: that finding's id, such as E12.0." },
                         },
                         "required": ["title", "severity", "class", "body"],
                         "additionalProperties": false,

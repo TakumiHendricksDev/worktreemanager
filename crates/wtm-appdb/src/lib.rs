@@ -32,6 +32,7 @@
 
 mod findings;
 mod migrate;
+mod pull_reviews;
 mod rules;
 mod runs;
 mod store;

@@ -16,8 +16,9 @@ pub mod slug;
 pub mod snapshot;
 
 pub use create::{
-    CreatePipeline, CreateRequest, ReuseReason, ReviewCheckout, ReviewFetch, ReviewOutcome,
-    ReviewPlan, ReviewPreview, ReviewRequest, ReviewSetup, ReviewTarget, SetupRequest,
+    AdvanceOutcome, AdvanceRequest, CreatePipeline, CreateRequest, ReuseReason, ReviewCheckout,
+    ReviewFetch, ReviewOutcome, ReviewPlan, ReviewPreview, ReviewRequest, ReviewSetup,
+    ReviewTarget, SetupRequest,
 };
 pub use remove::{RemoveOutcome, RemovePipeline, RemoveRequest, TeardownStep};
 pub use slug::slugify;

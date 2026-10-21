@@ -16,12 +16,20 @@
 //! rather than leaving a role to wonder whether it missed them. Your rules and the repository's
 //! instruction sources are given as R7 retrieves them; earlier findings are given when a role runs
 //! again after the code changed, as the reports it made on the snapshot before.
+//!
+//! # A teammate's pull request
+//!
+//! A review of someone else's pull request says whose it is and what it merges into, because a
+//! reviewer judges a contribution differently from your own unfinished work. When the round follows
+//! the pull request to a new head, the earlier findings are the point of it: the role is told the
+//! author pushed since, and asked to verify each one was addressed.
 
 use std::fmt::Write as _;
 
 use wtm_core::flow::submission::{self, kind_name};
 use wtm_core::flow::{
-    CheckSpec, OutputKind, ReportedFinding, RoleInput, RoleProvider, RoleSpec, Snapshot, Workspace,
+    CheckSpec, OutputKind, PullRequest, ReportedFinding, RoleInput, RoleProvider, RoleSpec,
+    Snapshot, Workspace,
 };
 
 /// What a brief is written from.
@@ -44,7 +52,12 @@ pub struct BriefFacts<'a> {
     /// The checks this role may ask the app to run, by id.
     pub checks: &'a [(String, CheckSpec)],
     /// What this role reported on an earlier snapshot, when it is run again after the code changed.
-    pub earlier: &'a [ReportedFinding],
+    /// Each with the id it is named by, which a report of it again puts in `repeats`.
+    pub earlier: &'a [(String, ReportedFinding)],
+    /// The pull request under review, for a teammate's, as the forge last described it.
+    pub pull_request: Option<&'a PullRequest>,
+    /// When this round follows the pull request to a new head: `(from, to)`.
+    pub revision: Option<(&'a str, &'a str)>,
 }
 
 /// How many changed files a brief lists before it says how to list the rest.
@@ -88,6 +101,30 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
     let short = |sha: &str| sha.chars().take(10).collect::<String>();
     let snapshot = facts.snapshot;
     let _ = writeln!(out, "\nWhat you are reviewing:");
+    if let Some(pr) = facts.pull_request {
+        let author = pr.author.as_deref().map_or_else(
+            || "an unknown author".to_owned(),
+            |login| format!("@{login}"),
+        );
+        let head = match (&pr.head.repo, pr.cross_repository) {
+            (Some(repo), true) => format!("{}:{}", repo.owner, pr.head.branch),
+            _ => pr.head.branch.clone(),
+        };
+        let _ = writeln!(
+            out,
+            "- Pull request #{} on {}, \"{}\", by {author}: `{head}` into `{}`{}. It is a \
+             teammate's change: review it as the person asked to approve it.",
+            pr.number,
+            pr.base.repo,
+            pr.title.trim(),
+            pr.base.branch,
+            if pr.cross_repository {
+                ", from a fork"
+            } else {
+                ""
+            },
+        );
+    }
     let branch = facts
         .branch
         .map_or_else(String::new, |branch| format!(" (branch `{branch}`)"));
@@ -177,20 +214,41 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
     if let Some(knowledge) = facts.knowledge.filter(|text| !text.trim().is_empty()) {
         let _ = writeln!(out, "\n{}", knowledge.trim_end());
     }
-    if spec.inputs.contains(&RoleInput::Findings) && !facts.earlier.is_empty() {
+    if let Some((from, to)) = facts.revision
+        && !facts.earlier.is_empty()
+    {
         let _ = writeln!(
             out,
-            "\nYou reviewed an earlier snapshot of this change and reported the findings below. \
-             The code has changed since. Check each one against the code as it is now: report it \
-             again if it still holds, and leave it out if it was addressed."
+            "\nThe author pushed new commits since you reviewed this pull request at {}; it is now \
+             at {}. Verify that each finding you reported then was addressed: if one still holds, \
+             report it again where it is now, with `repeats` set to its id; leave out any that \
+             were addressed. Review what the new commits changed as well.",
+            short(from),
+            short(to)
         );
-        for earlier in facts.earlier {
+        for (id, earlier) in facts.earlier {
             let place = match (&earlier.path, earlier.line) {
                 (Some(path), Some(line)) => format!(" ({path}:{line})"),
                 (Some(path), None) => format!(" ({path})"),
                 _ => String::new(),
             };
-            let _ = writeln!(out, "- {}{place}", earlier.title);
+            let _ = writeln!(out, "- [{id}] {}{place}", earlier.title);
+        }
+    } else if spec.inputs.contains(&RoleInput::Findings) && !facts.earlier.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nYou reviewed an earlier snapshot of this change and reported the findings below. \
+             The code has changed since. Check each one against the code as it is now: report it \
+             again if it still holds, with `repeats` set to its id, and leave it out if it was \
+             addressed."
+        );
+        for (id, earlier) in facts.earlier {
+            let place = match (&earlier.path, earlier.line) {
+                (Some(path), Some(line)) => format!(" ({path}:{line})"),
+                (Some(path), None) => format!(" ({path})"),
+                _ => String::new(),
+            };
+            let _ = writeln!(out, "- [{id}] {}{place}", earlier.title);
         }
     }
     if !facts.checks.is_empty() {
@@ -338,6 +396,8 @@ mod tests {
             knowledge: None,
             checks: &[],
             earlier: &[],
+            pull_request: None,
+            revision: None,
         });
         assert!(text.contains("`wtm:team-conventions`"), "{text}");
         assert!(text.contains("Skill tool"));

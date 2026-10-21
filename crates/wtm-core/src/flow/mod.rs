@@ -33,7 +33,8 @@
 //! decided, plus recipes and their planning, snapshot staleness, review knowledge (rules, their
 //! retrieval, and the repository's instruction sources), and a review run's steps, invocations and
 //! inbox with the rules for retries, fallbacks and usage limits, their consolidation into findings,
-//! and the record of the checks the app ran for them. The engine that drives them is in the app
+//! and the record of the checks the app ran for them, and a teammate's pull request followed across
+//! its heads ([`pull_review`]). The engine that drives them is in the app
 //! (`src-tauri/src/flow/`), because it opens sessions. The store tables for questions, approvals and
 //! operations arrive with the backlog items that first need them.
 
@@ -65,6 +66,7 @@ pub mod instructions;
 pub mod knowledge;
 pub mod outbox;
 pub mod plan;
+pub mod pull_review;
 pub mod question;
 pub mod recipe;
 pub mod review;
@@ -100,6 +102,10 @@ pub use outbox::{
     Operation, OperationId, OperationKey, OperationKind, OperationState, OutboxError,
 };
 pub use plan::{PlanError, PlannedRole, PlannedStage, RecipePlan, SkipReason, SkippedRole, plan};
+pub use pull_review::{
+    EarlierFate, MirroredPr, NewOutcome, NewReviewedHead, Outcome, OutcomeError, OutcomeKind,
+    PushToBranch, ReviewClaim, ReviewedHead, base_ref, fate, push_to_branch,
+};
 pub use question::{Answer, ContextLink, Question, QuestionError, QuestionId};
 pub use recipe::{
     CheckSpec, Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleProfile,

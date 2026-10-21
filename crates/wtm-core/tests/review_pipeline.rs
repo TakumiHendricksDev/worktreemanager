@@ -453,3 +453,154 @@ fn a_branch_checkout_makes_an_untracked_review_branch_and_refuses_one_left_over(
         preview.preflight
     );
 }
+
+// ── moving a review worktree to a new head ──
+
+const OLD: &str = "0d1d0000000000000000000000000000000000aa";
+const REVIEW_DIR: &str = "/x/webapp-pr-4031";
+
+fn review_worktree(branch: Option<&str>, head: &str) -> wtm_core::model::Worktree {
+    wtm_core::model::Worktree {
+        id: wtm_core::model::WorktreeId::from_path(std::path::Path::new(REVIEW_DIR)),
+        path: PathBuf::from(REVIEW_DIR),
+        head: Some(CommitId::new(head)),
+        checkout: branch.map_or(wtm_core::model::Checkout::Detached, |b| {
+            wtm_core::model::Checkout::Branch {
+                branch: wtm_core::model::BranchRef::new(b),
+            }
+        }),
+        is_main: false,
+        is_bare: false,
+        locked: None,
+        prunable: None,
+    }
+}
+
+fn advance(
+    h: &Harness,
+    worktree: wtm_core::model::Worktree,
+    reviewed: Option<&str>,
+) -> Result<wtm_core::usecase::AdvanceOutcome, WtmError> {
+    h.pipeline
+        .advance_review(&wtm_core::usecase::AdvanceRequest {
+            project: project(true),
+            pull_request: pull_request(true),
+            worktree,
+            reviewed: reviewed.map(CommitId::new),
+        })
+}
+
+fn refusal(result: Result<wtm_core::usecase::AdvanceOutcome, WtmError>) -> String {
+    match result {
+        Err(WtmError::Preflight(items)) => items[0].id.clone(),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_review_worktree_moves_to_a_forks_new_head_by_its_pull_ref_with_nothing_else_touched() {
+    let git = repo_fetching("pull/4031/head").with_worktree_at(REVIEW_DIR, None, OLD);
+    let h = harness(git);
+
+    let outcome = advance(&h, review_worktree(None, OLD), Some(OLD)).unwrap();
+
+    assert_eq!(
+        outcome,
+        wtm_core::usecase::AdvanceOutcome::Moved {
+            from: Some(CommitId::new(OLD)),
+            to: CommitId::new(HEAD),
+            fetched: Some(wtm_core::usecase::ReviewFetch {
+                remote: "origin".to_owned(),
+                refspec: "pull/4031/head".to_owned(),
+            }),
+        }
+    );
+    assert_eq!(
+        h.git.mutations(),
+        vec![
+            "fetch origin pull/4031/head".to_owned(),
+            format!("checkout_review_head {REVIEW_DIR} --detach {HEAD}"),
+        ]
+    );
+    assert!(h.pty.spawns().is_empty(), "moving a review ran setup");
+}
+
+#[test]
+fn a_review_worktree_on_its_review_branch_takes_the_branch_with_it() {
+    let git = repo_fetching("pull/4031/head").with_worktree_at(REVIEW_DIR, Some("pr-4031"), OLD);
+    let h = harness(git);
+
+    advance(&h, review_worktree(Some("pr-4031"), OLD), Some(OLD)).unwrap();
+
+    assert_eq!(
+        h.git.mutations().last().unwrap(),
+        &format!("checkout_review_head {REVIEW_DIR} pr-4031 {HEAD}")
+    );
+}
+
+#[test]
+fn a_review_worktree_already_at_the_head_is_neither_fetched_nor_moved() {
+    let h = harness(repo_fetching("pull/4031/head"));
+    let outcome = advance(&h, review_worktree(None, HEAD), Some(OLD)).unwrap();
+    assert_eq!(outcome, wtm_core::usecase::AdvanceOutcome::AtHead);
+    assert!(!h.git.was_mutated(), "{:?}", h.git.mutations());
+}
+
+#[test]
+fn uncommitted_changes_in_a_review_worktree_stop_it_being_moved() {
+    let git = repo_fetching("pull/4031/head").with_status(
+        REVIEW_DIR,
+        wtm_core::model::WorkingTreeStatus {
+            dirty_tracked: true,
+            ..Default::default()
+        },
+    );
+    let h = harness(git);
+    assert_eq!(
+        refusal(advance(&h, review_worktree(None, OLD), Some(OLD))),
+        "review_worktree_changed"
+    );
+    assert!(!h.git.was_mutated(), "{:?}", h.git.mutations());
+}
+
+#[test]
+fn a_worktree_on_a_branch_of_your_own_is_not_a_review_checkout_and_is_never_moved() {
+    let h = harness(repo_fetching("pull/4031/head"));
+    assert_eq!(
+        refusal(advance(
+            &h,
+            review_worktree(Some("feature/csv-export"), OLD),
+            Some(OLD)
+        )),
+        "not_a_review_checkout"
+    );
+    assert!(!h.git.was_mutated(), "{:?}", h.git.mutations());
+}
+
+#[test]
+fn a_review_worktree_at_a_commit_the_review_never_read_is_left_where_it_is() {
+    let h = harness(repo_fetching("pull/4031/head"));
+    let elsewhere = "e15e000000000000000000000000000000000000";
+    assert_eq!(
+        refusal(advance(&h, review_worktree(None, elsewhere), Some(OLD))),
+        "review_worktree_moved"
+    );
+    assert!(!h.git.was_mutated(), "{:?}", h.git.mutations());
+}
+
+#[test]
+fn a_new_head_the_fetch_does_not_bring_is_refused_rather_than_checked_out() {
+    // Force-pushed again between the forge's answer and the fetch: the ref now brings another
+    // commit, and the one the review was told about is not here.
+    let git = FakeGit::with_main(REPO, "main")
+        .with_remote_url("origin", URL)
+        .with_fetchable("pull/4031/head", "f0f0000000000000000000000000000000000000");
+    let h = harness(git);
+    let error = advance(&h, review_worktree(None, OLD), Some(OLD)).unwrap_err();
+    assert!(matches!(error, WtmError::Git(_)), "{error:?}");
+    assert_eq!(
+        h.git.mutations(),
+        vec!["fetch origin pull/4031/head".to_owned()],
+        "it checked out after a fetch that did not bring the head"
+    );
+}

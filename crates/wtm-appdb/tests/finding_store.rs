@@ -116,6 +116,7 @@ fn reported(title: &str, line: u32) -> ReportedFinding {
         between: Vec::new(),
         requirement: None,
         evidence: vec!["range test: 4 rows of 5".to_owned()],
+        repeats: None,
     }
 }
 

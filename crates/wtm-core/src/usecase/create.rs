@@ -48,8 +48,8 @@ use crate::ports::template::{Context, TemplateEngine};
 mod review;
 
 pub use review::{
-    ReuseReason, ReviewCheckout, ReviewFetch, ReviewOutcome, ReviewPlan, ReviewPreview,
-    ReviewRequest, ReviewSetup, ReviewTarget,
+    AdvanceOutcome, AdvanceRequest, ReuseReason, ReviewCheckout, ReviewFetch, ReviewOutcome,
+    ReviewPlan, ReviewPreview, ReviewRequest, ReviewSetup, ReviewTarget,
 };
 
 /// Total stage count, for progress reporting.

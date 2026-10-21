@@ -36,6 +36,16 @@
 //! worktree whose `HEAD` is the head commit. Finding one plans no mutation at all, and executing
 //! that plan returns it. A worktree that is behind the head is still the one used, with a warning:
 //! moving it would mean resetting a checkout that may hold someone's work.
+//!
+//! # Moving one to a new head is its own, narrower step
+//!
+//! Preparing never moves a worktree. Bringing a review worktree to the pull request's new head is
+//! [`CreatePipeline::advance_review`], which Run Review and Re-review changes ask for by name, and
+//! which moves only what a review put there: a checkout detached or on its `pr-<n>` branch, clean,
+//! and at the head a review last read (or, before any review, behind the head with nothing of its
+//! own on top). Anything else is refused with the reason, because the alternative is a `checkout`
+//! over somebody's edits. The checkout runs with hooks off: after it, a hooks directory inside the
+//! worktree is the pull request author's.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -180,6 +190,38 @@ pub enum ReviewOutcome {
     Created { outcome: CreateOutcome },
 }
 
+/// Bring a review worktree to a pull request's head. See the module docs for what may be moved.
+#[derive(Debug, Clone)]
+pub struct AdvanceRequest {
+    /// A loaded, trusted project: its root is where the head is fetched.
+    pub project: Project,
+    /// The pull request as the forge just described it.
+    pub pull_request: PullRequest,
+    /// The worktree as git lists it now.
+    pub worktree: Worktree,
+    /// The head a review of it last read. A worktree anywhere else holds something a review did
+    /// not put there. `None` before the first review.
+    pub reviewed: Option<CommitId>,
+}
+
+/// What [`CreatePipeline::advance_review`] did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum AdvanceOutcome {
+    /// It was at the head already. Nothing was fetched or moved.
+    AtHead,
+    /// Fetched, when the head was not here, and checked out at the head.
+    Moved {
+        from: Option<CommitId>,
+        to: CommitId,
+        fetched: Option<ReviewFetch>,
+    },
+}
+
 /// Everything planning produced, shared by preview and execute.
 struct PlannedReview {
     preview: ReviewPreview,
@@ -312,6 +354,137 @@ impl CreatePipeline {
             cancel,
         )?;
         Ok(ReviewOutcome::Created { outcome })
+    }
+
+    /// Move a review worktree to the pull request's head: fetch it when it is not here, then check
+    /// it out, detached or on the worktree's `pr-<n>` branch.
+    ///
+    /// Refused, with nothing moved, for a worktree on any other branch, one with changes
+    /// that are not committed, one at a commit that is neither the head a review read nor behind
+    /// the new head, and a head the fetch does not bring. Each refusal is a preflight error, so it
+    /// reads like the rest of the pipeline's.
+    pub fn advance_review(&self, req: &AdvanceRequest) -> Result<AdvanceOutcome, WtmError> {
+        let pr = &req.pull_request;
+        let worktree = &req.worktree;
+        let head = &pr.head.sha;
+        if worktree.head.as_ref() == Some(head) {
+            return Ok(AdvanceOutcome::AtHead);
+        }
+        let path = worktree.path.display();
+        let refuse = |id: &str, message: String, hint: &str| {
+            WtmError::Preflight(vec![PreflightItem::error(id, message).with_hint(hint)])
+        };
+
+        let review = review_branch(pr.number);
+        let branch = match worktree.branch() {
+            None => None,
+            Some(branch) if branch == &review => Some(review),
+            Some(other) => {
+                return Err(refuse(
+                    "not_a_review_checkout",
+                    format!(
+                        "{path} is on `{other}`, not a review checkout, so wtm will not move it to \
+                         the pull request's new head."
+                    ),
+                    "Update that branch yourself, or prepare a review worktree for the pull request.",
+                ));
+            }
+        };
+
+        let status = self.git.status(&worktree.path)?;
+        if !status.is_clean() {
+            return Err(refuse(
+                "review_worktree_changed",
+                format!(
+                    "{path} has changes that are not committed. Checking out the new head would \
+                     replace them."
+                ),
+                "Commit or discard them in that worktree, then try again.",
+            ));
+        }
+
+        let from = worktree.head.clone();
+        match (&req.reviewed, &from) {
+            (Some(reviewed), Some(at)) if at != reviewed => {
+                return Err(refuse(
+                    "review_worktree_moved",
+                    format!(
+                        "{path} is at {}, which is neither the head this review read ({}) nor the \
+                         pull request's head ({}). Something other than the review put it there.",
+                        at.short(),
+                        reviewed.short(),
+                        head.short()
+                    ),
+                    "Put it back yourself, or prepare a fresh review worktree.",
+                ));
+            }
+            _ => {}
+        }
+
+        let root = &req.project.root;
+        let remotes = self.git.remote_urls(root)?;
+        let fetch = if self.git.rev_parse(root, head.as_str())?.is_some() {
+            None
+        } else {
+            let remote = remote_for(&pr.base.repo, &remotes).ok_or_else(|| {
+                refuse(
+                    "no_remote",
+                    format!(
+                        "No remote of this repository points at {}, so the new head cannot be \
+                         fetched.",
+                        pr.base.repo
+                    ),
+                    "Add a remote for it.",
+                )
+            })?;
+            let fetch = ReviewFetch {
+                remote,
+                refspec: refspec_for(pr),
+            };
+            self.git.fetch(root, &fetch.remote, &fetch.refspec)?;
+            Some(fetch)
+        };
+        // As in `execute_review`: checked after the fetch rather than trusted from it, because a
+        // force-push in between leaves the head we were told about unreachable.
+        if self.git.rev_parse(root, head.as_str())?.is_none() {
+            return Err(GitError::BadRef(format!(
+                "{} (the head of pull request #{} is not in this repository after fetching; it \
+                 may have been force-pushed again, so look at the pull request again)",
+                head.as_str(),
+                pr.number
+            ))
+            .into());
+        }
+
+        // Before any review there is no head to compare with, so the worktree may be moved only
+        // when the new head already contains what it is at: nothing of its own would be left.
+        if req.reviewed.is_none()
+            && let Some(at) = &from
+            && self
+                .git
+                .merge_base(&worktree.path, at.as_str(), head.as_str())?
+                .as_ref()
+                != Some(at)
+        {
+            return Err(refuse(
+                "review_worktree_diverged",
+                format!(
+                    "{path} is at {}, which the pull request's head {} does not contain, so moving \
+                     it could lose commits.",
+                    at.short(),
+                    head.short()
+                ),
+                "Prepare a fresh review worktree for the pull request instead.",
+            ));
+        }
+
+        self.git
+            .checkout_review_head(&worktree.path, branch.as_ref(), head)?;
+        Ok(AdvanceOutcome::Moved {
+            from,
+            to: head.clone(),
+            fetched: fetch,
+        })
     }
 
     fn plan_review(

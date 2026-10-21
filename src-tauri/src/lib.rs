@@ -378,6 +378,7 @@ pub fn run() {
             reviews::review_queue,
             reviews::add_review,
             reviews::review_detail,
+            reviews::set_reviewing_pull_request,
             reviews::preview_review_worktree,
             reviews::create_review_worktree,
             commands::remove_preflight,
@@ -501,6 +502,9 @@ pub fn run() {
             flow::commands::resolve_inbox_item,
             flow::commands::review_staleness,
             flow::commands::rerun_review,
+            flow::commands::start_pull_request_review,
+            flow::commands::rereview_pull_request,
+            flow::commands::keep_review_private,
             flow::commands::dismiss_finding,
             flow::commands::review_base,
         ])
