@@ -971,6 +971,32 @@ impl Engine {
         }
     }
 
+    /// The answered questions `role` asked in any review of this worktree, oldest first.
+    ///
+    /// Any review, not just this run: Run again starts a new run of the same work, and the
+    /// question card promises the answer reaches the role "when it runs again". An answer is about
+    /// the work, which the worktree's runs share, not about one attempt at reviewing it.
+    fn answers_for(&self, ctx: &RunCtx, role: &str) -> Vec<Question> {
+        let Ok(db) = self.db() else {
+            return Vec::new();
+        };
+        let mut flows: Vec<FlowId> = db
+            .reviews_of(&ctx.project_id, &ctx.worktree)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|review| review.flow)
+            .collect();
+        if !flows.contains(&ctx.flow) {
+            flows.push(ctx.flow);
+        }
+        flows.sort();
+        flows
+            .into_iter()
+            .flat_map(|flow| db.questions(flow).unwrap_or_default())
+            .filter(|q| q.role.as_deref() == Some(role) && q.answer.is_some())
+            .collect()
+    }
+
     /// Roles this run has a step for, which a fallback is never chosen from twice.
     fn roles_run(&self, flow: FlowId) -> BTreeSet<String> {
         self.db()
@@ -1178,12 +1204,7 @@ impl Engine {
         // so a role is given them whatever it lists as inputs; the ones you dismissed are settled
         // and are not asked about again.
         let earlier = self.earlier_findings(step, &ctx.snapshot.tree_sha, ctx.revision.is_some());
-        let answers: Vec<Question> = db
-            .questions(ctx.flow)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|q| q.role.as_deref() == Some(step.role.as_str()) && q.answer.is_some())
-            .collect();
+        let answers = self.answers_for(ctx, &step.role);
         let facts = brief::BriefFacts {
             role: &step.role,
             spec,

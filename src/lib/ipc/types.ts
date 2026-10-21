@@ -1633,7 +1633,7 @@ export type InboxState = 'open' | 'resolved' | 'dismissed';
 
 /** Something a question points at. `wtm_core::flow::ContextLink`. */
 export type ContextLink =
-  | { kind: 'file'; path: string; line: number | null }
+  | { kind: 'file'; path: string; line: number | null; note: string | null }
   | { kind: 'excerpt'; source: string; text: string }
   | { kind: 'design_revision'; prototype: string; revision: number }
   | { kind: 'mention'; text: string };

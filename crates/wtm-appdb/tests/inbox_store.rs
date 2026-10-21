@@ -209,7 +209,8 @@ fn items_are_still_open_after_the_database_is_closed_and_opened_again() {
         question.context,
         vec![ContextLink::File {
             path: "src/export.py".to_owned(),
-            line: Some(41)
+            line: Some(41),
+            note: None,
         }]
     );
     assert_eq!(question.answer, None);

@@ -116,6 +116,9 @@
                 onclick={() => onopenfile(link.path, link.line)}
                 ><span class="u-mono">{label(link)}</span></Button
               >
+              {#if link.note}
+                <span class="c-question__excerpt"><CodeText text={link.note} /></span>
+              {/if}
             {:else}
               <span class="u-mono">{label(link)}</span>
               {#if link.kind === 'excerpt'}

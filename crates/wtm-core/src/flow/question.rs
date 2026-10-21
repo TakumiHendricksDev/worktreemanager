@@ -20,8 +20,13 @@ id! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextLink {
+    /// A file, at a line when one was named, with whatever the asker said about it.
     #[serde(rename_all = "camelCase")]
-    File { path: String, line: Option<u32> },
+    File {
+        path: String,
+        line: Option<u32>,
+        note: Option<String>,
+    },
     /// A quoted passage, such as the issue's acceptance criteria.
     Excerpt { source: String, text: String },
     #[serde(rename_all = "camelCase")]
@@ -32,35 +37,51 @@ pub enum ContextLink {
 }
 
 impl ContextLink {
-    /// Read one of a role's `refs`: `path:line` or a path is a file, anything else is words.
+    /// Read one of a role's `refs`. A reference that leads with a file — `path`, `path:line` or
+    /// `path:start-end` — is that file, at its first line, with the rest of what the asker wrote
+    /// kept as a note. Anything else is words.
     ///
-    /// A path is something with a `/` or a `.` in it and no spaces, which is what a role writes for
-    /// a file and rarely for anything else. A URL has a scheme, and stays words: the window opens
-    /// files at a line, and has no business opening a page a model named.
+    /// Leading with the file, because that is how a model writes a reference: the first real
+    /// review question's were `src/totals.py:6-7 (new raise at line 7)` and `CLAUDE.md: "An export
+    /// always writes its header row"`, and taking the whole string as a path made neither a link.
+    /// A path has a `/`, or a `.` followed by an extension with a letter in it, so `ExportWriter`
+    /// and `v1.2` stay words. A URL has a scheme and stays words too: the window opens files at a
+    /// line, and has no business opening a page a model named.
     #[must_use]
     pub fn from_ref(reference: &str) -> Self {
         let text = reference.trim();
         let words = || Self::Mention {
             text: text.to_owned(),
         };
-        if text.is_empty() || text.contains(char::is_whitespace) || text.contains("://") {
+        if text.contains("://") {
             return words();
         }
-        let (path, line) = match text.rsplit_once(':') {
-            Some((path, line)) if !line.is_empty() && line.bytes().all(|b| b.is_ascii_digit()) => {
-                (path, line.parse::<u32>().ok())
+        let (head, rest) = text
+            .split_once(char::is_whitespace)
+            .map_or((text, ""), |(head, rest)| (head, rest.trim()));
+        let head = head.trim_end_matches([':', ',', ';']);
+        let (path, line) = match head.split_once(':') {
+            Some((path, lines)) => {
+                let first = lines.split_once('-').map_or(lines, |(start, _)| start);
+                match first.parse::<u32>() {
+                    Ok(line) => (path, Some(line)),
+                    Err(_) => return words(),
+                }
             }
-            _ => (text, None),
+            None => (head, None),
         };
-        let looks_like_a_file =
-            !path.is_empty() && (path.contains('/') || path.contains('.')) && !path.contains(':');
-        if looks_like_a_file {
-            Self::File {
-                path: path.to_owned(),
-                line,
-            }
-        } else {
-            words()
+        let extension = path.rsplit_once('.').map(|(_, ext)| ext);
+        let looks_like_a_file = !path.is_empty()
+            && !path.contains(['"', '\'', '`'])
+            && (path.contains('/')
+                || extension.is_some_and(|ext| ext.chars().any(|c| c.is_ascii_alphabetic())));
+        if !looks_like_a_file {
+            return words();
+        }
+        Self::File {
+            path: path.to_owned(),
+            line,
+            note: (!rest.is_empty()).then(|| rest.to_owned()),
         }
     }
 }
@@ -169,6 +190,7 @@ mod tests {
             context: vec![ContextLink::File {
                 path: "app/exports.py".to_owned(),
                 line: Some(41),
+                note: None,
             }],
             recommendation: Some("CSV".to_owned()),
             options: vec!["CSV".to_owned(), "XLSX".to_owned()],
@@ -218,21 +240,48 @@ mod tests {
         );
     }
 
+    fn file(path: &str, line: Option<u32>, note: Option<&str>) -> ContextLink {
+        ContextLink::File {
+            path: path.to_owned(),
+            line,
+            note: note.map(str::to_owned),
+        }
+    }
+
     #[test]
     fn a_reference_with_a_line_number_becomes_a_link_to_that_line() {
         assert_eq!(
             ContextLink::from_ref("src/totals.py:7"),
-            ContextLink::File {
-                path: "src/totals.py".to_owned(),
-                line: Some(7)
-            }
+            file("src/totals.py", Some(7), None)
         );
         assert_eq!(
             ContextLink::from_ref(" README.md "),
-            ContextLink::File {
-                path: "README.md".to_owned(),
-                line: None
-            }
+            file("README.md", None, None)
+        );
+    }
+
+    #[test]
+    fn a_reference_that_leads_with_a_file_links_it_and_keeps_the_rest_as_a_note() {
+        // Both are what a real review role wrote, word for word, in the first click-through.
+        assert_eq!(
+            ContextLink::from_ref(
+                "src/totals.py:6-7 (new `raise ValueError(\"nothing to export\")` at line 7)"
+            ),
+            file(
+                "src/totals.py",
+                Some(6),
+                Some("(new `raise ValueError(\"nothing to export\")` at line 7)")
+            )
+        );
+        assert_eq!(
+            ContextLink::from_ref(
+                "CLAUDE.md: \"An export always writes its header row, even when there are no rows.\""
+            ),
+            file(
+                "CLAUDE.md",
+                None,
+                Some("\"An export always writes its header row, even when there are no rows.\"")
+            )
         );
     }
 
@@ -244,6 +293,8 @@ mod tests {
             "ExportWriter",
             "",
             "a:b:3",
+            "v1.2",
+            "export.py:line",
         ] {
             assert_eq!(
                 ContextLink::from_ref(words),

@@ -1453,7 +1453,8 @@ fn a_question_a_role_asks_is_kept_for_you_and_its_answer_reaches_the_role_when_i
         [
             wtm_core::flow::ContextLink::File {
                 path: "src/export.rs".to_owned(),
-                line: Some(1)
+                line: Some(1),
+                note: None,
             },
             wtm_core::flow::ContextLink::Mention {
                 text: "ExportWriter".to_owned()
@@ -1511,6 +1512,19 @@ fn a_question_a_role_asks_is_kept_for_you_and_its_answer_reaches_the_role_when_i
     assert!(
         !h.briefs("conventions")[1].contains("Is an empty export an error?"),
         "only the role that asked is told"
+    );
+
+    // Run again is a new run of the same worktree, and the answer still reaches the role.
+    let again = h.start("pair");
+    assert_ne!(
+        again, flow,
+        "a consolidated review is superseded by a new run"
+    );
+    h.consolidated(again);
+    let brief = &h.briefs("correctness")[2];
+    assert!(
+        brief.contains(r#"Answer: "Valid, header only""#),
+        "a new run of the same work is told too: {brief}"
     );
 }
 

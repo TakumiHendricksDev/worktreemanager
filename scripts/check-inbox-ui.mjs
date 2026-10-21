@@ -83,7 +83,7 @@ const item = (n, flow, kind, target, dir, title, body, more = {}) => ({ id: n, f
   question: null, ...more });
 const question = { id: 5, flow: 1, step: 12, role: 'correctness', text: 'Is an empty export an error?',
   why: 'It decides whether the empty case is a bug or a feature.', unblocks: 'Reporting the empty case one way or the other',
-  blocks: null, context: [{ kind: 'file', path: 'src/totals.py', line: 7 }, { kind: 'mention', text: 'ExportWriter' }],
+  blocks: null, context: [{ kind: 'file', path: 'src/totals.py', line: 7, note: 'the new raise' }, { kind: 'mention', text: 'ExportWriter' }],
   recommendation: 'Valid, header only: it matches the other exports', options: ['An error', 'Valid, header only'],
   askedAt: at, answer: null };
 window.inbox = [
