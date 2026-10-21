@@ -859,6 +859,7 @@ pub async fn post_notification(
     project_id: String,
     worktree_id: String,
     pane_id: String,
+    inbox_item: Option<i64>,
 ) -> Reply<()> {
     blocking(move || {
         use tauri::Manager;
@@ -871,6 +872,7 @@ pub async fn post_notification(
                 project_id,
                 worktree_id,
                 pane_id,
+                inbox_item,
             },
         )
     })

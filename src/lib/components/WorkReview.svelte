@@ -63,9 +63,12 @@
 
   const {
     item,
+    visible,
     onopenworktree,
   }: {
     item: ReviewItem;
+    /** Whether the panel is on screen: Work is up and its Inbox is not over it. */
+    visible: boolean;
     /** Leave Work for this worktree's sessions. */
     onopenworktree: (worktreeId: string) => void;
   } = $props();
@@ -275,6 +278,7 @@
     {/if}
     {#if listed && projectId}
       <WorkReviewRun
+        {visible}
         {projectId}
         worktree={listed}
         reviewing={`#${item.number}`}

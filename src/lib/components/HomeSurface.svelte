@@ -35,6 +35,7 @@
   import { attention } from '../state/attention.svelte';
   import { shellRuns } from '../state/shell-runs.svelte';
   import { fleet } from '../state/fleet.svelte';
+  import { inbox } from '../state/inbox.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import { view } from '../state/view.svelte';
   import ActivityList from './ActivityList.svelte';
@@ -183,7 +184,7 @@
     {
       id: 'inbox',
       label: 'Needs you',
-      count: fleet.needsYou.length + shellRuns.pending.length,
+      count: fleet.needsYou.length + shellRuns.pending.length + inbox.items.length,
     },
     { id: 'peek', label: 'Peek' },
     { id: 'activity', label: 'Activity' },
@@ -240,7 +241,7 @@
 
   {#if narrow}
     <div class="c-home__panel" id="home-inbox" role="tabpanel" hidden={tab !== 'inbox'}>
-      {#if fleet.needsYou.length + shellRuns.pending.length === 0}
+      {#if fleet.needsYou.length + shellRuns.pending.length + inbox.items.length === 0}
         <p class="c-home__hint">Nothing is waiting on you.</p>
       {/if}
       <NeedsYou onpeek={peek} {onreveal} />

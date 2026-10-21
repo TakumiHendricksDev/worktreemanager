@@ -66,6 +66,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "pull request reviews",
         sql: include_str!("../migrations/0005_pull_request_reviews.sql"),
     },
+    Migration {
+        version: 6,
+        name: "inbox and questions",
+        sql: include_str!("../migrations/0006_inbox_and_questions.sql"),
+    },
 ];
 
 /// Bring the database at `path`, open as `conn`, up to the last of `migrations`.
@@ -325,11 +330,84 @@ mod tests {
             "steps",
             "invocations",
             "inbox_items",
+            "questions",
         ] {
             assert!(has_table(&path, table), "{table}");
         }
         assert_eq!(work_items_in(&path), 1);
         assert_eq!(work_items_in(&backup_path(&path, 1)), 1);
+    }
+
+    #[test]
+    fn a_version_four_inbox_keeps_every_item_with_its_target_and_whether_it_was_resolved() {
+        // Migration 6 rebuilds the table. What R5 filed has to come through as what its writers
+        // meant: a role's name is that role's step, "run" is the run, and a permission prompt is
+        // the first kind of approval. Ids are kept, because a notification already posted names one.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flow.db");
+        let db = AppDb::open_with(&path, &MIGRATIONS[..4]).unwrap();
+        db.with_connection(|conn| {
+            conn.execute_batch(
+                "INSERT INTO work_items (project, title, created_at) VALUES ('/work/webapp', 'Export', 1);
+                 INSERT INTO flows (work_item_id, kind, phase, last_seq, started_at, updated_at)
+                     VALUES (1, 'review_mine', 'reviewing', 0, 1, 1);
+                 INSERT INTO review_runs (flow_id, project, worktree, worktree_path, recipe, base, created_at)
+                     VALUES (1, '/work/webapp', '/work/webapp-wt', '/work/webapp-wt', 'standard', 'main', 1);
+                 INSERT INTO steps (flow_id, stage, role, provider, profile, workspace, timeout_ms,
+                                    retries, status, created_at, updated_at)
+                     VALUES (1, 0, 'correctness', 'codex', 'reviewer', 'snapshot', 1000, 1, 'failed', 1, 1);
+                 INSERT INTO inbox_items (id, flow_id, kind, subject, title, body, created_at, resolved_at) VALUES
+                     (7, 1, 'failure', 'correctness', 'correctness failed', '', 10, NULL),
+                     (8, 1, 'permission', 'correctness', 'asked', '', 11, 20),
+                     (9, 1, 'interrupted', 'run', 'wtm quit', '', 12, NULL);",
+            )
+        })
+        .unwrap();
+        drop(db);
+
+        let db = reopen(&path, MIGRATIONS).unwrap();
+        let rows: Vec<(i64, String, String, i64, String, Option<i64>)> = db
+            .with_connection(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT id, kind, target_kind, target_id, state, closed_at
+                     FROM inbox_items ORDER BY id",
+                )?;
+                statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    })?
+                    .collect()
+            })
+            .unwrap();
+        let s = |text: &str| text.to_owned();
+        assert_eq!(
+            rows,
+            vec![
+                (7, s("failure"), s("step"), 1, s("open"), None),
+                (8, s("approval"), s("step"), 1, s("resolved"), Some(20)),
+                (9, s("interrupted"), s("flow"), 1, s("open"), None),
+            ]
+        );
+        // The next item does not reuse a carried-over id.
+        let next: i64 = db
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO inbox_items (flow_id, kind, target_kind, target_id, subject, title,
+                                              body, state, created_at)
+                     VALUES (1, 'review_ready', 'flow', 1, 'run', 'ready', '', 'open', 30)",
+                    [],
+                )?;
+                Ok(conn.last_insert_rowid())
+            })
+            .unwrap();
+        assert_eq!(next, 10);
     }
 
     #[test]

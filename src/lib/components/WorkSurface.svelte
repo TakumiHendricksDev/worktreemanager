@@ -16,9 +16,10 @@
    * For a pull request picked in Reviews: `WorkReview`, with what the forge says about it and the
    * worktree a review of it reads.
    *
-   * The inbox is the review runs' (`WorkRunInbox`). Approvals from ordinary sessions stay where
-   * they are, in Home and on the panes: the plan gives this inbox review runs' questions and
-   * failures, and moving the existing ones here is a separate decision.
+   * The inbox column is workflow runs' (`WorkRunInbox`), and the title bar's Inbox gives it the main
+   * column as the focused Inbox (`WorkInbox`), with filters and room to answer a question. Approvals
+   * from ordinary sessions stay where they are, in Home and on the panes; Home's Needs you lists the
+   * runs' items beside them, so nothing a run asks is only in one place.
    *
    * It draws no session pane, which is why `attention.offScreen` counts every pane as off screen
    * while Work is up.
@@ -33,6 +34,7 @@
   import Button from './ui/Button.svelte';
   import WorkReview from './WorkReview.svelte';
   import WorkReviewRun from './WorkReviewRun.svelte';
+  import WorkInbox from './WorkInbox.svelte';
   import WorkRunInbox from './WorkRunInbox.svelte';
 
   const {
@@ -93,124 +95,133 @@
 </script>
 
 <section class="c-work" class:is-hidden={!visible} aria-label="Work">
-  <div class="c-work__columns">
-    <div class="c-work__main">
-      {#if reviewItem}
-        <WorkReview item={reviewItem} {onopenworktree} />
-      {:else if subject && worktree}
-        <header class="c-work__header">
-          <div class="c-work__heading">
-            <h1 class="c-work__title" title={subject.detail}>{rowTitle(subject)}</h1>
-            <!-- The issue key is not repeated here: the title leads with it, and Overview says
+  {#if work.inboxOpen}
+    <WorkInbox />
+  {:else}
+    <div class="c-work__columns">
+      <div class="c-work__main">
+        {#if reviewItem}
+          <WorkReview
+            item={reviewItem}
+            visible={visible && !work.inboxOpen}
+            {onopenworktree}
+          />
+        {:else if subject && worktree}
+          <header class="c-work__header">
+            <div class="c-work__heading">
+              <h1 class="c-work__title" title={subject.detail}>{rowTitle(subject)}</h1>
+              <!-- The issue key is not repeated here: the title leads with it, and Overview says
                where it came from. -->
-            <p class="c-work__meta">
-              <span class="u-mono">
-                {worktree.branch ??
-                  `Detached${worktree.head ? ` at ${worktree.head.slice(0, 7)}` : ''}`}
-              </span>
-              <span>{changesOf(worktree)}</span>
-            </p>
-          </div>
-          <div class="c-work__actions">
-            <span class="c-badge"
-              >{runState
-                ? `Run: ${runState.eyebrow.toLowerCase()}`
-                : REVIEW_WORDS[subject.review]}</span
-            >
-            <Button size="sm" onclick={() => onopenworktree(worktree.id)}
-              >Open in Worktrees</Button
-            >
-            {#if workspace.activeProjectId}
-              {@const projectId = workspace.activeProjectId}
-              <Button
-                variant="accent"
-                size="sm"
-                ariaHaspopup="menu"
-                title="Review this worktree's committed and uncommitted work against its merge base"
-                onclick={(event) =>
-                  void runReview(
-                    event.currentTarget as Element,
-                    projectId,
-                    worktree.id,
-                    () => {
-                      work.tab = 'reviews';
-                    },
-                  )}>Run Review</Button
+              <p class="c-work__meta">
+                <span class="u-mono">
+                  {worktree.branch ??
+                    `Detached${worktree.head ? ` at ${worktree.head.slice(0, 7)}` : ''}`}
+                </span>
+                <span>{changesOf(worktree)}</span>
+              </p>
+            </div>
+            <div class="c-work__actions">
+              <span class="c-badge"
+                >{runState
+                  ? `Run: ${runState.eyebrow.toLowerCase()}`
+                  : REVIEW_WORDS[subject.review]}</span
               >
+              <Button size="sm" onclick={() => onopenworktree(worktree.id)}
+                >Open in Worktrees</Button
+              >
+              {#if workspace.activeProjectId}
+                {@const projectId = workspace.activeProjectId}
+                <Button
+                  variant="accent"
+                  size="sm"
+                  ariaHaspopup="menu"
+                  title="Review this worktree's committed and uncommitted work against its merge base"
+                  onclick={(event) =>
+                    void runReview(
+                      event.currentTarget as Element,
+                      projectId,
+                      worktree.id,
+                      () => {
+                        work.tab = 'reviews';
+                      },
+                    )}>Run Review</Button
+                >
+              {/if}
+            </div>
+          </header>
+
+          <div
+            class="c-tabs c-tabs--inset"
+            role="tablist"
+            aria-label="Workspace"
+            bind:this={tabs}
+          >
+            {#each TABS as tab (tab.id)}
+              <button
+                class="c-tabs__tab"
+                class:is-active={work.tab === tab.id}
+                role="tab"
+                id="work-tab-{tab.id}"
+                aria-selected={work.tab === tab.id}
+                aria-controls="work-panel"
+                tabindex={work.tab === tab.id ? 0 : -1}
+                onclick={() => (work.tab = tab.id)}
+                onkeydown={(event) => onTabKey(event, tab.id)}
+              >
+                {tab.label}
+              </button>
+            {/each}
+          </div>
+
+          <div
+            class="c-work__panel"
+            id="work-panel"
+            role="tabpanel"
+            aria-labelledby="work-tab-{work.tab}"
+          >
+            {#if work.tab === 'reviews' && workspace.activeProjectId}
+              <WorkReviewRun
+                visible={visible && !work.inboxOpen}
+                projectId={workspace.activeProjectId}
+                {worktree}
+                reviewing={reviewing ?? rowTitle(subject)}
+                subject={worktree.issueKey ?? worktree.branch}
+              />
+            {:else}
+              <dl class="o-facts o-facts--wide">
+                <dt>Branch</dt>
+                <dd class="u-mono">{worktree.branch ?? 'Detached HEAD'}</dd>
+                <dt>Head</dt>
+                <dd class="u-mono">{worktree.head ? worktree.head.slice(0, 7) : '—'}</dd>
+                <dt>Working tree</dt>
+                <dd>{changesOf(worktree)}</dd>
+                {#if worktree.ahead > 0 || worktree.behind > 0}
+                  <dt>Upstream</dt>
+                  <dd>{worktree.ahead} ahead, {worktree.behind} behind</dd>
+                {/if}
+                {#if worktree.issueKey}
+                  <dt>Issue</dt>
+                  <dd>{worktree.issueKey}, from the branch name</dd>
+                {/if}
+                <dt>Path</dt>
+                <dd class="u-mono">{worktree.path}</dd>
+              </dl>
             {/if}
           </div>
-        </header>
+        {:else if !workspace.loadingWorktrees}
+          <div class="c-placeholder">
+            <p>
+              {workspace.activeProject
+                ? 'Pick a worktree in the queue.'
+                : 'Add a repository to start reviewing its work.'}
+            </p>
+          </div>
+        {/if}
+      </div>
 
-        <div
-          class="c-tabs c-tabs--inset"
-          role="tablist"
-          aria-label="Workspace"
-          bind:this={tabs}
-        >
-          {#each TABS as tab (tab.id)}
-            <button
-              class="c-tabs__tab"
-              class:is-active={work.tab === tab.id}
-              role="tab"
-              id="work-tab-{tab.id}"
-              aria-selected={work.tab === tab.id}
-              aria-controls="work-panel"
-              tabindex={work.tab === tab.id ? 0 : -1}
-              onclick={() => (work.tab = tab.id)}
-              onkeydown={(event) => onTabKey(event, tab.id)}
-            >
-              {tab.label}
-            </button>
-          {/each}
-        </div>
-
-        <div
-          class="c-work__panel"
-          id="work-panel"
-          role="tabpanel"
-          aria-labelledby="work-tab-{work.tab}"
-        >
-          {#if work.tab === 'reviews' && workspace.activeProjectId}
-            <WorkReviewRun
-              projectId={workspace.activeProjectId}
-              {worktree}
-              reviewing={reviewing ?? rowTitle(subject)}
-              subject={worktree.issueKey ?? worktree.branch}
-            />
-          {:else}
-            <dl class="o-facts o-facts--wide">
-              <dt>Branch</dt>
-              <dd class="u-mono">{worktree.branch ?? 'Detached HEAD'}</dd>
-              <dt>Head</dt>
-              <dd class="u-mono">{worktree.head ? worktree.head.slice(0, 7) : '—'}</dd>
-              <dt>Working tree</dt>
-              <dd>{changesOf(worktree)}</dd>
-              {#if worktree.ahead > 0 || worktree.behind > 0}
-                <dt>Upstream</dt>
-                <dd>{worktree.ahead} ahead, {worktree.behind} behind</dd>
-              {/if}
-              {#if worktree.issueKey}
-                <dt>Issue</dt>
-                <dd>{worktree.issueKey}, from the branch name</dd>
-              {/if}
-              <dt>Path</dt>
-              <dd class="u-mono">{worktree.path}</dd>
-            </dl>
-          {/if}
-        </div>
-      {:else if !workspace.loadingWorktrees}
-        <div class="c-placeholder">
-          <p>
-            {workspace.activeProject
-              ? 'Pick a worktree in the queue.'
-              : 'Add a repository to start reviewing its work.'}
-          </p>
-        </div>
-      {/if}
+      <aside class="c-work__inbox" aria-labelledby="work-inbox-title">
+        <WorkRunInbox />
+      </aside>
     </div>
-
-    <aside class="c-work__inbox" aria-labelledby="work-inbox-title">
-      <WorkRunInbox projectId={workspace.activeProjectId} />
-    </aside>
-  </div>
+  {/if}
 </section>

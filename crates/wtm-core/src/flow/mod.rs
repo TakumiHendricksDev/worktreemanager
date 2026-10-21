@@ -31,12 +31,13 @@
 //!
 //! This is the skeleton the Work view is built on: the types and the rules that are already
 //! decided, plus recipes and their planning, snapshot staleness, review knowledge (rules, their
-//! retrieval, and the repository's instruction sources), and a review run's steps, invocations and
-//! inbox with the rules for retries, fallbacks and usage limits, their consolidation into findings,
-//! and the record of the checks the app ran for them, and a teammate's pull request followed across
-//! its heads ([`pull_review`]). The engine that drives them is in the app
-//! (`src-tauri/src/flow/`), because it opens sessions. The store tables for questions, approvals and
-//! operations arrive with the backlog items that first need them.
+//! retrieval, and the repository's instruction sources), a review run's steps and invocations with
+//! the rules for retries, fallbacks and usage limits, their consolidation into findings, the record
+//! of the checks the app ran for them, a teammate's pull request followed across its heads
+//! ([`pull_review`]), and the inbox that is the one thing about a run that tells you anything, with
+//! the questions it carries. The engine that drives them is in the app (`src-tauri/src/flow/`),
+//! because it opens sessions. The store tables for approvals and operations arrive with the backlog
+//! items that first need them.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -62,6 +63,7 @@ pub mod consolidate;
 pub mod event;
 pub mod forge;
 pub mod glob;
+pub mod inbox;
 pub mod instructions;
 pub mod knowledge;
 pub mod outbox;
@@ -91,6 +93,9 @@ pub use forge::{
     PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug, Reviewer,
     default_host, host_for, remote_for,
 };
+pub use inbox::{
+    InboxItem, InboxItemId, InboxKind, InboxState, InboxTarget, NewInboxItem, review_ready,
+};
 pub use instructions::{
     DEFAULT_INSTRUCTION_SOURCES, InstructionDocument, InstructionSet, SkippedDocument, SourceMatch,
 };
@@ -106,7 +111,7 @@ pub use pull_review::{
     EarlierFate, MirroredPr, NewOutcome, NewReviewedHead, Outcome, OutcomeError, OutcomeKind,
     PushToBranch, ReviewClaim, ReviewedHead, base_ref, fate, push_to_branch,
 };
-pub use question::{Answer, ContextLink, Question, QuestionError, QuestionId};
+pub use question::{Answer, ContextLink, NewQuestion, Question, QuestionError, QuestionId};
 pub use recipe::{
     CheckSpec, Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleProfile,
     RoleProvider, RoleSpec, SkillCatalog, SkillError, SkillProblem, StageSpec, WorkflowError,
@@ -120,10 +125,10 @@ pub use rule::{
     RuleId, RuleKind, RuleOrigin, RuleRevision, RuleScope, RuleSource, RuleStatus,
 };
 pub use run::{
-    AfterFailure, CheckRun, CheckRunId, CheckStatus, Field, InboxItem, InboxItemId, InboxKind,
-    Invocation, InvocationChange, InvocationId, InvocationStatus, NewCheckRun, NewInboxItem,
-    NewInvocation, NewReviewRun, NewStep, OnLimit, ReviewRun, SnapshotId, Step, StepChange, StepId,
-    StepStatus, after_failure, on_limit, resume_at,
+    AfterFailure, CheckRun, CheckRunId, CheckStatus, Field, Invocation, InvocationChange,
+    InvocationId, InvocationStatus, NewCheckRun, NewInvocation, NewReviewRun, NewStep, OnLimit,
+    ReviewRun, SnapshotId, Step, StepChange, StepId, StepStatus, after_failure, on_limit,
+    resume_at,
 };
 pub use schema::SchemaProblem;
 pub use snapshot::{FlowDir, ScratchLabel, TreeCheck};

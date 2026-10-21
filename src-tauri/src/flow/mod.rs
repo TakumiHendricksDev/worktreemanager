@@ -37,9 +37,12 @@
 //! # One notification owner
 //!
 //! A run session's own events still reach its pane behind the rail, but the window does not
-//! announce them (`sessions.svelte.ts` skips a pane with a `flow`). What needs you — a role that
-//! failed for good, a limit, a provider's permission prompt, an interruption — is an inbox item
-//! here, filed once per `(flow, kind, subject)`, and the inbox is what notifies.
+//! announce them (`sessions.svelte.ts` skips a pane with a `flow`). What needs you — a question, a
+//! provider's permission prompt, a role that failed for good, a limit, an interruption, a review
+//! that is ready to read — is an inbox item here, filed once per `(target, kind)` while it is open,
+//! and the inbox is what notifies. Routine progress (`flow_progress`, a role starting or finishing)
+//! changes the run and says nothing. An item is closed by what it is about being settled — an
+//! answer, a resume, a rerun — or by a person dismissing it, never by a notification going away.
 //!
 //! # Threads, not tasks
 //!
@@ -67,16 +70,17 @@ use serde::Serialize;
 use wtm_agent::session::AgentSink;
 use wtm_appdb::AppDb;
 use wtm_core::flow::{
-    AfterFailure, CheckRun, CheckSpec, Field, FindingRecord, Flow, FlowDir, FlowEvent, FlowId,
-    FlowKind, Hold, HoldKind, InboxItem, InboxItemId, InboxKind, InterruptCause, Invocation,
-    InvocationChange, InvocationStatus, NewInboxItem, NewInvocation, NewReviewRun, NewStep,
-    NewWorkItem, OnLimit, OutputKind, Phase, ReviewRun, RoleProvider, RoleSpec, ScratchLabel,
-    SkillProblem, Snapshot, SnapshotId, Status, Step, StepChange, StepId, StepStatus, Submission,
-    WorkLink, WorkflowSpec, Workspace, after_failure, on_limit, resume_at,
+    AfterFailure, Answer, CheckRun, CheckSpec, ContextLink, Field, FindingRecord, Flow, FlowDir,
+    FlowEvent, FlowId, FlowKind, Hold, HoldKind, InboxItem, InboxItemId, InboxKind, InboxTarget,
+    InterruptCause, Invocation, InvocationChange, InvocationStatus, NewInboxItem, NewInvocation,
+    NewQuestion, NewReviewRun, NewStep, NewWorkItem, OnLimit, OutputKind, Phase, Question,
+    QuestionId, ReviewRun, RoleProvider, RoleSpec, ScratchLabel, SkillProblem, Snapshot,
+    SnapshotId, Status, Step, StepChange, StepId, StepStatus, Submission, WorkLink, WorkflowSpec,
+    Workspace, after_failure, on_limit, resume_at,
 };
 use wtm_core::model::{AgentEvent, AgentSkill, ApprovalRequest, ExitOutcome, ProjectId, SessionId};
 use wtm_core::ports::clock::Clock;
-use wtm_core::ports::{FlowStore, FlowStoreError, RunStore};
+use wtm_core::ports::{FlowStore, FlowStoreError, InboxStore, RunStore};
 use wtm_core::usecase::snapshot::{SnapshotCheckout, Snapshots};
 
 use crate::app::{App, FlowRole};
@@ -489,6 +493,8 @@ impl Engine {
                 // run is the current one. Its results stay in the record.
                 db.record(existing, &FlowEvent::Finished, now)
                     .map_err(text)?;
+                // Its items are about a review that is no longer the current one.
+                self.settle(existing, &ALL_KINDS);
                 self.notice.changed(existing);
                 db.start_flow(item.id, kind, now).map_err(text)?
             }
@@ -790,7 +796,33 @@ impl Engine {
                 to: Phase::Consolidated,
             },
         )?;
+        self.file_ready(flow);
         Ok(())
+    }
+
+    /// The review is consolidated: say so once, with how much it found and the worst of it.
+    fn file_ready(&self, flow: FlowId) {
+        let Ok(db) = self.db() else { return };
+        let findings = db.findings(flow).unwrap_or_default();
+        let standing: Vec<&wtm_core::flow::Finding> = findings
+            .iter()
+            .map(|record| &record.finding)
+            .filter(|finding| finding.dismissed.is_none())
+            .collect();
+        let steps = db.steps(flow).unwrap_or_default();
+        let failed: Vec<&str> = steps
+            .iter()
+            .filter(|s| s.status == StepStatus::Failed)
+            .map(|s| s.role.as_str())
+            .collect();
+        let (title, body) = wtm_core::flow::review_ready(&standing, &failed);
+        self.file(&NewInboxItem {
+            flow,
+            kind: InboxKind::ReviewReady,
+            target: InboxTarget::Flow,
+            title,
+            body,
+        });
     }
 
     fn run_stage(&self, ctx: &RunCtx, run: &Run, snapshots: &Snapshots, steps: Vec<Step>) {
@@ -904,7 +936,7 @@ impl Engine {
                             self.file(&NewInboxItem {
                                 flow: ctx.flow,
                                 kind: InboxKind::Capacity,
-                                subject: step.role.clone(),
+                                target: on(&step),
                                 title: format!(
                                     "{} reached its usage limit; `{}` ran `{alternative}` instead",
                                     step.provider, step.role
@@ -937,6 +969,32 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// The answered questions `role` asked in any review of this worktree, oldest first.
+    ///
+    /// Any review, not just this run: Run again starts a new run of the same work, and the
+    /// question card promises the answer reaches the role "when it runs again". An answer is about
+    /// the work, which the worktree's runs share, not about one attempt at reviewing it.
+    fn answers_for(&self, ctx: &RunCtx, role: &str) -> Vec<Question> {
+        let Ok(db) = self.db() else {
+            return Vec::new();
+        };
+        let mut flows: Vec<FlowId> = db
+            .reviews_of(&ctx.project_id, &ctx.worktree)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|review| review.flow)
+            .collect();
+        if !flows.contains(&ctx.flow) {
+            flows.push(ctx.flow);
+        }
+        flows.sort();
+        flows
+            .into_iter()
+            .flat_map(|flow| db.questions(flow).unwrap_or_default())
+            .filter(|q| q.role.as_deref() == Some(role) && q.answer.is_some())
+            .collect()
     }
 
     /// Roles this run has a step for, which a fallback is never chosen from twice.
@@ -1146,6 +1204,7 @@ impl Engine {
         // so a role is given them whatever it lists as inputs; the ones you dismissed are settled
         // and are not asked about again.
         let earlier = self.earlier_findings(step, &ctx.snapshot.tree_sha, ctx.revision.is_some());
+        let answers = self.answers_for(ctx, &step.role);
         let facts = brief::BriefFacts {
             role: &step.role,
             spec,
@@ -1164,6 +1223,7 @@ impl Engine {
                 .revision
                 .as_ref()
                 .map(|(from, to)| (from.as_str(), to.as_str())),
+            answers: &answers,
         };
         let invocation = invocation.id;
         let session_spec = RoleSession {
@@ -1331,8 +1391,8 @@ impl Engine {
                     AgentEvent::ApprovalRequested { request, .. } => {
                         self.file(&NewInboxItem {
                             flow: ctx.flow,
-                            kind: InboxKind::Permission,
-                            subject: step.role.clone(),
+                            kind: InboxKind::Approval,
+                            target: on(step),
                             title: format!(
                                 "`{}` asked for a permission its profile should not need",
                                 step.role
@@ -1448,7 +1508,7 @@ impl Engine {
         self.file(&NewInboxItem {
             flow: ctx.flow,
             kind: InboxKind::Failure,
-            subject: step.role.clone(),
+            target: on(step),
             title: format!("`{}` failed: {reason}", step.role),
             body: format!(
                 "{} after {tries} attempt{}, and the role has no fallback left. The other roles' \
@@ -1491,7 +1551,7 @@ impl Engine {
         self.file(&NewInboxItem {
             flow: ctx.flow,
             kind: InboxKind::Capacity,
-            subject: step.role.clone(),
+            target: on(step),
             title: format!(
                 "`{}` is paused: {} limit reached",
                 step.role, step.provider
@@ -1530,7 +1590,7 @@ impl Engine {
             },
         );
         if let Ok(db) = self.db() {
-            let _ = db.resolve_inbox(ctx.flow, InboxKind::Capacity, Some(&step.role), self.now());
+            let _ = db.resolve_inbox(ctx.flow, InboxKind::Capacity, Some(&on(step)), self.now());
         }
         self.release_capacity(ctx.flow);
         self.notice.changed(ctx.flow);
@@ -1628,11 +1688,7 @@ impl Engine {
                 self.note_progress(role, &progress.text);
                 Ok("Noted.".to_owned())
             }
-            (FlowCall::Ask(_), Some(_)) => Ok(
-                "A review run does not stop for answers yet. Choose the most reasonable reading, \
-                 say which you chose and why in the finding it affects, and carry on."
-                    .to_owned(),
-            ),
+            (FlowCall::Ask(ask), Some(live)) => Ok(self.ask(role, &live, ask)),
             (FlowCall::RunCheck { name }, Some(live)) => self.run_check(role, &live, name),
             (
                 FlowCall::Submit(_)
@@ -1742,13 +1798,18 @@ impl Engine {
                 self.now(),
             );
         }
-        for kind in [
-            InboxKind::Interrupted,
-            InboxKind::Failure,
-            InboxKind::Capacity,
-        ] {
-            let _ = db.resolve_inbox(flow, kind, None, self.now());
-        }
+        // What the resume answers: the interruption, the pause, the failure. A review that was
+        // ready is running again, so it is not ready any more. A question stays: resuming answers
+        // nothing.
+        self.settle(
+            flow,
+            &[
+                InboxKind::Interrupted,
+                InboxKind::Failure,
+                InboxKind::Capacity,
+                InboxKind::ReviewReady,
+            ],
+        );
         self.notice.changed(flow);
         Ok(self.spawn(flow)?)
     }
@@ -1778,14 +1839,9 @@ impl Engine {
                 }
             }
         }
-        for kind in [
-            InboxKind::Interrupted,
-            InboxKind::Failure,
-            InboxKind::Capacity,
-            InboxKind::Permission,
-        ] {
-            let _ = db.resolve_inbox(flow, kind, None, self.now());
-        }
+        // A stopped review needs nothing more from you, its questions included: there is nobody
+        // left to give an answer to.
+        self.settle(flow, &ALL_KINDS);
         self.notice.changed(flow);
         Ok(())
     }
@@ -1922,7 +1978,7 @@ impl Engine {
         self.file(&NewInboxItem {
             flow,
             kind: InboxKind::Interrupted,
-            subject: "run".to_owned(),
+            target: InboxTarget::Flow,
             title,
             body: format!(
                 "{done} of {counted} roles had finished; their results are kept. {cut_off} Resume \
@@ -1949,7 +2005,7 @@ impl Engine {
         self.file(&NewInboxItem {
             flow,
             kind: InboxKind::Failure,
-            subject: "run".to_owned(),
+            target: InboxTarget::Flow,
             title: "This review could not run".to_owned(),
             body: capitalise(reason),
         });
@@ -1964,6 +2020,11 @@ impl Engine {
     ///
     /// When it does not exist or the database cannot be read.
     pub fn view(&self, flow: FlowId) -> Result<FlowView, String> {
+        // First, before any record is read. The run's thread lets go of the flow only after its
+        // roles have joined, so "not running" read first means every write they made is already
+        // in the reads below. Read last, it could pair a step still marked running with a thread
+        // that has since finished, and a caller waiting for the run to stop would see both.
+        let running = self.is_running(flow);
         let db = self.db()?;
         let state = db
             .flow(flow)
@@ -1998,7 +2059,7 @@ impl Engine {
             steps,
             invocations,
             inbox: db.inbox(Some(flow), None).map_err(text)?,
-            running: self.is_running(flow),
+            running,
             pull_request,
             review,
         })
@@ -2035,15 +2096,69 @@ impl Engine {
         self.db()?.inbox(None, project.as_ref()).map_err(text)
     }
 
-    /// Resolve an inbox item, as a person does.
+    /// Resolve an inbox item: what it was about is settled, such as a ready review read or a
+    /// provider's prompt answered in its pane. The item as it now is, or `None` when it was not
+    /// open.
     ///
     /// # Errors
     ///
     /// When the database cannot be written.
-    pub fn resolve(&self, item: InboxItemId) -> Result<bool, String> {
-        self.db()?
+    pub fn resolve(&self, item: InboxItemId) -> Result<Option<InboxItem>, String> {
+        let closed = self
+            .db()?
             .resolve_inbox_item(item, self.now())
-            .map_err(text)
+            .map_err(text)?;
+        if let Some(closed) = &closed {
+            self.notice.changed(closed.flow);
+        }
+        Ok(closed)
+    }
+
+    /// Dismiss an inbox item: a person putting it away without settling it. A failed role stays
+    /// failed and a question unanswered; only the item goes.
+    ///
+    /// # Errors
+    ///
+    /// When the database cannot be written.
+    pub fn dismiss_item(&self, item: InboxItemId) -> Result<Option<InboxItem>, String> {
+        let closed = self
+            .db()?
+            .dismiss_inbox_item(item, self.now())
+            .map_err(text)?;
+        if let Some(closed) = &closed {
+            self.notice.changed(closed.flow);
+        }
+        Ok(closed)
+    }
+
+    /// Answer a question a run asked. The first answer counts; its item is resolved with it.
+    ///
+    /// A review role was told not to wait, so nothing resumes now: the answer is kept with the run
+    /// and given to the role that asked when it runs again.
+    ///
+    /// # Errors
+    ///
+    /// When the question was answered already, the answer picks no option it offered and says
+    /// nothing, or the database cannot be written.
+    pub fn answer(
+        &self,
+        question: QuestionId,
+        choice: Option<usize>,
+        text_answer: &str,
+    ) -> Result<Question, String> {
+        let answered = self
+            .db()?
+            .answer_question(
+                question,
+                &Answer {
+                    choice,
+                    text: text_answer.trim().to_owned(),
+                    at: self.now(),
+                },
+            )
+            .map_err(text)?;
+        self.notice.changed(answered.flow);
+        Ok(answered)
     }
 
     // ═══════════════════════════════ small helpers ═══════════════════════════════
@@ -2074,6 +2189,8 @@ impl Engine {
         }
     }
 
+    /// File an item and announce it, unless an open one already says the same thing about the
+    /// same target: the one place a run's notification starts.
     fn file(&self, item: &NewInboxItem) {
         let Ok(db) = self.db() else { return };
         match db.file_inbox(item, self.now()) {
@@ -2081,6 +2198,86 @@ impl Engine {
             Ok(None) => {}
             Err(e) => tracing::warn!(flow = %item.flow, error = %e, "could not file an inbox item"),
         }
+    }
+
+    /// Resolve a run's open items of these kinds, whatever they are about.
+    fn settle(&self, flow: FlowId, kinds: &[InboxKind]) {
+        let Ok(db) = self.db() else { return };
+        for kind in kinds {
+            let _ = db.resolve_inbox(flow, *kind, None, self.now());
+        }
+    }
+
+    /// A role asked something: keep the question and tell you, then tell the role to carry on.
+    ///
+    /// A review role is not held for the answer — holding a run for hours and resuming its
+    /// provider session is the planner's machinery, not a review's. So the role chooses a reading
+    /// and says so, and the question is kept for you with that said, and its answer given to the
+    /// role when it runs again.
+    fn ask(&self, role: &FlowRole, live: &Live, ask: &crate::flow_tools::Ask) -> String {
+        let carry_on = "This review does not stop for answers. Choose the most reasonable reading, \
+                        say which you chose and why in the finding it affects, and carry on.";
+        let Ok(db) = self.db() else {
+            return carry_on.to_owned();
+        };
+        let question = NewQuestion {
+            flow: role.flow,
+            step: Some(live.step),
+            role: Some(role.role.clone()),
+            text: ask.question.trim().to_owned(),
+            why: ask.why.trim().to_owned(),
+            unblocks: ask.unblocks.trim().to_owned(),
+            blocks: None,
+            context: ask.refs.iter().map(|r| ContextLink::from_ref(r)).collect(),
+            recommendation: ask
+                .recommendation
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(str::to_owned),
+            options: ask
+                .options
+                .iter()
+                .map(|o| o.trim().to_owned())
+                .filter(|o| !o.is_empty())
+                .collect(),
+        };
+        let title = format!("`{}` asks: {}", role.role, question.text);
+        match db.ask(&question, &title, self.now()) {
+            Ok((asked, filed)) => {
+                if let Some(filed) = filed {
+                    self.notice.filed(&filed);
+                }
+                self.notice.changed(role.flow);
+                format!(
+                    "Filed as question {}. The person is told, and their answer reaches you if this \
+                     role runs again. {carry_on}",
+                    asked.id
+                )
+            }
+            Err(e) => {
+                tracing::warn!(flow = %role.flow, error = %e, "could not keep a question");
+                carry_on.to_owned()
+            }
+        }
+    }
+}
+
+/// Every kind of item, for closing all of a run's at once.
+const ALL_KINDS: [InboxKind; 6] = [
+    InboxKind::Question,
+    InboxKind::Approval,
+    InboxKind::Failure,
+    InboxKind::Capacity,
+    InboxKind::Interrupted,
+    InboxKind::ReviewReady,
+];
+
+/// The inbox target for a step: the role, by the step the store numbered.
+fn on(step: &Step) -> InboxTarget {
+    InboxTarget::Step {
+        step: step.id,
+        role: step.role.clone(),
     }
 }
 

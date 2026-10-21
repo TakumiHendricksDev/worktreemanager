@@ -178,9 +178,11 @@ const staleness = {
   7: { flow: 7, treeSha: '4e5f6a', headSha: '4e5f6a7b8c', changed: true, paths: ['export.py', 'ExportModal.vue'], complete: true, staleFindings: [71], staleChecks: [], affected: ['correctness', 'conventions'] },
   8: { flow: 8, treeSha: '9f00aa', headSha: 'a1b2c3d4e5f6', changed: false, paths: [], complete: true, staleFindings: [], staleChecks: [], affected: [] },
 };
+const item = (n, flow, kind, target, worktree, title, body) => ({ id: n, flow, kind, target, title, body,
+  state: 'open', createdAt: 0, closedAt: null, project: '/x/webapp', worktree: id(worktree), question: null });
 const inbox = [
-  { id: 1, flow: 2, kind: 'capacity', subject: 'correctness', title: '\`correctness\` is paused: Codex limit reached', body: "You've hit your usage limit.", createdAt: 0 },
-  { id: 2, flow: 4, kind: 'failure', subject: 'ui', title: '\`ui\` failed: it had no result after 15 min', body: 'It had no result after 15 min after 2 attempts.', createdAt: 0 },
+  item(1, 2, 'capacity', { kind: 'step', step: 22, role: 'correctness' }, 'waiting', '\`correctness\` is paused: Codex limit reached', "You've hit your usage limit."),
+  item(2, 4, 'failure', { kind: 'step', step: 42, role: 'ui' }, 'failed-role', '\`ui\` failed: it had no result after 15 min', 'It had no result after 15 min after 2 attempts.'),
 ];
 window.calls = [];
 mockIPC((cmd, args) => {
@@ -229,7 +231,13 @@ mockIPC((cmd, args) => {
     case 'code_read_file': return { text: '<template>\\n</template>\\n', size: 22, truncated: false, mtimeMs: 1, symlink: false, outside: false };
     case 'code_changes': return { scope: 'uncommitted', against: 'HEAD', rev: 'HEAD', changes: [] };
     case 'work_inbox': return structuredClone(inbox);
-    case 'resolve_inbox_item': return true;
+    case 'resolve_inbox_item':
+    case 'dismiss_inbox_item': {
+      const at = inbox.findIndex((x) => x.id === a.item);
+      if (at < 0) return null;
+      const [closed] = inbox.splice(at, 1);
+      return structuredClone({ ...closed, state: cmd === 'dismiss_inbox_item' ? 'dismissed' : 'resolved', closedAt: 1 });
+    }
     default: return cmd.startsWith('list_') ? [] : null;
   }
 });
@@ -341,7 +349,7 @@ try {
             'correctness',
             'a backticked name is drawn as code, not with its backticks',
         );
-        assert(inboxText.includes('Failure'));
+        assert(inboxText.includes('Failed'));
 
         // ── Not reviewed, with two recipes to pick from ───────────────────────────────────────
         await pick(page, 'webapp');
@@ -633,16 +641,16 @@ try {
             request: { project: '/x/webapp', worktree: '/x/webapp', recipe: 'quick' },
         });
 
-        // ── Resolving an inbox item takes it away ────────────────────────────────────────────
+        // ── Dismissing an inbox item takes it away ───────────────────────────────────────────
         await page
             .getByRole('complementary', { name: /Inbox/ })
-            .getByRole('button', { name: 'Resolve' })
+            .getByRole('button', { name: 'Dismiss' })
             .first()
             .click();
         await page.waitForFunction(() =>
             document.querySelector('.c-work__inbox')?.textContent?.includes('Inbox 1'),
         );
-        assert.deepEqual((await calls(page, 'resolve_inbox_item')).at(-1).args, {
+        assert.deepEqual((await calls(page, 'dismiss_inbox_item')).at(-1).args, {
             item: 1,
         });
         await page.context().close();

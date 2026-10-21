@@ -12,10 +12,13 @@
 //! # Inputs that are not here yet
 //!
 //! A role may ask for the issue, a plan, a design, earlier findings or answers. A review of your own
-//! work in this build has no issue, plan, design or answers to give, and the brief says so by name
-//! rather than leaving a role to wonder whether it missed them. Your rules and the repository's
+//! work in this build has no issue, plan or design to give, and the brief says so by name rather
+//! than leaving a role to wonder whether it missed them. Your rules and the repository's
 //! instruction sources are given as R7 retrieves them; earlier findings are given when a role runs
-//! again after the code changed, as the reports it made on the snapshot before.
+//! again after the code changed, as the reports it made on the snapshot before. Answers are the
+//! ones you gave to questions this role asked on an earlier attempt: a review role is not held for
+//! an answer, so the next time it runs is the first time it can use one, and it gets them whether or
+//! not it lists `answers`, because it asked.
 //!
 //! # A teammate's pull request
 //!
@@ -28,8 +31,8 @@ use std::fmt::Write as _;
 
 use wtm_core::flow::submission::{self, kind_name};
 use wtm_core::flow::{
-    CheckSpec, OutputKind, PullRequest, ReportedFinding, RoleInput, RoleProvider, RoleSpec,
-    Snapshot, Workspace,
+    CheckSpec, OutputKind, PullRequest, Question, ReportedFinding, RoleInput, RoleProvider,
+    RoleSpec, Snapshot, Workspace,
 };
 
 /// What a brief is written from.
@@ -58,6 +61,8 @@ pub struct BriefFacts<'a> {
     pub pull_request: Option<&'a PullRequest>,
     /// When this round follows the pull request to a new head: `(from, to)`.
     pub revision: Option<(&'a str, &'a str)>,
+    /// Questions this role asked on an earlier attempt that you have answered since.
+    pub answers: &'a [Question],
 }
 
 /// How many changed files a brief lists before it says how to list the rest.
@@ -203,8 +208,12 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
             Some("your review rules and the repository's instructions")
         }
         RoleInput::Findings if facts.earlier.is_empty() => Some("earlier findings"),
-        RoleInput::Answers => Some("answers to questions"),
-        RoleInput::Diff | RoleInput::Instructions | RoleInput::Rules | RoleInput::Findings => None,
+        RoleInput::Answers if facts.answers.is_empty() => Some("answers to questions"),
+        RoleInput::Diff
+        | RoleInput::Instructions
+        | RoleInput::Rules
+        | RoleInput::Findings
+        | RoleInput::Answers => None,
     }) {
         // Rules and instructions arrive together, so a role asking for both is told once.
         if !missing.contains(&name) {
@@ -249,6 +258,32 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
                 _ => String::new(),
             };
             let _ = writeln!(out, "- [{id}] {}{place}", earlier.title);
+        }
+    }
+    if !facts.answers.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nOn an earlier attempt you asked the questions below, chose a reading and carried on. \
+             The person has answered them since. Where an answer differs from the reading you \
+             chose, review by the answer."
+        );
+        for question in facts.answers {
+            let Some(answer) = &question.answer else {
+                continue;
+            };
+            let picked = answer
+                .choice
+                .and_then(|choice| question.options.get(choice))
+                .map(|option| format!("\"{option}\""));
+            let said = Some(answer.text.trim())
+                .filter(|text| !text.is_empty())
+                .map(|text| format!("\"{text}\""));
+            let reply = match (picked, said) {
+                (Some(picked), Some(said)) => format!("{picked}, adding {said}"),
+                (Some(only), None) | (None, Some(only)) => only,
+                (None, None) => continue,
+            };
+            let _ = writeln!(out, "- {}\n  Answer: {reply}", question.text.trim());
         }
     }
     if !facts.checks.is_empty() {
@@ -398,6 +433,7 @@ mod tests {
             earlier: &[],
             pull_request: None,
             revision: None,
+            answers: &[],
         });
         assert!(text.contains("`wtm:team-conventions`"), "{text}");
         assert!(text.contains("Skill tool"));
@@ -411,6 +447,68 @@ mod tests {
             text.contains(r#""confirmed_bug""#),
             "the schema itself is in the brief"
         );
+    }
+
+    #[test]
+    fn a_role_running_again_is_given_the_answers_to_what_it_asked_before() {
+        use wtm_core::flow::{Answer, FlowId, QuestionId};
+
+        let spec = role(json!({
+            "objective": "Find bugs",
+            "provider": "codex",
+            "inputs": ["diff", "answers"],
+        }));
+        let answered = Question {
+            id: QuestionId(1),
+            flow: FlowId(1),
+            step: None,
+            role: Some("correctness".to_owned()),
+            text: "Is an empty export an error?".to_owned(),
+            why: String::new(),
+            unblocks: String::new(),
+            blocks: None,
+            context: Vec::new(),
+            recommendation: None,
+            options: vec!["An error".to_owned(), "Valid, header only".to_owned()],
+            asked_at: 1,
+            answer: Some(Answer {
+                choice: Some(1),
+                text: "and log it".to_owned(),
+                at: 2,
+            }),
+        };
+        let snapshot = snapshot();
+        let facts = |answers| BriefFacts {
+            role: "correctness",
+            spec: &spec,
+            recipe: "standard",
+            worktree_path: "/w/acme-wt",
+            branch: None,
+            base: "origin/main",
+            snapshot: &snapshot,
+            changed: None,
+            handover: None,
+            knowledge: None,
+            checks: &[],
+            earlier: &[],
+            pull_request: None,
+            revision: None,
+            answers,
+        };
+
+        let text = brief(&facts(std::slice::from_ref(&answered)));
+        assert!(text.contains("- Is an empty export an error?"), "{text}");
+        assert!(
+            text.contains(r#"Answer: "Valid, header only", adding "and log it""#),
+            "{text}"
+        );
+        assert!(
+            !text.contains("answers to questions"),
+            "an input that is given is not called missing"
+        );
+
+        let without = brief(&facts(&[]));
+        assert!(without.contains("answers to questions"), "{without}");
     }
 
     #[test]

@@ -27,6 +27,7 @@
     view,
     stale,
     busy,
+    targeted = false,
     onopen,
     onsaverule,
     ondismiss,
@@ -36,6 +37,8 @@
     /** Every report of it was on a file that changed since. */
     stale: boolean;
     busy: boolean;
+    /** What an inbox item or a notification just brought you to. */
+    targeted?: boolean;
     onopen: (path: string, line: number | null) => void;
     onsaverule: (finding: FindingRecord) => void;
     ondismiss: (finding: FindingRecord, reason: string | null) => void;
@@ -76,6 +79,9 @@
 <article
   class="c-finding"
   class:is-dismissed={finding.dismissed !== null}
+  class:is-targeted={targeted}
+  id="work-finding-{finding.id}"
+  tabindex="-1"
   aria-labelledby="finding-{finding.id}"
 >
   <div class="c-finding__meta">

@@ -1114,6 +1114,11 @@ export interface NotificationClick {
   projectId: string;
   worktreeId: string;
   paneId: string;
+  /**
+   * The inbox item a workflow run's notification is about, which outlives the process where a
+   * pane does not. Absent for a pane's own notification.
+   */
+  inboxItem?: number | null;
 }
 
 /** Emitted as `agent:event`. */
@@ -1612,16 +1617,69 @@ export interface ReviewStaleness {
 
 export type RerunScope = 'affected' | 'all';
 
-export type InboxKind = 'failure' | 'capacity' | 'permission' | 'interrupted';
+/** What an inbox item asks of you. `wtm_core::flow::InboxKind`. */
+export type InboxKind =
+  'question' | 'approval' | 'failure' | 'capacity' | 'interrupted' | 'review_ready';
 
-export interface RunInboxItem {
+/** Where the thing an item is about lives, and so where a click on it lands. */
+export type InboxTarget =
+  | { kind: 'flow' }
+  | { kind: 'step'; step: number; role: string }
+  | { kind: 'finding'; finding: number }
+  | { kind: 'question'; question: number }
+  | { kind: 'approval'; approval: number };
+
+export type InboxState = 'open' | 'resolved' | 'dismissed';
+
+/** Something a question points at. `wtm_core::flow::ContextLink`. */
+export type ContextLink =
+  | { kind: 'file'; path: string; line: number | null; note: string | null }
+  | { kind: 'excerpt'; source: string; text: string }
+  | { kind: 'design_revision'; prototype: string; revision: number }
+  | { kind: 'mention'; text: string };
+
+export interface QuestionAnswer {
+  /** Index into the question's options, when one was picked. */
+  choice: number | null;
+  text: string;
+  at: number;
+}
+
+/** A question a run asked. `wtm_core::flow::Question`. */
+export interface Question {
+  id: number;
+  flow: number;
+  step: number | null;
+  /** The role that asked, when one did. */
+  role: string | null;
+  text: string;
+  why: string;
+  unblocks: string;
+  /** The phase that waits for the answer; `null` when nothing does, as for a review role. */
+  blocks: FlowPhase | null;
+  context: ContextLink[];
+  recommendation: string | null;
+  options: string[];
+  askedAt: number;
+  answer: QuestionAnswer | null;
+}
+
+/** Something a run needs you to know or decide: `work_inbox` and the `flow:inbox` event. */
+export interface InboxItem {
   id: number;
   flow: number;
   kind: InboxKind;
-  subject: string;
+  target: InboxTarget;
   title: string;
   body: string;
+  state: InboxState;
   createdAt: number;
+  closedAt: number | null;
+  /** The project and worktree the run is of: where a click on it arrives. */
+  project: string | null;
+  worktree: string | null;
+  /** The question itself, for an item about one. */
+  question: Question | null;
 }
 
 /** One review run, whole: `review_run` and friends. */
@@ -1640,7 +1698,7 @@ export interface ReviewRunView {
   snapshot: { headSha: string; treeSha: string; baseSha: string } | null;
   steps: ReviewStep[];
   invocations: ReviewInvocation[];
-  inbox: RunInboxItem[];
+  inbox: InboxItem[];
   running: boolean;
   findings: FindingRecord[];
   checks: CheckRun[];

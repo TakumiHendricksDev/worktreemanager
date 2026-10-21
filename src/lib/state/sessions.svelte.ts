@@ -999,7 +999,9 @@ class Sessions {
   statuses = $derived.by(() => {
     const out: Record<string, PaneStatus> = {};
     for (const pane of this.panes) {
-      if (pane.sideOf !== null) continue;
+      // A run session's state is its run's, and the inbox says what it needs; a worktree's dot
+      // turning to "needs you" for it would be the pane-level attention the inbox replaces.
+      if (!announces(pane)) continue;
       const next = statusOf(facts(pane));
       const held = out[pane.worktreeId];
       out[pane.worktreeId] = held === undefined ? next : worse(held, next);
@@ -1113,20 +1115,24 @@ class Sessions {
   /**
    * How many sessions are waiting on an answer, anywhere — including in another project.
    *
-   * The dock badge reads this. It is the only indicator that reaches someone when wtm is not the
-   * front application and notifications are off, and the only one that covers a project other than
-   * the selected one: panes carry a `projectId`, but the sidebar only lists the active project's
-   * worktrees, so sidebar dots alone still hide a blocked session one project over.
+   * The dock badge reads this, with the inbox's count beside it. It is the only indicator that
+   * reaches someone when wtm is not the front application and notifications are off, and the only
+   * one that covers a project other than the selected one: panes carry a `projectId`, but the
+   * sidebar only lists the active project's worktrees, so sidebar dots alone still hide a blocked
+   * session one project over.
+   *
+   * Not a run session's: a provider prompt in one is an inbox item, already counted there, and
+   * counting the pane too would make one question two on the badge.
    */
   waitingCount = $derived(
-    this.panes.filter((p) => p.sideOf === null && p.approvals.length > 0).length,
+    this.panes.filter((p) => announces(p) && p.approvals.length > 0).length,
   );
 
   /** Whether any pane in a project wants attention, for the project switcher's rows. */
   wantsAttentionIn(projectId: string): boolean {
     return this.panes.some(
       (p) =>
-        p.sideOf === null &&
+        announces(p) &&
         p.projectId === projectId &&
         (p.approvals.length > 0 || p.error !== null),
     );

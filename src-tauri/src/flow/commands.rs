@@ -9,14 +9,16 @@
 //! The Reviews tab learns that a run moved from `flow:changed`, which carries only the flow's id,
 //! and asks for the run again. ARCHITECTURE §8 bans polling, and a run is exactly the kind of slow,
 //! irregular thing a poll gets wrong in both directions. A newly filed inbox item is its own event,
-//! `flow:inbox`, because it is the one thing that may notify.
+//! `flow:inbox`, because it is the one thing that may notify. An item closing — answered, resolved,
+//! dismissed, or settled by a resume — is a `flow:changed` like any other change to its run.
 
 use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use wtm_core::flow::{
-    FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, Outcome, RoleProvider, WorkItemId,
+    FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, Outcome, Question, QuestionId,
+    RoleProvider, WorkItemId,
 };
 
 use super::findings::{Rerun, Staleness};
@@ -197,18 +199,43 @@ pub async fn cancel_review(engine: EngineState<'_>, flow: i64) -> Reply<FlowView
     .await
 }
 
-/// Open inbox items, newest first: one project's, or every project's.
+/// Open inbox items, newest first: one project's, or every project's. Each names the project and
+/// worktree its run is of, so Home, the dock badge and a notification click need nothing else.
 #[tauri::command]
 pub async fn work_inbox(engine: EngineState<'_>, project: Option<String>) -> Reply<Vec<InboxItem>> {
     let engine = Arc::clone(&engine);
     blocking(move || engine.inbox(project.as_deref()).map_err(refused)).await
 }
 
-/// Resolve one inbox item, as a person does.
+/// Resolve one inbox item: what it was about is settled. `null` when it was not open.
 #[tauri::command]
-pub async fn resolve_inbox_item(engine: EngineState<'_>, item: i64) -> Reply<bool> {
+pub async fn resolve_inbox_item(engine: EngineState<'_>, item: i64) -> Reply<Option<InboxItem>> {
     let engine = Arc::clone(&engine);
     blocking(move || engine.resolve(InboxItemId(item)).map_err(refused)).await
+}
+
+/// Dismiss one inbox item, as a person does. `null` when it was not open.
+#[tauri::command]
+pub async fn dismiss_inbox_item(engine: EngineState<'_>, item: i64) -> Reply<Option<InboxItem>> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.dismiss_item(InboxItemId(item)).map_err(refused)).await
+}
+
+/// Answer a question a run asked: an option by its index, words, or both.
+#[tauri::command]
+pub async fn answer_question(
+    engine: EngineState<'_>,
+    question: i64,
+    choice: Option<usize>,
+    text: String,
+) -> Reply<Question> {
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine
+            .answer(QuestionId(question), choice, &text)
+            .map_err(refused)
+    })
+    .await
 }
 
 /// Whether a review's results still describe its worktree: what changed since, which findings and

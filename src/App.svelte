@@ -44,8 +44,15 @@
   import Logo from './lib/components/ui/Logo.svelte';
   import Splitter from './lib/components/ui/Splitter.svelte';
   import { commands } from './lib/ipc/commands';
-  import { errorMessage, type NotificationClick, type Project } from './lib/ipc/types';
+  import {
+    errorMessage,
+    type InboxItem,
+    type NotificationClick,
+    type Project,
+  } from './lib/ipc/types';
+  import { arrival, type ReviewFocus } from './lib/inbox';
   import { attention, RUN_TARGET } from './lib/state/attention.svelte';
+  import { inbox } from './lib/state/inbox.svelte';
   import { reviewRuns } from './lib/state/review-runs.svelte';
   import { reviews } from './lib/state/reviews.svelte';
   import { work } from './lib/state/work.svelte';
@@ -132,14 +139,11 @@
     // There is nothing to navigate yet, and boot lands on the last active project on its own;
     // the click still brought the window to the front, which is all it ever did before.
     if (!booted) return;
-    // A review run's: its worktree's Reviews tab in Work, where the item that notified is.
+    // A workflow run's: whatever its inbox item is about, in Work. An item closed since — answered
+    // elsewhere, or resumed — is gone from the list, and the click lands on its worktree's reviews.
     if (target.paneId === RUN_TARGET) {
-      if (target.projectId !== workspace.activeProjectId) {
-        await workspace.selectProject(target.projectId);
-      }
-      work.pick(target.worktreeId);
-      work.tab = 'reviews';
-      view.show('work');
+      const item = target.inboxItem != null ? inbox.find(target.inboxItem) : null;
+      await openRun(target.projectId, target.worktreeId, item);
       return;
     }
     // Home's own pane has no worktree to arrive at; it is on Home, and Home is a view.
@@ -171,6 +175,53 @@
     await goTo({ projectId: pane.projectId, worktreeId: pane.worktreeId, paneId: pane.id });
     if (pane.parentSession !== null) sessions.showRelated(pane.id);
   }
+
+  /**
+   * To what an inbox item is about, in the Work view: a question or an approval open in the
+   * focused Inbox, a role or a finding marked in its worktree's Reviews tab, or the run itself.
+   *
+   * The one recipe for a notification click, a toast and an inbox row, so the three cannot land in
+   * different places. It settles nothing: arriving is not answering. A ready review is the one kind
+   * that being read settles, and the Reviews tab says when it has been (`inbox.seen`).
+   */
+  async function openRun(
+    projectId: string,
+    worktreeId: string,
+    item: InboxItem | null,
+    focus?: ReviewFocus,
+  ): Promise<void> {
+    if (projectId !== workspace.activeProjectId) {
+      await workspace.selectProject(projectId);
+    }
+    const to = focus
+      ? { place: 'reviews' as const, focus }
+      : item
+        ? arrival(item)
+        : { place: 'reviews' as const, focus: null };
+    if (to.place === 'inbox') {
+      work.pick(worktreeId);
+      inbox.filter = 'all';
+      inbox.chosen = to.item;
+      work.inboxOpen = true;
+    } else {
+      work.showReviews(worktreeId, to.focus);
+    }
+    view.show('work');
+  }
+
+  /** The last inbox request navigated for. Same contract as `navigatedFor`. */
+  let openedItem = 0;
+
+  /* An inbox row's Open, from Home's Needs you or Work's inbox: the same route as its click. */
+  $effect(() => {
+    const request = inbox.request;
+    if (!booted || !request || request.id === openedItem) return;
+    openedItem = request.id;
+    const { item, focus } = request;
+    if (item.project === null || item.worktree === null) return;
+    const [projectId, worktreeId] = [item.project, item.worktree];
+    untrack(() => void openRun(projectId, worktreeId, item, focus));
+  });
 
   /** From Home to a worktree, with nothing in particular to focus. */
   async function openWorktree(projectId: string, worktreeId: string): Promise<void> {
@@ -350,6 +401,12 @@
      * can fail while Work is closed, and that has to reach you anyway.
      */
     const unlistenRuns = reviewRuns.init();
+    /*
+     * The inbox: what runs need you for, every project's, read at launch — items outlive the app —
+     * and the one route by which a run notifies. Not in the boot chain for the reason the runs are
+     * not: the badge and Needs you fill in when it answers, and nothing waits on it.
+     */
+    const unlistenInbox = inbox.init();
 
     /*
      * A macOS notification was clicked. The payload is the pane's address, attached by
@@ -471,6 +528,7 @@
       void unlistenWork.then((off) => off());
       void unlistenUsage.then((off) => off());
       void unlistenRuns.then((off) => off());
+      void unlistenInbox.then((off) => off());
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
       offFleet?.();
@@ -481,7 +539,7 @@
   });
 
   /*
-   * The count of sessions waiting on an answer, on the dock icon.
+   * The count of sessions waiting on an answer, and of open inbox items, on the dock icon.
    *
    * The only indicator that reaches someone when wtm is not the front application *and* notifications
    * are off — and the only one that covers a session in a project other than the selected one, since
@@ -491,9 +549,12 @@
    * nothing here, and a badge that could not be set is not worth a banner over the approval it was
    * trying to report. `undefined` rather than `0` to clear it — that is the API's own way of saying
    * "no badge", where zero would be a badge reading 0.
+   *
+   * Inbox items are counted beside sessions rather than inside them: a run's session is left out of
+   * `waitingCount`, so a provider prompt in one is one on the badge, as its item.
    */
   $effect(() => {
-    const waiting = sessions.waitingCount + shellRuns.pending.length;
+    const waiting = sessions.waitingCount + shellRuns.pending.length + inbox.items.length;
     void getCurrentWindow()
       .setBadgeCount(waiting > 0 ? waiting : undefined)
       .catch(() => {});
@@ -544,6 +605,8 @@
     home={view.home}
     work={view.work}
     workEnabled={view.workEnabled}
+    inboxOpen={work.inboxOpen}
+    oninbox={() => (work.inboxOpen = !work.inboxOpen)}
     ontogglehome={() => view.toggleHome()}
     onshow={(place) => (place === 'worktrees' ? view.showWorktrees() : view.show(place))}
     ontogglesidebar={toggleSidebar}

@@ -79,6 +79,8 @@ export type IconName =
   | 'mic'
   | 'more'
   | 'more-vertical'
+  | 'pause'
+  | 'question'
   | 'warn';
 
 export interface IconSpec {
@@ -183,6 +185,14 @@ export const icons: Record<IconName, IconSpec> = {
   },
   /** A triangle, the same shape warnings already used as a `!` glyph in preflight lists. */
   warn: { stroke: 'M8 3 L13.25 13.25 H2.75 Z M8 6.75 V10 M8 11.5 V12.25' },
+  /** A question mark in a circle: something only you can answer. The inbox's questions. */
+  question: {
+    stroke:
+      'M8 2 A6 6 0 1 1 8 14 A6 6 0 1 1 8 2 Z M6.25 6.5 A1.75 1.75 0 1 1 9.1 7.85 ' +
+      'C8.45 8.35 8 8.75 8 9.6 M8 11.4 V11.6',
+  },
+  /** Two bars: waiting, and it will go on by itself. A run paused for usage. */
+  pause: { stroke: 'M6 4 V12 M10 4 V12' },
   file: { stroke: 'M4 1.75 H9.25 L12 4.5 V14.25 H4 Z M9.25 1.75 V4.5 H12' },
   folder: { stroke: 'M2 3.75 H6.25 L7.75 5.25 H14 V12.75 H2 Z' },
   // A crosshair, PyCharm's ⌖: find the open file in the tree.
