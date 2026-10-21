@@ -216,3 +216,77 @@
 .c-review-checks__item--muted > .c-review-checks__mark {
   color: var(--fg-subtle);
 }
+
+/* For a teammate's pull request: which head was reviewed and which the pull request is at. */
+.c-review__heads {
+  align-items: center;
+}
+
+/*
+ * Heads the review moved on from, newest first, each with its findings and what became of them.
+ * Folded by default: it is history, and the findings above are the review as it stands.
+ */
+.c-review-earlier__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.c-review-earlier__title {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-review-earlier__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--step--1);
+}
+
+.c-review-earlier__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+}
+
+.c-review-earlier__fate {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-review-earlier__fate--ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.c-review-earlier__fate--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.c-review-earlier__fate--info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.c-review-earlier__what {
+  overflow-wrap: anywhere;
+}
+
+.c-review-earlier__where,
+.c-review-earlier__kept {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}

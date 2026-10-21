@@ -718,6 +718,23 @@ impl Git for GitCli {
         )?;
         Ok(())
     }
+
+    fn checkout_review_head(
+        &self,
+        worktree_path: &Path,
+        branch: Option<&BranchRef>,
+        commit: &CommitId,
+    ) -> Result<(), GitError> {
+        let mut args = vec!["-c", "core.hooksPath=/dev/null", "checkout", "--quiet"];
+        match branch {
+            Some(branch) => args.extend(["-B", branch.as_str()]),
+            None => args.push("--detach"),
+        }
+        // The trailing `--` makes the id a commit and never a path to restore.
+        args.extend([commit.as_str(), "--"]);
+        self.git(worktree_path, &args, MUTATE_TIMEOUT)?;
+        Ok(())
+    }
 }
 
 /// Who and when every snapshot commit says it is.

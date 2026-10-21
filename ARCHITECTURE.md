@@ -251,6 +251,15 @@ preflight gate. Three things differ, each for a stated reason:
   branch, the review directory, the pull request's own branch, or its head commit, and executing
   that plan mutates nothing. One that is behind the head is reported, never moved.
 
+Moving a review worktree to the pull request's new head is a separate, narrower step
+(`CreatePipeline::advance_review`), taken only when Run Review or Re-review changes asks for it. It
+moves only what a review put there: a checkout detached or on its own `pr-<n>` branch, with nothing
+uncommitted, at the head a review last read (or, before any review, at a commit the new head
+contains). Anything else is refused with the reason, because the alternative is a `checkout` over
+somebody's edits. The checkout runs with `core.hooksPath=/dev/null`: after it, a hooks directory
+inside the worktree, such as a `.husky/`, is the pull request author's code. The fetch is the
+same one Prepare makes, by branch or by `pull/<n>/head`.
+
 ### The relaxation: a snapshot writes objects, never refs
 
 A review in the Work view reads a snapshot of the worktree rather than the worktree, so you can
@@ -1272,12 +1281,50 @@ measured against the trees they read. The first real run found the middle case: 
 one directory reported a bug in another, and its paths alone would have left that report stale with
 nothing offering to run it again.
 
+**A teammate's pull request is measured from where it would merge.** A review of your own work is
+measured from where your branch left the default branch. A pull request names its base, so its
+review is measured from the remote-tracking ref of that branch, fetched first: a stale one would
+put commits already on the base into the change, and the reviewers would review them too. The brief
+says whose pull request it is, from which branch, and into which. "I'm reviewing this" is wtm's own
+flag (`review_claims`), apart from GitHub's requested reviewers, and sent nowhere.
+
+**Following a pull request is reading it, then moving on deliberately.** Each read of a pull request
+(add, open, Refresh, and window focus for the one on screen; never a timer) is kept as its mirror
+(migration 5, `mirror_prs`). The head a review read is its snapshot's; when the mirror names another,
+the review is stale against that commit — measured exactly when its objects are here, and "all of
+it" when they are not, since which files the push touched cannot be known before fetching. Rerun
+affected is refused meanwhile, because it would read the old head again. Re-review changes reads the
+pull request again and refuses a head other than the one you were shown, checks the run could rerun
+before anything moves, moves the review worktree (§5), records what the review said at the head it
+leaves (`reviewed_heads`), fetches the base, and reruns the roles the push affects on the same run.
+
+**"Addressed" is the reviewer's word, never a comparison of places.** A role run again at a new
+head gets its earlier reports, each with an id (`E<attempt>.<ordinal>`), and is asked to verify each
+was addressed: one that still holds is reported again with `repeats` naming that id. An earlier
+head's finding is then *still reported* when a report at the next head names it or carries one of
+its reports over unchanged, *not reported again* when the roles asked about it did not, *unchanged*
+when no role needed to read it again, or *dismissed*. Nothing compares paths and lines across
+heads: the author's commits move lines, and the first real re-review showed a fixed off-by-one read
+as "reported again" because a different problem had moved onto overlapping lines. Each head is
+judged by the round at the head that followed it, not by the newest, which would rewrite history
+every push.
+
+**Private is the one outcome.** Keep private notes records the notes and the findings beside them,
+pinned to the head reviewed (`review_outcomes`, append-only: a later decision is a later row), and
+writes nothing outside wtm. Publishing and local fixes are drawn in the outcome sheet and disabled:
+both write to GitHub, which waits for the outbox and its approvals. Whether a fix could be pushed to
+the pull request's own branch is shown already, from the forge's facts: never to a fork whose author
+did not allow maintainer edits, whatever your access.
+
 **Tested twice, at two depths.** `review_engine.rs` drives the engine with fake agents that call the
 real run tools with real tokens, against a real repository and database and a fake clock.
 `review_real_cli.rs` runs one recipe with a Claude role and a Codex role on the real CLIs; its skill
 lists need no model turn and always run, and the review itself spends turns, so it runs on request.
-A change to the Work view is also clicked through in a dev build that shares nothing with an
-installed app (`just dev-isolated`): its own config, data, handoff socket and WebKit storage.
+`pull_request_reviews.rs` does the same for a teammate's pull request, with `GhForge` parsing `gh`'s
+own JSON from a fake runner and a second repository playing the forge. A change to the Work view is
+also clicked through in a dev build that shares nothing with an installed app (`just
+dev-isolated`): its own config, data, handoff socket and WebKit storage, with `gh` pointed back at
+your own sign-in.
 
 ## 7. Toolchain policy
 

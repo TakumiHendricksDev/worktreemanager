@@ -9,6 +9,13 @@
  *
  * Every write to the state checks that the project is still the one it was read for. Switching
  * projects while `gh` is answering must not paint one project's pull requests into another's queue.
+ *
+ * # Focus reads the open one again
+ *
+ * Coming back to the window reads the pull request on screen again (`App.svelte`'s focus handler
+ * calls `refresh` for it). That is how a push by its author reaches a review of it: the reading is
+ * kept in Rust as the item's mirror, and the review's staleness is measured against it. One pull
+ * request, the one you are looking at, never the whole queue.
  */
 import { commands } from '../ipc/commands';
 import { errorMessage, type ReviewDetail, type ReviewQueue } from '../ipc/types';
@@ -64,6 +71,29 @@ class Reviews {
     } finally {
       this.adding = false;
     }
+  }
+
+  /**
+   * Set or clear "I'm reviewing this". Local: nothing is sent to GitHub, and its requested
+   * reviewers are not touched.
+   */
+  async setReviewing(projectId: string, itemId: number, on: boolean): Promise<void> {
+    try {
+      const item = await commands.setReviewing(projectId, itemId, on);
+      if (this.projectId !== projectId || !this.queue) return;
+      this.queue = {
+        ...this.queue,
+        items: this.queue.items.map((queued) => (queued.id === item.id ? item : queued)),
+      };
+    } catch (error) {
+      if (this.projectId === projectId)
+        this.detailErrors = { ...this.detailErrors, [itemId]: errorMessage(error) };
+    }
+  }
+
+  /** Read the pull request on screen again, for the project the queue is showing. */
+  async refreshShown(itemId: number): Promise<void> {
+    if (this.projectId) await this.refresh(this.projectId, itemId);
   }
 
   /** Read one pull request from the forge again. */

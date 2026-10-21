@@ -170,10 +170,9 @@ export function changesOf(w: Pick<Worktree, 'dirty' | 'staged' | 'untracked'>): 
 // ── pull requests in the Reviews section ──
 
 /**
- * Where a queued pull request stands, as its row says it.
- *
- * About the worktree only, for the reason `ReviewStatus` has one value: no review of a pull
- * request can run yet, so "has somewhere to read it" is the one thing a row can truthfully report.
+ * Where a queued pull request stands before it is reviewed, as its row says it: whether it has
+ * somewhere to be read. Once its review worktree has a review, the row says that review's status
+ * instead (`reviewStatus`), the same words a worktree row uses.
  */
 export type ReviewRowStatus = 'no_worktree' | 'worktree';
 
@@ -192,6 +191,8 @@ export interface ReviewRow {
   /** The worktree it was last reviewed in, if it is still in the listing. */
   worktree: Worktree | null;
   status: ReviewRowStatus;
+  /** You said "I'm reviewing this". */
+  reviewing: boolean;
 }
 
 /**
@@ -215,6 +216,7 @@ export function reviewRows(
       detail: `${item.repo}#${item.number}`,
       worktree,
       status: worktree ? 'worktree' : 'no_worktree',
+      reviewing: item.reviewingSince !== null,
     };
   });
 }

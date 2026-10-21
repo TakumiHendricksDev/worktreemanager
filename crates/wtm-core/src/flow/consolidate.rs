@@ -92,6 +92,15 @@ pub struct EvidenceKey {
     pub ordinal: u32,
 }
 
+impl EvidenceKey {
+    /// How a brief names this report to the role it asks to check it again: `E12.0`, its attempt
+    /// and its place. A role that reports it again sets `repeats` to this.
+    #[must_use]
+    pub fn label(&self) -> String {
+        format!("E{}.{}", self.invocation.0, self.ordinal)
+    }
+}
+
 /// One reported finding and where it came from: what consolidation works on, and what a finding
 /// keeps as its evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -482,6 +491,7 @@ mod tests {
             between: Vec::new(),
             requirement: None,
             evidence: Vec::new(),
+            repeats: None,
         }
     }
 

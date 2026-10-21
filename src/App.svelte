@@ -47,6 +47,7 @@
   import { errorMessage, type NotificationClick, type Project } from './lib/ipc/types';
   import { attention, RUN_TARGET } from './lib/state/attention.svelte';
   import { reviewRuns } from './lib/state/review-runs.svelte';
+  import { reviews } from './lib/state/reviews.svelte';
   import { work } from './lib/state/work.svelte';
   import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
@@ -300,6 +301,10 @@
 
     const onFocus = () => {
       if (booted) void workspace.refreshWorktrees();
+      // The pull request Work is showing is read again, so a push by its author reaches its
+      // review. One pull request, the one on screen: see `reviews.svelte.ts`.
+      if (booted && view.work && work.review !== null)
+        void reviews.refreshShown(work.review);
       /*
        * Coming back to the window is looking at what is on screen.
        *

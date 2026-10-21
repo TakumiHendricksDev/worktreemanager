@@ -24,10 +24,30 @@
    * Dismiss, Save as rule and the reruns go through `reviewRuns` and back to Rust; Save as rule
    * opens R7's dialog on the stored finding, by its id. Open in Code goes through `codeRequests`,
    * which takes you to the worktree's Code tab at the line.
+   *
+   * # A teammate's pull request
+   *
+   * With `pullRequest`, the worktree is that pull request's review worktree and the block is the
+   * pull request's review: Run Review compares with the pull request's base, the header says which
+   * head was reviewed and which the pull request is at now, and when those differ the one action
+   * is Re-review changes (Rerun affected would read the old head again). Heads the review moved on
+   * from are listed with what became of each finding, and Finish review opens the outcome sheet.
+   * Staleness is asked again whenever the window's reading of the pull request names a new head,
+   * which it reads on focus.
    */
   import { untrack } from 'svelte';
 
-  import type { FindingRecord, Worktree } from '../ipc/types';
+  import type { FindingRecord, PullRequest, ReviewItem, Worktree } from '../ipc/types';
+  import {
+    canFinish,
+    canRereview,
+    currentOutcome,
+    FATE_TONE,
+    FATE_WORDS,
+    movedTo,
+    outcomeLine,
+    short,
+  } from '../pr-review';
   import {
     canResume,
     canRunAgain,
@@ -55,12 +75,14 @@
   import RuleDialog from './RuleDialog.svelte';
   import Button from './ui/Button.svelte';
   import WorkFinding from './WorkFinding.svelte';
+  import WorkPrOutcome from './WorkPrOutcome.svelte';
 
   const {
     projectId,
     worktree,
     reviewing,
     subject,
+    pullRequest = null,
   }: {
     projectId: string;
     worktree: Worktree;
@@ -68,6 +90,11 @@
     reviewing: string;
     /** The work item a rule saved from a finding names, such as an issue key or the branch. */
     subject: string | null;
+    /**
+     * A teammate's pull request whose review worktree this is: its queue item, and the window's
+     * newest reading of it from the forge.
+     */
+    pullRequest?: { item: ReviewItem; read: PullRequest | null } | null;
   } = $props();
 
   const worktreeId = $derived(worktree.id);
@@ -81,9 +108,15 @@
   const groups = $derived(run ? findingGroups(run.findings) : []);
   const dismissed = $derived(run ? run.findings.filter((f) => f.dismissed !== null) : []);
   const checks = $derived(run ? checkLines(run, stale) : []);
+  const prReview = $derived(run?.pullRequest ?? null);
+  /** The pull request's new head, when the review read an older one. */
+  const moved = $derived(prReview ? movedTo(prReview, pullRequest?.read ?? null) : null);
+  const outcome = $derived(prReview ? currentOutcome(prReview) : null);
+  let finishing = $state(false);
   const showRerun = $derived(
     run !== undefined &&
       run !== null &&
+      moved === null &&
       (stale?.changed === true ||
         run.findings.some(
           (f) => f.dismissed === null && stale?.staleFindings.includes(f.id),
@@ -114,7 +147,9 @@
 
   /** What the listing says about the worktree's contents: when it moves, staleness may have. */
   const treeKey = $derived(
-    `${worktree.head ?? ''}:${worktree.dirty}:${worktree.staged}:${worktree.untracked}`,
+    `${worktree.head ?? ''}:${worktree.dirty}:${worktree.staged}:${worktree.untracked}:${
+      pullRequest?.read?.head.sha ?? ''
+    }`,
   );
   const settledFlow = $derived(run && !run.running && run.snapshot ? run.flow.id : null);
   $effect(() => {
@@ -124,7 +159,30 @@
   });
 
   function start(): void {
-    if (recipe) void reviewRuns.start(projectId, worktreeId, recipe);
+    if (!recipe) return;
+    if (pullRequest)
+      // Starting may move the review worktree to the head, so the listing is read again after.
+      void reviewRuns
+        .startPullRequest(
+          projectId,
+          worktreeId,
+          pullRequest.item.id,
+          recipe,
+          pullRequest.read?.head.sha ?? null,
+        )
+        .then(() => workspace.refreshWorktrees());
+    else void reviewRuns.start(projectId, worktreeId, recipe);
+  }
+
+  /** True from the click until the run is back: the fetch and the checkout come first. */
+  let following = $state(false);
+  function rereview(): void {
+    if (!run || !moved) return;
+    following = true;
+    void reviewRuns
+      .rereview(projectId, worktreeId, run.flow.id, moved)
+      .then(() => workspace.refreshWorktrees())
+      .finally(() => (following = false));
   }
 
   function open(path: string, line: number | null): void {
@@ -193,8 +251,33 @@
           minute: '2-digit',
         })}</span
       >
-      <span>Compared with the <code>{run.review.base}</code> merge base</span>
+      {#if pullRequest}
+        <span
+          >Compared with <code>{run.review.base}</code>, where #{pullRequest.item.number} would
+          merge</span
+        >
+      {:else}
+        <span>Compared with the <code>{run.review.base}</code> merge base</span>
+      {/if}
     </p>
+
+    {#if prReview && run.snapshot}
+      <p class="c-review__meta c-review__heads">
+        <span>Reviewed head <code>{short(run.snapshot.headSha)}</code></span>
+        {#if moved}
+          <span class="c-status--warn"
+            >Current head <code>{short(moved)}</code> · new commits</span
+          >
+        {:else if prReview.mirror || pullRequest?.read}
+          <span class="c-status--ok"
+            >Current head <code>{short(run.snapshot.headSha)}</code> ✓</span
+          >
+        {/if}
+        {#if prReview.reviewing}<span class="c-badge c-badge--accent"
+            >You're reviewing this</span
+          >{/if}
+      </p>
+    {/if}
 
     {#if problem?.kind === 'billing'}
       {@render billing(problem.providers, problem.message)}
@@ -264,10 +347,43 @@
             >Stop review</Button
           >
         {/if}
-        {#if canRunAgain(run) && !showRerun && recipe}
+        {#if canRereview(run, moved)}
+          <Button
+            variant="accent"
+            size="sm"
+            disabled={busy}
+            title={moved
+              ? `Moves the review worktree to ${short(moved)} and reruns the roles its changes affect`
+              : undefined}
+            onclick={rereview}>{following ? 'Re-reviewing…' : 'Re-review changes'}</Button
+          >
+        {/if}
+        {#if canFinish(run)}
+          <Button
+            variant={showRerun || moved ? 'neutral' : 'accent'}
+            size="sm"
+            disabled={busy}
+            onclick={() => (finishing = true)}>Finish review…</Button
+          >
+        {/if}
+        {#if canRunAgain(run) && !showRerun && !moved && recipe}
           <Button size="sm" disabled={busy} onclick={start}>Run again</Button>
         {/if}
       </div>
+      {#if moved && canRereview(run, moved)}
+        <p class="c-work-state__note">
+          Re-review changes moves the review worktree to {short(moved)} and reruns only the roles
+          whose files changed, asking each to verify its earlier findings were addressed. The
+          results at {short(run.snapshot?.headSha ?? '')} are kept below.
+        </p>
+      {/if}
+      {#if outcome}
+        <p class="c-work-state__note">
+          {outcomeLine(outcome, prReview?.reviewedHead ?? null)}{outcome.notes
+            ? `: “${outcome.notes}”`
+            : ''}
+        </p>
+      {/if}
       {#if error && problem?.kind !== 'billing'}
         <p class="c-work-state__error" role="alert"><CodeText text={error} /></p>
       {/if}
@@ -328,6 +444,55 @@
       </details>
     {/if}
 
+    {#if prReview && prReview.earlier.length > 0}
+      <details class="c-findings c-review-earlier">
+        <summary class="c-findings__heading">
+          Earlier heads · {prReview.earlier.length}
+        </summary>
+        {#each [...prReview.earlier].reverse() as left (left.head.id)}
+          <section
+            class="c-review-earlier__head"
+            aria-labelledby="work-earlier-{left.head.id}"
+          >
+            <h4 class="c-review-earlier__title" id="work-earlier-{left.head.id}">
+              <code>{short(left.head.headSha)}</code>, until the author pushed
+              <code>{short(left.head.nextHead)}</code>
+              · {left.findings.length === 1
+                ? '1 finding'
+                : `${left.findings.length} findings`}
+              {#if left.checks.length > 0}· {left.checks
+                  .map((c) => `${c.check} ${c.status.replace('_', ' ')}`)
+                  .join(', ')}{/if}
+            </h4>
+            {#if left.findings.length > 0}
+              <ul class="o-plain-list c-review-earlier__list">
+                {#each left.findings as earlier (earlier.id)}
+                  <li class="c-review-earlier__item">
+                    <span
+                      class="c-review-earlier__fate c-review-earlier__fate--{FATE_TONE[
+                        earlier.fate
+                      ]}">{FATE_WORDS[earlier.fate]}</span
+                    >
+                    <span class="c-review-earlier__what"
+                      ><CodeText text={earlier.title} /></span
+                    >
+                    {#if earlier.location}<code class="c-review-earlier__where"
+                        >{earlier.location.path}:{earlier.location.startLine}</code
+                      >{/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            {#each prReview.outcomes.filter((o) => o.headSha === left.head.headSha) as kept (kept.id)}
+              <p class="c-review-earlier__kept">
+                Kept private here{kept.notes ? `: “${kept.notes}”` : ''}
+              </p>
+            {/each}
+          </section>
+        {/each}
+      </details>
+    {/if}
+
     {#if checks.length > 0}
       <section class="c-review-checks" aria-labelledby="work-checks-title">
         <h3 class="c-findings__heading" id="work-checks-title">
@@ -378,10 +543,24 @@
   <section class="c-work-state" aria-labelledby="work-review-title">
     <span class="c-work-state__eyebrow">Not reviewed yet</span>
     <h2 class="c-work-state__title" id="work-review-title">Review {reviewing}</h2>
-    <p class="c-work-state__prose">
-      A review reads a snapshot of this worktree, committed and uncommitted work alike,
-      against its merge base. It needs no pull request and changes nothing in your tracker.
-    </p>
+    {#if pullRequest}
+      <p class="c-work-state__prose">
+        A review reads the pull request's head{pullRequest.read
+          ? `, ${short(pullRequest.read.head.sha)},`
+          : ''} in its review worktree, against
+        <code
+          >{pullRequest.read
+            ? `${pullRequest.read.base.repo.owner}/${pullRequest.read.base.repo.name} ${pullRequest.read.base.branch}`
+            : 'its base'}</code
+        >, where it would merge. Roles only read; nothing is posted to GitHub.
+      </p>
+    {:else}
+      <p class="c-work-state__prose">
+        A review reads a snapshot of this worktree, committed and uncommitted work alike,
+        against its merge base. It needs no pull request and changes nothing in your
+        tracker.
+      </p>
+    {/if}
     {#if recipes && recipes.length > 1}
       <label class="c-work-state__field">
         Recipe
@@ -416,6 +595,17 @@
       <p class="c-work-state__error" role="alert"><CodeText text={error} /></p>
     {/if}
   </section>
+{/if}
+
+{#if finishing && run}
+  <WorkPrOutcome
+    view={run}
+    read={pullRequest?.read ?? null}
+    {busy}
+    {error}
+    onclose={() => (finishing = false)}
+    onkeep={(notes) => reviewRuns.keepPrivate(worktreeId, run.flow.id, notes)}
+  />
 {/if}
 
 {#if saving}

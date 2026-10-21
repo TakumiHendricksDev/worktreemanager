@@ -108,6 +108,57 @@ class ReviewRuns {
     await this.act(worktree, () => commands.rerunReview(flow, scope));
   }
 
+  /**
+   * Run Review on a teammate's pull request, by its queue item, in its review worktree. The head
+   * the window showed travels with it, so a push since is refused rather than reviewed unseen.
+   */
+  async startPullRequest(
+    project: string,
+    worktree: string,
+    item: number,
+    recipe: string,
+    expectedHead: string | null,
+  ): Promise<void> {
+    await this.act(worktree, () =>
+      commands.startPullRequestReview(project, item, recipe, expectedHead),
+    );
+    const run = this.latest[worktree];
+    if (run) void this.checkStaleness(run.flow.id);
+  }
+
+  /** Re-review changes: follow the pull request to the head shown, and rerun what it affects. */
+  async rereview(
+    project: string,
+    worktree: string,
+    flow: number,
+    expectedHead: string | null,
+  ): Promise<void> {
+    await this.act(worktree, () =>
+      commands.rereviewPullRequest(project, flow, expectedHead),
+    );
+    void this.checkStaleness(flow);
+  }
+
+  /**
+   * Keep a review's result private. Returns whether it was kept; the reason it was not is the
+   * worktree's error, as for every other action here.
+   */
+  async keepPrivate(worktree: string, flow: number, notes: string): Promise<boolean> {
+    if (this.busy[worktree]) return false;
+    this.busy[worktree] = true;
+    delete this.errors[worktree];
+    try {
+      await commands.keepReviewPrivate(flow, notes);
+      this.latest[worktree] = await commands.reviewRun(flow);
+      return true;
+    } catch (error) {
+      this.errors[worktree] = message(error);
+      return false;
+    } finally {
+      this.busy[worktree] = false;
+    }
+  }
+
   /** Dismiss a finding with a reason, or take the dismissal back with `null`. */
   async dismiss(worktree: string, finding: number, reason: string | null): Promise<void> {
     try {

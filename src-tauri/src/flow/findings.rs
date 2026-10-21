@@ -25,6 +25,15 @@
 //! they were found on. One run rather than a new one because the findings, their dismissals and
 //! the rules saved from them are about one piece of work, and splitting them across runs would
 //! leave the Reviews tab choosing which run to believe.
+//!
+//! # A pull request that moved is compared with its new head
+//!
+//! For a teammate's pull request the code that matters is the head the author pushed, not the
+//! review worktree, which stays where the review left it until Re-review changes moves it. So once
+//! the last reading of the pull request names another head, staleness compares each report with
+//! that commit when it is here, and calls everything stale when it is not: which files the new
+//! commits touch cannot be known before they are fetched. Rerun affected is refused meanwhile,
+//! because it would run the roles again over the old head.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -34,11 +43,11 @@ use std::sync::atomic::Ordering;
 use serde::{Deserialize, Serialize};
 use wtm_core::flow::knowledge::{RuleQuery, select};
 use wtm_core::flow::{
-    CheckRunId, Evidence, Field, FindingId, FindingRecord, FlowDir, FlowEvent, FlowId, HoldKind,
-    InboxKind, Invocation, InvocationStatus, Phase, ReportedFinding, ReviewInvocation, RoleInput,
-    RoleProvider, RoleSpec, RuleId, RuleKind, ScratchLabel, Snapshot, SnapshotId, Source, Step,
-    StepChange, StepStatus, Submission, TreeCheck, WorkflowSpec, consolidate, finding_is_stale,
-    reconcile, role_is_affected,
+    CheckRunId, Evidence, EvidenceKey, Field, FindingId, FindingRecord, FlowDir, FlowEvent, FlowId,
+    HoldKind, InboxKind, Invocation, InvocationStatus, Phase, ReportedFinding, ReviewInvocation,
+    RoleInput, RoleProvider, RoleSpec, RuleId, RuleKind, ScratchLabel, Snapshot, SnapshotId,
+    Source, Step, StepChange, StepStatus, Submission, TreeCheck, WorkflowSpec, consolidate,
+    finding_is_stale, reconcile, role_is_affected,
 };
 use wtm_core::ports::{RuleStore, RunStore};
 use wtm_core::usecase::snapshot::Snapshots;
@@ -116,6 +125,12 @@ pub struct Staleness {
     pub stale_checks: Vec<CheckRunId>,
     /// The roles Rerun affected would run, in the run's order.
     pub affected: Vec<String>,
+    /// For a teammate's pull request: its head by the last reading, when that is not the head the
+    /// review read. Everything above is then measured against this commit, not the worktree.
+    pub pull_request_head: Option<String>,
+    /// Whether that head's commits are in this repository. When they are not, nothing narrower
+    /// than "all of it" is known about what changed.
+    pub pull_request_head_here: bool,
 }
 
 /// The newest attempt at `step` that handed in a result.
@@ -232,21 +247,66 @@ impl Engine {
 
     /// What a role reported last time, when that was on another tree: a rerun asks it to check
     /// each one against the code as it is now.
-    pub(super) fn earlier_findings(&self, step: &Step, tree: &str) -> Vec<ReportedFinding> {
+    ///
+    /// With `skip_dismissed`, reports that are part of a finding you dismissed are left out: a
+    /// pull request's re-review asks each role to verify its findings were addressed, and a
+    /// dismissed one has nothing left to verify.
+    ///
+    /// Each comes with the id the brief names it by ([`EvidenceKey::label`]), which a role that
+    /// reports it again puts in `repeats`.
+    pub(super) fn earlier_findings(
+        &self,
+        step: &Step,
+        tree: &str,
+        skip_dismissed: bool,
+    ) -> Vec<(String, ReportedFinding)> {
         let Some(Submission::Findings(report)) = &step.result else {
             return Vec::new();
         };
         let Ok(db) = self.db() else {
             return Vec::new();
         };
-        let read = db
+        let attempt = db
             .invocations(step.flow)
             .ok()
-            .and_then(|all| submitted_by(&all, step))
+            .and_then(|all| submitted_by(&all, step));
+        let read = attempt
+            .as_ref()
             .and_then(|attempt| attempt.snapshot)
             .and_then(|id| db.snapshot(id).ok().flatten());
         match read {
-            Some(snapshot) if snapshot.tree_sha != tree => report.findings.clone(),
+            Some(snapshot) if snapshot.tree_sha != tree => {
+                let dismissed: BTreeSet<u32> = if skip_dismissed {
+                    db.findings(step.flow)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter(|record| record.finding.dismissed.is_some())
+                        .flat_map(|record| &record.evidence)
+                        .filter(|e| {
+                            attempt
+                                .as_ref()
+                                .is_some_and(|a| e.source.invocation == a.id)
+                        })
+                        .map(|e| e.source.ordinal)
+                        .collect()
+                } else {
+                    BTreeSet::new()
+                };
+                let Some(attempt) = attempt else {
+                    return Vec::new();
+                };
+                (0u32..)
+                    .zip(&report.findings)
+                    .filter(|(ordinal, _)| !dismissed.contains(ordinal))
+                    .map(|(ordinal, reported)| {
+                        let key = EvidenceKey {
+                            invocation: attempt.id,
+                            ordinal,
+                        };
+                        (key.label(), reported.clone())
+                    })
+                    .collect()
+            }
             _ => Vec::new(),
         }
     }
@@ -402,11 +462,24 @@ impl Engine {
             self.scratch.fetch_add(1, Ordering::SeqCst)
         ))
         .ok_or("a scratch label")?;
-        let now = self
-            .app
-            .git
-            .snapshot_tree(&worktree.path, &dir.scratch_index(&label))
-            .map_err(text)?;
+        let pull_request_head = self.moved_head(flow, &snapshot);
+        let here = pull_request_head.as_deref().is_none_or(|commit| {
+            self.app
+                .git
+                .rev_parse(&worktree.path, commit)
+                .ok()
+                .flatten()
+                .is_some()
+        });
+        let now = match &pull_request_head {
+            // A commit rather than a tree: `diff-tree` compares either.
+            Some(commit) => commit.clone(),
+            None => self
+                .app
+                .git
+                .snapshot_tree(&worktree.path, &dir.scratch_index(&label))
+                .map_err(text)?,
+        };
         let head = self
             .app
             .git
@@ -420,7 +493,13 @@ impl Engine {
             if let Some(known) = compared.get(tree) {
                 return known.clone();
             }
-            let check = if tree == now {
+            let check = if !here {
+                TreeCheck::Changed {
+                    tree_sha: now.clone(),
+                    paths: BTreeSet::new(),
+                    complete: false,
+                }
+            } else if tree == now {
                 TreeCheck::Unchanged
             } else {
                 match self.app.git.tree_changes(&worktree.path, tree, &now) {
@@ -473,6 +552,8 @@ impl Engine {
             stale_findings,
             stale_checks,
             affected,
+            pull_request_head,
+            pull_request_head_here: here,
         })
     }
 
@@ -548,6 +629,31 @@ impl Engine {
     /// When the review is running, waiting on something, has ended, or has nothing to rerun; when a
     /// provider would not bill a subscription; or when the snapshot cannot be taken.
     pub fn rerun(self: &Arc<Self>, flow: FlowId, scope: Rerun) -> Result<(), Refusal> {
+        self.can_rerun(flow)?;
+        if let Some(snapshot) = self
+            .db()?
+            .review(flow)
+            .map_err(text)?
+            .and_then(|review| review.snapshot)
+            .and_then(|id| self.db().ok()?.snapshot(id).ok().flatten())
+            && self.moved_head(flow, &snapshot).is_some()
+        {
+            return Err(
+                "the pull request has new commits that its review worktree does not have \
+                 yet; Re-review changes brings them in and reruns the roles they affect"
+                    .into(),
+            );
+        }
+        self.rerun_now(flow, scope, false).map(|_| ())
+    }
+
+    /// Whether a rerun could start now: the run is finished and not held, and every provider it
+    /// can reach would bill a subscription. Asked before anything about the review moves.
+    ///
+    /// # Errors
+    ///
+    /// Why it could not, in a sentence.
+    pub fn can_rerun(&self, flow: FlowId) -> Result<(), Refusal> {
         if self.is_running(flow) {
             return Err("this review is still running".into());
         }
@@ -575,12 +681,7 @@ impl Engine {
         let project = self.app.project(review.project.as_str()).map_err(text)?;
         let workflow = project
             .workflow
-            .clone()
             .ok_or("the project's workflow config has gone")?;
-        let worktree = self
-            .app
-            .worktree(&project, &review.worktree)
-            .map_err(|e| format!("the worktree is no longer there: {e}"))?;
         let plan = wtm_core::flow::plan(&workflow, &review.recipe, None).map_err(text)?;
         let providers: Vec<&str> = plan
             .providers(&workflow)
@@ -588,6 +689,41 @@ impl Engine {
             .map(RoleProvider::id)
             .collect();
         self.host.preflight(&providers)?;
+        Ok(())
+    }
+
+    /// Rerun the roles a pull request's new head affects, once its review worktree is there.
+    /// Returns the roles that run. With none affected, the new head's snapshot is still recorded,
+    /// so the review stands at the head it now describes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::rerun`].
+    pub fn rerun_at_new_head(self: &Arc<Self>, flow: FlowId) -> Result<Vec<String>, Refusal> {
+        self.can_rerun(flow)?;
+        self.rerun_now(flow, Rerun::Affected, true)
+    }
+
+    fn rerun_now(
+        self: &Arc<Self>,
+        flow: FlowId,
+        scope: Rerun,
+        new_head: bool,
+    ) -> Result<Vec<String>, Refusal> {
+        let db = self.db()?;
+        let review = db
+            .review(flow)
+            .map_err(text)?
+            .ok_or_else(|| format!("run {flow} is not a review"))?;
+        let project = self.app.project(review.project.as_str()).map_err(text)?;
+        let workflow = project
+            .workflow
+            .clone()
+            .ok_or("the project's workflow config has gone")?;
+        let worktree = self
+            .app
+            .worktree(&project, &review.worktree)
+            .map_err(|e| format!("the worktree is no longer there: {e}"))?;
 
         let steps = db.steps(flow).map_err(text)?;
         let roles: BTreeSet<String> = match scope {
@@ -598,7 +734,7 @@ impl Engine {
                 .map(|s| s.role.clone())
                 .collect(),
         };
-        if roles.is_empty() {
+        if roles.is_empty() && !new_head {
             return Err(
                 "nothing the review's roles read has changed since they ran, so there is nothing \
                  to run again"
@@ -625,6 +761,12 @@ impl Engine {
         if current.as_ref() != Some(&snapshot) {
             db.record_snapshot(flow, &snapshot, self.now())
                 .map_err(text)?;
+        }
+        if roles.is_empty() {
+            // A new head whose commits touch nothing any role reads: the review stands as it was,
+            // now about the head it describes.
+            self.notice.changed(flow);
+            return Ok(Vec::new());
         }
 
         // Planned against the new snapshot's changes, so a role none of whose files are in the
@@ -665,7 +807,8 @@ impl Engine {
             },
         )?;
         self.notice.changed(flow);
-        Ok(self.spawn(flow)?)
+        self.spawn(flow)?;
+        Ok(roles.into_iter().collect())
     }
 
     /// Dismiss a finding, saying why, or take a dismissal back with `None`.

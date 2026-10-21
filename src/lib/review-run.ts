@@ -201,6 +201,27 @@ export function headline(
     }
     const live = view.findings.filter((f) => f.dismissed === null);
     const behind = live.filter((f) => stale?.staleFindings.includes(f.id));
+    if (stale?.pullRequestHead && view.snapshot) {
+      // A teammate's pull request moved on: the author pushed, and the review read the old head.
+      const now = stale.pullRequestHead.slice(0, 7);
+      const was = view.snapshot.headSha.slice(0, 7);
+      const number = view.pullRequest ? `#${view.pullRequest.number}` : 'the pull request';
+      const holding = live.length - behind.length;
+      return {
+        eyebrow: 'Stale',
+        title: `New commits on ${number} since this review`,
+        prose: stale.pullRequestHeadHere
+          ? `The author pushed ${now}; this review read ${was}. ${
+              behind.length === 1 ? '1 finding is' : `${behind.length} findings are`
+            } on files the new commits touch${
+              holding > 0
+                ? `, and ${holding === 1 ? '1 still holds' : `${holding} still hold`}`
+                : ''
+            }. Re-review changes moves the review worktree to ${now} and reruns the roles those files affect.`
+          : `The author pushed ${now}; this review read ${was}. wtm has not fetched the new commits, so it cannot tell which files they touch, and every finding is stale until Re-review changes brings them in and reruns the roles they affect.`,
+        tone: 'warn',
+      };
+    }
     if (stale && !stale.changed && behind.length > 0) {
       // The latest snapshot is current, and a role that was not run again still has a report
       // from before the change: the review is only partly about the code as it is.
@@ -288,6 +309,18 @@ export function headline(
       title: 'An earlier review',
       prose: `${kept}`,
       tone: 'muted',
+    };
+  }
+  if (view.pullRequest) {
+    // A teammate's pull request: its review worktree holds the head and nothing of yours.
+    return {
+      eyebrow: state.phase === 'reviewing' ? 'Running' : 'Preparing',
+      title: tree
+        ? `Reviewing #${view.pullRequest.number} at ${tree}`
+        : `Taking a snapshot of #${view.pullRequest.number}`,
+      prose:
+        "Reviewers read a snapshot copy of the pull request's review worktree, against its base. They only read: nothing is posted to GitHub.",
+      tone: 'info',
     };
   }
   return {
