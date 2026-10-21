@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
+use super::publish::ReviewPayload;
 use super::state::FlowId;
 
 id! {
@@ -158,6 +159,10 @@ impl Approval {
 
     /// Whether this approval still covers `current`: every pin on either side must be on both,
     /// with the same value.
+    ///
+    /// # Errors
+    ///
+    /// [`Stale`], with every pin that differs.
     pub fn check(&self, current: &Binding) -> Result<(), Stale> {
         let approved = &self.binding.0;
         let now = &current.0;
@@ -180,6 +185,67 @@ impl Approval {
             Err(Stale { changes })
         }
     }
+}
+
+/// What an approval was of, kept with it, so the window can show exactly what you approved and the
+/// executor can check it against what would be sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+pub enum ApprovalSubject {
+    /// A review to publish on a pull request.
+    Review(Box<ReviewPayload>),
+}
+
+/// An approval to record, not yet numbered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewApproval {
+    pub flow: FlowId,
+    pub intent: ApprovalIntent,
+    pub binding: Binding,
+    pub subject: ApprovalSubject,
+}
+
+impl NewApproval {
+    /// Approval to post exactly `review`, given while the pull request's head was `head`.
+    ///
+    /// `head` is the review's own commit when nothing moved, and the newer head when you chose to
+    /// publish against the commit you reviewed anyway: either way, a head that moves again after
+    /// this makes the approval stale.
+    ///
+    /// # Errors
+    ///
+    /// When a pin the intent requires is missing, which a review cannot leave out.
+    pub fn review(flow: FlowId, review: &ReviewPayload, head: &str) -> Result<Self, ApprovalError> {
+        let binding = review_binding(review, head);
+        let missing: Vec<Pinned> = ApprovalIntent::Post
+            .requires()
+            .iter()
+            .filter(|pin| !binding.0.contains_key(pin))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            return Err(ApprovalError::Unpinned {
+                intent: ApprovalIntent::Post,
+                missing,
+            });
+        }
+        Ok(Self {
+            flow,
+            intent: ApprovalIntent::Post,
+            binding,
+            subject: ApprovalSubject::Review(Box::new(review.clone())),
+        })
+    }
+}
+
+/// The pins a review publish is checked against: the hash of what would post, the commit it is
+/// pinned to, and the pull request's head now.
+#[must_use]
+pub fn review_binding(review: &ReviewPayload, head: &str) -> Binding {
+    Binding::default()
+        .with(Pinned::Payload, review.hash())
+        .with(Pinned::Commit, review.commit_id.clone())
+        .with(Pinned::Head, head)
 }
 
 #[cfg(test)]
@@ -288,5 +354,54 @@ mod tests {
             .with(Pinned::Payload, "sha256:bb")
             .with(Pinned::Commit, "7c9e1d");
         assert!(approval.check(&edited).is_err());
+    }
+
+    fn review() -> ReviewPayload {
+        ReviewPayload {
+            repo: crate::flow::forge::RepoSlug::new("github.com", "acme", "webapp"),
+            number: 4031,
+            commit_id: "7c9e1d".to_owned(),
+            event: crate::flow::publish::ReviewEvent::Comment,
+            comments: Vec::new(),
+            folded: Vec::new(),
+            summary: "Two things before merge.".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_review_approval_covers_its_text_its_commit_and_the_head_you_saw_and_nothing_else() {
+        let payload = review();
+        let new = NewApproval::review(FlowId(1), &payload, "7c9e1d").unwrap();
+        let approval = grant(new.intent, new.binding).unwrap();
+        assert_eq!(approval.check(&review_binding(&payload, "7c9e1d")), Ok(()));
+
+        let moved = approval
+            .check(&review_binding(&payload, "91ab44"))
+            .unwrap_err();
+        assert_eq!(
+            moved.changes,
+            [PinChange {
+                pin: Pinned::Head,
+                approved: Some("7c9e1d".to_owned()),
+                current: Some("91ab44".to_owned()),
+            }]
+        );
+        let mut edited = payload;
+        edited.summary.push('!');
+        assert!(approval.check(&review_binding(&edited, "7c9e1d")).is_err());
+    }
+
+    #[test]
+    fn publishing_against_the_reviewed_commit_after_the_head_moved_is_an_approval_of_that_head() {
+        // You saw 91ab44 and chose to post at 7c9e1d anyway. Another push after that is news again.
+        let payload = review();
+        let new = NewApproval::review(FlowId(1), &payload, "91ab44").unwrap();
+        let approval = grant(new.intent, new.binding).unwrap();
+        assert_eq!(approval.check(&review_binding(&payload, "91ab44")), Ok(()));
+        assert!(approval.check(&review_binding(&payload, "c0ffee")).is_err());
+        assert_eq!(
+            approval.binding.0.get(&Pinned::Commit).map(String::as_str),
+            Some("7c9e1d")
+        );
     }
 }

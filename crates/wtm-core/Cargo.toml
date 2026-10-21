@@ -24,6 +24,10 @@ serde_json = { workspace = true }
 # it does not break `cargo core-wasm`.
 serde_json_path = { workspace = true }
 thiserror  = { workspace = true }
+# The hash an approval pins and an outbox key carries: of exactly what a publish sends. Pure Rust
+# with no OS surface, so `cargo core-wasm` still passes, and already in the build for the config
+# trust store's content hash.
+sha2       = { workspace = true }
 
 [dev-dependencies]
 # Dev-only, and deliberately cyclic: all of these depend on wtm-core. Cargo permits a

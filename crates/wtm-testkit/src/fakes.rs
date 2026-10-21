@@ -1462,4 +1462,17 @@ impl wtm_core::ports::forge::Forge for FakeForge {
             rules: vec!["pull_request".to_owned()],
         })
     }
+
+    /// No lines: every comment a test would place folds into the summary. A test about placement
+    /// uses `GhForge` with the forge's own diff instead.
+    fn changed_lines(
+        &self,
+        _cwd: &Path,
+        repo: &wtm_core::flow::RepoSlug,
+        base: &str,
+        head: &str,
+    ) -> Result<wtm_core::flow::ChangedLines, wtm_core::error::ForgeError> {
+        self.note(format!("changed_lines {repo} {base}...{head}"));
+        Ok(wtm_core::flow::ChangedLines::default())
+    }
 }

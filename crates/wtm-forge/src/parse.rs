@@ -7,9 +7,12 @@
 //! review cannot proceed without is required: a pull request's number, its URL, which names the
 //! base repository, and its head commit.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 use wtm_core::flow::{
-    ChecksSummary, Permission, PrBase, PrHead, PrState, PrTarget, PullRequest, RepoSlug, Reviewer,
+    ChangedLines, ChecksSummary, FileLines, LineRange, Permission, PrBase, PrHead, PrState,
+    PrTarget, PullRequest, RemoteComment, RemoteReview, RemoteReviewState, RepoSlug, Reviewer,
 };
 use wtm_core::model::CommitId;
 
@@ -121,6 +124,145 @@ pub(crate) fn branch_rules(json: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(rules)
+}
+
+/// The lines a review comment can sit on, from `gh api repos/{o}/{r}/compare/{base}...{head}`: for
+/// each file, the new side of every hunk in its patch. A file listed without a patch (binary, or
+/// too large for the forge to show) has no lines to comment on.
+pub(crate) fn changed_lines(json: &str) -> Result<ChangedLines, String> {
+    let value = json_of(json)?;
+    let files = value["files"]
+        .as_array()
+        .ok_or_else(|| "expected the comparison's files".to_owned())?;
+    let mut lines = BTreeMap::new();
+    for file in files {
+        let Some(name) = text(file, "filename") else {
+            continue;
+        };
+        let shown = match file["patch"].as_str() {
+            Some(patch) => FileLines::Hunks(hunks(patch)),
+            None => FileLines::NoDiff,
+        };
+        lines.insert(name, shown);
+    }
+    Ok(ChangedLines { files: lines })
+}
+
+/// The new side of each `@@ -a,b +c,d @@` header in a unified diff, as `c..=c+d-1`. A hunk that
+/// only deletes has no new lines and is left out.
+fn hunks(patch: &str) -> Vec<LineRange> {
+    patch
+        .lines()
+        .filter_map(|line| {
+            let header = line.strip_prefix("@@ ")?;
+            let new = header
+                .split_whitespace()
+                .find(|part| part.starts_with('+'))?;
+            let (start, count) = match new[1..].split_once(',') {
+                Some((start, count)) => (start.parse::<u32>().ok()?, count.parse::<u32>().ok()?),
+                None => (new[1..].parse::<u32>().ok()?, 1),
+            };
+            (count > 0).then(|| LineRange {
+                start,
+                end: start + count - 1,
+            })
+        })
+        .collect()
+}
+
+/// Every review in a `gh api --paginate --slurp` of `pulls/{n}/reviews`: one list per page.
+pub(crate) fn reviews(json: &str) -> Result<Vec<RemoteReview>, String> {
+    pages(json)?.iter().map(read_review).collect()
+}
+
+/// One review, as creating or submitting it answers.
+pub(crate) fn review(json: &str) -> Result<RemoteReview, String> {
+    read_review(&json_of(json)?)
+}
+
+/// Every comment in a `gh api --paginate --slurp` of a review's comments.
+pub(crate) fn review_comments(json: &str) -> Result<Vec<RemoteComment>, String> {
+    pages(json)?
+        .iter()
+        .map(|value| {
+            Ok(RemoteComment {
+                id: value["id"]
+                    .as_u64()
+                    .ok_or_else(|| "a review comment without an id".to_owned())?,
+                path: text(value, "path").unwrap_or_default(),
+                body: value["body"].as_str().unwrap_or_default().to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// The items of every page, in order. `--slurp` prints a list of pages, and each page a list.
+fn pages(json: &str) -> Result<Vec<Value>, String> {
+    let value = json_of(json)?;
+    let pages = value
+        .as_array()
+        .ok_or_else(|| "expected a list of pages".to_owned())?;
+    Ok(pages
+        .iter()
+        .flat_map(|page| page.as_array().cloned().unwrap_or_default())
+        .collect())
+}
+
+fn read_review(value: &Value) -> Result<RemoteReview, String> {
+    let id = value["id"]
+        .as_u64()
+        .ok_or_else(|| "a review without an id".to_owned())?;
+    let state = match value["state"].as_str().unwrap_or_default() {
+        "PENDING" => RemoteReviewState::Pending,
+        "COMMENTED" => RemoteReviewState::Commented,
+        "CHANGES_REQUESTED" => RemoteReviewState::ChangesRequested,
+        "APPROVED" => RemoteReviewState::Approved,
+        "DISMISSED" => RemoteReviewState::Dismissed,
+        _ => RemoteReviewState::Unknown,
+    };
+    Ok(RemoteReview {
+        id,
+        node_id: text(value, "node_id").unwrap_or_default(),
+        author: text(&value["user"], "login"),
+        state,
+        body: value["body"].as_str().unwrap_or_default().to_owned(),
+        commit_id: text(value, "commit_id"),
+        url: text(value, "html_url").unwrap_or_default(),
+    })
+}
+
+/// What a failed `gh api` request printed on stdout: GitHub's own reasons, which are either strings
+/// or objects with a `message`, else its top-level message.
+pub(crate) fn api_reasons(stdout: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(stdout) else {
+        return Vec::new();
+    };
+    let listed: Vec<String> = value["errors"]
+        .as_array()
+        .map(|errors| {
+            errors
+                .iter()
+                .filter_map(|error| {
+                    error
+                        .as_str()
+                        .map(str::to_owned)
+                        .or_else(|| text(error, "message"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if listed.is_empty() {
+        text(&value, "message").into_iter().collect()
+    } else {
+        listed
+    }
+}
+
+/// Whether a GraphQL `addPullRequestReviewThread` reply made a thread. GitHub answers `null` for a
+/// line it will not put a comment on, with no error.
+pub(crate) fn thread_added(json: &str) -> Result<bool, String> {
+    let value = json_of(json)?;
+    Ok(value["data"]["addPullRequestReviewThread"]["thread"].is_object())
 }
 
 fn json_of(text: &str) -> Result<Value, String> {
@@ -275,6 +417,37 @@ mod tests {
         assert_eq!(version("gh version 2.81.0-rc1"), Some((2, 81, 0)));
         assert_eq!(version("gh version DEV"), None);
         assert_eq!(version(""), None);
+    }
+
+    #[test]
+    fn each_hunks_new_side_is_read_and_a_hunk_that_only_deletes_has_no_lines() {
+        let patch =
+            "@@ -9,14 +9,15 @@ def header():\n x\n@@ -40 +41 @@\n-y\n+z\n@@ -60,3 +62,0 @@\n-a";
+        assert_eq!(
+            hunks(patch),
+            [
+                LineRange { start: 9, end: 23 },
+                LineRange { start: 41, end: 41 }
+            ]
+        );
+    }
+
+    #[test]
+    fn github_s_reasons_are_read_whether_strings_or_objects() {
+        assert_eq!(
+            api_reasons(
+                r#"{"message":"Unprocessable Entity","errors":["Line could not be resolved"]}"#
+            ),
+            ["Line could not be resolved"]
+        );
+        assert_eq!(
+            api_reasons(
+                r#"{"message":"Validation Failed","errors":[{"resource":"Review","code":"custom","message":"x"}]}"#
+            ),
+            ["x"]
+        );
+        assert_eq!(api_reasons(r#"{"message":"Not Found"}"#), ["Not Found"]);
+        assert!(api_reasons("not json").is_empty());
     }
 
     #[test]

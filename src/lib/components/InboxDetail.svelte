@@ -12,6 +12,10 @@
    *   alive its prompt is answerable right here, with the same card a pane draws. Once the session
    *   has ended there is nothing left to answer, and the card says so rather than offering a
    *   button that does nothing.
+   * - **A publish** — an approval gone stale because the pull request moved, or one that failed or
+   *   stopped partway — is the publication's own card (`WorkPublication`), with what settles it:
+   *   Retry, the pending-review choices, or re-review and publish anyway. It reads the run the
+   *   Reviews tab reads, so a retry here updates both.
    * - **A ready review** names the worst of what it found; each finding is a link to that finding
    *   in the Reviews tab, which is the exact place the item is about. Reading the review settles
    *   it.
@@ -20,7 +24,8 @@
 
   import { KIND_TONE, KIND_WORDS, filedAt, resumeWords, showWords } from '../inbox';
   import { commands } from '../ipc/commands';
-  import type { FindingRecord, InboxItem } from '../ipc/types';
+  import type { FindingRecord, InboxItem, PublicationView } from '../ipc/types';
+  import { draftOf } from '../publish';
   import { GROUP_WORDS, findingGroups } from '../review-run';
   import { inbox } from '../state/inbox.svelte';
   import { reviewRuns } from '../state/review-runs.svelte';
@@ -28,6 +33,7 @@
   import CodeText from './CodeText.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import Button from './ui/Button.svelte';
+  import WorkPublication from './WorkPublication.svelte';
 
   const { item }: { item: InboxItem } = $props();
 
@@ -70,6 +76,59 @@
     });
   });
   const groups = $derived(findings ? findingGroups(findings) : []);
+
+  /** The publish an item is about, by its approval: live from the worktree's run when shown there. */
+  const approvalId = $derived(
+    item.target.kind === 'approval' ? item.target.approval : null,
+  );
+  let fetched = $state<PublicationView | null>(null);
+  $effect(() => {
+    const id = approvalId;
+    const project = item.project;
+    const worktree = item.worktree;
+    untrack(() => {
+      fetched = null;
+      if (id === null) return;
+      if (project && worktree && reviewRuns.latest[worktree] === undefined) {
+        void reviewRuns.load(project, worktree);
+      }
+      void commands
+        .reviewPublication(id)
+        .then((view) => {
+          if (approvalId === id) fetched = view;
+        })
+        .catch(() => {});
+    });
+  });
+  const publication = $derived.by(() => {
+    if (approvalId === null) return null;
+    const live = item.worktree
+      ? reviewRuns.latest[item.worktree]?.pullRequest?.publications.find(
+          (p) => p.approval.id === approvalId,
+        )
+      : undefined;
+    return live ?? fetched;
+  });
+  const publishing = $derived(
+    item.worktree ? (reviewRuns.busy[`publication:${item.worktree}`] ?? false) : false,
+  );
+  const publishError = $derived(
+    item.worktree ? (reviewRuns.errors[`publication:${item.worktree}`] ?? null) : null,
+  );
+
+  function act(action: () => Promise<PublicationView>): void {
+    if (!item.worktree) return;
+    void reviewRuns.publication(item.worktree, item.flow, action);
+  }
+
+  async function rereviewInstead(stale: PublicationView, head: string): Promise<void> {
+    const [project, worktree] = [item.project, item.worktree];
+    if (!project || !worktree) return;
+    await reviewRuns.publication(worktree, item.flow, () =>
+      commands.cancelPublication(stale.approval.id),
+    );
+    await reviewRuns.rereview(project, worktree, item.flow, head);
+  }
 
   async function answered(reply: Parameters<typeof sessions.answer>[2]): Promise<void> {
     if (!asking) return;
@@ -122,7 +181,44 @@
     <p class="c-inbox-card__body"><CodeText text={item.body} /></p>
   {/if}
 
-  {#if item.kind === 'approval'}
+  {#if publication}
+    <WorkPublication
+      view={publication}
+      head={null}
+      busy={publishing}
+      error={publishError}
+      onretry={() => act(() => commands.retryPublication(publication.approval.id))}
+      onadd={() => act(() => commands.addToPendingReview(publication.approval.id))}
+      onleave={() => act(() => commands.cancelPublication(publication.approval.id))}
+      onrereview={publication.state === 'stale'
+        ? () => {
+            const stopped = publication.operations.find(
+              (op) => op.attention?.kind === 'head_moved',
+            );
+            if (stopped?.attention?.kind === 'head_moved') {
+              void rereviewInstead(publication, stopped.attention.current);
+            }
+          }
+        : null}
+      onagainst={(head) => {
+        const hash = publication.approval.binding.payload;
+        const worktree = item.worktree;
+        if (!hash || !worktree) return;
+        act(() =>
+          reviewRuns.approvePublish(
+            worktree,
+            item.flow,
+            draftOf(publication.review),
+            hash,
+            head,
+          ),
+        );
+      }}
+      onopen={(url) => void commands.openUrl(url)}
+    />
+  {:else if item.kind === 'approval' && item.target.kind === 'approval'}
+    <p class="c-inbox-card__note">Reading this publish…</p>
+  {:else if item.kind === 'approval'}
     {#if asking}
       <div class="c-inbox-card__approval">
         <ApprovalCard
@@ -151,9 +247,13 @@
       >
     {/if}
     <Button
-      variant={resume ? 'neutral' : 'accent'}
+      variant={resume || publication ? 'neutral' : 'accent'}
       size="sm"
-      onclick={() => inbox.open(item)}>{showWords(item)}</Button
+      onclick={() =>
+        inbox.open(
+          item,
+          approvalId !== null ? { kind: 'publication', id: approvalId } : undefined,
+        )}>{showWords(item)}</Button
     >
     <span class="c-inbox-card__spacer"></span>
     <Button

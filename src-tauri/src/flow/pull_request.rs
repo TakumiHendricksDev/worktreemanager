@@ -25,11 +25,12 @@
 //! If anything before the move refuses, nothing has happened. After it, the worst case is a review
 //! that is visibly stale with Rerun affected offered, which is the state a rerun would fix anyway.
 //!
-//! # Private, and nothing else yet
+//! # Private, or published through the outbox
 //!
-//! Keep private notes records an outcome in wtm and writes nowhere else. Publishing and local fixes
-//! are drawn in the outcome sheet and disabled: they write to GitHub, and every such write waits for
-//! the outbox and its approvals (M1b).
+//! Keep private notes records an outcome in wtm and writes nowhere else. Publishing a review is an
+//! approval of exactly what posts and the outbox's operations that post it (`publish.rs`,
+//! `outbox.rs`); its record is that approval and those operations, shown beside the private outcomes.
+//! Local fixes are drawn in the outcome sheet and disabled until the writer lease exists (P3).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -72,6 +73,9 @@ pub struct PullRequestReview {
     pub earlier: Vec<EarlierHead>,
     /// What you decided, oldest first. The last is the current decision.
     pub outcomes: Vec<Outcome>,
+    /// The review's publishes, oldest first: each approval with exactly what it covered and how
+    /// far its writes got. The last is the current one.
+    pub publications: Vec<super::publish::PublicationView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -319,7 +323,7 @@ pub fn rereview(
 
 impl Engine {
     /// The work item a run is of, when it is a pull request's.
-    fn pull_request_item(&self, flow: &Flow) -> Option<WorkItem> {
+    pub(super) fn pull_request_item(&self, flow: &Flow) -> Option<WorkItem> {
         if flow.state.kind != FlowKind::ReviewPr {
             return None;
         }
@@ -549,6 +553,7 @@ impl Engine {
                 .map(|m| push_to_branch(&m.pull_request, m.permission)),
             reviewing: db.claim(item.id).map_err(text)?,
             outcomes: db.outcomes(state.id).map_err(text)?,
+            publications: self.publication_views(state.id)?,
             mirror,
             reviewed_head,
             moved_to,

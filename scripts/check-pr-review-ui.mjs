@@ -6,8 +6,9 @@
  * What it proves, in order: a queued pull request with a review worktree opens on Reviews, whose
  * Run Review asks for a pull request review carrying the head that was shown; a reviewed one says
  * which head it read and that the pull request is still there; the outcome sheet offers Keep
- * private notes and draws Publish and Local fixes disabled, saying they come next, with the push
- * to a fork without maintainer edits unavailable; keeping notes sends them and shows the outcome;
+ * private notes beside a live Publish (which `check-publish-ui.mjs` drives) and draws Local fixes
+ * disabled, saying it comes next, with the push to a fork without maintainer edits unavailable;
+ * keeping notes sends them and shows the outcome;
  * a new head read from the forge makes the review stale with Re-review changes as its one action
  * (no Rerun affected, which would read the old head), and the re-review sends the new head; the
  * head it left is listed with what became of each finding; the flag is sent and shown in the
@@ -108,6 +109,7 @@ const view = () => {
         checks: [],
       }] : [],
       outcomes: ['kept', 'moved', 'rereviewed'].includes(p) ? [outcome] : [],
+      publications: [],
     },
   };
 };
@@ -260,10 +262,13 @@ try {
         assert(meta.includes('Compared with origin/main, where #4031 would merge'), meta);
         await shot(page, join(shots, `pr-reviewed-${scheme}.png`));
 
-        // ── The outcome sheet: private works, the rest come next, a fork is not pushed to ───
+        // ── The outcome sheet: private works, Local fixes come next, a fork is not pushed to ─
+        // (Publishing is `check-publish-ui.mjs`'s.)
         await panel(page).getByRole('button', { name: 'Finish review…' }).click();
         const sheet = page.getByRole('dialog', { name: 'Finish your review of #4031' });
         await sheet.waitFor();
+        const outcome = (name) => sheet.getByRole('radio', { name });
+        await outcome(/Keep private notes/).check();
         const sheetText = await sheet.innerText();
         for (const words of [
             'sam-rivera:feature/csv-export → acme/webapp main',
@@ -276,15 +281,17 @@ try {
             assert(sheetText.includes(words), `the sheet says “${words}”:\n${sheetText}`);
         assert.equal(
             await sheet.getByText('Coming next').count(),
-            2,
-            'Publish and Local fixes both say they come next',
+            1,
+            'Local fixes say they come next',
         );
-        const radios = sheet.getByRole('radio');
-        assert.equal(await radios.count(), 3);
-        assert.equal(await radios.nth(0).isChecked(), true);
-        assert.equal(await radios.nth(1).isDisabled(), true, 'Publish is not offered yet');
+        assert.equal(await outcome(/Keep private notes/).isChecked(), true);
         assert.equal(
-            await radios.nth(2).isDisabled(),
+            await outcome(/Publish a review/).isDisabled(),
+            false,
+            'Publish is live',
+        );
+        assert.equal(
+            await outcome(/Fix it locally/).isDisabled(),
             true,
             'Local fixes are not offered yet',
         );

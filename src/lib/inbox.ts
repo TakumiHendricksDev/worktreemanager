@@ -72,9 +72,9 @@ export const KIND_ICON: Record<InboxKind, IconName> = {
   review_ready: 'file',
 };
 
-/** Something in a run's Reviews tab a click can land on. */
+/** Something in a run's Reviews tab a click can land on. A publication is its approval's id. */
 export interface ReviewFocus {
-  kind: 'finding' | 'step';
+  kind: 'finding' | 'step' | 'publication';
   id: number;
 }
 
@@ -166,6 +166,8 @@ export function showWords(item: InboxItem): string {
       return `Show ${item.target.role}`;
     case 'finding':
       return 'Show the finding';
+    case 'approval':
+      return 'Show the review';
     default:
       return 'Show the run';
   }

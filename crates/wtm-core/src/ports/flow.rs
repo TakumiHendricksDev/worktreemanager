@@ -25,6 +25,10 @@ use crate::flow::{
     Answer, InboxItem, InboxItemId, InboxKind, InboxTarget, NewInboxItem, NewQuestion, Question,
     QuestionError, QuestionId,
 };
+use crate::flow::{
+    ApprovalId, NewApproval, NewOperation, Operation, OperationChange, OperationId, OutboxError,
+    Publication,
+};
 use crate::flow::{CheckRun, FindingId, FindingRecord, NewCheckRun, Reconciled};
 use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
@@ -76,6 +80,25 @@ pub enum FlowStoreError {
     /// The flow rules refused the event. Nothing was written.
     #[error(transparent)]
     Refused(#[from] TransitionError),
+
+    #[error("no approval {0}")]
+    UnknownApproval(ApprovalId),
+
+    #[error("no operation {0}")]
+    UnknownOperation(OperationId),
+
+    /// The outbox's rules refused the change. Nothing was written. A field, for the reason
+    /// [`Self::Unanswerable`] gives.
+    #[error("{reason}")]
+    Outbox {
+        #[from]
+        reason: OutboxError,
+    },
+
+    /// An approval would take over an operation that is being sent, or was being sent when wtm
+    /// stopped: whether it reached the remote is not known yet. Nothing was written.
+    #[error("operation {operation} is still being sent; wait for it to finish or be checked")]
+    StillSending { operation: OperationId },
 
     /// The store itself failed. Carries the driver's message, which holds no secrets: nothing in
     /// this store is one.
@@ -346,4 +369,47 @@ pub trait InboxStore: Send + Sync {
     /// counts: a second is refused with [`QuestionError::AlreadyAnswered`] and changes nothing, so
     /// answering in two places cannot answer twice.
     fn answer_question(&self, id: QuestionId, answer: &Answer) -> Result<Question, FlowStoreError>;
+}
+
+/// Approvals and the outbox: what you allowed to be sent, and each write's progress.
+///
+/// A port of its own, because every kind of flow will write through it — a review now; a push, a
+/// pull request and an issue move later — and because its rules are the outbox's: one operation per
+/// key, an approval never changed once given, and an operation's state moving only as
+/// [`OperationState::can_move_to`](crate::flow::OperationState::can_move_to) allows. The same
+/// database implements it.
+pub trait OutboxStore: Send + Sync {
+    /// Record `approval` and queue `operations` under it, in one transaction.
+    ///
+    /// An operation whose key is already queued is not queued twice. It moves to this approval: one
+    /// that stopped, failed or was cancelled goes back to pending, and one that is done stays done,
+    /// because the write it stands for happened. One that is executing refuses the whole approval
+    /// with [`FlowStoreError::StillSending`], since whether it happened is not known yet.
+    fn approve(
+        &self,
+        approval: &NewApproval,
+        operations: &[NewOperation],
+        at: UnixMs,
+    ) -> Result<Publication, FlowStoreError>;
+
+    /// One approval, with what it was of and its operations in order.
+    fn publication(&self, approval: ApprovalId) -> Result<Option<Publication>, FlowStoreError>;
+
+    /// A flow's publications, oldest first. An operation belongs to the latest approval that
+    /// covered it, so an earlier approval of the same payload has none left.
+    fn publications(&self, flow: FlowId) -> Result<Vec<Publication>, FlowStoreError>;
+
+    fn operation(&self, id: OperationId) -> Result<Option<Operation>, FlowStoreError>;
+
+    /// Change an operation, checked against the outbox's rules. What stopped it is cleared whenever
+    /// it moves anywhere but `NeedsAttention`. Returns it as it now is.
+    fn change_operation(
+        &self,
+        id: OperationId,
+        change: &OperationChange,
+        at: UnixMs,
+    ) -> Result<Operation, FlowStoreError>;
+
+    /// Every operation left executing: at launch, the ones a crash cut off mid-write.
+    fn executing_operations(&self) -> Result<Vec<Operation>, FlowStoreError>;
 }

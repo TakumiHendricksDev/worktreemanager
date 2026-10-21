@@ -985,9 +985,13 @@ It is a category of its own rather than a variation on the routes above, for thr
   review, posting a comment, marking a pull request ready, moving an issue and merging each wait for
   an approval bound to the exact head or text, and merging has no agent tool at all.
 
-`wtm-forge` is the first of them, and so far it only reads: a pull request by URL, number or head
-branch, your permission on the repository, and branch protection. It is handed a `CommandRunner`
-and depends on nothing that could reach the network another way, which `network_boundary.rs` pins.
+`wtm-forge` is the first of them. It reads a pull request by URL, number or head branch, your
+permission on the repository, branch protection, and the forge's own diff of a commit; and it posts
+one approved review, as three `gh api` requests that its tests hold it to: start a pending review
+with the inline comments, add a comment to a pending review, submit one. Reading and writing are two
+ports (`Forge`, `ReviewWriter`), so code that reads is never handed the ability to write, and only
+the outbox's executor holds the writer (§6i). It is handed a `CommandRunner` and depends on nothing
+that could reach the network another way, which `network_boundary.rs` pins.
 It is called only while the Work view is on and only for a project whose *own* config names a
 forge (`[workflow] forge = "github"`); a repository's committed `wtm.toml` may not name one,
 because that is the consent this paragraph is about. `wtm-tracker` does not exist yet. This is the
@@ -1340,19 +1344,54 @@ as "reported again" because a different problem had moved onto overlapping lines
 judged by the round at the head that followed it, not by the newest, which would rewrite history
 every push.
 
-**Private is the one outcome.** Keep private notes records the notes and the findings beside them,
-pinned to the head reviewed (`review_outcomes`, append-only: a later decision is a later row), and
-writes nothing outside wtm. Publishing and local fixes are drawn in the outcome sheet and disabled:
-both write to GitHub, which waits for the outbox and its approvals. Whether a fix could be pushed to
-the pull request's own branch is shown already, from the forge's facts: never to a fork whose author
-did not allow maintainer edits, whatever your access.
+**Private writes nothing; publishing writes only what you approved.** Keep private notes records the
+notes and the findings beside them, pinned to the head reviewed (`review_outcomes`, append-only: a
+later decision is a later row), and writes nothing outside wtm. Local fixes are drawn in the outcome
+sheet and disabled until the writer lease exists; whether one could be pushed to the pull request's
+own branch is shown already, from the forge's facts: never to a fork whose author did not allow
+maintainer edits, whatever your access.
+
+**What posts is a value, and the approval pins its hash.** Publishing starts from your picks, your
+words and a review state, and the preview is the app building exactly what would post from a fresh
+read of the pull request and the forge's own diff of the reviewed commit
+(`wtm_core::flow::publish`): which findings sit on a changed line and which, being about a whole
+file, the whole change or lines the pull request did not touch, are folded into the summary under
+their place, since GitHub refuses a comment off its diff (and through GraphQL drops one silently).
+Approving sends the draft back with the hash the preview showed and builds it again; a different
+hash is refused. The approval (`approvals`, migration 7, never changed) pins that hash, the commit
+every comment is pinned to, and the head the pull request was at. A head other than the reviewed
+commit refuses the approval with both heads, unless you chose to publish against the reviewed
+commit anyway, which approves with the newer head pinned. No agent tool reaches any of this: it is
+the window's IPC, and `flow_request` only records that a role asked.
+
+**Every write is an operation, and the remote is read before each one.** A review posts as GitHub's
+own page posts one: the inline comments on a pending review, then the pending review submitted with
+the summary and the state. Those are two `operations` under the approval, keyed by flow, kind,
+target and the hash of exactly what each sends, so approving the same text again is the same rows
+and a done write stays done. Before each operation the executor (`src-tauri/src/flow/outbox.rs`)
+reads the pull request and checks the approval against its head now; a push since stops the publish
+and files an approval item. It then reads the reviews and looks for the operation's marker, an HTML
+comment GitHub renders as nothing, derived from the operation's key and ending every body it posts:
+found, the write already happened and is adopted. Only then is the operation marked executing,
+durably, and sent. A reply that never came is settled the same way, by reading again. GitHub allows
+one pending review per person, so a pending review of yours that is not this operation's stops it
+for you to decide about — add the comments to it, open it on GitHub, or leave it — and adding to it
+sends only the comments whose markers it does not already hold.
+
+**A crash is checked, never re-sent.** An operation found executing at launch was cut off mid-write.
+Recovery reads GitHub and settles it as done or failed, the window says "Checking GitHub…"
+meanwhile, and nothing is sent, not even the operation after it: carrying on is Retry, which reads
+first again. A failed or stopped publish is one inbox item about its approval, settled when the
+publish finishes, is stopped, or is replaced by a newer approval of the same review.
 
 **Tested twice, at two depths.** `review_engine.rs` drives the engine with fake agents that call the
 real run tools with real tokens, against a real repository and database and a fake clock.
 `review_real_cli.rs` runs one recipe with a Claude role and a Codex role on the real CLIs; its skill
 lists need no model turn and always run, and the review itself spends turns, so it runs on request.
 `pull_request_reviews.rs` does the same for a teammate's pull request, with `GhForge` parsing `gh`'s
-own JSON from a fake runner and a second repository playing the forge. A change to the Work view is
+own JSON from a fake runner and a second repository playing the forge, and `publish_review.rs`
+publishes that review into an in-memory GitHub that can lose a reply, refuse a second pending review
+or die mid-write, to show nothing is ever posted twice. A change to the Work view is
 also clicked through in a dev build that shares nothing with an installed app (`just
 dev-isolated`): its own config, data, handoff socket and WebKit storage, with `gh` pointed back at
 your own sign-in.

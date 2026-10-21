@@ -50,6 +50,8 @@ pub(crate) enum Behaviour {
     AskThenSubmit(Value, Value),
     /// Report progress a few times, then submit.
     ProgressThenSubmit(Value),
+    /// Ask the app for something with `flow_request`, such as posting a comment, then submit.
+    RequestThenSubmit(Value, Value),
 }
 
 /// How a script picks a behaviour: by role and attempt (1 for the first).
@@ -257,6 +259,11 @@ impl FakeHost {
             }
             Behaviour::AskThenSubmit(question, payload) => {
                 self.call(session, "flow_ask", question);
+                self.submit(session, &payload);
+                self.finish_turn(session);
+            }
+            Behaviour::RequestThenSubmit(request, payload) => {
+                self.call(session, "flow_request", request);
                 self.submit(session, &payload);
                 self.finish_turn(session);
             }

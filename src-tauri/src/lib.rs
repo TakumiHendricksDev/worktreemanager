@@ -289,7 +289,8 @@ pub fn run() {
 
             // The review engine, for the same reason again: its sessions are announced to the
             // window. Then recovery, off the launch path: a review whose processes went with the
-            // last run is marked interrupted, and nothing it was doing is sent again. It opens the
+            // last run is marked interrupted, and nothing it was doing is sent again; a publish a
+            // crash cut off is checked against GitHub, and nothing is posted. Both open the
             // database only if one exists.
             {
                 use tauri::Manager;
@@ -305,12 +306,27 @@ pub fn run() {
                 handle.manage(Arc::clone(&engine));
                 let recovered = std::thread::Builder::new()
                     .name("flow-recovery".to_owned())
-                    .spawn(move || match engine.recover() {
-                        Ok(flows) if !flows.is_empty() => {
-                            tracing::info!(?flows, "marked reviews interrupted at launch");
+                    .spawn(move || {
+                        match engine.recover() {
+                            Ok(flows) if !flows.is_empty() => {
+                                tracing::info!(?flows, "marked reviews interrupted at launch");
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "could not check reviews at launch");
+                            }
                         }
-                        Ok(_) => {}
-                        Err(error) => tracing::warn!(%error, "could not check reviews at launch"),
+                        // A publish cut off mid-write: read GitHub to learn whether the write
+                        // arrived, and send nothing.
+                        match engine.recover_publications() {
+                            Ok(checked) if !checked.is_empty() => {
+                                tracing::info!(?checked, "checked interrupted publishes at launch");
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "could not check publishes at launch");
+                            }
+                        }
                     });
                 if let Err(error) = recovered {
                     tracing::warn!(%error, "could not start review recovery");
@@ -507,6 +523,12 @@ pub fn run() {
             flow::commands::start_pull_request_review,
             flow::commands::rereview_pull_request,
             flow::commands::keep_review_private,
+            flow::commands::preview_review_publish,
+            flow::commands::approve_review_publish,
+            flow::commands::review_publication,
+            flow::commands::retry_publication,
+            flow::commands::add_to_pending_review,
+            flow::commands::cancel_publication,
             flow::commands::dismiss_finding,
             flow::commands::review_base,
         ])

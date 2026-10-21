@@ -35,9 +35,9 @@
 //! the rules for retries, fallbacks and usage limits, their consolidation into findings, the record
 //! of the checks the app ran for them, a teammate's pull request followed across its heads
 //! ([`pull_review`]), and the inbox that is the one thing about a run that tells you anything, with
-//! the questions it carries. The engine that drives them is in the app (`src-tauri/src/flow/`),
-//! because it opens sessions. The store tables for approvals and operations arrive with the backlog
-//! items that first need them.
+//! the questions it carries, and publishing a review through the outbox under an approval of exactly
+//! what posts ([`publish`], [`outbox`], [`approval`]). The engine and the outbox's executor are in
+//! the app (`src-tauri/src/flow/`), because one opens sessions and the other reaches the forge.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -68,6 +68,7 @@ pub mod instructions;
 pub mod knowledge;
 pub mod outbox;
 pub mod plan;
+pub mod publish;
 pub mod pull_review;
 pub mod question;
 pub mod recipe;
@@ -81,7 +82,8 @@ pub mod submission;
 pub mod work;
 
 pub use approval::{
-    Approval, ApprovalError, ApprovalId, ApprovalIntent, Binding, PinChange, Pinned, Stale,
+    Approval, ApprovalError, ApprovalId, ApprovalIntent, ApprovalSubject, Binding, NewApproval,
+    PinChange, Pinned, Stale, review_binding,
 };
 pub use consolidate::{
     Evidence, EvidenceKey, FindingRecord, Merged, NewFinding, Reconciled, Source, consolidate,
@@ -104,9 +106,17 @@ pub use knowledge::{
     RuleSelection, RuleUsage, SelectedRule,
 };
 pub use outbox::{
-    Operation, OperationId, OperationKey, OperationKind, OperationState, OutboxError,
+    Activity, Attention, NewOperation, Operation, OperationChange, OperationId, OperationKey,
+    OperationKind, OperationPayload, OperationResult, OperationState, OutboxError, Publication,
+    PublicationState, Resolution,
 };
 pub use plan::{PlanError, PlannedRole, PlannedStage, RecipePlan, SkipReason, SkippedRole, plan};
+pub use publish::{
+    ChangedLines, DraftComment, FileLines, FoldReason, FoldedComment, InlineComment, LineRange,
+    Marker, PendingFound, PendingReviewPayload, PublishContext, PublishError, RemoteComment,
+    RemoteReview, RemoteReviewState, ReviewDraft, ReviewEvent, ReviewPayload, SubmitFound,
+    SubmitReviewPayload, carries_marker, find_pending, find_submitted, missing_comments, signed,
+};
 pub use pull_review::{
     EarlierFate, MirroredPr, NewOutcome, NewReviewedHead, Outcome, OutcomeError, OutcomeKind,
     PushToBranch, ReviewClaim, ReviewedHead, base_ref, fate, push_to_branch,

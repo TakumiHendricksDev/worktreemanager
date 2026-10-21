@@ -1726,7 +1726,7 @@ export interface MirroredPr {
   readAt: number;
 }
 
-/** What you chose to do with a review. Only `private` exists until publishing does (M1b). */
+/** What you chose to do with a review that writes nothing outside wtm. A publish is a publication. */
 export interface ReviewOutcomeRecord {
   id: number;
   flow: number;
@@ -1766,6 +1766,187 @@ export interface PullRequestReview {
   earlier: EarlierHead[];
   /** Oldest first; the last is the current decision. */
   outcomes: ReviewOutcomeRecord[];
+  /** The review's publishes, oldest first. The last is the current one. */
+  publications: PublicationView[];
+}
+
+// ── publishing a review: `wtm_core::flow::{publish, outbox, approval}` ──
+
+/** The state a review is submitted with. `wtm_core::flow::ReviewEvent`. */
+export type ReviewEvent = 'comment' | 'request_changes' | 'approve';
+
+/** One finding picked for the review, in your words. */
+export interface DraftComment {
+  finding: number;
+  body: string;
+}
+
+/** What the outcome sheet sends to be previewed and approved. */
+export interface ReviewDraft {
+  comments: DraftComment[];
+  summary: string;
+  event: ReviewEvent;
+}
+
+/** Why a picked finding posts in the summary rather than on a line. */
+export type FoldReason =
+  'whole_change' | 'whole_file' | 'not_changed' | 'no_diff' | 'not_in_change';
+
+export interface InlineComment {
+  finding: number;
+  path: string;
+  /** The first line of a range; `null` for one line. */
+  startLine: number | null;
+  line: number;
+  body: string;
+}
+
+export interface FoldedComment {
+  finding: number;
+  path: string | null;
+  line: number | null;
+  body: string;
+  reason: FoldReason;
+}
+
+/** Exactly what a publish posts, apart from its markers. Its hash is what an approval pins. */
+export interface ReviewPayload {
+  repo: RepoSlug;
+  number: number;
+  commitId: string;
+  event: ReviewEvent;
+  comments: InlineComment[];
+  folded: FoldedComment[];
+  summary: string;
+}
+
+/** One inline comment exactly as it posts, its marker included. */
+export interface PostedComment {
+  finding: number;
+  path: string;
+  startLine: number | null;
+  line: number;
+  body: string;
+}
+
+/** `preview_review_publish`: exactly what would post, and the hash an approval of it pins. */
+export interface PublishPreview {
+  review: ReviewPayload;
+  hash: string;
+  comments: PostedComment[];
+  /** The pending review's own body: its marker and nothing else. */
+  pendingBody: string;
+  /** The review's body as it is submitted, its marker included. */
+  body: string;
+  /** Who it posts as. */
+  account: string | null;
+  /** The pull request is yours, so it can only be a comment. */
+  ownPullRequest: boolean;
+  /** The pull request's head by this read. */
+  head: string;
+  url: string;
+}
+
+export type OperationKind =
+  | 'push_branch'
+  | 'create_draft_pull_request'
+  | 'update_pull_request'
+  | 'mark_ready'
+  | 'pending_review'
+  | 'submit_review'
+  | 'post_comment'
+  | 'move_issue'
+  | 'merge';
+
+export type OperationState =
+  'pending' | 'executing' | 'done' | 'failed' | 'needs_attention' | 'cancelled';
+
+export type OperationPayload =
+  | {
+      kind: 'pending_review';
+      /** The hash of the whole review this write posts part of. */
+      review: string;
+      repo: RepoSlug;
+      number: number;
+      commitId: string;
+      comments: InlineComment[];
+    }
+  | {
+      kind: 'submit_review';
+      review: string;
+      repo: RepoSlug;
+      number: number;
+      commitId: string;
+      event: ReviewEvent;
+      body: string;
+    };
+
+/** What an operation left on GitHub. */
+export interface OperationResult {
+  kind: 'review';
+  review: number;
+  nodeId: string;
+  url: string;
+  /** Found on GitHub by its marker rather than sent this time. */
+  adopted: boolean;
+}
+
+/** Why an operation stopped and waits for you. `wtm_core::flow::Attention`. */
+export type Attention =
+  | { kind: 'head_moved'; approved: string; current: string }
+  | {
+      kind: 'pending_review';
+      review: number;
+      nodeId: string;
+      url: string;
+      comments: number;
+      startedByWtm: boolean;
+    }
+  | { kind: 'refused'; message: string };
+
+export type Resolution = { kind: 'add_to_pending_review'; review: number; nodeId: string };
+
+export interface Operation {
+  id: number;
+  key: { flow: number; kind: OperationKind; target: string; payloadHash: string };
+  approval: number;
+  position: number;
+  payload: OperationPayload;
+  state: OperationState;
+  attempts: number;
+  lastError: string | null;
+  result: OperationResult | null;
+  attention: Attention | null;
+  resolution: Resolution | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PublicationState =
+  | 'posting'
+  | 'checking'
+  | 'published'
+  | 'stale'
+  | 'needs_you'
+  | 'failed'
+  | 'waiting'
+  | 'cancelled';
+
+/** One approval of a review, exactly what it covered, and the operations that post it. */
+export interface PublicationView {
+  approval: {
+    id: number;
+    flow: number;
+    intent: 'post';
+    /** The pins it covers: `payload` (the hash), `commit` and `head`. */
+    binding: Partial<Record<'payload' | 'commit' | 'head', string>>;
+    grantedAt: number;
+  };
+  review: ReviewPayload;
+  operations: Operation[];
+  state: PublicationState;
+  /** The posted review on GitHub, once there is one. */
+  url: string | null;
 }
 
 export interface RecipeChoice {

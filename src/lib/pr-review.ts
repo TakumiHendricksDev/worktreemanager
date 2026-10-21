@@ -6,13 +6,13 @@
  * Pure, as `review-run.ts` is, and for its reason: the maps are keyed by the Rust enums' unions, so
  * a value the engine gains and this file does not name is a type error rather than a blank line.
  *
- * # Only one outcome is live
+ * # Two outcomes are live
  *
- * Keep private notes writes nothing outside wtm, so it works now. Publish and Local fixes write to
- * GitHub, and every such write waits for the outbox and its approvals (M1b), so the sheet draws
- * them, disabled, saying what they will do and that they come next. The push destination is drawn
- * with its real availability today, because whether a fork allows maintainer edits is a fact about
- * the pull request, not about this build.
+ * Keep private notes writes nothing outside wtm. Publishing goes through the outbox under an
+ * approval of exactly what posts, and its words are `publish.ts`'s. Local fixes wait for the
+ * writer lease, so the sheet draws them disabled, saying they come next; the push destination is
+ * drawn with its real availability today, because whether a fork allows maintainer edits is a fact
+ * about the pull request, not about this build.
  */
 
 import type {

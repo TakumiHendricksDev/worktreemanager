@@ -17,11 +17,12 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use wtm_core::flow::{
-    FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, Outcome, Question, QuestionId,
-    RoleProvider, WorkItemId,
+    ApprovalId, FindingId, FindingRecord, FlowId, InboxItem, InboxItemId, Outcome, Question,
+    QuestionId, ReviewDraft, RoleProvider, WorkItemId,
 };
 
 use super::findings::{Rerun, Staleness};
+use super::publish::{PublicationView, PublishPreview};
 use super::pull_request;
 use super::{Engine, FlowView, Notice, Refusal, StartReview};
 use crate::commands::{AppState, Reply, blocking};
@@ -357,4 +358,88 @@ pub async fn keep_review_private(
 ) -> Reply<Outcome> {
     let engine = Arc::clone(&engine);
     blocking(move || engine.keep_private(FlowId(flow), &notes).map_err(refused)).await
+}
+
+/// The refusal every publishing command gives while the Work view is off.
+fn work_view_off() -> ErrorView {
+    refused("publishing happens from the Work view, which is turned off".to_owned())
+}
+
+/// Exactly what a draft of a review would post on its pull request, markers and all, and the hash
+/// an approval of it would pin. Reads the pull request and its diff; posts nothing.
+#[tauri::command]
+pub async fn preview_review_publish(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+    draft: ReviewDraft,
+) -> Reply<PublishPreview> {
+    if !app.work_view_enabled() {
+        return Err(work_view_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.preview_publish(FlowId(flow), &draft)).await
+}
+
+/// Approve exactly what the preview showed, by its hash, and start posting it.
+///
+/// There is no agent tool that reaches this, or anything else that posts: only the window calls it,
+/// from the outcome sheet's Approve and publish.
+#[tauri::command]
+pub async fn approve_review_publish(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+    draft: ReviewDraft,
+    hash: String,
+    against_head: Option<String>,
+) -> Reply<PublicationView> {
+    if !app.work_view_enabled() {
+        return Err(work_view_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.approve_publish(FlowId(flow), &draft, &hash, against_head.as_deref()))
+        .await
+}
+
+/// One publish of a review, as it stands.
+#[tauri::command]
+pub async fn review_publication(engine: EngineState<'_>, approval: i64) -> Reply<PublicationView> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.publication_view(ApprovalId(approval))).await
+}
+
+/// Send what is left of a publish that failed or stopped, after checking GitHub for it.
+#[tauri::command]
+pub async fn retry_publication(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    approval: i64,
+) -> Reply<PublicationView> {
+    if !app.work_view_enabled() {
+        return Err(work_view_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.retry_publication(ApprovalId(approval))).await
+}
+
+/// Put the review's comments on the pending review that was in the way, then submit it.
+#[tauri::command]
+pub async fn add_to_pending_review(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    approval: i64,
+) -> Reply<PublicationView> {
+    if !app.work_view_enabled() {
+        return Err(work_view_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.add_to_pending_review(ApprovalId(approval))).await
+}
+
+/// Stop a publish where it is. What was posted stays posted.
+#[tauri::command]
+pub async fn cancel_publication(engine: EngineState<'_>, approval: i64) -> Reply<PublicationView> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.cancel_publication(ApprovalId(approval))).await
 }

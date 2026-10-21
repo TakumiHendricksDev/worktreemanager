@@ -44,7 +44,13 @@
    */
   import { untrack } from 'svelte';
 
-  import type { FindingRecord, PullRequest, ReviewItem, Worktree } from '../ipc/types';
+  import type {
+    FindingRecord,
+    PublicationView,
+    PullRequest,
+    ReviewItem,
+    Worktree,
+  } from '../ipc/types';
   import {
     canFinish,
     canRereview,
@@ -75,6 +81,8 @@
     STEP_TONE,
     stepLine,
   } from '../review-run';
+  import { commands } from '../ipc/commands';
+  import { draftOf } from '../publish';
   import { codeRequests } from '../state/code-request.svelte';
   import { inbox } from '../state/inbox.svelte';
   import { reviewRuns } from '../state/review-runs.svelte';
@@ -85,6 +93,7 @@
   import Button from './ui/Button.svelte';
   import WorkFinding from './WorkFinding.svelte';
   import WorkPrOutcome from './WorkPrOutcome.svelte';
+  import WorkPublication from './WorkPublication.svelte';
 
   const {
     visible,
@@ -124,6 +133,8 @@
   /** The pull request's new head, when the review read an older one. */
   const moved = $derived(prReview ? movedTo(prReview, pullRequest?.read ?? null) : null);
   const outcome = $derived(prReview ? currentOutcome(prReview) : null);
+  /** The review's current publish, if it has been published or tried. */
+  const publication = $derived(prReview?.publications.at(-1) ?? null);
   let finishing = $state(false);
   const showRerun = $derived(
     run !== undefined &&
@@ -187,7 +198,10 @@
     const here =
       focus.kind === 'finding'
         ? shown.findings.some((f) => f.id === focus.id)
-        : shown.steps.some((s) => s.id === focus.id);
+        : focus.kind === 'publication'
+          ? (shown.pullRequest?.publications.some((p) => p.approval.id === focus.id) ??
+            false)
+          : shown.steps.some((s) => s.id === focus.id);
     // Not in this run yet, or ever: a newer run of the worktree, or one still loading. The next
     // read of the run tries again; a finding superseded since is simply not marked.
     if (!here) return;
@@ -199,7 +213,11 @@
       work.focus = null;
     });
     const id =
-      focus.kind === 'finding' ? `work-finding-${focus.id}` : `work-role-${focus.id}`;
+      focus.kind === 'finding'
+        ? `work-finding-${focus.id}`
+        : focus.kind === 'publication'
+          ? `work-publication-${focus.id}`
+          : `work-role-${focus.id}`;
     queueMicrotask(() => {
       const element = document.getElementById(id);
       if (!element) return;
@@ -240,6 +258,33 @@
       .rereview(projectId, worktreeId, run.flow.id, moved)
       .then(() => workspace.refreshWorktrees())
       .finally(() => (following = false));
+  }
+
+  function publicationAction(action: () => Promise<PublicationView>): void {
+    if (!run) return;
+    void reviewRuns.publication(worktreeId, run.flow.id, action);
+  }
+
+  /**
+   * Re-review the head the pull request moved to, instead of publishing what was approved at the
+   * old one: the stale publish is stopped first, so it does not wait in the inbox for a decision
+   * already made.
+   */
+  async function rereviewInstead(stale: PublicationView): Promise<void> {
+    await reviewRuns.publication(worktreeId, stale.approval.flow, () =>
+      commands.cancelPublication(stale.approval.id),
+    );
+    rereview();
+  }
+
+  /** Approve exactly what was approved before, against the head it moved to. */
+  async function publishAnyway(stale: PublicationView, head: string): Promise<void> {
+    const hash = stale.approval.binding.payload;
+    if (!run || !hash) return;
+    const flow = run.flow.id;
+    await reviewRuns.publication(worktreeId, flow, () =>
+      reviewRuns.approvePublish(worktreeId, flow, draftOf(stale.review), hash, head),
+    );
   }
 
   function open(path: string, line: number | null): void {
@@ -450,6 +495,26 @@
         <p class="c-work-state__error" role="alert"><CodeText text={error} /></p>
       {/if}
     </section>
+
+    {#if publication}
+      <WorkPublication
+        view={publication}
+        head={pullRequest?.read?.head.sha ?? prReview?.mirror?.pullRequest.head.sha ?? null}
+        busy={reviewRuns.busy[`publication:${worktreeId}`] ?? false}
+        error={reviewRuns.errors[`publication:${worktreeId}`] ?? null}
+        onretry={() =>
+          publicationAction(() => commands.retryPublication(publication.approval.id))}
+        onadd={() =>
+          publicationAction(() => commands.addToPendingReview(publication.approval.id))}
+        onleave={() =>
+          publicationAction(() => commands.cancelPublication(publication.approval.id))}
+        onrereview={canRereview(run, moved)
+          ? () => void rereviewInstead(publication)
+          : null}
+        onagainst={(head) => void publishAnyway(publication, head)}
+        onopen={(url) => void commands.openUrl(url)}
+      />
+    {/if}
 
     {#each groups as section (section.group)}
       {#if section.group === 'suggestion'}
@@ -670,6 +735,13 @@
     {error}
     onclose={() => (finishing = false)}
     onkeep={(notes) => reviewRuns.keepPrivate(worktreeId, run.flow.id, notes)}
+    onpreview={(draft) => reviewRuns.previewPublish(run.flow.id, draft)}
+    onapprove={(draft, hash, againstHead) =>
+      reviewRuns.approvePublish(worktreeId, run.flow.id, draft, hash, againstHead)}
+    onrereview={(head) =>
+      void reviewRuns
+        .rereview(projectId, worktreeId, run.flow.id, head)
+        .then(() => workspace.refreshWorktrees())}
   />
 {/if}
 
