@@ -1103,13 +1103,13 @@ agent for runs as for panes. It cannot say how that agent runs.
 | Claude settings sources | `--strict-mcp-config` **and** `--setting-sources ""`; everything else is in one `--settings` object | Same |
 | Claude sandbox | `enabled`, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, `autoAllowBashIfSandboxed: true`; `denyWrite`: the worktree, every git dir (common, gitdir, the worktree's `.git` file), the worktree's `.claude`, `.codex`, `.cursor`, `.mcp.json` | The same without the worktree |
 | Claude reads | `denyRead` and `Read(…)` deny rules: `~/Library/Keychains`, `~/.config/gh`, `~/.ssh`, `~/.codex`, `~/.config/acli`, wtm's run-sessions folder | Same |
-| Claude tools | `--tools Read,Bash,Grep,Glob,Task`, mode `dontAsk` | `--tools Read,Edit,Write,Bash,Grep,Glob,Task`, mode `acceptEdits`, `Edit`/`Write` deny rules on every git dir and agent config |
+| Claude tools | `--tools Read,Bash,Grep,Glob,Task`, mode `dontAsk`; plus `Skill`, `--plugin-dir` and `--add-dir` on a wtm-written plugin holding exactly the skills a role names, when it names any | `--tools Read,Edit,Write,Bash,Grep,Glob,Task`, mode `acceptEdits`, `Edit`/`Write` deny rules on every git dir and agent config; skills the same way |
 | Claude allow rules | The role's run tools by full name (`mcp__wtm__flow_…`). Never Bash | Same |
 | Codex home | Its own `CODEX_HOME`: `auth.json` linked to the sign-in, a generated `config.toml` with `features.apps = false`, the repository and worktree `trust_level = "untrusted"`, the bridge as the only server | Same |
 | Codex sandbox | `read-only`, `approvalPolicy: never`, `{"type":"readOnly","networkAccess":false}` per turn | `workspace-write`, `on-request`, `approvalsReviewer: user`, `workspaceWrite` with `networkAccess: false` |
 | Network | Claude: `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`. Codex: none | Same |
 | Environment | F3's scrub (`run_profile::scrub`), and for Codex `CODEX_HOME` set last; Codex's `shell_environment_policy` excludes the same names, `GH_*` by exact name, and sets `GH_CONFIG_DIR` | Same |
-| Bridge | The run tools only; token in a 0600 file (Claude's `--mcp-config` path, Codex's home config), never argv | The same plus `flow_checkpoint` |
+| Bridge | The run tools only; token in a 0600 file (Claude's `--mcp-config` path, Codex's home config), never argv; for Codex, `default_tools_approval_mode = "approve"` and `enabled_tools` naming the role's tools | The same plus `flow_checkpoint` |
 | Git | Read only. Agents cannot commit, stash, update a ref or push | Same. `flow_checkpoint` is an app commit with `-c core.hooksPath=/dev/null` and `--no-verify`, refusing agent and hook config |
 
 Three of those rows are F2 correcting the first plan. `--tools` is an allowlist because the
@@ -1173,6 +1173,77 @@ that refuse unknown fields, so a malformed `flow_submit` comes back as an error 
   Codex writer's escalation reaching a person. Codex's shell policy is measured: a command in a
   run's home loses the excluded names even from a dirty environment, and gets the run's
   `GH_CONFIG_DIR` over an inherited one.
+- A Codex run lists the user's personal skills from `~/.agents/skills` beside the repository's,
+  even with a home of its own (measured on 0.160.1). They are instructions, not tools, and the
+  sandbox decides what any of them can do, but they are not only the role's.
+
+Two rows were added when the review engine (§6i) first ran roles against the real CLIs, and both
+were found by a run failing rather than by reading:
+
+- **Claude's skills.** `--setting-sources ""` keeps a repository's `.claude/skills` out along with
+  its hooks — a project skill is in Claude's `initialize` list with the default sources and gone
+  with none, and `--add-dir` does not bring it back. `--plugin-dir` does, as `<plugin>:<skill>`,
+  without loading anything else. So `flow_session` copies a role's named skills, from the checkout
+  it reads and then the user's own, into a plugin named `wtm` under the flow's directory, and the
+  role invokes `wtm:<skill>` with the `Skill` tool. The directory is an `--add-dir` too, because
+  under `dontAsk` a Read outside the working directories is refused, and a skill's own files would
+  be unreadable to the role it was copied for.
+- **Codex's bridge.** Codex 0.160.1 asks before every MCP tool call, and under
+  `approval_policy = never` an ask is a refusal: a correctness role's every `flow_submit` came back
+  rejected, and it ended its turns with nothing handed in. The run's own server is now approved by
+  name in its home's config, as Claude's allow rules already named its tools, and `enabled_tools`
+  keeps it to the role's own.
+
+## 6i. Review runs: an engine, its holds, and one notification owner
+
+The Work view's first slice runs a review recipe against a worktree (`src-tauri/src/flow/`). What
+follows is the shape and the reasons for it; the code's module docs have the rest.
+
+**The order is the evidence's.** A start preflights every provider the recipe can reach (§6h: a
+plan, never an API key) before anything is recorded, so a refused start leaves nothing behind. The
+run then records its snapshot (§5's relaxation) before any session opens, plans the recipe against
+the snapshot's changed files, and records a step per role, skipped ones included with the reason.
+What a review read exists before the reading starts.
+
+**Stages in order, roles together, a cap on the account.** A stage's roles run in parallel, as many
+at once as the recipe's `concurrency` allows, and the next stage waits for all of them. The cap is
+about the subscription rather than the machine: six reviewers on one plan spend its window six times
+as fast. Each attempt is one headless session (§6h) sent one short turn; the role's brief, the exact
+JSON Schema its result is checked against included, comes back from `flow_context`.
+
+**A result is a submission, never a message.** A role's result is what `flow_submit` accepted after
+`wtm_core::flow::submission::read` checked it: the schema the role was shown, enforced in Rust by a
+small checker that refuses a schema keyword it does not enforce, then the rules a flat schema cannot
+say (a confirmed bug carries its verification, a rule violation names its rule). Every problem goes
+back to the model with its JSON Pointer, in the same turn. A turn that ends without a submission is
+asked once more, then counts as a failed attempt; parsing a last message would make "found nothing"
+indistinguishable from "wrote something we could not read".
+
+**Failures, limits and interruptions mean different things.** A timeout, a dead session or no
+submission is the role's failure and spends a retry; after the last, its configured fallback runs
+from a written handover, or you are told. A usage limit is the account's: it spends nothing, and the
+role either hands over to a fallback configured on another provider or waits, holding the flow
+`WaitingCapacity(provider, resets_at)` until the reset the provider named, then runs again by itself
+if the app is open. An unknown reset is never guessed. A quit records `Interrupted(quit)` before the
+processes go; a launch that finds a run mid-phase with no process records `Interrupted(crash)`. Either
+way finished roles keep their results and nothing is re-sent, because a turn sent twice can do its
+work twice. Resume is a person's.
+
+**Waiting polls a clock, and the window polls nothing.** A role thread waits on its session's
+events with a short timeout and checks the `Clock` port between them, which is what lets every
+timeout and reset in the tests be a fake clock moving. The window is told by `flow:changed` and asks
+for the run again; §8's ban on polling in the frontend stands.
+
+**One notification owner.** A run session's pane is behind its run's rail and announces nothing
+(`announces` in `sessions.svelte.ts`). What needs you — a role that failed for good, a limit, a
+provider's permission prompt, an interruption — is a durable inbox row, filed once per
+`(flow, kind, subject)` by a partial unique index, kept until resolved, and the only thing that
+notifies. Dismissing a notification resolves nothing.
+
+**Tested twice, at two depths.** `review_engine.rs` drives the engine with fake agents that call the
+real run tools with real tokens, against a real repository and database and a fake clock.
+`review_real_cli.rs` runs one recipe with a Claude role and a Codex role on the real CLIs; its skill
+lists need no model turn and always run, and the review itself spends turns, so it runs on request.
 
 ## 7. Toolchain policy
 

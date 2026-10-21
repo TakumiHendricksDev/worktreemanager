@@ -551,6 +551,14 @@ impl Provider for Claude {
             // prompt after it. This CLI takes prompts on stdin, but the next caller may not.
             argv.push("--tools".to_owned());
             argv.push(run.tools.join(","));
+            if let Some(dir) = &run.skills {
+                // The role's own skills, and nothing else from where they came from. See
+                // `authority::with_skills`.
+                argv.push("--plugin-dir".to_owned());
+                argv.push(dir.clone());
+                argv.push("--add-dir".to_owned());
+                argv.push(dir.clone());
+            }
             if !run.persist {
                 argv.push("--no-session-persistence".to_owned());
             }

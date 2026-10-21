@@ -4483,7 +4483,7 @@ class Sessions {
       pane.lastTurnFinished = true;
       this.turnEpoch[pane.worktreeId] = (this.turnEpoch[pane.worktreeId] ?? 0) + 1;
       if (
-        pane.sideOf === null &&
+        announces(pane) &&
         attention.announce('finished', announceable(pane, this.isOut(pane.id)))
       ) {
         pane.unseen = true;
@@ -4511,7 +4511,7 @@ class Sessions {
       if (restoring) this.settling.get(pane.id)?.(event.message);
       if (
         !restoring &&
-        pane.sideOf === null &&
+        announces(pane) &&
         attention.announce('failed', announceable(pane, this.isOut(pane.id)))
       ) {
         pane.unseen = true;
@@ -4524,7 +4524,7 @@ class Sessions {
       this.holdQueue(pane);
       pane.limit = { message: event.message, resetsAt: event.resetsAt };
       if (
-        pane.sideOf === null &&
+        announces(pane) &&
         attention.announce('limit', announceable(pane, this.isOut(pane.id)))
       ) {
         pane.unseen = true;
@@ -4552,7 +4552,7 @@ class Sessions {
         { id: event.id, request: event.request, order: approvalOrder },
       ];
       if (
-        pane.sideOf === null &&
+        announces(pane) &&
         attention.announce(
           announcementFor(event.request),
           announceable(pane, this.isOut(pane.id)),
@@ -4702,6 +4702,18 @@ function facts(pane: Pane): Parameters<typeof statusOf>[0] {
     working: pane.working,
     unseen: pane.unseen,
   };
+}
+
+/**
+ * Whether a pane's own turns, failures, limits and approvals are announced.
+ *
+ * Not a side question's, which lives in its overlay. And not a workflow run's: a run session is
+ * headless, behind its run's rail, and the run's inbox is what tells you it failed, hit a limit or
+ * asked for a permission. Announcing both would be two notifications about one thing, and the
+ * pane's would arrive for every routine turn a reviewer finishes.
+ */
+function announces(pane: Pane): boolean {
+  return pane.sideOf === null && pane.flow === null;
 }
 
 function announceable(pane: Pane, ownWindow: boolean): Announceable {

@@ -18,14 +18,19 @@
 //! # What the handlers do today
 //!
 //! They parse and validate, and they keep what they were given. Arguments are typed structs that
-//! refuse unknown fields, so a malformed `flow_submit` comes back as an error the model can fix and
-//! retry, rather than as something the engine has to make sense of later. What was accepted goes
-//! into the [`Ledger`], per run and role, which is where the review engine reads it from.
-//! `flow_checkpoint` is real: an app commit, hooks off, refusing agent config.
+//! refuse unknown fields, and a `flow_submit` payload is checked against the JSON Schema for its
+//! kind (`wtm_core::flow::submission`), so a malformed one comes back with every problem listed for
+//! the model to fix and retry, rather than as something the engine has to make sense of later.
+//! What was accepted goes into the [`Ledger`], per run and role. `flow_checkpoint` is real: an app
+//! commit, hooks off, refusing agent config.
 //!
-//! What they do not do yet, because the engine that owns it does not exist yet: interrupt the turn
-//! after `flow_ask`, publish a `flow_request`, or run a `flow_run_check` (no project declares a
-//! check until `[[check]]` exists). Each says so in its answer rather than pretending.
+//! For a review run's roles the engine (`crate::flow`) answers `flow_progress`, `flow_submit` and
+//! `flow_ask` itself: a submission is the role's result, persisted, and only one of the kind the
+//! role's recipe says it hands in is accepted. The ledger still keeps a copy.
+//!
+//! What they do not do yet: interrupt the turn after `flow_ask` (a review answers it in place),
+//! publish a `flow_request`, or run a `flow_run_check` (no project declares a check until
+//! `[[check]]` exists). Each says so in its answer rather than pretending.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -33,7 +38,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wtm_agent::authority::Authority;
-use wtm_core::flow::{FlowId, Severity};
+use wtm_core::flow::submission;
+use wtm_core::flow::{FlowId, Submission};
 
 use crate::app::{App, FlowRole};
 use crate::handoff::{CodeCall, Response};
@@ -135,16 +141,17 @@ fn definition(name: &'static str) -> Value {
             }),
         ),
         SUBMIT => (
-            "Hand in your result: a plan, review findings, or an implementation handoff. The payload \
-             is checked; if it is rejected, fix what the error names and call again. Submitting \
-             again replaces what you submitted before.",
+            "Hand in your result: a plan, review findings, or an implementation handoff. Your brief \
+             from `flow_context` has the exact JSON Schema for your kind. The payload is checked \
+             against it; if it is rejected, every problem is listed: fix them and call again. \
+             Submitting again replaces what you submitted before.",
             json!({
                 "type": "object",
                 "properties": {
                     "kind": { "type": "string", "enum": ["plan", "findings", "handoff"] },
                     "payload": {
                         "type": "object",
-                        "description": "plan: {summary, steps[], risks[]}. findings: {summary?, findings[{title, severity: minor|notable|blocking, body, path?, line?, evidence[]}]}. handoff: {summary, changed[], checks[], openQuestions[]}.",
+                        "description": "plan: {summary, steps[], risks[]}. findings: {summary?, findings[{title, severity: minor|notable|blocking, class: confirmed_bug|rule_violation|conflict|suggestion, body, path?, line?, endLine?, verification? (confirmed_bug), rule? {id, revision} (rule_violation), between[]? (conflict), requirement?, evidence[]}]}. handoff: {summary, changed[], checks[], openQuestions[]}.",
                     },
                 },
                 "required": ["kind", "payload"],
@@ -230,57 +237,6 @@ pub struct Ask {
     pub unblocks: String,
     #[serde(default)]
     pub options: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Plan {
-    pub summary: String,
-    pub steps: Vec<String>,
-    #[serde(default)]
-    pub risks: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SubmittedFinding {
-    pub title: String,
-    pub severity: Severity,
-    pub body: String,
-    #[serde(default)]
-    pub path: Option<String>,
-    #[serde(default)]
-    pub line: Option<u32>,
-    #[serde(default)]
-    pub evidence: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Findings {
-    #[serde(default)]
-    pub summary: Option<String>,
-    pub findings: Vec<SubmittedFinding>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct Handoff {
-    pub summary: String,
-    #[serde(default)]
-    pub changed: Vec<String>,
-    #[serde(default)]
-    pub checks: Vec<String>,
-    #[serde(default)]
-    pub open_questions: Vec<String>,
-}
-
-/// What `flow_submit` handed in, checked against its kind.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Submission {
-    Plan(Plan),
-    Findings(Findings),
-    Handoff(Handoff),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -402,17 +358,15 @@ pub fn parse(tool: &str, args: &Value, authority: Authority) -> Result<FlowCall,
         }
         SUBMIT => {
             let Submit { kind, payload } = typed(tool, args)?;
-            let what = format!("flow_submit` with kind `{kind}");
-            FlowCall::Submit(match kind.as_str() {
-                "plan" => Submission::Plan(typed(&what, &payload)?),
-                "findings" => Submission::Findings(typed(&what, &payload)?),
-                "handoff" => Submission::Handoff(typed(&what, &payload)?),
-                other => {
-                    return Err(format!(
-                        "`flow_submit` takes kind `plan`, `findings` or `handoff`, not `{other}`."
-                    ));
-                }
-            })
+            let Some(output) = submission::kind_from(&kind) else {
+                return Err(format!(
+                    "`flow_submit` takes kind `plan`, `findings` or `handoff`, not `{kind}`."
+                ));
+            };
+            FlowCall::Submit(
+                submission::read(output, &payload)
+                    .map_err(|problems| submission::refusal(output, &problems))?,
+            )
         }
         REQUEST => FlowCall::Request(typed(tool, args)?),
         RUN_CHECK => {
@@ -486,12 +440,26 @@ impl Ledger {
 ///
 /// Authorized here from the token, whatever the bridge listed: a token without a run role is
 /// refused, and so is a tool its role does not have.
-pub fn run(_handle: &tauri::AppHandle, app: &Arc<App>, token: &str, call: &CodeCall) -> Response {
-    answer(app, token, call)
+pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, token: &str, call: &CodeCall) -> Response {
+    use tauri::Manager;
+    let engine = handle
+        .try_state::<Arc<crate::flow::Engine>>()
+        .map(|engine| Arc::clone(&engine));
+    answer_with(app, engine.as_deref(), token, call)
 }
 
-/// [`run`] without the window handle, which none of these tools needs. For tests.
+/// [`run`] without the window handle or an engine, so every call is the ledger's. For tests.
 pub fn answer(app: &Arc<App>, token: &str, call: &CodeCall) -> Response {
+    answer_with(app, None, token, call)
+}
+
+/// [`run`], with the review engine that answers for its own roles when there is one.
+pub fn answer_with(
+    app: &Arc<App>,
+    engine: Option<&crate::flow::Engine>,
+    token: &str,
+    call: &CodeCall,
+) -> Response {
     let Some(caller) = app.handoff.resolve(token) else {
         tracing::warn!(tool = %call.tool, "a run tool call arrived with an unknown token");
         return Response::failed("this session is not registered with Worktree Manager any more");
@@ -507,6 +475,20 @@ pub fn answer(app: &Arc<App>, token: &str, call: &CodeCall) -> Response {
     };
     tracing::info!(flow = %role.flow, role = %role.role, tool = %call.tool, "run tool call");
     let ledger = &app.flow_ledger;
+    if let Some(answer) = engine.and_then(|engine| engine.on_tool(&role, &parsed)) {
+        // Kept in the ledger too, which is what an engine-less reader and the tests look at.
+        match &parsed {
+            FlowCall::Progress(progress) => {
+                ledger.with(&role, |record| record.progress.push(progress.clone()));
+            }
+            FlowCall::Submit(submission) if answer.is_ok() => keep(ledger, &role, submission),
+            _ => {}
+        }
+        return match answer {
+            Ok(text) => Response::ok(text),
+            Err(refusal) => Response::failed(refusal),
+        };
+    }
     match parsed {
         FlowCall::Context => Response::ok(context(&role, &ledger.record(&role))),
         FlowCall::Progress(progress) => {
@@ -524,19 +506,8 @@ pub fn answer(app: &Arc<App>, token: &str, call: &CodeCall) -> Response {
             ))
         }
         FlowCall::Submit(submission) => {
-            let what = match &submission {
-                Submission::Plan(plan) => format!("your plan ({} steps)", plan.steps.len()),
-                Submission::Findings(findings) => {
-                    format!("{} findings", findings.findings.len())
-                }
-                Submission::Handoff(_) => "your handoff".to_owned(),
-            };
-            ledger.with(&role, |record| {
-                record.submissions.retain(|kept| {
-                    std::mem::discriminant(kept) != std::mem::discriminant(&submission)
-                });
-                record.submissions.push(submission);
-            });
+            let what = submission.summary();
+            keep(ledger, &role, &submission);
             Response::ok(format!("Received {what}."))
         }
         FlowCall::Request(request) => {
@@ -562,6 +533,16 @@ pub fn answer(app: &Arc<App>, token: &str, call: &CodeCall) -> Response {
         }
         FlowCall::Checkpoint { message } => checkpoint(app, &caller.scope, &role, &message),
     }
+}
+
+/// Keep the latest submission of its kind: a second `flow_submit` of a kind replaces the first.
+fn keep(ledger: &Ledger, role: &FlowRole, submission: &Submission) {
+    ledger.with(role, |record| {
+        record
+            .submissions
+            .retain(|kept| kept.kind() != submission.kind());
+        record.submissions.push(submission.clone());
+    });
 }
 
 /// `flow_context`'s answer. The brief is fenced, because a recipe's brief quotes an issue, and an
@@ -626,6 +607,8 @@ fn checkpoint(
 
 #[cfg(test)]
 mod tests {
+    use wtm_core::flow::Severity;
+
     use super::*;
 
     fn names(authority: Authority) -> Vec<String> {
@@ -716,6 +699,7 @@ mod tests {
             "payload": { "findings": [{
                 "title": "Unbounded retry",
                 "severity": "blocking",
+                "class": "suggestion",
                 "body": "The loop never gives up.",
                 "path": "src/sync.rs",
                 "line": 42,
@@ -732,7 +716,8 @@ mod tests {
         bad["payload"]["findings"][0]["severity"] = json!("catastrophic");
         let refused = parse(SUBMIT, &bad, Authority::Reviewer).unwrap_err();
         assert!(
-            refused.contains("kind `findings`") && refused.contains("call it again"),
+            refused.contains("/findings/0/severity")
+                && refused.contains("call `flow_submit` again"),
             "{refused}"
         );
     }

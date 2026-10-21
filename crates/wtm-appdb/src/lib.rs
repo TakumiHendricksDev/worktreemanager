@@ -32,6 +32,7 @@
 
 mod migrate;
 mod rules;
+mod runs;
 mod store;
 
 use std::path::{Path, PathBuf};
@@ -72,8 +73,8 @@ pub enum AppDbError {
     },
 }
 
-/// The open database. Implements [`FlowStore`](wtm_core::ports::FlowStore) and
-/// [`RuleStore`](wtm_core::ports::RuleStore).
+/// The open database. Implements [`FlowStore`](wtm_core::ports::FlowStore),
+/// [`RuleStore`](wtm_core::ports::RuleStore) and [`RunStore`](wtm_core::ports::RunStore).
 #[derive(Debug)]
 pub struct AppDb {
     conn: Mutex<Connection>,

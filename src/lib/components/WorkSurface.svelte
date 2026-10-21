@@ -8,16 +8,14 @@
    * # What it draws, and what it does not yet
    *
    * For a worktree: the workspace header, Overview and Reviews. Overview is the worktree listing's
-   * own facts. Reviews shows "Not reviewed yet", which is the one true state while nothing can run
-   * a review, and its Run Review is disabled with the reason beside it rather than missing: it is
-   * where the view's main action will be, and a button that appears later moves everything around
-   * it. The plan's other tabs — Changes, Sessions, Activity — come with the items that give them
+   * own facts. Reviews is `WorkReviewRun`: Run Review, then the run's state and each role's line.
+   * The plan's other tabs — Changes, Sessions, Activity — come with the items that give them
    * something to show.
    *
    * For a pull request picked in Reviews: `WorkReview`, with what the forge says about it and the
    * worktree a review of it reads.
    *
-   * The inbox is empty and says what will land in it. Approvals from ordinary sessions stay where
+   * The inbox is the review runs' (`WorkRunInbox`). Approvals from ordinary sessions stay where
    * they are, in Home and on the panes: the plan gives this inbox review runs' questions and
    * failures, and moving the existing ones here is a separate decision.
    *
@@ -25,11 +23,15 @@
    * while Work is up.
    */
   import { changesOf, myWorktrees, REVIEW_WORDS, rowTitle, subjectOf } from '../work';
+  import { headline } from '../review-run';
+  import { reviewRuns } from '../state/review-runs.svelte';
   import { reviews } from '../state/reviews.svelte';
   import { work, type WorkTab } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
   import WorkReview from './WorkReview.svelte';
+  import WorkReviewRun from './WorkReviewRun.svelte';
+  import WorkRunInbox from './WorkRunInbox.svelte';
 
   const {
     visible,
@@ -56,6 +58,11 @@
   const worktree = $derived(
     subject ? (workspace.worktrees.find((w) => w.id === subject.id) ?? null) : null,
   );
+  /** The newest review run's state, which the header says instead of "Not reviewed" once there is one. */
+  const runState = $derived.by(() => {
+    const run = worktree ? reviewRuns.latest[worktree.id] : null;
+    return run ? headline(run) : null;
+  });
   /** What the review would be of: the branch, which is what a reviewer names it by. */
   const reviewing = $derived(
     worktree?.branch ?? (worktree?.head ? worktree.head.slice(0, 7) : null),
@@ -102,7 +109,9 @@
               <span>{changesOf(worktree)}</span>
             </p>
           </div>
-          <span class="c-badge">{REVIEW_WORDS[subject.review]}</span>
+          <span class="c-badge"
+            >{runState ? runState.eyebrow : REVIEW_WORDS[subject.review]}</span
+          >
           <Button size="sm" onclick={() => onopenworktree(worktree.id)}
             >Open in Worktrees</Button
           >
@@ -137,24 +146,12 @@
           role="tabpanel"
           aria-labelledby="work-tab-{work.tab}"
         >
-          {#if work.tab === 'reviews'}
-            <section class="c-work-state" aria-labelledby="work-review-title">
-              <span class="c-work-state__eyebrow">Not reviewed yet</span>
-              <h2 class="c-work-state__title" id="work-review-title">
-                Review {reviewing ?? rowTitle(subject)}
-              </h2>
-              <p class="c-work-state__prose">
-                A review reads a snapshot of this worktree, uncommitted work included,
-                against its merge base. It needs no pull request and changes nothing in your
-                tracker.
-              </p>
-              <div class="c-work-state__actions">
-                <Button variant="accent" disabled>Run Review</Button>
-                <span class="c-work-state__note"
-                  >Review runs are not available in this build.</span
-                >
-              </div>
-            </section>
+          {#if work.tab === 'reviews' && workspace.activeProjectId}
+            <WorkReviewRun
+              projectId={workspace.activeProjectId}
+              worktreeId={worktree.id}
+              reviewing={reviewing ?? rowTitle(subject)}
+            />
           {:else}
             <dl class="o-facts o-facts--wide">
               <dt>Branch</dt>
@@ -188,13 +185,7 @@
     </div>
 
     <aside class="c-work__inbox" aria-labelledby="work-inbox-title">
-      <h2 class="c-work__inbox-title" id="work-inbox-title">
-        Inbox <span class="c-work__count">0</span>
-      </h2>
-      <p class="c-work__hint">
-        Nothing needs you. Questions, approvals and failures from review runs land here, and
-        stay until you resolve them.
-      </p>
+      <WorkRunInbox projectId={workspace.activeProjectId} />
     </aside>
   </div>
 </section>

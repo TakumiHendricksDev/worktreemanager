@@ -48,6 +48,12 @@ export type NotifyPref = 'ask' | 'on' | 'off';
 const NOTIFY_PREF = 'ui.notify';
 
 /**
+ * The pane id a review run's notification carries instead of a pane's. A run session is headless,
+ * so there is no pane to arrive at; the run's worktree in the Work view is where its inbox item is.
+ */
+export const RUN_TARGET = 'work:run';
+
+/**
  * How many toasts stand at once. Oldest dropped, the policy `MAX_EVENTS` and `holdEvent` already set.
  *
  * Four, because they are dismissed by hand: a cap is what keeps "away for an hour" from returning to
@@ -278,6 +284,51 @@ class Attention {
     }
 
     return hidden;
+  }
+
+  /**
+   * Tell the user a review run filed an inbox item: it failed for good, hit a usage limit, asked for
+   * a permission, or was interrupted.
+   *
+   * The run's one voice, since its sessions' panes are not announced (`announces` in
+   * `sessions.svelte.ts`). The same two gates as `announce`: a notification when no wtm window is in
+   * front, otherwise a toast — unless Work is up, where the item is already in the inbox beside you.
+   * The target names the worktree and `RUN_TARGET` instead of a pane, which `App.goTo` reads as "the
+   * Work view, on this worktree's Reviews tab".
+   */
+  announceRun(
+    item: { title: string; body: string },
+    projectId: string,
+    worktreeId: string,
+  ): void {
+    if (inPaneWindow) return;
+    const where = workspace.worktrees.find((w) => w.id === worktreeId)?.title ?? 'A review';
+    const title = `${where}: review needs you`;
+    const detail = item.title;
+    if (!this.inFront && this.windowFront === null) {
+      if (this.pref === 'on') {
+        void commands
+          .postNotification({
+            title,
+            body: detail,
+            projectId,
+            worktreeId,
+            paneId: RUN_TARGET,
+          })
+          .catch(() => {
+            this.blocked ??= 'denied';
+          });
+      } else if (this.pref === 'ask') {
+        this.earned = true;
+      }
+    } else if (!view.work) {
+      this.push({
+        kind: 'attention',
+        target: { projectId, worktreeId, paneId: RUN_TARGET },
+        title,
+        detail,
+      });
+    }
   }
 
   /** Drop this worktree's toasts. Called when you arrive at it — they have served their purpose. */

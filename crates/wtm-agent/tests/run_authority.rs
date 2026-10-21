@@ -271,6 +271,85 @@ fn ultracode_and_fast_mode_ride_in_the_same_settings_object_as_the_sandbox() {
 }
 
 #[test]
+fn a_claude_role_with_skills_gets_the_skill_tool_and_its_own_plugin_and_nothing_else_changes() {
+    let plain = profile("claude", Authority::Reviewer);
+    let mut skilled = plain.clone();
+    let RunAuthority::Claude(run) = &mut skilled.run else {
+        panic!("a Claude profile");
+    };
+    authority::with_skills(run, Path::new("/data/flow/7/skills/conventions"));
+    let before = stable(Claude.argv(&hostile_request(&plain)));
+    let after = stable(Claude.argv(&hostile_request(&skilled)));
+
+    let at = after.iter().position(|arg| arg == "--tools").unwrap();
+    assert_eq!(
+        after[at + 1..at + 6],
+        strings(&[
+            "Read,Bash,Grep,Glob,Task,Skill",
+            "--plugin-dir",
+            "/data/flow/7/skills/conventions",
+            "--add-dir",
+            "/data/flow/7/skills/conventions",
+        ])
+    );
+    // Everything else, the settings object included, is the reviewer's argv unchanged.
+    let mut without = after.clone();
+    without.drain(at + 2..at + 6);
+    without[at + 1] = "Read,Bash,Grep,Glob,Task".to_owned();
+    assert_eq!(without, before);
+
+    let RunAuthority::Claude(run) = &skilled.run else {
+        panic!("a Claude profile");
+    };
+    let canary = authority::claude_canary(run);
+    assert_eq!(canary.skills, None);
+    assert_eq!(canary.tools, ["Bash"]);
+}
+
+#[test]
+fn a_run_session_never_starts_with_wtms_own_reading_of_skill_directories() {
+    // A composer seed is wtm's guess at a pane's skills from disk. A run's skills are checked
+    // against what the provider reports, and its profile keeps those directories out, so a seed
+    // would make a run session appear to have skills it does not.
+    let repo = tempfile::tempdir().unwrap();
+    let skill = repo.path().join(".claude/skills/conventions");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: conventions\ndescription: x\n---\nx\n",
+    )
+    .unwrap();
+
+    let seeded = |run: Option<RunAuthority>| {
+        let sink = Arc::new(Recorder::default());
+        let sink_dyn: Arc<dyn AgentSink> = sink.clone();
+        let session = AgentSession::open(
+            &Claude,
+            &SessionRequest {
+                cwd: repo.path().to_string_lossy().into_owned(),
+                executable: Some("/opt/bin/agent".to_owned()),
+                run,
+                ..SessionRequest::default()
+            },
+            Arc::new(FakePipe::new()) as Arc<dyn PipeHost>,
+            &sink_dyn,
+            60_000,
+            None,
+        )
+        .unwrap();
+        drop(session);
+        let events = sink.events.lock().clone();
+        events
+            .into_iter()
+            .any(|event| matches!(event, AgentEvent::SkillsListed { .. }))
+    };
+
+    assert!(seeded(None), "a pane is seeded");
+    let run = profile("claude", Authority::Reviewer).run;
+    assert!(!seeded(Some(run)), "a run session is not");
+}
+
+#[test]
 fn a_claude_canary_loads_no_server_and_keeps_no_conversation() {
     let RunAuthority::Claude(run) = profile("claude", Authority::Writer).run else {
         panic!("a Claude profile");
@@ -432,6 +511,20 @@ fn the_files_a_run_needs_carry_its_token_and_only_its_bridge() {
 
 #[derive(Default)]
 struct Quiet;
+
+/// Keeps every event a session emitted, for the tests that look at what it said while opening.
+#[derive(Default)]
+struct Recorder {
+    events: parking_lot::Mutex<Vec<AgentEvent>>,
+}
+
+impl AgentSink for Recorder {
+    fn on_event(&self, _session: &SessionId, event: &AgentEvent) {
+        self.events.lock().push(event.clone());
+    }
+    fn on_exit(&self, _session: &SessionId, _outcome: &ExitOutcome) {}
+    fn on_ready(&self, _session: &SessionId) {}
+}
 
 impl AgentSink for Quiet {
     fn on_event(&self, _session: &SessionId, _event: &AgentEvent) {}

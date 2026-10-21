@@ -95,6 +95,14 @@ pub struct RecipeSpec {
     /// Run in order. The next stage starts when every role in this one has finished.
     #[serde(rename = "stage")]
     pub stages: Vec<StageSpec>,
+    /// At most this many of a stage's roles run at once; the rest wait for a place. `None` runs a
+    /// whole stage together.
+    ///
+    /// A cap rather than a fixed degree of parallelism, because what it protects is the account,
+    /// not the machine: four roles on one subscription spend its window four times as fast, and a
+    /// stage of six reviewers can reach a limit before any of them finishes.
+    #[serde(default)]
+    pub concurrency: Option<u32>,
 }
 
 /// Roles that run at the same time.
@@ -534,6 +542,12 @@ impl WorkflowSpec {
     }
 
     fn check_recipe(&self, id: &str, recipe: &RecipeSpec) -> Result<(), WorkflowError> {
+        if recipe.concurrency == Some(0) {
+            return Err(WorkflowError::new(
+                format!("recipe.{id}.concurrency"),
+                "a cap of zero would run nothing; leave it out to run each stage whole",
+            ));
+        }
         let key = format!("recipe.{id}.stage");
         if recipe.stages.is_empty() {
             return Err(WorkflowError::new(key, "a recipe needs at least one stage"));
@@ -920,6 +934,16 @@ mod tests {
         let empty_stage =
             review_with(&json!({ "recipe": { "review": { "stage": [{ "roles": [] }] } } }));
         assert!(refusal(&empty_stage).message.contains("at least one role"));
+    }
+
+    #[test]
+    fn a_concurrency_cap_of_zero_is_refused_and_one_is_kept_for_the_plan() {
+        let zero = review_with(&json!({ "recipe": { "review": { "concurrency": 0 } } }));
+        assert_eq!(refusal(&zero).key, "recipe.review.concurrency");
+
+        let one = review_with(&json!({ "recipe": { "review": { "concurrency": 1 } } }));
+        let planned = crate::flow::plan(&one, "review", None).unwrap();
+        assert_eq!(planned.concurrency, Some(1));
     }
 
     #[test]

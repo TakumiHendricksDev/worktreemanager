@@ -460,7 +460,7 @@ fn pull_request_columns(pr: Option<&PullRequestRef>) -> (Option<&str>, Option<u6
     pr.map_or((None, None), |pr| (Some(pr.repo.as_str()), Some(pr.number)))
 }
 
-fn is_unique_violation(error: &rusqlite::Error) -> bool {
+pub(crate) fn is_unique_violation(error: &rusqlite::Error) -> bool {
     matches!(
         error,
         rusqlite::Error::SqliteFailure(failure, _)
@@ -490,6 +490,6 @@ pub(crate) fn from_json<T: DeserializeOwned>(text: &str) -> Result<T, FlowStoreE
     serde_json::from_str(text).map_err(storage)
 }
 
-fn storage(error: impl std::fmt::Display) -> FlowStoreError {
+pub(crate) fn storage(error: impl std::fmt::Display) -> FlowStoreError {
     FlowStoreError::Storage(error.to_string())
 }

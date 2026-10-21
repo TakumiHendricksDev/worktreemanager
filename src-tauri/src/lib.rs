@@ -20,6 +20,7 @@ pub mod commands;
 pub mod design_evidence;
 pub mod dictate;
 pub mod display;
+pub mod flow;
 pub mod flow_session;
 pub mod flow_tools;
 pub mod handoff;
@@ -285,6 +286,36 @@ pub fn run() {
             // window, so attaching needs an `AppHandle`. Where there is no center to attach to
             // — an unbundled dev run — `notifier` falls back to the plugin above.
             notifier::install(handle.handle());
+
+            // The review engine, for the same reason again: its sessions are announced to the
+            // window. Then recovery, off the launch path: a review whose processes went with the
+            // last run is marked interrupted, and nothing it was doing is sent again. It opens the
+            // database only if one exists.
+            {
+                use tauri::Manager;
+                let app = Arc::clone(&*handle.state::<Arc<App>>());
+                let clock = Arc::clone(&app.clock);
+                let engine = flow::Engine::new(
+                    app,
+                    Arc::new(flow::host::TauriHost::new(handle.handle().clone())),
+                    clock,
+                    Arc::new(flow::commands::TauriNotice::new(handle.handle().clone())),
+                    flow::Tuning::default(),
+                );
+                handle.manage(Arc::clone(&engine));
+                let recovered = std::thread::Builder::new()
+                    .name("flow-recovery".to_owned())
+                    .spawn(move || match engine.recover() {
+                        Ok(flows) if !flows.is_empty() => {
+                            tracing::info!(?flows, "marked reviews interrupted at launch");
+                        }
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(%error, "could not check reviews at launch"),
+                    });
+                if let Err(error) = recovered {
+                    tracing::warn!(%error, "could not start review recovery");
+                }
+            }
             Ok(())
         })
         .on_menu_event(|handle, event| {
@@ -460,6 +491,14 @@ pub fn run() {
             commands::post_notification,
             commands::notification_permission,
             commands::request_notification_permission,
+            flow::commands::review_recipes,
+            flow::commands::start_review,
+            flow::commands::review_run,
+            flow::commands::latest_review,
+            flow::commands::resume_review,
+            flow::commands::cancel_review,
+            flow::commands::work_inbox,
+            flow::commands::resolve_inbox_item,
         ])
         // `build` then `run`, rather than `Builder::run`. The shorthand is exactly
         // `build(context)?.run(|_, _| {})` — an empty event callback — and this app now needs
@@ -492,6 +531,11 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Exit) {
                 use tauri::Manager;
 
+                // First, while the record can still say why: a review running now is interrupted
+                // by this quit, not by whatever the next launch finds.
+                if let Some(engine) = handle.try_state::<Arc<flow::Engine>>() {
+                    engine.shutdown();
+                }
                 if let Some(app) = handle.try_state::<Arc<App>>() {
                     app.close_shell_runs();
                     let mut pids = app.pty.take_running_pids();

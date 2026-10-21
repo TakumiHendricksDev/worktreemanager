@@ -83,6 +83,8 @@ impl Harness {
             effort: None,
             brief: "Review the change for naming conventions.".to_owned(),
             resume: None,
+            cwd: None,
+            skills: Vec::new(),
         }
     }
 
@@ -263,7 +265,8 @@ fn a_run_token_is_answered_by_its_run_tools_and_a_reviewer_cannot_checkpoint() {
         &prepared.token,
         "flow_submit",
         json!({ "kind": "findings", "payload": { "findings": [
-            { "title": "Inconsistent name", "severity": "minor", "body": "fooBar vs foo_bar" }
+            { "title": "Inconsistent name", "severity": "minor", "class": "suggestion",
+              "body": "fooBar vs foo_bar" }
         ]}}),
     );
     assert!(ok, "{answer}");
