@@ -24,6 +24,7 @@ use super::env::CommandRequest;
 use super::moves::MoveRequest;
 use super::publish::ReviewPayload;
 use super::route::{RoutePlan, SuggestionRoute};
+use super::runtime::StartRequest;
 use super::state::FlowId;
 
 id! {
@@ -47,7 +48,8 @@ pub enum ApprovalIntent {
     Route,
     /// Merge this head. Only the merge sheet asks for this, and no agent tool can.
     Merge,
-    /// Run this environment command once: a destructive one on a resource every worktree shares.
+    /// Run environment commands once: a destructive one on a resource every worktree shares, or the
+    /// services a review's blocked checks need, started, and those checks run.
     Command,
     /// Move an issue from one team status to another: Start Work's move, or a card dropped on
     /// another board column. The click is the approval, and it pins exactly that move.
@@ -213,6 +215,11 @@ pub enum ApprovalSubject {
     Command(Box<CommandRequest>),
     /// An issue moved to another team status, and why.
     Move(Box<MoveRequest>),
+    /// Starting a review's environment: the services its blocked checks and waiting runtime roles
+    /// need, then running those. Its own subject under the `command` intent, because what it allows
+    /// is the same kind of thing — processes run once on this machine, pinned by the hash of exactly
+    /// what runs — and a new intent would rebuild `approvals` for a word.
+    Services(Box<StartRequest>),
 }
 
 /// An approval to record, not yet numbered.
@@ -358,6 +365,33 @@ impl NewApproval {
             ),
             subject: ApprovalSubject::Move(Box::new(request.clone())),
         }
+    }
+
+    /// Approval to start a review's environment and run what it blocks, covering the hash of
+    /// exactly what runs ([`super::runtime::start_binding`]).
+    ///
+    /// # Errors
+    ///
+    /// When `binding` does not pin the payload.
+    pub fn services(
+        flow: FlowId,
+        request: &StartRequest,
+        binding: Binding,
+    ) -> Result<Self, ApprovalError> {
+        let mut approval = Self::command(
+            flow,
+            &CommandRequest {
+                project: request.project.clone(),
+                worktree: request.worktree.clone(),
+                command: String::new(),
+                label: String::new(),
+                argv: Vec::new(),
+                shared: Vec::new(),
+            },
+            binding,
+        )?;
+        approval.subject = ApprovalSubject::Services(Box::new(request.clone()));
+        Ok(approval)
     }
 }
 

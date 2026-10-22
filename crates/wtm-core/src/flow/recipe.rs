@@ -104,6 +104,14 @@ pub struct WorkflowSpec {
     /// one. The plan's repository-level `[[check]]`, behind the trust prompt, is a later item.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub check: BTreeMap<String, CheckSpec>,
+    /// Whether a check that needs services wtm is not running may start them itself: the project's
+    /// default for its checks, which a check's own `start_services` overrides. `None` is
+    /// [`StartServices::Ask`].
+    ///
+    /// Your own config and the local layer only, like checks: `auto` lets a model's request start
+    /// processes on this machine, and that is not a repository's to decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_services: Option<StartServices>,
     /// Globs naming the repository's own instruction files. `None` means
     /// [`DEFAULT_INSTRUCTION_SOURCES`]; an empty list means none at all, which is a choice a
     /// project can make and so is not the same as leaving the key out.
@@ -165,12 +173,28 @@ pub struct CheckSpec {
     #[serde(default)]
     pub timeout_ms: Option<u64>,
     /// Services the check needs running, such as `web`: ids of `[[environment.service]]`, which
-    /// config loading holds it to. A check that names any is recorded as skipped with that reason
-    /// and never run, until a check can be given its services (the plan's E3): a browser test
-    /// against nothing would fail for a reason that says nothing about the change, and passing it
-    /// would be worse.
+    /// config loading holds it to. The check runs only once every one of them answers its health
+    /// check; until then it is recorded as blocked, with the missing services named, and never as a
+    /// pass or a quiet skip. A browser test against nothing would fail for a reason that says
+    /// nothing about the change, and passing it would be worse.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needs: Vec<String>,
+    /// What happens when the services in `needs` are not running. `None` takes the workflow's
+    /// [`WorkflowSpec::start_services`], and that defaults to asking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_services: Option<StartServices>,
+}
+
+/// What a check, or a runtime role, does about services it needs that are not running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartServices {
+    /// Record it blocked and ask you, once per run, whether to start them and run what they block.
+    /// The default, because a start runs processes on your machine at a model's request.
+    #[default]
+    Ask,
+    /// Start them, wait for their health checks, and run. Only for checks your own config says may.
+    Auto,
 }
 
 /// How long a check may run when its config does not say.
@@ -236,6 +260,37 @@ impl RoleProfile {
             Self::Writer => "writer",
         }
     }
+}
+
+/// What a role examines: the code, or the app the code runs as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleKind {
+    /// Reads the change: a snapshot of the code, or the worktree.
+    #[default]
+    Static,
+    /// Exercises the running app the worktree serves, after the static roles, and reports what it
+    /// saw happen. See `wtm_core::flow::runtime`.
+    Runtime,
+}
+
+impl RoleKind {
+    // By reference, because serde's `skip_serializing_if` hands it one.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn is_static(&self) -> bool {
+        *self == Self::Static
+    }
+}
+
+/// How a runtime role exercises the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDriver {
+    /// Through the project's own Playwright suite: the role's checks, which the app runs for it.
+    Playwright,
+    /// By driving a browser pane wtm opens on its service's verified preview, in a store of its
+    /// own that is thrown away with the pane.
+    Browser,
 }
 
 /// Which files a role reads while it works.
@@ -389,11 +444,28 @@ pub struct RoleSpec {
     pub retries: u32,
     #[serde(default)]
     pub fallback: Fallback,
+    /// Static, the default, or runtime: a role that exercises the running app.
+    #[serde(default, skip_serializing_if = "RoleKind::is_static")]
+    pub kind: RoleKind,
+    /// For a runtime role: the `[[environment.service]]` whose verified preview its browser pane
+    /// opens on. Config loading holds it to a declared service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    /// For a runtime role: how it exercises the app. `None` uses the project's Playwright when the
+    /// worktree's `package.json` declares `@playwright/test` and the role has checks, and a browser
+    /// pane otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<RuntimeDriver>,
 }
 
 impl RoleSpec {
+    /// Where the role reads. A runtime role always reads the worktree, because the app it
+    /// exercises runs from there.
     #[must_use]
     pub fn workspace(&self) -> Workspace {
+        if self.kind == RoleKind::Runtime {
+            return Workspace::Worktree;
+        }
         self.workspace.unwrap_or(match self.profile {
             RoleProfile::Reviewer => Workspace::Snapshot,
             RoleProfile::Writer => Workspace::Worktree,
@@ -515,6 +587,17 @@ impl WorkflowSpec {
         })
     }
 
+    /// What `check` does about services it needs that are not running: its own setting, then the
+    /// workflow's, then asking.
+    #[must_use]
+    pub fn start_policy(&self, check: &str) -> StartServices {
+        self.check
+            .get(check)
+            .and_then(|spec| spec.start_services)
+            .or(self.start_services)
+            .unwrap_or_default()
+    }
+
     fn check_role(&self, id: &str, role: &RoleSpec) -> Result<(), WorkflowError> {
         let key = |field: &str| format!("role.{id}.{field}");
 
@@ -606,7 +689,65 @@ impl WorkflowSpec {
                  when the stage ends",
             ));
         }
+        Self::check_runtime(id, role)?;
         self.check_fallback(id, role)
+    }
+
+    fn check_runtime(id: &str, role: &RoleSpec) -> Result<(), WorkflowError> {
+        let key = |field: &str| format!("role.{id}.{field}");
+        if role.kind == RoleKind::Static {
+            for (field, set) in [
+                ("service", role.service.is_some()),
+                ("driver", role.driver.is_some()),
+            ] {
+                if set {
+                    return Err(WorkflowError::new(
+                        key(field),
+                        "only a runtime role exercises a service; add `kind = \"runtime\"`",
+                    ));
+                }
+            }
+            return Ok(());
+        }
+        if role.profile == RoleProfile::Writer {
+            return Err(WorkflowError::new(
+                key("profile"),
+                "a runtime role reads and reports what the app does; a writer is a separate role",
+            ));
+        }
+        if role.workspace == Some(Workspace::Snapshot) {
+            return Err(WorkflowError::new(
+                key("workspace"),
+                "a runtime role exercises the app the worktree serves, so it reads the worktree; \
+                 leave `workspace` out",
+            ));
+        }
+        if role
+            .service
+            .as_ref()
+            .is_some_and(|service| service.trim().is_empty())
+        {
+            return Err(WorkflowError::new(
+                key("service"),
+                "a service name cannot be empty",
+            ));
+        }
+        match role.driver {
+            Some(RuntimeDriver::Playwright) if role.checks.is_empty() => Err(WorkflowError::new(
+                key("checks"),
+                "a Playwright runtime role runs its checks; name the `[workflow.check]` that runs \
+                 your end-to-end suite",
+            )),
+            // Without Playwright the role drives a browser pane, which opens on a service's preview.
+            Some(RuntimeDriver::Browser) | None if role.service.is_none() => {
+                Err(WorkflowError::new(
+                    key("service"),
+                    "a runtime role that drives a browser pane needs the service whose preview it \
+                     opens, such as `service = \"web\"`",
+                ))
+            }
+            _ => Ok(()),
+        }
     }
 
     fn check_fallback(&self, id: &str, role: &RoleSpec) -> Result<(), WorkflowError> {
@@ -641,6 +782,15 @@ impl WorkflowSpec {
                 format!("`{alternative}` hands back a different kind of output"),
             ));
         }
+        if target.kind != role.kind {
+            return Err(WorkflowError::new(
+                key,
+                format!(
+                    "`{alternative}` is a different kind of role: a fallback reads what the role \
+                     it stands in for reads"
+                ),
+            ));
+        }
         let mut seen = BTreeSet::from([id]);
         let mut next = alternative.as_str();
         while seen.insert(next) {
@@ -667,8 +817,32 @@ impl WorkflowSpec {
             return Err(WorkflowError::new(key, "a recipe needs at least one stage"));
         }
 
+        // A runtime role exercises what the static roles have finished reading, so no static role
+        // may run beside it or after it. The last static stage is where runtime stages may start.
+        let last_static = recipe.stages.iter().rposition(|stage| {
+            stage.roles.iter().any(|name| {
+                self.role
+                    .get(name)
+                    .is_some_and(|r| r.kind == RoleKind::Static)
+            })
+        });
         let mut used = BTreeSet::new();
         for (index, stage) in recipe.stages.iter().enumerate() {
+            if last_static.is_some_and(|last| index <= last)
+                && let Some(runtime) = stage.roles.iter().find(|name| {
+                    self.role
+                        .get(*name)
+                        .is_some_and(|r| r.kind == RoleKind::Runtime)
+                })
+            {
+                return Err(WorkflowError::new(
+                    format!("{key}[{index}].roles"),
+                    format!(
+                        "`{runtime}` is a runtime role, and runtime roles run after the static \
+                         ones; move it to a stage after the last static role"
+                    ),
+                ));
+            }
             let key = format!("{key}[{index}].roles");
             if stage.roles.is_empty() {
                 return Err(WorkflowError::new(key, "a stage needs at least one role"));
@@ -1052,6 +1226,105 @@ mod tests {
         spec.validate().unwrap();
         assert_eq!(spec.check["e2e"].needs, ["web"]);
         assert_eq!(spec.check["e2e"].timeout_ms(), DEFAULT_CHECK_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn a_check_asks_before_starting_services_unless_its_config_or_the_projects_says_auto() {
+        let spec = review_with(&json!({
+            "check": {
+                "e2e": { "run": ["just", "e2e"], "needs": ["web"] },
+                "smoke": { "run": ["just", "smoke"], "needs": ["web"], "start_services": "auto" },
+            },
+        }));
+        assert_eq!(spec.start_policy("e2e"), StartServices::Ask);
+        assert_eq!(spec.start_policy("smoke"), StartServices::Auto);
+
+        let mut project_auto = spec.clone();
+        project_auto.start_services = Some(StartServices::Auto);
+        assert_eq!(project_auto.start_policy("e2e"), StartServices::Auto);
+        project_auto.check.get_mut("smoke").unwrap().start_services = Some(StartServices::Ask);
+        assert_eq!(project_auto.start_policy("smoke"), StartServices::Ask);
+    }
+
+    /// `review()` with a runtime role after its two stages.
+    fn with_runtime(runtime: &serde_json::Value, stages: &serde_json::Value) -> WorkflowSpec {
+        let mut base = review();
+        base["role"]["clickthrough"] = runtime.clone();
+        base["recipe"]["review"]["stage"] = stages.clone();
+        workflow(base)
+    }
+
+    fn clickthrough() -> serde_json::Value {
+        json!({
+            "objective": "Click through what the change touches",
+            "provider": "claude",
+            "kind": "runtime",
+            "service": "web",
+            "inputs": ["diff"],
+        })
+    }
+
+    #[test]
+    fn a_runtime_role_runs_after_every_static_role_and_reads_the_worktree() {
+        let after = with_runtime(
+            &clickthrough(),
+            &json!([
+                { "roles": ["conventions", "correctness"] },
+                { "roles": ["consolidate"] },
+                { "roles": ["clickthrough"] },
+            ]),
+        );
+        after.validate().unwrap();
+        assert_eq!(after.role["clickthrough"].workspace(), Workspace::Worktree);
+
+        let beside = with_runtime(
+            &clickthrough(),
+            &json!([
+                { "roles": ["conventions", "correctness", "clickthrough"] },
+                { "roles": ["consolidate"] },
+            ]),
+        );
+        let error = refusal(&beside);
+        assert_eq!(error.key, "recipe.review.stage[0].roles");
+        assert!(
+            error.message.contains("after the last static role"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_runtime_role_that_may_drive_a_pane_names_its_service_and_never_reads_a_snapshot() {
+        let stages = json!([
+            { "roles": ["conventions", "correctness"] },
+            { "roles": ["clickthrough"] },
+        ]);
+        let mut no_service = clickthrough();
+        no_service.as_object_mut().unwrap().remove("service");
+        assert_eq!(
+            refusal(&with_runtime(&no_service, &stages)).key,
+            "role.clickthrough.service"
+        );
+
+        let mut snapshot = clickthrough();
+        snapshot["workspace"] = json!("snapshot");
+        assert_eq!(
+            refusal(&with_runtime(&snapshot, &stages)).key,
+            "role.clickthrough.workspace"
+        );
+
+        let mut playwright = no_service.clone();
+        playwright["driver"] = json!("playwright");
+        assert_eq!(
+            refusal(&with_runtime(&playwright, &stages)).key,
+            "role.clickthrough.checks"
+        );
+
+        let mut static_with_service = review();
+        static_with_service["role"]["correctness"]["service"] = json!("web");
+        assert_eq!(
+            refusal(&workflow(static_with_service)).key,
+            "role.correctness.service"
+        );
     }
 
     #[test]

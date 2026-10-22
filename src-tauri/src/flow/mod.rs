@@ -63,6 +63,7 @@ pub mod outbox;
 pub mod publish;
 pub mod pull_request;
 pub mod routes;
+pub mod runtime;
 pub mod start;
 pub mod start_commands;
 
@@ -82,7 +83,7 @@ use wtm_core::flow::{
     FlowEvent, FlowId, FlowKind, Hold, HoldKind, InboxItem, InboxItemId, InboxKind, InboxTarget,
     InterruptCause, Invocation, InvocationChange, InvocationStatus, NewInboxItem, NewInvocation,
     NewQuestion, NewReviewRun, NewStep, NewWorkItem, OnLimit, OutputKind, Phase, Question,
-    QuestionId, ReviewRun, RoleProvider, RoleSpec, ScratchLabel, SkillProblem, Snapshot,
+    QuestionId, ReviewRun, RoleKind, RoleProvider, RoleSpec, ScratchLabel, SkillProblem, Snapshot,
     SnapshotId, Status, Step, StepChange, StepId, StepStatus, Submission, WorkLink, WorkflowSpec,
     Workspace, after_failure, on_limit, resume_at,
 };
@@ -207,6 +208,12 @@ pub struct FlowView {
     pub leases: Vec<wtm_core::flow::Lease>,
     /// The writer roles your config has, which a local fix can be given to.
     pub writers: Vec<fix::WriterChoice>,
+    /// The pictures runtime roles took, and wtm took for them, oldest first. Findings cite them as
+    /// `s<id>` in their evidence.
+    pub screenshots: Vec<wtm_core::flow::Screenshot>,
+    /// What Start environment and run would start and run now, while a check is blocked or a
+    /// runtime role waits for its services. `None` when nothing is.
+    pub pending_start: Option<runtime::StartView>,
 }
 
 /// One run's controls, shared by its thread and its roles.
@@ -218,6 +225,8 @@ struct Run {
     /// The reviewer lease a review drive holds on its worktree while it reads it, released when
     /// the drive ends. A fix's writer lease is the fix's, not the drive's (`fix.rs`).
     lease: Mutex<Option<wtm_core::flow::LeaseId>>,
+    /// Set when you decline starting the environment a runtime role waits for (`runtime.rs`).
+    declined: AtomicBool,
 }
 
 /// What a session told the role thread waiting on it.
@@ -244,6 +253,13 @@ struct Live {
     dir: FlowDir,
     /// What a writer fixing findings is held to, for a fix's role; `None` for a reviewer.
     fix: Option<Arc<fix::FixLive>>,
+    /// The project and worktree, which a check that needs services asks the gate about.
+    project: String,
+    worktree: String,
+    /// The workflow's `start_services`, which a check without its own setting follows.
+    start_services: Option<wtm_core::flow::StartServices>,
+    /// The incognito pane a runtime role drives, by id.
+    browser: Option<String>,
 }
 
 /// The engine's ear on one session: the events it acts on, forwarded to the role thread.
@@ -377,6 +393,8 @@ pub struct Engine {
     fired: AtomicBool,
     /// Start Work's lock and the worktrees being made now (`start.rs`).
     starts: start::Starts,
+    /// The environment supervisor, attached once it exists. Weak, because it holds this engine.
+    environment: Mutex<Option<std::sync::Weak<dyn runtime::Environment>>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -417,6 +435,7 @@ impl Engine {
             fault: outbox::Fault::from_env(),
             fired: AtomicBool::new(false),
             starts: start::Starts::default(),
+            environment: Mutex::new(None),
         })
     }
 
@@ -1098,6 +1117,17 @@ impl Engine {
         let Ok(db) = self.db() else {
             return RoleEnd::Stopped;
         };
+        // A runtime role exercises the running app, so it starts only once every service it needs
+        // answers: waiting for you to start them if it has to (`runtime.rs`).
+        let mut services = Vec::new();
+        if let Ok(spec) = ctx.role(&step.role)
+            && spec.kind == RoleKind::Runtime
+        {
+            match self.runtime_ready(ctx, run, step, spec) {
+                runtime::EnvReady::Up(up) => services = up,
+                runtime::EnvReady::Stopped => return RoleEnd::Stopped,
+            }
+        }
         loop {
             if self.quitting() {
                 return RoleEnd::Stopped;
@@ -1111,7 +1141,7 @@ impl Engine {
                 .map_or(0, |all| all.iter().filter(|i| i.step == step.id).count())
                 + 1;
             let attempt = u32::try_from(attempt).unwrap_or(u32::MAX);
-            match self.attempt(ctx, run, snapshots, checkout, step, attempt) {
+            match self.attempt(ctx, run, snapshots, checkout, step, attempt, &services) {
                 AttemptEnd::Submitted => return RoleEnd::Done,
                 AttemptEnd::Quitting => return RoleEnd::Stopped,
                 AttemptEnd::Cancelled => {
@@ -1143,6 +1173,7 @@ impl Engine {
     }
 
     /// One attempt: one session, opened, sent its turn, and read until it submits or stops.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn attempt(
         &self,
         ctx: &RunCtx,
@@ -1151,6 +1182,7 @@ impl Engine {
         checkout: &StageCheckout,
         step: &mut Step,
         attempt: u32,
+        services: &[wtm_core::flow::GatedService],
     ) -> AttemptEnd {
         let Ok(db) = self.db() else {
             return AttemptEnd::Quitting;
@@ -1206,6 +1238,30 @@ impl Engine {
             },
         );
 
+        let setup = if spec.kind == RoleKind::Runtime {
+            match self.open_runtime(ctx, step, &spec, invocation.id, services.to_vec()) {
+                Ok(setup) => Some(setup),
+                Err(reason) => {
+                    let reason = format!("its runtime could not be set up: {reason}");
+                    let _ = db.update_invocation(
+                        invocation.id,
+                        &InvocationChange::ended(
+                            InvocationStatus::Failed,
+                            Some(reason.clone()),
+                            self.now(),
+                        ),
+                        self.now(),
+                    );
+                    return AttemptEnd::Failed {
+                        status: InvocationStatus::Failed,
+                        reason,
+                    };
+                }
+            }
+        } else {
+            None
+        };
+
         let (tx, rx) = mpsc::channel();
         let key = (ctx.flow, step.role.clone());
         self.live.lock().insert(
@@ -1227,10 +1283,37 @@ impl Engine {
                     .collect(),
                 dir: ctx.dir.clone(),
                 fix: ctx.fix.clone(),
+                project: ctx.project.clone(),
+                worktree: ctx.worktree.clone(),
+                start_services: ctx.workflow.start_services,
+                browser: setup
+                    .as_ref()
+                    .and_then(|s| s.pane.as_ref())
+                    .map(|p| p.id.clone()),
             }),
         );
-        let end = self.converse(ctx, run, step, &spec, &cwd, &invocation, tx, &rx);
+        let end = self.converse(
+            ctx,
+            run,
+            step,
+            &spec,
+            &cwd,
+            &invocation,
+            setup.as_ref(),
+            tx,
+            &rx,
+        );
         self.live.lock().remove(&key);
+        if let Some(setup) = &setup {
+            self.close_runtime(setup);
+        }
+        // A role that read the worktree read it while you could edit it: ask git whether you did.
+        if matches!(end, AttemptEnd::Submitted)
+            && step.workspace == Workspace::Worktree
+            && step.profile == wtm_core::flow::RoleProfile::Reviewer
+        {
+            self.recheck_tree(ctx, step);
+        }
 
         if !matches!(end, AttemptEnd::Quitting) {
             let (status, detail) = match &end {
@@ -1264,6 +1347,7 @@ impl Engine {
         spec: &RoleSpec,
         cwd: &Path,
         invocation: &Invocation,
+        setup: Option<&runtime::RuntimeSetup>,
         tx: Sender<Signal>,
         rx: &Receiver<Signal>,
     ) -> AttemptEnd {
@@ -1310,6 +1394,7 @@ impl Engine {
                 .as_ref()
                 .map(|(from, to)| (from.as_str(), to.as_str())),
             answers: &answers,
+            runtime: setup,
         };
         let invocation = invocation.id;
         let session_spec = RoleSession {
@@ -1319,6 +1404,7 @@ impl Engine {
                 flow: ctx.flow,
                 role: step.role.clone(),
                 authority: step.profile,
+                browser: setup.and_then(|s| s.pane.as_ref()).map(|p| p.id.clone()),
             },
             provider: step.provider.id().to_owned(),
             model: step.model.clone(),
@@ -2066,13 +2152,16 @@ impl Engine {
             if state.end.is_some() {
                 return;
             }
-            if let Some(Hold::WaitingCapacity { .. }) = state.hold {
-                let _ = self.record(
-                    flow,
-                    &FlowEvent::Released {
-                        hold: HoldKind::WaitingCapacity,
-                    },
-                );
+            // A role waiting for capacity or for its environment waits in a thread that is going
+            // away; the interruption is what holds the run now, and a resume asks again.
+            if let Some(
+                hold @ (Hold::WaitingCapacity { .. }
+                | Hold::Blocked {
+                    cause: wtm_core::flow::BlockCause::Env,
+                }),
+            ) = &state.hold
+            {
+                let _ = self.record(flow, &FlowEvent::Released { hold: hold.kind() });
             }
             if let Err(e) = self.record(
                 flow,
@@ -2197,8 +2286,17 @@ impl Engine {
         let fixes = db.fixes(flow).map_err(text)?;
         let leases = db.open_leases(Some(&review.worktree_path)).map_err(text)?;
         let writers = fix::writer_choices(workflow.as_ref());
+        let screenshots = db.screenshots(flow).map_err(text)?;
+        // What Start environment and run would start and run, when anything is blocked. A config
+        // that no longer renders is shown as nothing to start rather than failing the whole view.
+        let pending_start = self.pending_start(flow).unwrap_or_else(|e| {
+            tracing::debug!(%flow, error = %e, "could not plan starting the environment");
+            None
+        });
         Ok(FlowView {
             fixes,
+            screenshots,
+            pending_start,
             leases,
             writers,
             status: state.state.status(),

@@ -1025,6 +1025,11 @@ pub(crate) fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Resp
     // without — another agent, a browser, a pane the user opened, a comment thread — so each is
     // refused here, before any handler resolves the token for itself.
     if let Some(role) = scope.flow() {
+        // The one exception: a runtime role holds a pane wtm opened for it, and drives that.
+        // `browser_tools` holds such a token to that pane and to the tools that drive it.
+        if action == Action::Browser && role.browser.is_some() {
+            return None;
+        }
         return (action != Action::Flow).then(|| {
             Response::failed(format!(
                 "this is a workflow run's {} session, and it has only its run tools (`flow_*`)",
@@ -1628,6 +1633,7 @@ mod tests {
                 flow: wtm_core::flow::FlowId(7),
                 role: "conventions".to_owned(),
                 authority,
+                browser: None,
             },
         )
     }
@@ -1656,6 +1662,28 @@ mod tests {
                         "{action:?}: {refusal:?}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn a_runtime_roles_token_reaches_the_browser_and_its_run_tools_and_nothing_else() {
+        let mut scope = run_scope(wtm_agent::authority::Authority::Reviewer);
+        if let SessionScope::Worktree {
+            flow: Some(role), ..
+        } = &mut scope
+        {
+            role.browser = Some("browser-runtime".to_owned());
+        }
+        for action in ALL_ACTIONS {
+            let refusal = scope_refusal(&scope, action);
+            if matches!(action, Action::Flow | Action::Browser) {
+                assert!(refusal.is_none(), "a runtime role must reach {action:?}");
+            } else {
+                assert!(
+                    refusal.is_some(),
+                    "a runtime role must not reach {action:?}"
+                );
             }
         }
     }

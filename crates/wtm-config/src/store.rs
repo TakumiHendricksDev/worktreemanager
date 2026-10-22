@@ -415,6 +415,14 @@ fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
                  a review role asks",
             ));
         }
+        if workflow.get("start_services").is_some() {
+            return Err(refuse(
+                "start_services",
+                "whether a review may start services by itself belongs in your own config \
+                 (~/.config/wtm/config.toml), not in a repository's wtm.toml: `auto` lets a \
+                 model's request start processes on this machine",
+            ));
+        }
     }
     Ok(())
 }
@@ -1507,6 +1515,21 @@ roles = ["conventions", "correctness"]
             ConfigError::Invalid { layer, key, .. } => {
                 assert_eq!(layer, ConfigLayer::Repo);
                 assert_eq!(key.as_deref(), Some("workflow.check"));
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_repository_cannot_let_a_review_start_services_by_itself() {
+        let h = Harness::new();
+        h.write_repo_config("[workflow]\nstart_services = \"auto\"\n");
+        h.approve("wtm.toml");
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid { layer, key, .. } => {
+                assert_eq!(layer, ConfigLayer::Repo);
+                assert_eq!(key.as_deref(), Some("workflow.start_services"));
             }
             other => panic!("expected Invalid, got {other:?}"),
         }

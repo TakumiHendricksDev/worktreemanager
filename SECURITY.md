@@ -113,6 +113,14 @@ Worth stating because it narrows the surface considerably:
   shows the declared command and pins a hash of the rendered one, so no value from `.env` reaches
   the window and a changed value runs nothing. Quitting stops what wtm holds and leaves detached
   services running, listed on the next launch.
+  A review check that needs those services runs only after each answers its health check; one
+  that cannot is recorded as blocked, never as passed, and starting the services for it waits for
+  your approval of exactly what starts and runs, pinned by hash as above. Only your own config can
+  set `start_services = "auto"`, which lets such a check start them without asking; a
+  repository's `wtm.toml` cannot. A review's runtime role drives one browser pane wtm opens for it
+  on a preview that answered, in an in-memory store made for that pane and dropped with it — never
+  the store your own browser panes share, where a sign-in persists — held to that preview's
+  origin; its session's token reaches that pane and no other.
 
   What is unchanged, and is the reason the exceptions are narrow enough to describe in a bullet:
 

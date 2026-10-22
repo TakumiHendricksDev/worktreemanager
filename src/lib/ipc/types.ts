@@ -1557,7 +1557,21 @@ export interface FindingRecord extends Finding {
   evidence: { source: FindingSource; reported: ReportedFinding }[];
 }
 
-export type CheckStatus = 'passed' | 'failed' | 'timed_out' | 'skipped' | 'error';
+export type CheckStatus =
+  'passed' | 'failed' | 'timed_out' | 'skipped' | 'error' | 'blocked';
+
+/**
+ * A service a check or a runtime role needed, as the health gate found it just before.
+ * `wtm_core::flow::GatedService`.
+ */
+export interface GatedService {
+  service: string;
+  state: ServiceState;
+  /** What its health check answered, or why it is not up. */
+  detail: string | null;
+  /** Where its health was asked, when that is an address. */
+  url: string | null;
+}
 
 /** One run of a configured check the app made for a role. The only thing that can show a pass. */
 export interface CheckRun {
@@ -1568,8 +1582,40 @@ export interface CheckRun {
   detail: string | null;
   exitCode: number | null;
   treeSha: string;
+  /** Where it ran: the snapshot checkout its role read, or the worktree after an approval. */
+  cwd: string;
+  /** The services it needed: which were up and where when it ran, or what was missing. */
+  services: GatedService[];
   startedAt: number;
   endedAt: number;
+}
+
+/** A picture a runtime role took of its pane, or wtm took for it. `wtm_core::flow::Screenshot`. */
+export interface Screenshot {
+  id: number;
+  flow: number;
+  step: number | null;
+  invocation: number | null;
+  role: string | null;
+  url: string;
+  takenBy: 'wtm' | 'role';
+  takenAt: number;
+}
+
+/** What Start environment and run would start and run. `flow::runtime::StartView`. */
+export interface StartView {
+  flow: number;
+  request: {
+    project: string;
+    worktree: string;
+    /** As declared, templates and all: a rendered argv can hold a value from `.env`. */
+    services: { service: string; label: string; argv: string[] }[];
+    checks: { check: string; label: string; argv: string[]; needs: string[] }[];
+    /** Runtime roles waiting for these services. */
+    roles: string[];
+  };
+  /** The pin the approval covers; Approve sends it back. */
+  binding: string;
 }
 
 /** A check the run's roles may ask for. One with no `CheckRun` was not run. */
@@ -1715,6 +1761,10 @@ export interface ReviewRunView {
   leases: WorktreeLease[];
   /** The writer roles your config has. */
   writers: WriterChoice[];
+  /** Runtime roles' screenshots, oldest first; findings cite them as `s<id>`. */
+  screenshots: Screenshot[];
+  /** What Start environment and run would do now; null when nothing is blocked. */
+  pendingStart: StartView | null;
 }
 
 // ── local fixes: `wtm_core::flow::{fix, route}` ──

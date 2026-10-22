@@ -36,11 +36,11 @@ use wtm_appdb::AppDb;
 use wtm_core::error::ExecError;
 use wtm_core::flow::{
     CommandRequest, CommandRun, CommandRunChange, CommandRunId, CommandRunState, EnvCommandSpec,
-    FlowEvent, FlowId, FlowKind, InboxKind, InboxTarget, Isolation, NewApproval, NewCommandRun,
-    NewInboxItem, NewWorkItem, Phase, PortConflict, PortOwner, Recovery, ServiceEvent,
-    ServiceRecord, ServiceSpec, ServiceState, WorkLink, command_binding, containers_on,
-    healthy_status, is_docker_forwarder, loopback_url, needs_approval, parse_lsof, port_number,
-    probe_delays,
+    FlowEvent, FlowId, FlowKind, GatedService, InboxKind, InboxTarget, Isolation, NewApproval,
+    NewCommandRun, NewInboxItem, NewWorkItem, Phase, PortConflict, PortOwner, Recovery,
+    ServiceEvent, ServiceRecord, ServiceSpec, ServiceState, WorkLink, command_binding,
+    containers_on, healthy_status, is_docker_forwarder, loopback_url, needs_approval, parse_lsof,
+    port_number, probe_delays,
 };
 use wtm_core::model::{ExitOutcome, Project, ProjectId, Worktree};
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation};
@@ -111,6 +111,10 @@ enum Probe {
     Url(String),
     Command { argv: Vec<String>, cwd: PathBuf },
 }
+
+/// How often a start for a check looks at whether its services have settled. Reading a row, not
+/// asking the service: the health thread a start began does the asking.
+const SETTLE_POLL_MS: u64 = 250;
 
 // ═══════════════════════════════ views ═══════════════════════════════
 
@@ -1325,6 +1329,83 @@ impl Supervisor {
         })
     }
 
+    // ═══════════════════════════════ for checks ═══════════════════════════════
+
+    /// Ask one service, now, for the gate. A service that is starting is asked but not moved on a
+    /// miss: its own health thread is still asking on its schedule, and calling it unhealthy early
+    /// would end that.
+    fn gate_one(&self, project: &Project, worktree: &Worktree, service: &str) -> GatedService {
+        let worktree_id = worktree.id.as_str();
+        let Some(spec) = project.environment.service(service) else {
+            return GatedService {
+                service: service.to_owned(),
+                state: ServiceState::Failed,
+                detail: Some("this project declares no such service".to_owned()),
+                url: None,
+            };
+        };
+        let ctx = self.context(project, worktree);
+        let probe = self.probe_of(project, worktree, &ctx, spec);
+        let url = match &probe {
+            Ok(Probe::Url(url)) => Some(url.clone()),
+            _ => spec.preview.as_ref().and_then(|template| {
+                self.render(&ctx, "preview", template)
+                    .ok()
+                    .and_then(|url| loopback_url(&url).ok())
+                    .map(|url| url.as_str().to_owned())
+            }),
+        };
+        let key = (worktree_id.to_owned(), spec.id.clone());
+        self.refresh_recovered(worktree_id);
+        let record = self.record(&key);
+        let state = record.as_ref().map_or(ServiceState::Stopped, |r| r.state);
+        if !state.is_running() {
+            return GatedService {
+                service: service.to_owned(),
+                state,
+                detail: record.and_then(|r| r.detail),
+                url,
+            };
+        }
+        let probe = match probe {
+            Ok(probe) => probe,
+            Err(why) => {
+                return GatedService {
+                    service: service.to_owned(),
+                    state: ServiceState::Failed,
+                    detail: Some(why),
+                    url,
+                };
+            }
+        };
+        match self.ask(&probe, PROBE_TIMEOUT_MS) {
+            Ok(answer) => {
+                self.transition(&key, ServiceEvent::Answered, Some(answer.clone()), false);
+                GatedService {
+                    service: service.to_owned(),
+                    state: ServiceState::Healthy,
+                    detail: Some(answer),
+                    url,
+                }
+            }
+            Err(why) if state == ServiceState::Starting => GatedService {
+                service: service.to_owned(),
+                state,
+                detail: Some(why),
+                url,
+            },
+            Err(why) => {
+                self.transition(&key, ServiceEvent::Unanswered, Some(why.clone()), false);
+                GatedService {
+                    service: service.to_owned(),
+                    state: ServiceState::Unhealthy,
+                    detail: Some(why),
+                    url,
+                }
+            }
+        }
+    }
+
     // ═══════════════════════════════ commands ═══════════════════════════════
 
     /// The worktree's environment flow, made with its work item if it has none.
@@ -2130,4 +2211,99 @@ fn tail(path: &Path, max: u64) -> std::io::Result<(String, bool)> {
         text.drain(..=newline);
     }
     Ok((text, start > 0))
+}
+
+impl super::runtime::Environment for Supervisor {
+    fn gate(&self, project: &str, worktree: &str, services: &[String]) -> Vec<GatedService> {
+        match self.resolve(project, worktree) {
+            Ok((project, worktree)) => services
+                .iter()
+                .map(|service| self.gate_one(&project, &worktree, service))
+                .collect(),
+            Err(why) => services
+                .iter()
+                .map(|service| GatedService {
+                    service: service.clone(),
+                    state: ServiceState::Stopped,
+                    detail: Some(why.clone()),
+                    url: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn bring_up(&self, project: &str, worktree: &str, services: &[String]) -> Vec<GatedService> {
+        let mut refused: BTreeMap<String, String> = BTreeMap::new();
+        let mut deadline_ms: u64 = 0;
+        if let Ok((resolved, _)) = self.resolve(project, worktree) {
+            for service in services {
+                if let Some(spec) = resolved.environment.service(service) {
+                    deadline_ms = deadline_ms.max(spec.health.timeout_ms());
+                }
+                if let Err(why) = self.start(project, worktree, Some(service)) {
+                    refused.insert(service.clone(), why);
+                }
+            }
+        }
+        // Each start's health thread asks on its own schedule and settles its row; this waits for
+        // the rows, within the longest deadline among them and a little more for the last answer.
+        let began = self.clock.monotonic_ms();
+        let keys: Vec<Key> = services
+            .iter()
+            .map(|service| (worktree.to_owned(), service.clone()))
+            .collect();
+        while self.clock.monotonic_ms() - began < deadline_ms + 2_000 {
+            let starting = keys.iter().any(|key| {
+                self.record(key)
+                    .is_some_and(|r| r.state == ServiceState::Starting)
+            });
+            if !starting {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(SETTLE_POLL_MS));
+        }
+        let mut gated = super::runtime::Environment::gate(self, project, worktree, services);
+        for service in &mut gated {
+            if !service.is_up()
+                && let Some(why) = refused.remove(&service.service)
+            {
+                service.detail = Some(why);
+            }
+        }
+        gated
+    }
+
+    fn plan(
+        &self,
+        project: &str,
+        worktree: &str,
+        services: &[String],
+    ) -> Result<Vec<(wtm_core::flow::PlannedStart, Vec<String>)>, String> {
+        let (project, worktree) = self.resolve(project, worktree)?;
+        let ctx = self.context(&project, &worktree);
+        services
+            .iter()
+            .map(|service| {
+                let spec = Self::chosen(&project, Some(service))?[0];
+                let rendered = self.render_argv(
+                    &project,
+                    &ctx,
+                    &format!("environment.service.{}.start", spec.id),
+                    &spec.start,
+                )?;
+                Ok((
+                    wtm_core::flow::PlannedStart {
+                        service: spec.id.clone(),
+                        label: spec.label().to_owned(),
+                        argv: spec.start.clone(),
+                    },
+                    rendered,
+                ))
+            })
+            .collect()
+    }
+
+    fn preview(&self, project: &str, worktree: &str, service: &str) -> Result<String, String> {
+        Self::preview(self, project, worktree, service).map(|verified| verified.url)
+    }
 }

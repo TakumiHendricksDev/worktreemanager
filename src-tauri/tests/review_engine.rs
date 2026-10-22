@@ -142,7 +142,8 @@ run = ["sh", "-c", "echo '2 of 3 tests failed'; exit 1"]
 run = ["sh", "-c", "touch ran-e2e"]
 needs = ["web"]
 
-# What `needs` names has to be declared. Never started here: the check is skipped regardless.
+# What `needs` names has to be declared. Never started here: this engine has no supervisor, so the
+# check is blocked (`runtime_checks.rs` gives it one).
 [[defaults.environment.service]]
 id = "web"
 start = ["sh", "-c", "exit 0"]
@@ -1217,7 +1218,7 @@ fn a_check_a_role_asks_for_is_run_by_the_app_and_only_an_exit_of_zero_reads_as_p
     };
     assert_eq!(status("passes"), Some((CheckStatus::Passed, Some(0))));
     assert_eq!(status("fails"), Some((CheckStatus::Failed, Some(1))));
-    assert_eq!(status("e2e"), Some((CheckStatus::Skipped, None)));
+    assert_eq!(status("e2e"), Some((CheckStatus::Blocked, None)));
     assert_eq!(
         status("deploy"),
         None,
@@ -1245,8 +1246,12 @@ fn a_check_a_role_asks_for_is_run_by_the_app_and_only_an_exit_of_zero_reads_as_p
     assert!(ok && text.contains("2 of 3 tests failed"), "{text}");
     let (_, ok, _) = said("`deploy` is not one of this role's checks").unwrap();
     assert!(!ok);
-    let (_, _, skipped) = said("`e2e` was skipped").unwrap();
-    assert!(skipped.contains("neither passed nor failed"), "{skipped}");
+    let (_, _, blocked) = said("`e2e` was not run").unwrap();
+    assert!(
+        blocked.contains("blocked: environment not started")
+            && blocked.contains("neither passed nor failed"),
+        "{blocked}"
+    );
     assert_eq!(
         view.expected_checks
             .iter()

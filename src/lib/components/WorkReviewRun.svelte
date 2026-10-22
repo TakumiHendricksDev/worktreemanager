@@ -35,6 +35,13 @@
    * Staleness is asked again whenever the window's reading of the pull request names a new head,
    * which it reads on focus.
    *
+   * # Blocked on the environment
+   *
+   * A check that needs services which were not answering is drawn blocked, never passed or
+   * skipped, with the services named; while anything is blocked the run carries `pendingStart`, and
+   * the Start environment and run card (also in the inbox) is the one action. A runtime role's
+   * screenshots are listed under Runtime, and a finding that cites one (`s12`) shows it.
+   *
    * # Arriving from the inbox
    *
    * An inbox item or a notification about a role or a finding sets `work.focus`; once that target
@@ -79,6 +86,7 @@
     resumeWords,
     ruleLabel,
     runsOn,
+    servicesLine,
     skippedLine,
     STEP_TONE,
     stepLine,
@@ -97,6 +105,8 @@
   import WorkPrOutcome from './WorkPrOutcome.svelte';
   import WorkPublication from './WorkPublication.svelte';
   import WorkRoute from './WorkRoute.svelte';
+  import WorkShot from './WorkShot.svelte';
+  import WorkStartApproval from './WorkStartApproval.svelte';
 
   const {
     visible,
@@ -520,6 +530,18 @@
       {/if}
     </section>
 
+    {#if run.pendingStart}
+      {@const start = run.pendingStart}
+      <WorkStartApproval
+        {start}
+        {busy}
+        error={null}
+        onstart={() =>
+          void reviewRuns.startEnvironment(worktreeId, run.flow.id, start.binding)}
+        ondecline={() => void reviewRuns.declineEnvironment(worktreeId, run.flow.id)}
+      />
+    {/if}
+
     {#if publication}
       <WorkPublication
         view={publication}
@@ -678,12 +700,27 @@
               <span
                 >{check.label} · {CHECK_WORDS[check.state]}{#if check.detail}: <CodeText
                     text={check.detail}
+                  />{/if}{#if servicesLine(check.run)}, <CodeText
+                    text={servicesLine(check.run) ?? ''}
                   />{/if}</span
               >
               {#if check.stale}<span class="c-finding__stale">Stale</span>{/if}
             </li>
           {/each}
         </ul>
+      </section>
+    {/if}
+
+    {#if run.screenshots.length > 0}
+      <section class="c-review-runtime" aria-labelledby="work-runtime-title">
+        <h3 class="c-findings__heading" id="work-runtime-title">
+          Runtime · what the running app showed, in a private browser store
+        </h3>
+        <div class="c-review-runtime__shots">
+          {#each run.screenshots as shot (shot.id)}
+            <WorkShot {shot} />
+          {/each}
+        </div>
       </section>
     {/if}
 

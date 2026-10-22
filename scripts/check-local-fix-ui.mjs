@@ -113,6 +113,8 @@ const view = () => ({
   fixes: window.fix ? [structuredClone(window.fix)] : [],
   leases: structuredClone(window.leases),
   writers: [{ id: 'fixer', provider: 'claude', model: 'sonnet', objective: 'Fix the findings you are given' }],
+  screenshots: [],
+  pendingStart: null,
 });
 const PR_MARK = '<!-- wtm:5e6f7a8b9c0d1e2f -->';
 const BRANCH = 'wtm/pr-4031-fix-f1a2b3c';

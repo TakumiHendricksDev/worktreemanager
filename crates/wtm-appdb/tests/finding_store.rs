@@ -3,7 +3,8 @@
 //! These protect what the Reviews tab reads back and what a rule's provenance points at: a finding
 //! keeps every report it was made of, a superseded finding leaves the list but not the record, a
 //! dismissal keeps its reason, and a check record reads as a pass only when its command exited 0 —
-//! the store refuses to write one that says otherwise.
+//! the store refuses to write one that says otherwise. A check blocked on its environment keeps the
+//! services it was waiting for, and a runtime role's screenshots are kept and never rewritten.
 
 #![allow(clippy::unwrap_used)]
 
@@ -12,9 +13,10 @@ use std::path::Path;
 use pretty_assertions::assert_eq;
 use wtm_appdb::AppDb;
 use wtm_core::flow::{
-    CheckStatus, Evidence, FindingClass, FindingId, FlowKind, InvocationId, Location, NewCheckRun,
-    NewFinding, NewInvocation, NewReviewRun, NewStep, NewWorkItem, Reconciled, ReportedClass,
-    ReportedFinding, RoleProfile, RoleProvider, Severity, Source, StepStatus, Workspace,
+    BlobRef, CheckStatus, Evidence, FindingClass, FindingId, FlowKind, GatedService, InvocationId,
+    Location, NewCheckRun, NewFinding, NewInvocation, NewReviewRun, NewScreenshot, NewStep,
+    NewWorkItem, Reconciled, ReportedClass, ReportedFinding, RoleProfile, RoleProvider,
+    ServiceState, Severity, ShotTaker, Source, StepStatus, Workspace,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStore, FlowStoreError, RunStore};
@@ -285,6 +287,7 @@ fn check(status: CheckStatus, exit_code: Option<i32>) -> NewCheckRun {
         tree_sha: "t1".to_owned(),
         cwd: "/data/flow/1/checkouts/t1".to_owned(),
         output: None,
+        services: Vec::new(),
         started_at: 1_000,
     }
 }
@@ -326,4 +329,102 @@ fn a_check_record_reads_as_a_pass_only_when_its_command_exited_zero() {
         );
     }
     assert_eq!(db.checks(flow).unwrap().len(), 3);
+}
+
+fn web(state: ServiceState, detail: &str) -> GatedService {
+    GatedService {
+        service: "web".to_owned(),
+        state,
+        detail: Some(detail.to_owned()),
+        url: Some("http://localhost:18431/healthz".to_owned()),
+    }
+}
+
+#[test]
+fn a_blocked_check_keeps_the_services_it_waited_for_and_can_never_be_a_pass() {
+    let (_dir, db) = open();
+    let (flow, _) = a_review(&db);
+    let at = |run: NewCheckRun| NewCheckRun { flow, ..run };
+
+    let blocked = db
+        .record_check(
+            &at(NewCheckRun {
+                detail: Some("blocked: environment not started — `web` is stopped".to_owned()),
+                services: vec![web(ServiceState::Stopped, "never started")],
+                ..check(CheckStatus::Blocked, None)
+            }),
+            2_000,
+        )
+        .unwrap();
+    assert_eq!(blocked.status, CheckStatus::Blocked);
+    assert_eq!(
+        blocked.services,
+        [web(ServiceState::Stopped, "never started")]
+    );
+
+    let ran = db
+        .record_check(
+            &at(NewCheckRun {
+                services: vec![web(ServiceState::Healthy, "answered 200 in 3 ms")],
+                ..check(CheckStatus::Passed, Some(0))
+            }),
+            3_000,
+        )
+        .unwrap();
+    assert_eq!(
+        ran.services[0].url.as_deref(),
+        Some("http://localhost:18431/healthz")
+    );
+
+    for refused in [
+        // Blocked with an exit code ran something, which a blocked check did not.
+        NewCheckRun {
+            detail: Some("blocked".to_owned()),
+            services: vec![web(ServiceState::Stopped, "x")],
+            ..check(CheckStatus::Blocked, Some(0))
+        },
+        // Blocked without naming what it waited for says nothing anyone can act on.
+        NewCheckRun {
+            detail: Some("blocked".to_owned()),
+            ..check(CheckStatus::Blocked, None)
+        },
+        NewCheckRun {
+            services: vec![web(ServiceState::Stopped, "x")],
+            ..check(CheckStatus::Blocked, None)
+        },
+    ] {
+        assert!(db.record_check(&at(refused), 2_000).is_err());
+    }
+    assert_eq!(db.checks(flow).unwrap().len(), 2);
+}
+
+#[test]
+fn a_runtime_roles_screenshots_are_kept_in_order_and_never_rewritten() {
+    let (dir, db) = open();
+    let (flow, source) = a_review(&db);
+    let shot = |n: u64, taken_by| NewScreenshot {
+        flow,
+        step: Some(source.step),
+        invocation: Some(source.invocation),
+        role: Some("clickthrough".to_owned()),
+        url: "http://localhost:18431/".to_owned(),
+        taken_by,
+        image: BlobRef {
+            path: format!("shots/{n}.png"),
+            sha256: format!("sha256:{n}"),
+            bytes: n,
+        },
+    };
+    let first = db.record_screenshot(&shot(1, ShotTaker::Wtm), 10).unwrap();
+    let second = db.record_screenshot(&shot(2, ShotTaker::Role), 20).unwrap();
+    let kept = db.screenshots(flow).unwrap();
+    assert_eq!(kept, vec![first.clone(), second]);
+    assert_eq!(first.taken_by, ShotTaker::Wtm);
+
+    let raw = rusqlite::Connection::open(dir.path().join("flow.db")).unwrap();
+    let rewritten = raw.execute(
+        "UPDATE screenshots SET url = 'https://example.com/' WHERE id = 1",
+        [],
+    );
+    assert!(rewritten.is_err(), "a screenshot's record was rewritten");
 }

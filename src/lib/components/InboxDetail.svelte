@@ -19,6 +19,9 @@
    *   branch moved, or a push failed — is the route's own card (`WorkRoute`) the same way.
    * - **An issue's own run** — a pause offered after a backward drag, a move that stopped or failed,
    *   a worktree's setup that failed or was cut off — is Start Work's card (`WorkStartItem`).
+   * - **A review blocked on its environment** — a check that needs services which were not
+   *   answering, or a runtime role waiting for them — is the Start environment and run card
+   *   (`WorkStartApproval`), read from the worktree's run as the Reviews tab has it.
    * - **A ready review** names the worst of what it found; each finding is a link to that finding
    *   in the Reviews tab, which is the exact place the item is about. Reading the review settles
    *   it.
@@ -54,6 +57,7 @@
   import WorkEnvApproval from './WorkEnvApproval.svelte';
   import WorkPublication from './WorkPublication.svelte';
   import WorkRoute from './WorkRoute.svelte';
+  import WorkStartApproval from './WorkStartApproval.svelte';
   import WorkStartItem from './WorkStartItem.svelte';
 
   const { item }: { item: InboxItem } = $props();
@@ -98,6 +102,27 @@
         .catch(() => {
           pendingCommand = null;
         });
+    });
+  });
+  /**
+   * A review blocked on its environment: an approval item about a review's run, rather than an
+   * environment's. Read from the worktree's run as the Reviews tab has it, so starting it here
+   * updates both.
+   */
+  const blockedRun = $derived.by(() => {
+    if (item.kind !== 'approval' || item.target.kind !== 'flow' || !item.worktree)
+      return null;
+    const run = reviewRuns.latest[item.worktree];
+    return run && run.flow.id === item.flow ? run : null;
+  });
+  $effect(() => {
+    const wanted =
+      item.kind === 'approval' && item.target.kind === 'flow' ? item.worktree : null;
+    const project = item.project;
+    untrack(() => {
+      if (wanted && project && reviewRuns.latest[wanted] === undefined) {
+        void reviewRuns.load(project, wanted);
+      }
     });
   });
   const commandBusy = $derived(
@@ -303,7 +328,22 @@
     {:else if item.kind === 'approval' && item.target.kind === 'approval'}
       <p class="c-inbox-card__note">Reading this publish…</p>
     {:else if item.kind === 'approval' && item.target.kind === 'flow'}
-      {#if pendingCommand}
+      {#if blockedRun?.pendingStart && item.worktree}
+        {@const start = blockedRun.pendingStart}
+        {@const worktree = item.worktree}
+        <WorkStartApproval
+          {start}
+          busy={reviewRuns.busy[worktree] ?? false}
+          error={reviewRuns.errors[worktree] ?? null}
+          onstart={() =>
+            void reviewRuns.startEnvironment(worktree, item.flow, start.binding)}
+          ondecline={() => void reviewRuns.declineEnvironment(worktree, item.flow)}
+        />
+      {:else if blockedRun}
+        <p class="c-inbox-card__note">
+          Nothing is blocked any more: the environment was started, or you chose not to.
+        </p>
+      {:else if pendingCommand}
         {@const pending = pendingCommand}
         <WorkEnvApproval
           {pending}
@@ -354,9 +394,11 @@
         size="sm"
         onclick={() => {
           // An environment's approval goes to its Environment tab when that worktree is in the
-          // project on screen; anywhere else, the run's own route.
+          // project on screen; anywhere else, the run's own route. A review blocked on its
+          // environment is the review's, so it goes to the Reviews tab like any other run.
           if (
             isEnvironmentApproval(item) &&
+            blockedRun === null &&
             item.worktree &&
             item.project === workspace.activeProjectId
           ) {
@@ -368,7 +410,7 @@
             item,
             approvalId !== null ? { kind: 'publication', id: approvalId } : undefined,
           );
-        }}>{showWords(item)}</Button
+        }}>{blockedRun ? 'Show the review' : showWords(item)}</Button
       >
       <span class="c-inbox-card__spacer"></span>
       <Button

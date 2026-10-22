@@ -214,6 +214,7 @@ fn skills_of(h: &Harness, provider: &str, role: &str, skills: &[&str]) -> Vec<St
             flow: FlowId(1),
             role: role.to_owned(),
             authority: Authority::Reviewer,
+            browser: None,
         },
         provider: provider.to_owned(),
         model: None,

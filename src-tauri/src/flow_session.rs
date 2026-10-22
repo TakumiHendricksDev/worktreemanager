@@ -261,11 +261,27 @@ pub fn prepare_with(
                 ),
             ]
             .into_iter()
+            // A runtime role's bridge also lists the tools that drive its pane; its token is what
+            // holds them to that pane.
+            .chain(
+                spec.role
+                    .browser
+                    .is_some()
+                    .then(|| (crate::flow_tools::BROWSER_ENV, "on".to_owned())),
+            )
             .map(|(key, value)| (key.to_owned(), value))
             .collect(),
         },
         tools: crate::flow_tools::tools_for(spec.role.authority)
             .into_iter()
+            .chain(
+                spec.role
+                    .browser
+                    .is_some()
+                    .then_some(crate::browser_tools::RUNTIME_TOOLS)
+                    .into_iter()
+                    .flatten(),
+            )
             .map(str::to_owned)
             .collect(),
     };

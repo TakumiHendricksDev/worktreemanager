@@ -96,6 +96,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "start work",
         sql: include_str!("../migrations/0011_start_work.sql"),
     },
+    Migration {
+        version: 12,
+        name: "runtime checks",
+        sql: include_str!("../migrations/0012_runtime_checks.sql"),
+    },
 ];
 
 /// Bring the database at `path`, open as `conn`, up to the last of `migrations`.
@@ -495,6 +500,58 @@ mod tests {
                 )
                 .is_err(),
                 "an operation still has to belong to an approval that exists"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_version_eleven_check_record_keeps_its_id_and_status_and_gains_no_services() {
+        // Migration 12 rebuilds `check_runs` to let a check be blocked. A role cited each record
+        // by its id, so the ids have to survive, and nothing an earlier check said may change.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flow.db");
+        let db = AppDb::open_with(&path, &MIGRATIONS[..11]).unwrap();
+        db.with_connection(|conn| {
+            conn.execute_batch(
+                "INSERT INTO work_items (project, title, created_at) VALUES ('/work/webapp', 'Export', 1);
+                 INSERT INTO flows (work_item_id, kind, phase, last_seq, started_at, updated_at)
+                     VALUES (1, 'review_mine', 'consolidated', 0, 1, 1);
+                 INSERT INTO check_runs (id, flow_id, check_id, status, detail, exit_code, tree_sha,
+                                         cwd, started_at, ended_at) VALUES
+                     (41, 1, 'unit', 'failed', NULL, 2, 't1', '/w', 1, 2),
+                     (42, 1, 'e2e', 'skipped', 'needs `web`', NULL, 't1', '/w', 3, 3);",
+            )
+        })
+        .unwrap();
+        drop(db);
+
+        let db = reopen(&path, MIGRATIONS).unwrap();
+        let rows: Vec<(i64, String, Option<i32>, String)> = db
+            .with_connection(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT id, status, exit_code, services FROM check_runs ORDER BY id",
+                )?;
+                statement
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })?
+                    .collect()
+            })
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (41, "failed".to_owned(), Some(2), "[]".to_owned()),
+                (42, "skipped".to_owned(), None, "[]".to_owned()),
+            ]
+        );
+        db.with_connection(|conn| {
+            assert!(
+                conn.execute("UPDATE check_runs SET status = 'passed' WHERE id = 41", [])
+                    .is_err(),
+                "the rebuilt table is still append-only"
             );
             Ok(())
         })

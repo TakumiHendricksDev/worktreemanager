@@ -63,6 +63,65 @@ pub struct BriefFacts<'a> {
     pub revision: Option<(&'a str, &'a str)>,
     /// Questions this role asked on an earlier attempt that you have answered since.
     pub answers: &'a [Question],
+    /// For a runtime role: how it exercises the app, the pane it drives, and what was up.
+    pub runtime: Option<&'a super::runtime::RuntimeSetup>,
+}
+
+/// What a runtime role is told about the running app it exercises.
+fn runtime_section(out: &mut String, runtime: &super::runtime::RuntimeSetup) {
+    let up: Vec<String> = runtime
+        .services
+        .iter()
+        .map(|s| match &s.url {
+            Some(url) => format!("`{}` ({url})", s.service),
+            None => format!("`{}`", s.service),
+        })
+        .collect();
+    let _ = writeln!(
+        out,
+        "\nYou are a runtime role: you exercise the running app, after the static roles have read \
+         the code. Report what you saw the app do, not what the code suggests it would do."
+    );
+    if !up.is_empty() {
+        let _ = writeln!(
+            out,
+            "- wtm asked each service just now, and these answered: {}.",
+            up.join(", ")
+        );
+    }
+    match (&runtime.pane, runtime.driver) {
+        (Some(pane), _) => {
+            let _ = writeln!(
+                out,
+                "- wtm opened a browser pane for you on the verified preview {}, in a private store \
+                 with no cookies or sign-ins, which is thrown away when you hand in. Drive it with \
+                 the `browser_*` tools; leave `browser` out, it is the only pane you have. It stays \
+                 on that origin.",
+                pane.url
+            );
+            let _ = writeln!(
+                out,
+                "- Every `browser_screenshot` is kept as evidence and its answer names it, like \
+                 `s12`. A finding about something you saw on the page puts that name in its \
+                 `evidence`, and a confirmed bug says in `verification` what you did to see it."
+            );
+            if let Some(opening) = &runtime.opening {
+                let _ = writeln!(
+                    out,
+                    "- wtm took {} of the page as it first loaded, before you touched it.",
+                    opening.id.label()
+                );
+            }
+        }
+        (None, wtm_core::flow::RuntimeDriver::Playwright) => {
+            let _ = writeln!(
+                out,
+                "- This project runs its end-to-end tests with Playwright: run your checks with \
+                 `flow_run_check` and report what they show. You have no browser pane."
+            );
+        }
+        (None, wtm_core::flow::RuntimeDriver::Browser) => {}
+    }
 }
 
 /// How many changed files a brief lists before it says how to list the rest.
@@ -303,12 +362,15 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
                 String::new()
             } else {
                 format!(
-                    " — needs {} running, which wtm does not start yet, so it will be skipped",
+                    " — needs {} answering; if one is not, it is recorded blocked and not run",
                     check.needs.join(", ")
                 )
             };
             let _ = writeln!(out, "- `{id}`{label}: `{}`{needs}", check.run.join(" "));
         }
+    }
+    if let Some(runtime) = facts.runtime {
+        runtime_section(&mut out, runtime);
     }
     if !missing.is_empty() {
         let _ = writeln!(
@@ -532,6 +594,7 @@ mod tests {
             pull_request: None,
             revision: None,
             answers: &[],
+            runtime: None,
         });
         assert!(text.contains("`wtm:team-conventions`"), "{text}");
         assert!(text.contains("Skill tool"));
@@ -592,6 +655,7 @@ mod tests {
             pull_request: None,
             revision: None,
             answers,
+            runtime: None,
         };
 
         let text = brief(&facts(std::slice::from_ref(&answered)));

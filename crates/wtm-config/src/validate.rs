@@ -190,6 +190,31 @@ pub fn check_environment(
                 }
             }
         }
+        for (id, role) in &workflow.role {
+            if let Some(service) = &role.service {
+                match environment.service(service) {
+                    None => {
+                        return Err(origin.invalid(
+                            &format!("workflow.role.{id}.service"),
+                            format!(
+                                "`{service}` is not a declared `[[environment.service]]`: a \
+                                 runtime role opens its browser pane on that service's preview"
+                            ),
+                        ));
+                    }
+                    Some(spec) if spec.preview.is_none() => {
+                        return Err(origin.invalid(
+                            &format!("workflow.role.{id}.service"),
+                            format!(
+                                "`{service}` declares no `preview`, so there is no address for a \
+                                 runtime role's browser pane to open"
+                            ),
+                        ));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1259,6 +1284,23 @@ mod environment_tests {
         let config =
             format!("{WEB}\n[workflow.check.e2e]\nrun = ['just', 'e2e']\nneeds = ['web']\n");
         check(&config).unwrap();
+    }
+
+    #[test]
+    fn a_runtime_role_must_drive_a_declared_service_that_has_a_preview() {
+        let role = |service: &str| {
+            format!(
+                "{WEB}\n[workflow.role.clickthrough]\nobjective = 'Click through'\n\
+                 provider = 'claude'\nkind = 'runtime'\nservice = '{service}'\n\
+                 inputs = ['diff']\n"
+            )
+        };
+        let error = check(&role("api")).unwrap_err();
+        assert_eq!(
+            key_of(error).as_deref(),
+            Some("workflow.role.clickthrough.service")
+        );
+        check(&role("web")).unwrap();
     }
 
     #[test]
