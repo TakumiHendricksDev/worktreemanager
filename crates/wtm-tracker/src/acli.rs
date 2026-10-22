@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use wtm_core::error::ExecError;
 use wtm_core::flow::{
-    Issue, IssueDetail, IssueQuery, Sprint, SprintState, TrackerAccount, Transition,
+    Issue, IssueDetail, IssueQuery, Sprint, SprintState, TrackerAccount, TrackerComment, Transition,
 };
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation};
 use wtm_core::ports::tracker::{Tracker, TrackerError, TrackerWriter};
@@ -32,6 +32,9 @@ const READ_TIMEOUT_MS: u64 = 60_000;
 /// One transition. Jira finds it by the status's name and runs the workflow's validators and post
 /// functions, which on a busy site take seconds, not milliseconds.
 const MOVE_TIMEOUT_MS: u64 = 60_000;
+
+/// One comment. Jira stores it and answers within a request; a minute allows for a slow site.
+const COMMENT_TIMEOUT_MS: u64 = 60_000;
 
 /// What a queue row needs. `workitem search` accepts no more than its own short list (see the crate
 /// docs), and every one of these is on it.
@@ -352,6 +355,29 @@ impl Tracker for AcliTracker {
         parse::sprint(&stdout).map_err(|message| TrackerError::Unreadable { what, message })
     }
 
+    fn comments(&self, cwd: &Path, key: &str) -> Result<Vec<TrackerComment>, TrackerError> {
+        let what = format!("{key}'s comments");
+        if !is_issue_key(key) {
+            return Err(TrackerError::NotFound { what });
+        }
+        let key_arg = format!("--key={key}");
+        let stdout = self.acli(
+            cwd,
+            &[
+                "jira",
+                "workitem",
+                "comment",
+                "list",
+                &key_arg,
+                "--paginate",
+                "--json",
+            ],
+            READ_TIMEOUT_MS,
+            &what,
+        )?;
+        parse::comments(&stdout).map_err(|message| TrackerError::Unreadable { what, message })
+    }
+
     fn transitions(&self, _cwd: &Path, key: &str) -> Result<Vec<Transition>, TrackerError> {
         Err(TrackerError::Unsupported {
             what: format!("listing {key}'s transitions"),
@@ -399,6 +425,40 @@ impl TrackerWriter for AcliTracker {
                 "--yes",
             ],
             MOVE_TIMEOUT_MS,
+            &what,
+        )
+        .map(|_| ())
+    }
+
+    /// `acli jira workitem comment create --key=KEY --body=TEXT`.
+    ///
+    /// - **One issue, checked**, as for a move: `--key` takes a list, and `--jql` and `--filter`
+    ///   select by query, so only `--key` is used, with a key that passed [`is_issue_key`].
+    /// - **`--body=TEXT`**, so a body that begins with `-` is still the body. `acli` reads a body
+    ///   that is a JSON object as Atlassian Document Format; the outbox refuses text that starts
+    ///   with `{` before it gets here (`flow::comment::check_body`), and this refuses it again.
+    /// - **Nothing parsed on success.** Whether the comment is there is read back by the executor
+    ///   from the issue's comments, which is also why this reply has no recorded fixture:
+    ///   recording one means commenting on a real issue.
+    fn comment(&self, cwd: &Path, key: &str, body: &str) -> Result<(), TrackerError> {
+        let what = format!("issue {key}");
+        if !is_issue_key(key) {
+            return Err(TrackerError::NotFound { what });
+        }
+        if body.trim().is_empty() || body.trim_start().starts_with('{') {
+            return Err(TrackerError::Unsupported {
+                what: format!("commenting on {key}"),
+                reason: "the comment is empty, or starts with `{`, which acli would read as a \
+                         document rather than as text"
+                    .to_owned(),
+            });
+        }
+        let key_arg = format!("--key={key}");
+        let body_arg = format!("--body={body}");
+        self.acli(
+            cwd,
+            &["jira", "workitem", "comment", "create", &key_arg, &body_arg],
+            COMMENT_TIMEOUT_MS,
             &what,
         )
         .map(|_| ())

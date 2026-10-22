@@ -360,6 +360,9 @@ fn most_specific(loaded: &[LoadedLayer], declares: impl Fn(&Value) -> bool) -> O
 /// a command, so approving one would be a click on something the prompt never showed. Your own
 /// config and the untracked local layer are yours, so both may declare them.
 ///
+/// `planner` names one of those roles and has it run by itself once a started issue's worktree is
+/// ready, so it is refused with them.
+///
 /// `forge` and `tracker` are refused for the same reason in different words: naming one is the
 /// opt-in that lets the Work view call that service through your own CLI and credentials
 /// (ARCHITECTURE §6a), and that consent is not the repository's to give. The tracker's status
@@ -381,7 +384,7 @@ fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
             key: Some(format!("workflow.{key}")),
             message: message.to_owned(),
         };
-        for table in ["role", "recipe"] {
+        for table in ["role", "recipe", "planner"] {
             if workflow.get(table).is_some() {
                 return Err(refuse(
                     table,
@@ -1498,6 +1501,21 @@ roles = ["conventions", "correctness"]
                 assert_eq!(path, h.repo.join("wtm.toml"));
                 assert_eq!(layer, ConfigLayer::Repo);
                 assert_eq!(key.as_deref(), Some("workflow.role"));
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_repository_cannot_choose_the_planner_that_spends_your_account() {
+        // Naming the planner is choosing which role runs, by itself, as soon as a started issue has
+        // its worktree: the same decision as declaring a role.
+        let h = Harness::new();
+        h.write_repo_config("[workflow]\nplanner = 'conventions'\n");
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid { layer, key, .. } => {
+                assert_eq!(layer, ConfigLayer::Repo);
+                assert_eq!(key.as_deref(), Some("workflow.planner"));
             }
             other => panic!("expected Invalid, got {other:?}"),
         }

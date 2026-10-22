@@ -4,10 +4,10 @@
 //! queue, the board and the issue workspace need, including the paginated listing that prints one
 //! JSON document per page and the sign-in check that answers in text: the fixtures are acli
 //! 1.3.18's own output with every identifying value replaced (`fixtures/README.md`). And that the
-//! adapter reads, and writes in exactly one way: every argv it hands the runner is checked against
+//! adapter reads, and writes in exactly two ways: every argv it hands the runner is checked against
 //! the list of read-only `acli` commands, or, for a move, against the one transition of one issue
-//! by key, because "nothing else is written to Jira" is a promise nothing else in the app could
-//! notice being broken.
+//! by key, or, for a comment, against the one comment on one issue by key, because "nothing else
+//! is written to Jira" is a promise nothing else in the app could notice being broken.
 
 #![allow(clippy::unwrap_used)]
 
@@ -63,6 +63,7 @@ fn is_read_only(argv: &[String]) -> bool {
             | ["acli", "jira", "workitem", "search" | "view", ..]
             | ["acli", "jira", "board", "list-sprints", ..]
             | ["acli", "jira", "sprint", "view" | "list-workitems", ..]
+            | ["acli", "jira", "workitem", "comment", "list", ..]
     );
     read && !words.iter().any(|word| *word == "--web" || *word == "-w")
 }
@@ -85,6 +86,20 @@ fn is_one_move(argv: &[String]) -> bool {
             key.strip_prefix("--key=")
                 .is_some_and(|key| !key.is_empty() && !key.contains(','))
                 && status.starts_with("--status=")
+        }
+        _ => false,
+    }
+}
+
+/// Whether an argv is the other write: one comment on one issue by its key, its body a flag value
+/// so it can never be read as another flag.
+fn is_one_comment(argv: &[String]) -> bool {
+    let words: Vec<&str> = argv.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        ["acli", "jira", "workitem", "comment", "create", key, body] => {
+            key.strip_prefix("--key=")
+                .is_some_and(|key| !key.is_empty() && !key.contains(','))
+                && body.starts_with("--body=")
         }
         _ => false,
     }
@@ -631,4 +646,74 @@ fn the_one_move_shape_admits_no_selection_list_or_other_write() {
             "{not_one:?} must not pass as one move"
         );
     }
+}
+
+#[test]
+fn an_issues_comments_are_read_across_pages_with_their_text_as_acli_flattens_it() {
+    let (tracker, runner) = harness(vec![FakeRunner::ok(&fixture("comment_list.json"))]);
+
+    let comments = tracker.comments(Path::new(ROOT), "ACME-12").unwrap();
+
+    assert_eq!(
+        comments
+            .iter()
+            .map(|c| (c.id.as_str(), c.author.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("90011", Some("Robin Quill")),
+            ("90017", Some("Avery Stone")),
+            ("90102", Some("Robin Quill")),
+        ]
+    );
+    // A mention comes back without its name, and a typographic quote as it was.
+    assert!(comments[1].body.starts_with(", I\u{2019}ll"));
+    assert_only_reads(&runner);
+    assert_eq!(
+        runner.argvs()[0][5..],
+        ["--key=ACME-12", "--paginate", "--json"]
+    );
+}
+
+#[test]
+fn a_comment_is_one_create_on_one_issue_with_the_body_as_a_flag_value() {
+    let (tracker, runner) = harness(vec![FakeRunner::ok("✓ Comment added to ACME-12\n")]);
+
+    tracker
+        .comment(
+            Path::new(ROOT),
+            "ACME-12",
+            "--not a flag\nQuestion: CSV or XLSX?\nAnswer: CSV.",
+        )
+        .unwrap();
+
+    let argvs = runner.argvs();
+    assert_eq!(argvs.len(), 1);
+    assert!(is_one_comment(&argvs[0]), "{:?}", argvs[0]);
+    assert_eq!(
+        argvs[0][6],
+        "--body=--not a flag\nQuestion: CSV or XLSX?\nAnswer: CSV."
+    );
+    assert!(!is_read_only(&argvs[0]), "a comment is not a read");
+    assert!(!is_one_move(&argvs[0]), "nor a move");
+}
+
+#[test]
+fn a_comment_on_a_key_list_or_a_body_acli_would_read_as_a_document_runs_nothing() {
+    let (tracker, runner) = harness(Vec::new());
+    for key in ["ACME-1,ACME-2", "--jql=project=ACME", ""] {
+        assert!(
+            matches!(
+                tracker.comment(Path::new(ROOT), key, "hello"),
+                Err(TrackerError::NotFound { .. })
+            ),
+            "{key}"
+        );
+    }
+    for body in ["  ", "{\"type\":\"doc\"}"] {
+        assert!(matches!(
+            tracker.comment(Path::new(ROOT), "ACME-1", body),
+            Err(TrackerError::Unsupported { .. })
+        ));
+    }
+    assert_eq!(runner.call_count(), 0);
 }

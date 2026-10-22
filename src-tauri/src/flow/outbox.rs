@@ -326,7 +326,8 @@ impl Engine {
             }
             OperationPayload::PushBranch(_)
             | OperationPayload::OpenPullRequest(_)
-            | OperationPayload::MoveIssue(_) => {
+            | OperationPayload::MoveIssue(_)
+            | OperationPayload::PostComment(_) => {
                 self.failed(publication, op, "this is not a review's write");
                 Then::Stop
             }
@@ -754,6 +755,8 @@ impl Engine {
                 // A fix's route, checked by its own executor's rules (`routes.rs`).
             } else if self.recover_move(op.approval, &op) {
                 // An issue's move, settled by reading the issue (`moves.rs`).
+            } else if self.recover_comment(op.approval, &op) {
+                // A comment on an issue, settled by reading its comments (`comments.rs`).
             } else if let Ok(Some(publication)) = db.publication(op.approval) {
                 self.settle_unsent(&publication, &op);
                 // Whatever the check found, a publish that is not finished waits for you, so it is
@@ -884,7 +887,8 @@ impl Engine {
             }
             OperationPayload::PushBranch(_)
             | OperationPayload::OpenPullRequest(_)
-            | OperationPayload::MoveIssue(_) => {
+            | OperationPayload::MoveIssue(_)
+            | OperationPayload::PostComment(_) => {
                 OperationChange::failed("this is not a review's write")
             }
         };

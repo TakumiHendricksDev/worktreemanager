@@ -21,6 +21,12 @@ import type {
 } from '../start-work';
 
 import type {
+  CommentDraft,
+  CommentView,
+  IssueText,
+  PlanDecision,
+  PlanView,
+  QuestionThread,
   CommandRunView,
   EnvironmentView,
   PendingCommandView,
@@ -236,6 +242,42 @@ export const commands = {
   /** Hold an issue's run paused, or release it. */
   pauseRun: (flow: number) => invoke<void>('pause_run', { flow }),
   unpauseRun: (flow: number) => invoke<void>('unpause_run', { flow }),
+
+  // ── planning: the issue's Plan tab, its questions, and Send to Jira ──
+  /** An issue's planning: its context, plans, decisions and questions. `null` before a run. */
+  issuePlan: (project: string, key: string) =>
+    invoke<PlanView | null>('issue_plan', { project, key }),
+  /** Plan an issue's run that is ready to plan. */
+  startPlanning: (flow: number) => invoke<void>('start_planning', { flow }),
+  /** Carry the planner on after an interruption, a failure or a limit. */
+  resumePlanning: (flow: number) => invoke<void>('resume_planning', { flow }),
+  /** Read the issue whole again: what a plan approval is measured against. */
+  readPlannedIssue: (flow: number) => invoke<IssueText>('read_planned_issue', { flow }),
+  /** Approve the newest plan for the issue whose revision you saw. */
+  approvePlan: (
+    flow: number,
+    revision: number,
+    issueRevision: string,
+    skipDesign: boolean,
+  ) => invoke<PlanDecision>('approve_plan', { flow, revision, issueRevision, skipDesign }),
+  /** Ask the planner for changes, in the same conversation. */
+  requestPlanChanges: (flow: number, revision: number, note: string) =>
+    invoke<PlanDecision>('request_plan_changes', { flow, revision, note }),
+  /** A question with its discussion and what was sent. */
+  questionThread: (question: number) =>
+    invoke<QuestionThread>('question_thread', { question }),
+  /** Discuss a planner's open question with it before answering. */
+  discussQuestion: (question: number, text: string) =>
+    invoke<void>('discuss_question', { question, text }),
+  /** Send to Jira…'s first click: a draft to edit. Records and sends nothing. */
+  questionCommentDraft: (question: number) =>
+    invoke<CommentDraft>('question_comment_draft', { question }),
+  /** Send to Jira's second click: post exactly this text. */
+  postQuestionComment: (question: number, body: string) =>
+    invoke<CommentView>('post_question_comment', { question, body }),
+  /** Try a comment that did not post again, reading the issue first. */
+  retryQuestionComment: (approval: number) =>
+    invoke<void>('retry_question_comment', { approval }),
 
   // ── reviews: pull requests in the Work view ──
   /** The project's Reviews queue, from the local store. Reads no forge. */

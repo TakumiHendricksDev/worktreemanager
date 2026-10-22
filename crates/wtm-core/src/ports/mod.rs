@@ -48,7 +48,7 @@ pub use database::{DatabaseConnection, DatabaseHost, DatabaseSession};
 pub use dictate::{DictateError, Utterance};
 pub use exec::{CancelToken, CommandRunner, EnvScrub, Invocation, Output};
 pub use flow::{
-    EnvStore, FixStore, FlowStore, FlowStoreError, InboxStore, LeaseStore, OutboxStore,
+    EnvStore, FixStore, FlowStore, FlowStoreError, InboxStore, LeaseStore, OutboxStore, PlanStore,
     PullReviewStore, RunStore, StartStore,
 };
 pub use forge::{

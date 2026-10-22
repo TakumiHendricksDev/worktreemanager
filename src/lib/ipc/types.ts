@@ -1493,7 +1493,7 @@ export interface ReportedFinding {
 /** A role's result, exactly as `flow_submit` accepted it. */
 export type RoleResult =
   | { kind: 'findings'; payload: { summary?: string | null; findings: ReportedFinding[] } }
-  | { kind: 'plan'; payload: { summary: string; steps: string[] } }
+  | { kind: 'plan'; payload: PlanReport }
   | { kind: 'handoff'; payload: { summary: string } };
 
 export interface ReviewStep {
@@ -2119,7 +2119,8 @@ export type OperationPayload =
         body: string;
       };
     }
-  | { kind: 'move_issue'; tracker: 'jira'; key: string; from: string; to: string };
+  | { kind: 'move_issue'; tracker: 'jira'; key: string; from: string; to: string }
+  | { kind: 'post_comment'; tracker: 'jira'; key: string; body: string };
 
 /** What an operation left on GitHub. */
 export type OperationResult =
@@ -2134,7 +2135,15 @@ export type OperationResult =
   | { kind: 'pushed'; url: string; reference: string; commit: string; adopted: boolean }
   | { kind: 'pull_request'; number: number; url: string; adopted: boolean }
   /** An issue now in the status a move asked for; `adopted` when it was there already. */
-  | { kind: 'moved'; key: string; status: string; adopted: boolean };
+  | { kind: 'moved'; key: string; status: string; adopted: boolean }
+  /** A comment now on the issue; `adopted` when it was found there before anything was sent. */
+  | {
+      kind: 'commented';
+      key: string;
+      comment: string;
+      author: string | null;
+      adopted: boolean;
+    };
 
 /** Why an operation stopped and waits for you. `wtm_core::flow::Attention`. */
 export type Attention =
@@ -2326,4 +2335,213 @@ export interface ServiceLog {
   path: string;
   text: string;
   truncated: boolean;
+}
+
+// ── planning an issue: `wtm_core::flow::{planning, comment}` ──
+
+/** A plan as the planner handed it in through `flow_submit`. */
+export interface PlanReport {
+  summary: string;
+  steps: string[];
+  acceptanceCriteria: string[];
+  verification: string[];
+  /** Files or directories the work expects to touch, as paths or globs. */
+  areas: string[];
+  designNeeded: boolean;
+  designReason?: string | null;
+  risks?: string[];
+}
+
+/** What an issue says the work is: the parts a plan answers, and its revision is hashed from. */
+export interface IssueText {
+  key: string;
+  summary: string;
+  kind: string | null;
+  description: string | null;
+  fields: { name: string; value: string | null }[];
+  parent: string | null;
+  links: string[];
+}
+
+export interface DiffLine {
+  kind: 'same' | 'added' | 'removed';
+  text: string;
+}
+
+/** One part of the issue that differs from the version a plan was approved against. */
+export interface IssueChange {
+  part: string;
+  before: string | null;
+  after: string | null;
+  lines: DiffLine[];
+}
+
+export interface PlanRecord {
+  id: number;
+  flow: number;
+  revision: number;
+  step: number | null;
+  invocation: number | null;
+  plan: PlanReport;
+  issue: IssueText;
+  issueRevision: string;
+  submittedAt: number;
+}
+
+export type PlanVerdict =
+  | { kind: 'approved'; approval: number; skipDesign: boolean }
+  | { kind: 'changes_requested'; note: string };
+
+export interface PlanDecision {
+  id: number;
+  flow: number;
+  plan: number;
+  revision: number;
+  verdict: PlanVerdict;
+  at: number;
+}
+
+/** One pin an approval covered that differs now. */
+export interface PinChange {
+  pin: string;
+  approved: string | null;
+  current: string | null;
+}
+
+/** Where planning stands. `wtm_core::flow::PlanStanding`. */
+export type PlanStanding =
+  | { kind: 'none' }
+  | { kind: 'waiting'; revision: number }
+  | { kind: 'revising'; revision: number; note: string }
+  | { kind: 'approved'; approval: number; revision: number; skipDesign: boolean }
+  | {
+      kind: 'stale';
+      approval: number;
+      revision: number;
+      changes: PinChange[];
+      diff: IssueChange[];
+    };
+
+/** What the planner was given: the context drawer. */
+export interface PlanContext {
+  issue: IssueText;
+  status: string;
+  sprint: string | null;
+  sprintGoal: string | null;
+  dependencies: {
+    relation: string;
+    key: string;
+    summary: string | null;
+    status: string | null;
+  }[];
+  instructionSources: string[];
+  rules: {
+    rule: number;
+    revision: number;
+    kind: 'required' | 'guidance';
+    text: string;
+    reason:
+      | { kind: 'path'; glob: string; file: string }
+      | { kind: 'area'; area: string }
+      | { kind: 'project' };
+  }[];
+  skills: string[];
+  role: string;
+  provider: RoleProvider;
+  model: string | null;
+  readAt: number;
+}
+
+export interface Planning {
+  flow: number;
+  project: string;
+  worktree: string;
+  key: string;
+  tracker: 'jira';
+  role: string;
+  context: PlanContext | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One of the planner's sessions: a process, continuing one provider conversation. */
+export interface PlanSession {
+  id: number;
+  attempt: number;
+  provider: RoleProvider;
+  model: string | null;
+  session: string | null;
+  /** The CLI's own conversation id, as the CLI reported it. */
+  providerSession: string | null;
+  status: InvocationStatus;
+  detail: string | null;
+  progress: string | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+export interface QuestionMessage {
+  id: number;
+  question: number;
+  from: 'you' | 'agent';
+  text: string;
+  at: number;
+}
+
+/** Exactly what Send to Jira posts. */
+export interface CommentPayload {
+  tracker: 'jira';
+  key: string;
+  body: string;
+}
+
+/** One Send to Jira, as the question card shows it. */
+export interface CommentView {
+  approval: number;
+  request: { payload: CommentPayload; question: number };
+  operation: Operation;
+  state: PublicationState;
+}
+
+/** Send to Jira…'s draft: built from the question and your answer. Nothing was recorded. */
+export interface CommentDraft {
+  question: number;
+  tracker: 'jira';
+  key: string;
+  body: string;
+}
+
+/** A question with its discussion and what was sent: `question_thread`. */
+export interface QuestionThread {
+  question: Question;
+  discussion: QuestionMessage[];
+  comments: CommentView[];
+  /** Discuss can be asked now: a planner's open question, its run waiting, nothing running. */
+  canDiscuss: boolean;
+  /** A discussion reply is being written now. */
+  replying: boolean;
+  /** The issue Send to Jira would post to. */
+  issue: string | null;
+}
+
+/** Everything the issue's Plan tab shows: `issue_plan`. */
+export interface PlanView {
+  flow: { id: number; state: FlowState; startedAt: number; updatedAt: number };
+  /** The planner role the project names now; `null` when it names none. */
+  planner: string | null;
+  planning: Planning | null;
+  plans: PlanRecord[];
+  decisions: PlanDecision[];
+  standing: PlanStanding;
+  issueNow: IssueText | null;
+  /** `issueNow`'s revision, as an approval pins it. */
+  issueRevisionNow: string | null;
+  /** What differs between the issue the newest plan was made from and the issue now. */
+  issueChanges: IssueChange[];
+  questions: QuestionThread[];
+  sessions: PlanSession[];
+  step: ReviewStep | null;
+  running: boolean;
+  /** Plan would start it now. */
+  canStart: boolean;
 }

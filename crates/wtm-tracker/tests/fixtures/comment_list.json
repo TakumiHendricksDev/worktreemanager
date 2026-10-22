@@ -1,0 +1,33 @@
+{
+  "comments": [
+    {
+      "author": "Robin Quill",
+      "body": "Placeholder text. Is this in scope for the sprint?",
+      "id": "90011",
+      "visibility": "public"
+    },
+    {
+      "author": "Avery Stone",
+      "body": ", I’ll add more detail when the export spec is settled.",
+      "id": "90017",
+      "visibility": "public"
+    },
+    {
+      "author": "Robin Quill",
+      "body": "Question: CSV or XLSX for the export? Why it matters: the issue says spreadsheet. Answer: CSV.",
+      "id": "90102",
+      "visibility": "public"
+    }
+  ],
+  "isLast": false,
+  "maxResults": 50,
+  "startAt": 0,
+  "total": 3
+}
+{
+  "comments": [],
+  "isLast": true,
+  "maxResults": 50,
+  "startAt": 50,
+  "total": 3
+}

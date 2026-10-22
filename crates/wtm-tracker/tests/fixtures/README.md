@@ -36,3 +36,8 @@ to ignore.
   `workitem search` does not accept, each with exit status 1.
 - `sprint_not_found.*`, `board_not_found.*`: a missing sprint and board, whose message is split
   between the two streams.
+- `comment_list.json`: `acli jira workitem comment list --key=… --paginate --json`, recorded on
+  2026-10-22. Two pages back to back: every comment on the first (`isLast` false all the same), then
+  an empty last page, exactly as printed. Bodies are one line of plain text each, with a mention's
+  name gone and typographic quotes kept, and authors are display names; there is no time on a
+  comment. Names and text were replaced and the real reply had eight comments, cut to three.

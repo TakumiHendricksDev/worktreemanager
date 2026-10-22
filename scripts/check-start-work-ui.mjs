@@ -328,7 +328,6 @@ try {
             'feature/ACME-101',
             'Moved from To Do to In Progress',
             'cannot check a status and move an issue in one step',
-            'Investigating and planning come with a later version',
         ])
             assert(run.includes(fact), `the run says “${fact}”:\n${run}`);
         // The move is the header's word too, read back from the mirror without asking the tracker,

@@ -2,9 +2,10 @@
 //!
 //! # Three capabilities, three traits
 //!
-//! [`Tracker`] only reads: a search, one issue, a board's sprints, one sprint. [`TrackerWriter`]
-//! moves an issue, and is held only by the outbox's executor, which reads the issue before every
-//! move (`flow::moves`), as the forge's writers are held only by it. [`TrackerMirror`] is the app
+//! [`Tracker`] only reads: a search, one issue, a board's sprints, one sprint, an issue's comments.
+//! [`TrackerWriter`] moves an issue and comments on one, and is held only by the outbox's executor,
+//! which reads the issue before every write (`flow::moves`, `flow::comment`), as the forge's
+//! writers are held only by it. [`TrackerMirror`] is the app
 //! database's half: the tables a sync writes.
 //!
 //! The split is what makes "a sync never starts a run" a property of types rather than of care.
@@ -24,7 +25,7 @@ use std::path::Path;
 pub use crate::error::TrackerError;
 use crate::flow::{
     IssueDetail, IssueQuery, MirroredQueue, QueueReading, Sprint, SprintState, SyncFailure,
-    TrackerAccount, TrackerKind, Transition, UnixMs,
+    TrackerAccount, TrackerComment, TrackerKind, Transition, UnixMs,
 };
 use crate::model::ProjectId;
 use crate::ports::flow::FlowStoreError;
@@ -68,19 +69,27 @@ pub trait Tracker: Send + Sync {
     /// [`TrackerError::Unsupported`] from a CLI that cannot list them. A move by status name does
     /// not need the list, so this is information for a person, not a step a write depends on.
     fn transitions(&self, cwd: &Path, key: &str) -> Result<Vec<Transition>, TrackerError>;
+
+    /// An issue's comments, oldest first: what Send to Jira reads before and after it posts, to find
+    /// its own comment (`flow::comment`).
+    fn comments(&self, cwd: &Path, key: &str) -> Result<Vec<TrackerComment>, TrackerError>;
 }
 
-/// Moving an issue to another team status: the one write to a tracker this build makes.
+/// The two writes to a tracker this build makes: moving an issue, and commenting on one.
 ///
 /// Every move is an approval in the plan (§4.2): Start Work's move to the mapped "started" status
 /// rides on your Start, a drop on another board column is its own, and a move to "needs review"
-/// will ride on the publish approval. The outbox's executor is the only holder, as it is of the
-/// forge's writers, and it reads the issue's status before it moves it, because a tracker has no
-/// compare-and-swap for a transition (§4.4). Commenting is a later item, and is not on the port
-/// until something sends one, so nothing in this build can.
+/// will ride on the publish approval. A comment is Send to Jira's, approved by the second click
+/// that sends exactly the text shown. The outbox's executor is the only holder, as it is of the
+/// forge's writers, and it reads the issue before each write: its status before a move, because a
+/// tracker has no compare-and-swap for a transition (§4.4), and its comments before a comment,
+/// because one already there is the same write done before.
 pub trait TrackerWriter: Send + Sync {
     /// Move `key` to `status` by name. The tracker picks the transition that reaches it.
     fn move_to(&self, cwd: &Path, key: &str, status: &str) -> Result<(), TrackerError>;
+
+    /// Post `body`, plain text, as a comment on `key`.
+    fn comment(&self, cwd: &Path, key: &str, body: &str) -> Result<(), TrackerError>;
 }
 
 /// The mirror tables: the last thing the tracker said, per project's queue and per issue.

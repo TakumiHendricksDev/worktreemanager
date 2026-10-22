@@ -13,10 +13,15 @@
    *
    * Start (or ⌘↵ here and on the queue's row) starts the issue's run, or shows the one it has. Where
    * its worktree comes from is resolution's (`flow/start.rs`), and a choice opens the Start sheet.
-   * The run then makes or adopts its worktree and stops: Overview's Run section says "Ready to
-   * plan", because investigating and planning are a later item. That section is where everything
-   * about the start is: its worktree and setup terminal, a crash's Resume, a pause, and each move
-   * of the team status with what it read, including the race a tracker leaves open.
+   * The run then makes or adopts its worktree. Overview's Run section is where everything about the
+   * start is: its worktree and setup terminal, a crash's Resume, a pause, and each move of the team
+   * status with what it read, including the race a tracker leaves open.
+   *
+   * # Planning
+   *
+   * Once the worktree is ready the project's planner starts by itself, and the Plan tab is where it
+   * is followed and decided on (`WorkPlan`): its questions, its plan, your approval, and what it was
+   * given. The Run section says where planning stands and leads there.
    *
    * # Read on opening
    *
@@ -57,8 +62,12 @@
     STAY_WORDS,
   } from '../start-work';
   import { worktreeLabel } from '../worktree-label';
+  import { planRunWords } from '../plan';
+  import { codeRequests } from '../state/code-request.svelte';
+  import { plan } from '../state/plan.svelte';
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
+  import WorkPlan from './WorkPlan.svelte';
   import WorkReviewRun from './WorkReviewRun.svelte';
 
   const {
@@ -76,6 +85,7 @@
 
   const TABS: { id: WorkTab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
+    { id: 'plan', label: 'Plan' },
     { id: 'reviews', label: 'Reviews' },
   ];
 
@@ -118,6 +128,18 @@
   const boundWorktree = $derived(
     job ? (workspace.worktrees.find((w) => w.id === job.worktree) ?? null) : null,
   );
+  /** The run's planning, as the Plan tab reads it. */
+  const planned = $derived(plan.views[issueKey] ?? null);
+  const waitingQuestions = $derived(
+    planned?.questions.filter((q) => q.question.answer === null).length ?? 0,
+  );
+
+  /** Open a file a question points at, in the issue's worktree. */
+  function openFile(path: string, line: number | null): void {
+    const projectId = workspace.activeProjectId;
+    const worktree = job?.worktree ?? reviewed?.id;
+    if (projectId && worktree) codeRequests.open(projectId, worktree, path, line);
+  }
 
   function start(): void {
     const projectId = workspace.activeProjectId;
@@ -138,11 +160,16 @@
     start();
   }
 
-  // Start Work's record is read with the issue, untracked for the reason the read below gives.
+  // Start Work's record and the run's planning are read with the issue, untracked for the reason
+  // the read below gives.
   $effect(() => {
     const projectId = workspace.activeProjectId;
     const key = issueKey;
-    if (visible && projectId) untrack(() => void startWork.load(projectId, key));
+    if (visible && projectId)
+      untrack(() => {
+        void startWork.load(projectId, key);
+        void plan.load(projectId, key);
+      });
   });
 
   // Read whole on opening, and again when a different issue is opened. `issueKey` is a string, so
@@ -269,7 +296,16 @@
   role="tabpanel"
   aria-labelledby="issue-tab-{work.tab}"
 >
-  {#if work.tab === 'reviews'}
+  {#if work.tab === 'plan'}
+    {#if workspace.activeProjectId}
+      <WorkPlan
+        projectId={workspace.activeProjectId}
+        {issueKey}
+        {visible}
+        onopenfile={openFile}
+      />
+    {/if}
+  {:else if work.tab === 'reviews'}
     {#if reviewed && workspace.activeProjectId}
       <WorkReviewRun
         {visible}
@@ -300,9 +336,11 @@
               ? runWords(row?.run ?? null)
               : flow.state.hold?.kind === 'paused'
                 ? 'Paused'
-                : flow.state.hold?.kind === 'interrupted'
-                  ? JOB_WORDS.interrupted
-                  : JOB_WORDS[job.state]}</span
+                : job.state === 'ready' && planned?.planning
+                  ? planRunWords(planned)
+                  : flow.state.hold?.kind === 'interrupted'
+                    ? JOB_WORDS.interrupted
+                    : JOB_WORDS[job.state]}</span
           >
           {#if open}
             <span class="c-issue-run__actions">
@@ -313,7 +351,7 @@
                   onclick={() => void startWork.unpause(projectId, issueKey, flow.id)}
                   >Resume run</Button
                 >
-              {:else if flow.state.hold === null}
+              {:else if flow.state.hold === null && !planned?.running}
                 <Button
                   size="sm"
                   variant="quiet"
@@ -334,10 +372,16 @@
             </span>
           {/if}
         </header>
-        {#if job.state === 'ready' && open && flow.state.hold === null}
+        {#if job.state === 'ready' && open && planned}
           <p class="c-issue-run__note">
-            Its worktree is ready. Investigating and planning come with a later version of
-            wtm, so the run waits here.
+            Its worktree is ready, and {planned.planner || planned.planning
+              ? `its planning reads “${planRunWords(planned)}”`
+              : 'this project names no planner, so the run waits here'}{waitingQuestions > 0
+              ? `, with ${waitingQuestions} question${waitingQuestions === 1 ? '' : 's'} for you`
+              : ''}.
+            <Button size="sm" variant="link" onclick={() => (work.tab = 'plan')}
+              >Open the Plan tab</Button
+            >
           </p>
         {/if}
         {#if job.detail && (job.state === 'interrupted' || job.state === 'setup_failed' || job.state === 'failed')}

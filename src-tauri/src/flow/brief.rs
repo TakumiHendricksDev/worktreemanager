@@ -29,10 +29,11 @@
 
 use std::fmt::Write as _;
 
+use wtm_core::flow::planning::plan_text;
 use wtm_core::flow::submission::{self, kind_name};
 use wtm_core::flow::{
-    CheckSpec, OutputKind, PullRequest, Question, ReportedFinding, RoleInput, RoleProvider,
-    RoleSpec, Snapshot, Workspace,
+    CheckSpec, OutputKind, PlanContext, PlanRecord, PullRequest, Question, ReportedFinding,
+    RoleInput, RoleProvider, RoleSpec, Snapshot, TrackerKind, Workspace,
 };
 
 /// What a brief is written from.
@@ -503,6 +504,287 @@ pub fn fix_opening_turn(role: &str) -> String {
          the files it allows, commit with `flow_checkpoint`, and hand in a handoff with \
          `flow_submit`."
     )
+}
+
+/// What a planner's brief is written from.
+#[derive(Debug, Clone)]
+pub struct PlannerFacts<'a> {
+    pub role: &'a str,
+    pub spec: &'a RoleSpec,
+    pub key: &'a str,
+    pub tracker: TrackerKind,
+    pub worktree_path: &'a str,
+    pub branch: Option<&'a str>,
+    /// What the planner was given, as the context drawer lists it.
+    pub context: Option<&'a PlanContext>,
+    /// The repository's instructions and your rules, as `wtm_core::flow::knowledge::brief` wrote
+    /// them, when the role takes either.
+    pub knowledge: Option<&'a str>,
+    /// Questions it asked that you have answered.
+    pub answers: &'a [Question],
+    /// The newest plan it handed in, when it is revising one.
+    pub latest: Option<&'a PlanRecord>,
+}
+
+/// The brief `flow_context` hands a planner.
+///
+/// The issue's text is in here, inside `flow_context`'s fence like everything else, because an
+/// issue is text anybody with access to the tracker wrote. What the planner may do, when to ask and
+/// what to hand in are the app's words, before and after it.
+#[must_use]
+pub fn planner_brief(facts: &PlannerFacts<'_>) -> String {
+    let spec = facts.spec;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Role `{}`: you investigate {} {} and plan its implementation. You do not implement \
+         it.\n\nObjective: {}",
+        facts.role,
+        facts.tracker.as_str(),
+        facts.key,
+        spec.objective.trim()
+    );
+    if let Some(instructions) = spec.instructions.as_deref().map(str::trim)
+        && !instructions.is_empty()
+    {
+        let _ = writeln!(out, "\n{instructions}");
+    }
+
+    if let Some(context) = facts.context {
+        planner_issue(&mut out, context);
+    }
+
+    let branch = facts
+        .branch
+        .map_or_else(String::new, |branch| format!(" (branch `{branch}`)"));
+    let _ = writeln!(
+        out,
+        "\nYour working directory is the issue's worktree{branch}, at `{}`. Read the code there; \
+         your sandbox refuses every write, in the worktree too, because nothing is written before \
+         a plan is approved.",
+        facts.worktree_path
+    );
+
+    if !spec.skills.is_empty() {
+        let names: Vec<String> = spec
+            .skills
+            .iter()
+            .map(|skill| format!("`{}`", invocable(spec.provider, skill)))
+            .collect();
+        let how = match spec.provider {
+            RoleProvider::Claude => "Invoke them with the Skill tool",
+            RoleProvider::Codex => "They are in your skills list; read and follow them",
+        };
+        let _ = writeln!(
+            out,
+            "\nSkills for this role: {}. {how}. Where a skill says how to report, hand in a plan \
+             through `flow_submit` instead.",
+            names.join(", ")
+        );
+    }
+    if let Some(knowledge) = facts.knowledge.filter(|text| !text.trim().is_empty()) {
+        let _ = writeln!(out, "\n{}", knowledge.trim_end());
+        let _ = writeln!(
+            out,
+            "\nFor a plan, a disagreement between the project's instructions and a rule is a \
+             question for the person, or a risk the plan names. Never pick a side silently."
+        );
+    }
+
+    if !facts.answers.is_empty() {
+        let _ = writeln!(out, "\nQuestions you asked, and the person's answers:");
+        for question in facts.answers {
+            let Some(answer) = &question.answer else {
+                continue;
+            };
+            let _ = writeln!(
+                out,
+                "- {}\n  Answer: {}",
+                question.text.trim(),
+                super::planner::answer_words(question, answer)
+            );
+        }
+    }
+    if let Some(latest) = facts.latest {
+        let _ = writeln!(
+            out,
+            "\nYour newest plan, revision {}:\n{}",
+            latest.revision,
+            plan_text(&latest.plan)
+        );
+    }
+
+    let _ = writeln!(
+        out,
+        "\nAsk with `flow_ask` only when the answer changes the work's behaviour, its scope or its \
+         architecture, and you cannot settle it from the code, the issue or the project's \
+         instructions. Anything else, decide reasonably and say what you decided in the plan. A \
+         question gives `why` it matters, `refs` (file:line, or a quoted line of the issue), your \
+         `recommendation`, what it `unblocks`, and `options` when there are clear choices. When \
+         you have asked, end your turn: wtm ends it for you, and the answer arrives as your next \
+         message in this same conversation, possibly hours later."
+    );
+    let _ = writeln!(
+        out,
+        "\nHand in the plan by calling `flow_submit` with kind `plan` and a payload matching this \
+         JSON Schema. It is checked; a payload that does not match comes back with every problem \
+         listed, to fix and submit again. `areas` are the files and directories the work expects \
+         to touch: a writer is held to them later, so name every place, as globs where that is \
+         honest. Set `designNeeded` when the work changes a user interface substantially or a \
+         person should see it before it is built.\n{}",
+        submission::schema(OutputKind::Plan)
+    );
+    let _ = write!(
+        out,
+        "\nWhen you have submitted, end your turn. Do not try to change files, commit or push: \
+         this session cannot, and nothing is implemented until the plan is approved."
+    );
+    out
+}
+
+/// The issue as the planner's brief gives it: the context drawer's record, in words.
+fn planner_issue(out: &mut String, context: &PlanContext) {
+    let issue = &context.issue;
+    let _ = writeln!(
+        out,
+        "\nThe issue, as the tracker had it when this run read it (status: {}):",
+        context.status
+    );
+    let _ = writeln!(out, "- Summary: {}", issue.summary.trim());
+    if let Some(kind) = &issue.kind {
+        let _ = writeln!(out, "- Type: {kind}");
+    }
+    match issue.description.as_deref().map(str::trim) {
+        Some(description) if !description.is_empty() => {
+            let _ = writeln!(out, "- Description:\n{description}");
+        }
+        _ => {
+            let _ = writeln!(out, "- Description: none");
+        }
+    }
+    for field in &issue.fields {
+        let _ = writeln!(
+            out,
+            "- {}: {}",
+            field.name,
+            field.value.as_deref().unwrap_or("(empty)")
+        );
+    }
+    if let Some(sprint) = &context.sprint {
+        let goal = context
+            .sprint_goal
+            .as_deref()
+            .map_or_else(String::new, |goal| format!(", whose goal is: {goal}"));
+        let _ = writeln!(out, "- Sprint: {sprint}{goal}");
+    }
+    if !context.dependencies.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nRelated issues, as read-only context. They are other work; plan this issue, and \
+             name a dependency in the plan's risks where it matters:"
+        );
+        for dependency in &context.dependencies {
+            let summary = dependency
+                .summary
+                .as_deref()
+                .map_or_else(String::new, |s| format!(" · {s}"));
+            let status = dependency
+                .status
+                .as_deref()
+                .map_or_else(String::new, |s| format!(" ({s})"));
+            let _ = writeln!(
+                out,
+                "- {} {}{summary}{status}",
+                dependency.relation, dependency.key
+            );
+        }
+    }
+}
+
+/// The first turn a planner is sent.
+#[must_use]
+pub fn planner_opening_turn(key: &str) -> String {
+    format!(
+        "Start planning {key}: call `flow_context` for your brief, investigate the code, ask with \
+         `flow_ask` only if an answer would change behaviour, scope or architecture, and hand in \
+         the plan with `flow_submit`."
+    )
+}
+
+/// The turn that resumes a planner with the answers to its questions.
+#[must_use]
+pub fn planner_answers_turn(answered: &[Question], resumed: bool) -> String {
+    let mut out = String::from(if resumed {
+        "The person answered your question"
+    } else {
+        "This is a new session: the conversation you asked in could not be resumed. The person \
+         answered the question you asked"
+    });
+    if answered.len() > 1 {
+        out.push('s');
+    }
+    out.push_str(".\n");
+    for question in answered {
+        if let Some(answer) = &question.answer {
+            let _ = writeln!(
+                out,
+                "- {}\n  Answer: {}",
+                question.text.trim(),
+                super::planner::answer_words(question, answer)
+            );
+        }
+    }
+    out.push_str(
+        "Continue planning with the answer. Ask again only if something new changes behaviour, \
+         scope or architecture, and hand in the plan with `flow_submit` when it is ready.",
+    );
+    if !resumed {
+        out.push_str(" Call `flow_context` first for your brief.");
+    }
+    out
+}
+
+/// The turn that asks a planner about one of its questions before it is answered.
+#[must_use]
+pub fn planner_discuss_turn(question: &Question, message: &str) -> String {
+    format!(
+        "The person has not answered your question yet (\"{}\"). Before they do, they ask:\n\n{}\n\n\
+         Reply to them in plain words in this turn, briefly, as one message. Do not call \
+         `flow_submit` or `flow_ask` and do not continue planning: the question stays open until \
+         they answer it, and your reply is shown to them beside it.",
+        question.text.trim(),
+        message.trim()
+    )
+}
+
+/// The turn that asks a planner for changes to a plan revision.
+#[must_use]
+pub fn planner_changes_turn(revision: u32, note: &str, resumed: bool) -> String {
+    let start = if resumed {
+        ""
+    } else {
+        "This is a new session: the conversation could not be resumed. Call `flow_context` \
+         first; it holds your brief and your newest plan. "
+    };
+    format!(
+        "{start}The person asked for changes to plan revision {revision}:\n\n{}\n\nRevise the \
+         plan and hand the whole of it in again with `flow_submit`. Ask with `flow_ask` only if \
+         the request leaves something that changes behaviour, scope or architecture unclear.",
+        note.trim()
+    )
+}
+
+/// The turn that carries a planner on after an interruption, a failure or a limit.
+#[must_use]
+pub fn planner_resume_turn(key: &str, resumed: bool) -> String {
+    if resumed {
+        format!(
+            "Your work on {key} was cut off. Carry on from where you were, and hand in the plan \
+             with `flow_submit`."
+        )
+    } else {
+        planner_opening_turn(key)
+    }
 }
 
 /// The first turn a role session is sent.

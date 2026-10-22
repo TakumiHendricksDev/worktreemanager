@@ -20,8 +20,8 @@
 //!    stopped when it moved elsewhere.
 //!
 //! The run then stays in Preparing with its worktree ready, which the issue workspace calls "Ready
-//! to plan". Investigating and planning are the planner's, a later item, and nothing here starts
-//! them.
+//! to plan". Investigating and planning are the planner's (`planner.rs`), which starts by itself
+//! from here when the project names one.
 //!
 //! # A crash in the middle
 //!
@@ -880,6 +880,8 @@ impl Engine {
         match job.state {
             StartJobState::Ready => {
                 self.settle(flow, &[InboxKind::Failure, InboxKind::Interrupted]);
+                // Ready to plan: the planner starts by itself when the project names one.
+                self.plan_when_ready(flow);
             }
             StartJobState::SetupFailed => self.file(&NewInboxItem {
                 flow,

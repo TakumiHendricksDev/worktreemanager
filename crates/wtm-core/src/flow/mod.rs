@@ -43,7 +43,10 @@
 //! where an issue's work happens, the job that makes its worktree, and what a drop on the board
 //! means ([`start`]), and the one tracker write, moving an issue, read first ([`moves`]). And a
 //! worktree's environment: the services it runs, the rules they are supervised by, and the approval
-//! a destructive command on a shared resource waits for ([`env`]). The engine, the outbox's executor
+//! a destructive command on a shared resource waits for ([`env`]). Then planning an issue: what the
+//! planner read, the plans it handed in, your decisions about them and when an approval goes stale
+//! ([`planning`]), and a question's answer sent to the tracker only when you send it ([`comment`]).
+//! The engine, the outbox's executor
 //! and the environment's supervisor are in the app (`src-tauri/src/flow/`), because one opens
 //! sessions, one reaches the forge and the tracker, and one starts processes.
 
@@ -67,6 +70,7 @@ macro_rules! id {
 }
 
 pub mod approval;
+pub mod comment;
 pub mod consolidate;
 pub mod env;
 pub mod event;
@@ -79,6 +83,7 @@ pub mod knowledge;
 pub mod moves;
 pub mod outbox;
 pub mod plan;
+pub mod planning;
 pub mod publish;
 pub mod pull_review;
 pub mod question;
@@ -101,6 +106,7 @@ pub use approval::{
     Approval, ApprovalError, ApprovalId, ApprovalIntent, ApprovalSubject, Binding, NewApproval,
     PinChange, Pinned, Stale, review_binding,
 };
+pub use comment::{CommentError, CommentPayload, CommentRequest};
 pub use consolidate::{
     Evidence, EvidenceKey, FindingRecord, Merged, NewFinding, Reconciled, Source, consolidate,
     finding_is_stale, reconcile, role_is_affected,
@@ -135,11 +141,16 @@ pub use knowledge::{
 };
 pub use moves::{MoveCause, MoveIssuePayload, MoveRequest, MoveStep, MovedElsewhere};
 pub use outbox::{
-    Activity, Approved, Attention, MoveSend, NewOperation, Operation, OperationChange, OperationId,
-    OperationKey, OperationKind, OperationPayload, OperationResult, OperationState, OutboxError,
-    Publication, PublicationState, Resolution, RouteSend, SuggestedFix, progress,
+    Activity, Approved, Attention, CommentSend, MoveSend, NewOperation, Operation, OperationChange,
+    OperationId, OperationKey, OperationKind, OperationPayload, OperationResult, OperationState,
+    OutboxError, Publication, PublicationState, Resolution, RouteSend, SuggestedFix, progress,
 };
 pub use plan::{PlanError, PlannedRole, PlannedStage, RecipePlan, SkipReason, SkippedRole, plan};
+pub use planning::{
+    DiffKind, DiffLine, IssueChange, IssueText, IssueTextField, NewPlan, NewPlanning, PlanApproval,
+    PlanContext, PlanDecision, PlanDecisionId, PlanDependency, PlanId, PlanRecord, PlanRule,
+    PlanStanding, PlanVerdict, Planning, plan_binding,
+};
 pub use publish::{
     ChangedLines, DraftComment, FileLines, FoldReason, FoldedComment, InlineComment, LineRange,
     Marker, PendingFound, PendingReviewPayload, PublishContext, PublishError, RemoteComment,
@@ -151,7 +162,10 @@ pub use pull_review::{
     EarlierFate, MirroredPr, NewOutcome, NewReviewedHead, Outcome, OutcomeError, OutcomeKind,
     PushToBranch, ReviewClaim, ReviewedHead, base_ref, fate, push_to_branch,
 };
-pub use question::{Answer, ContextLink, NewQuestion, Question, QuestionError, QuestionId};
+pub use question::{
+    Answer, ContextLink, NewQuestion, Question, QuestionError, QuestionId, QuestionMessage,
+    QuestionMessageId, Speaker,
+};
 pub use queue::{
     MirroredQueue, QueueChanges, QueueReading, QueueSection, QueuedIssue, StatusChange, SyncFailure,
 };
@@ -202,7 +216,8 @@ pub use submission::{
 pub use tracker::{
     DEFAULT_QUEUE_LIMIT, Issue, IssueDetail, IssueField, IssueLink, IssueParent, IssueQuery,
     IssueStatus, MAX_QUEUE_LIMIT, QueueSpec, SPRINT_FIELD, Sprint, SprintRef, SprintState,
-    StatusCategory, StatusColumn, StatusMap, StatusRole, TrackerAccount, TrackerKind, Transition,
+    StatusCategory, StatusColumn, StatusMap, StatusRole, TrackerAccount, TrackerComment,
+    TrackerKind, Transition,
 };
 pub use work::{
     Backing, IssueRef, NewWorkItem, PullRequestRef, RecordedLink, WorkItem, WorkItemId, WorkKey,

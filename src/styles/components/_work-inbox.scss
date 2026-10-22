@@ -466,3 +466,73 @@
   color: var(--danger);
   font-size: var(--step--1);
 }
+
+/*
+ * Discuss: a question talked over with the role that asked it, before it is answered. Its own
+ * replies are set off by a rule on the left and the role's name, never by colour alone.
+ */
+.c-discussion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+}
+
+.c-discussion__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.c-discussion__message {
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-discussion__message.is-agent {
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--info-line);
+  color: var(--fg-muted);
+}
+
+.c-discussion__who {
+  margin-right: var(--sp-1);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.c-discussion__compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* Send to Jira: the draft to edit, and what was sent, after the answer. */
+.c-comment-draft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.c-comment-sent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+}
+
+/* A reply rendered as Markdown sits under its speaker rather than beside it. */
+.c-discussion__message > .c-markdown {
+  margin-top: 2px;
+}

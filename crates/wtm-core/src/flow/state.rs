@@ -139,6 +139,8 @@ const IMPLEMENT: Lifecycle = Lifecycle {
         (Phase::Resolving, Phase::Preparing),
         (Phase::Preparing, Phase::Investigating),
         (Phase::Investigating, Phase::Planned),
+        // Asking for changes to a plan goes back to the planner, in the same conversation.
+        (Phase::Planned, Phase::Investigating),
         (Phase::Planned, Phase::Designing),
         (Phase::Planned, Phase::Implementing),
         (Phase::Designing, Phase::DesignReady),

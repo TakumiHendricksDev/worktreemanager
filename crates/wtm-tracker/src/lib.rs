@@ -8,15 +8,17 @@
 //! client. The cost is a process per question, and a narrower window onto the tracker than its API
 //! gives, recorded below because it decides what the Work view can show.
 //!
-//! # Reads, and one write
+//! # Reads, and two writes
 //!
 //! Every argv this crate builds is one of `acli --version`, `acli jira auth status`,
 //! `acli jira workitem search`, `acli jira workitem view`, `acli jira board list-sprints`,
-//! `acli jira sprint view` and `acli jira sprint list-workitems`, which read, and
-//! `acli jira workitem transition` for exactly one issue by key, which moves it
-//! ([`TrackerWriter`](wtm_core::ports::TrackerWriter)); `tests/acli.rs` holds the adapter to that
-//! list. Nothing comments, edits, assigns or creates. A move is sent only by the app's outbox, which
-//! reads the issue first and reads it again after (`wtm_core::flow::moves`).
+//! `acli jira sprint view`, `acli jira sprint list-workitems` and
+//! `acli jira workitem comment list`, which read; `acli jira workitem transition` for exactly one
+//! issue by key, which moves it; and `acli jira workitem comment create` for exactly one issue by
+//! key, which comments on it ([`TrackerWriter`](wtm_core::ports::TrackerWriter)). `tests/acli.rs`
+//! holds the adapter to that list. Nothing edits, assigns or creates issues. A move or a comment is
+//! sent only by the app's outbox, which reads the issue first and reads it again after
+//! (`wtm_core::flow::moves`, `wtm_core::flow::comment`).
 //!
 //! # What acli 1.3.18 can and cannot read (measured 2026-10-21 against a Jira Cloud site)
 //!
@@ -29,6 +31,7 @@
 //! | Which field holds sprints | Nothing: `names`/`schema` expansions are always `null` | The id differs per site, so it is config (`[workflow.fields] sprint`) |
 //! | Transitions | Nothing lists them; `workitem transition --key --status` moves by status name | [`list`](wtm_core::ports::Tracker::transitions) is `Unsupported`; a move does not need it |
 //! | Sign-in | `jira auth status`: text, not JSON | Parsed from its `✓ Authenticated` and `Site:` lines |
+//! | Comments (measured 2026-10-22) | `workitem comment list --key --paginate --json`: one `{ "comments": [...] }` per page | Each body flattened to one line of plain text, mentions without their names; the author a display name; no time on a comment |
 //!
 //! None of the gaps is essential to a sprint queue and board: membership and the sprint's goal
 //! come from the board, a mapped field is read when an issue is opened, and a query can filter on a

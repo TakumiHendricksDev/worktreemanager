@@ -132,6 +132,35 @@ pub struct Question {
     pub answer: Option<Answer>,
 }
 
+id! {
+    /// One message in a question's discussion, as the store numbers it.
+    QuestionMessageId
+}
+
+/// Who said one message of a discussion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Speaker {
+    You,
+    /// The role that asked, in the same conversation it asked from.
+    Agent,
+}
+
+/// One message of **Discuss**: a follow-up about a question before it is answered, with the role
+/// that asked it.
+///
+/// Kept apart from the answer on purpose. The answer is what the role acts on and what Send to
+/// Jira may carry; a discussion is working it out, and stays here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionMessage {
+    pub id: QuestionMessageId,
+    pub question: QuestionId,
+    pub from: Speaker,
+    pub text: String,
+    pub at: UnixMs,
+}
+
 /// A question as it is asked, before the store numbers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

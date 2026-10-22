@@ -251,8 +251,12 @@ pub fn run() {
     init_tracing();
 
     let mut app = App::new().expect("initialize the application");
-    // A debug build's click-through keeps issue moves on this machine (`dev_tracker`).
-    if let Some(fake) =
+    // A debug build's click-through keeps its tracker writes on this machine (`dev_tracker`): a
+    // fixture file instead of any tracker, or the real tracker's reads with local writes.
+    if let Some(fixture) = dev_tracker::FixtureTracker::from_env() {
+        app.tracker = Arc::clone(&fixture) as Arc<dyn wtm_core::ports::Tracker>;
+        app.tracker_writer = fixture;
+    } else if let Some(fake) =
         dev_tracker::DevTracker::from_env(Arc::clone(&app.tracker), &app.config.paths().flow_db)
     {
         app.tracker = Arc::clone(&fake) as Arc<dyn wtm_core::ports::Tracker>;
@@ -615,6 +619,17 @@ pub fn run() {
             flow::start_commands::settle_move,
             flow::start_commands::pause_run,
             flow::start_commands::unpause_run,
+            flow::plan_commands::issue_plan,
+            flow::plan_commands::start_planning,
+            flow::plan_commands::resume_planning,
+            flow::plan_commands::read_planned_issue,
+            flow::plan_commands::approve_plan,
+            flow::plan_commands::request_plan_changes,
+            flow::plan_commands::question_thread,
+            flow::plan_commands::discuss_question,
+            flow::plan_commands::question_comment_draft,
+            flow::plan_commands::post_question_comment,
+            flow::plan_commands::retry_question_comment,
         ])
         // `build` then `run`, rather than `Builder::run`. The shorthand is exactly
         // `build(context)?.run(|_, _| {})` — an empty event callback — and this app now needs

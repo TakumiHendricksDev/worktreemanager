@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
 use super::approval::{Approval, ApprovalId, ApprovalSubject, Binding, review_binding};
+use super::comment::{CommentPayload, CommentRequest};
 use super::env::CommandRequest;
 use super::moves::{MoveIssuePayload, MoveRequest, MovedElsewhere};
 use super::publish::{PendingReviewPayload, ReviewPayload, SubmitReviewPayload, hash_of, target};
@@ -107,6 +108,8 @@ pub enum OperationPayload {
     OpenPullRequest(OpenPullRequestPayload),
     /// An issue moved to another team status.
     MoveIssue(MoveIssuePayload),
+    /// A comment posted to an issue: a question and its answer, sent from Send to Jira.
+    PostComment(CommentPayload),
 }
 
 impl OperationPayload {
@@ -118,6 +121,7 @@ impl OperationPayload {
             Self::PushBranch(_) => OperationKind::PushBranch,
             Self::OpenPullRequest(_) => OperationKind::OpenPullRequest,
             Self::MoveIssue(_) => OperationKind::MoveIssue,
+            Self::PostComment(_) => OperationKind::PostComment,
         }
     }
 
@@ -136,6 +140,7 @@ impl OperationPayload {
                 p.pull_request.head
             ),
             Self::MoveIssue(p) => p.target(),
+            Self::PostComment(p) => p.target(),
         }
     }
 
@@ -268,6 +273,17 @@ pub enum OperationResult {
         /// It was there before anything was sent.
         adopted: bool,
     },
+    /// A comment now on the issue.
+    #[serde(rename_all = "camelCase")]
+    Commented {
+        key: String,
+        /// The tracker's id for the comment.
+        comment: String,
+        /// Who the tracker says wrote it.
+        author: Option<String>,
+        /// It was on the issue before anything was sent.
+        adopted: bool,
+    },
 }
 
 impl OperationResult {
@@ -278,7 +294,10 @@ impl OperationResult {
             Self::Review {
                 review, node_id, ..
             } => Some((*review, node_id)),
-            Self::Pushed { .. } | Self::PullRequest { .. } | Self::Moved { .. } => None,
+            Self::Pushed { .. }
+            | Self::PullRequest { .. }
+            | Self::Moved { .. }
+            | Self::Commented { .. } => None,
         }
     }
 
@@ -608,6 +627,8 @@ impl Approved {
             ApprovalSubject::Route(_)
             | ApprovalSubject::Command(_)
             | ApprovalSubject::Move(_)
+            | ApprovalSubject::Plan(_)
+            | ApprovalSubject::Comment(_)
             | ApprovalSubject::Services(_) => return None,
         };
         Some(Publication {
@@ -631,6 +652,8 @@ impl Approved {
             | ApprovalSubject::Suggestions(_)
             | ApprovalSubject::Command(_)
             | ApprovalSubject::Move(_)
+            | ApprovalSubject::Plan(_)
+            | ApprovalSubject::Comment(_)
             | ApprovalSubject::Services(_) => None,
         }
     }
@@ -644,6 +667,8 @@ impl Approved {
             | ApprovalSubject::Suggestions(_)
             | ApprovalSubject::Route(_)
             | ApprovalSubject::Move(_)
+            | ApprovalSubject::Plan(_)
+            | ApprovalSubject::Comment(_)
             | ApprovalSubject::Services(_) => None,
         }
     }
@@ -661,8 +686,45 @@ impl Approved {
             | ApprovalSubject::Suggestions(_)
             | ApprovalSubject::Route(_)
             | ApprovalSubject::Command(_)
+            | ApprovalSubject::Plan(_)
+            | ApprovalSubject::Comment(_)
             | ApprovalSubject::Services(_) => None,
         }
+    }
+
+    /// A comment on an issue. `None` for anything else.
+    #[must_use]
+    pub fn into_comment(self) -> Option<CommentSend> {
+        match self.subject {
+            ApprovalSubject::Comment(request) => Some(CommentSend {
+                approval: self.approval,
+                request: *request,
+                operations: self.operations,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// One approval of a comment on an issue, with its one operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentSend {
+    pub approval: Approval,
+    pub request: CommentRequest,
+    /// One: a comment is a single write.
+    pub operations: Vec<Operation>,
+}
+
+impl CommentSend {
+    #[must_use]
+    pub fn state(&self, activity: Option<Activity>) -> PublicationState {
+        progress(&self.operations, activity)
+    }
+
+    #[must_use]
+    pub fn operation(&self) -> Option<&Operation> {
+        self.operations.first()
     }
 }
 

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 use wtm_core::flow::{
     Issue, IssueDetail, IssueField, IssueLink, IssueParent, IssueStatus, SPRINT_FIELD, Sprint,
-    SprintState, StatusCategory,
+    SprintState, StatusCategory, TrackerComment,
 };
 
 /// `acli version 1.3.18-stable` → `(1, 3, 18)`. Only the first line is read: an outdated `acli`
@@ -90,6 +90,31 @@ pub(crate) fn issues(printed: &str) -> Result<Vec<Issue>, String> {
         }
     }
     Ok(issues)
+}
+
+/// An issue's comments: `{ "comments": [...] }` per page, pages one after the other, oldest first.
+///
+/// `acli` gives each body as plain text on one line, its author as a display name, and no time.
+pub(crate) fn comments(printed: &str) -> Result<Vec<TrackerComment>, String> {
+    let mut comments = Vec::new();
+    for document in documents(printed)? {
+        let page = document["comments"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice);
+        for item in page {
+            let id = match &item["id"] {
+                Value::String(id) => id.clone(),
+                Value::Number(id) => id.to_string(),
+                _ => return Err("a comment has no id".to_owned()),
+            };
+            comments.push(TrackerComment {
+                author: text(item, "author"),
+                body: item["body"].as_str().unwrap_or_default().to_owned(),
+                id,
+            });
+        }
+    }
+    Ok(comments)
 }
 
 fn issue(value: &Value) -> Result<Issue, String> {

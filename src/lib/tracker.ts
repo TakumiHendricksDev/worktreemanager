@@ -213,6 +213,11 @@ export function runWords(run: IssueRun | null): string {
   if (run.start && state.phase === 'preparing') return JOB_WORDS[run.start];
   if (run.openItems > 0) return 'Run has news for you';
   switch (state.phase) {
+    case 'investigating':
+      return 'Planning';
+    case 'planned':
+      // Held for your approval above; here, nothing waits: the plan was approved.
+      return 'Planned, approved';
     case 'reviewing':
       return 'Reviewing';
     case 'consolidated':

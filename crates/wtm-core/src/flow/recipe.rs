@@ -97,6 +97,13 @@ pub struct WorkflowSpec {
     pub role: BTreeMap<String, RoleSpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub recipe: BTreeMap<String, RecipeSpec>,
+    /// The role that investigates a started issue and plans it: a reviewer handing in a plan.
+    /// Absent, an issue's run waits at "Ready to plan" and nothing is spent on it.
+    ///
+    /// Your own config and the local layer only, like the roles it names: choosing the planner
+    /// chooses which account a started issue spends, by itself, once its worktree is ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner: Option<String>,
     /// Commands the app runs when a role asks, through `flow_run_check`.
     ///
     /// Your own config and the local layer only, like roles: a check is a command wtm runs outside
@@ -568,6 +575,9 @@ impl WorkflowSpec {
                 WorkflowError::new("instruction_sources", format!("`{pattern}`: {message}"))
             })?;
         }
+        if let Some(planner) = &self.planner {
+            self.check_planner(planner)?;
+        }
         self.statuses.validate()?;
         tracker::validate_fields(&self.fields)?;
         if let Some(queue) = &self.queue {
@@ -748,6 +758,46 @@ impl WorkflowSpec {
             }
             _ => Ok(()),
         }
+    }
+
+    /// The planner is a reviewer that hands in a plan, and it reads the issue's worktree.
+    ///
+    /// Read-only because planning comes before any approval, and the plan's policy (§4.2) lets
+    /// nothing write until a plan is approved. The worktree rather than a snapshot because its
+    /// conversation is resumed in the same directory, possibly hours later, when a question is
+    /// answered, and a snapshot checkout is removed when its stage ends.
+    fn check_planner(&self, planner: &str) -> Result<(), WorkflowError> {
+        let Some(role) = self.role.get(planner) else {
+            return Err(WorkflowError::new(
+                "planner",
+                format!("there is no role `{planner}`; declare it as `[workflow.role.{planner}]`"),
+            ));
+        };
+        if role.output != OutputKind::Plan {
+            return Err(WorkflowError::new(
+                "planner",
+                format!(
+                    "`{planner}` hands back findings or a handoff; a planner's `output` is `plan`"
+                ),
+            ));
+        }
+        if role.profile != RoleProfile::Reviewer {
+            return Err(WorkflowError::new(
+                "planner",
+                format!(
+                    "`{planner}` is a writer; a planner reads and plans, and nothing writes before \
+                     a plan is approved"
+                ),
+            ));
+        }
+        if role.workspace == Some(Workspace::Snapshot) {
+            return Err(WorkflowError::new(
+                format!("role.{planner}.workspace"),
+                "a planner reads the issue's worktree: its conversation is resumed there when you \
+                 answer a question, and a snapshot checkout is gone by then",
+            ));
+        }
+        Ok(())
     }
 
     fn check_fallback(&self, id: &str, role: &RoleSpec) -> Result<(), WorkflowError> {
@@ -1174,6 +1224,43 @@ mod tests {
 
     fn refusal(spec: &WorkflowSpec) -> WorkflowError {
         spec.validate().unwrap_err()
+    }
+
+    fn with_planner(fields: &serde_json::Value) -> WorkflowSpec {
+        let mut spec = review_with(&json!({ "role": { "planner": fields } }));
+        spec.planner = Some("planner".to_owned());
+        spec
+    }
+
+    #[test]
+    fn a_planner_is_a_reviewer_that_hands_in_a_plan_from_the_worktree() {
+        let planner = json!({
+            "objective": "Investigate the issue and plan it",
+            "provider": "claude",
+            "inputs": ["issue", "instructions", "rules"],
+            "output": "plan",
+        });
+        with_planner(&planner).validate().unwrap();
+
+        let mut findings = planner.clone();
+        findings["output"] = json!("findings");
+        assert_eq!(refusal(&with_planner(&findings)).key, "planner");
+
+        let mut writer = planner.clone();
+        writer["profile"] = json!("writer");
+        writer["workspace"] = json!("worktree");
+        assert!(refusal(&with_planner(&writer)).message.contains("writer"));
+
+        let mut snapshot = planner;
+        snapshot["workspace"] = json!("snapshot");
+        assert_eq!(
+            refusal(&with_planner(&snapshot)).key,
+            "role.planner.workspace"
+        );
+
+        let mut missing = review_with(&json!({}));
+        missing.planner = Some("nobody".to_owned());
+        assert!(refusal(&missing).message.contains("no role `nobody`"));
     }
 
     fn skills(names: &[&str]) -> Vec<AgentSkill> {

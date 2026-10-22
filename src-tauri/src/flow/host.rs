@@ -68,6 +68,16 @@ pub trait RoleHost: Send + Sync {
     /// End the session and its process. Idempotent.
     fn close(&self, session: &SessionId);
 
+    /// Stop the turn the session is running, as the CLI's own interrupt does: the provider ends the
+    /// turn and keeps the conversation. The planner's `flow_ask` uses it to end the turn itself.
+    ///
+    /// # Errors
+    ///
+    /// When the session cannot be interrupted; the engine closes it instead.
+    fn interrupt(&self, session: &SessionId) -> Result<(), String> {
+        Err(format!("{session} cannot be interrupted by this host"))
+    }
+
     /// Where the setup of a worktree Start Work makes sends its terminal: kept for a window to
     /// attach to, by the real host. A test's host, which has no window, drops it.
     fn setup_sink(&self) -> Arc<dyn PtySink> {
@@ -184,6 +194,12 @@ impl RoleHost for TauriHost {
         }
     }
 
+    fn interrupt(&self, session: &SessionId) -> Result<(), String> {
+        self.app()?
+            .with_agent(session.as_str(), wtm_agent::AgentSession::interrupt)
+            .map_err(|e| e.to_string())
+    }
+
     /// Recorded, as a Home job's setup is, so the issue workspace can attach to the terminal
     /// after the setup started and still show what it printed first.
     fn setup_sink(&self) -> Arc<dyn PtySink> {
@@ -276,6 +292,12 @@ impl RoleHost for HeadlessHost {
 
     fn close(&self, session: &SessionId) {
         self.app.close_agent(session.as_str());
+    }
+
+    fn interrupt(&self, session: &SessionId) -> Result<(), String> {
+        self.app
+            .with_agent(session.as_str(), wtm_agent::AgentSession::interrupt)
+            .map_err(|e| e.to_string())
     }
 }
 

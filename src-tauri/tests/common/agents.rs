@@ -54,6 +54,11 @@ pub(crate) enum Behaviour {
     RequestThenSubmit(Value, Value),
     /// A writer: do these, in its working directory and through its run tools, then end the turn.
     Acts(Vec<Act>),
+    /// Make these run tool calls, by name, in order; then end the turn when `end` says so. A
+    /// planner that asks does not end its own turn: the engine interrupts it.
+    Tools(Vec<(&'static str, Value)>, bool),
+    /// Say this as the turn's reply, in words, and end the turn: a discussion turn.
+    Reply(&'static str),
 }
 
 /// One thing a fake writer does.
@@ -92,6 +97,12 @@ pub(crate) struct Opened {
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) cwd_existed: bool,
     pub(crate) brief: String,
+    /// The provider conversation the session was to continue, when it was a resume.
+    pub(crate) resume: Option<String>,
+    /// The run token it was issued.
+    pub(crate) token: String,
+    /// The turns it was sent, in order.
+    pub(crate) turns: Arc<Mutex<Vec<String>>>,
     /// The pane its token was scoped to, for a runtime role.
     pub(crate) browser: Option<String>,
 }
@@ -120,6 +131,10 @@ pub(crate) struct FakeHost {
     /// Every answer a run tool gave a fake agent, by role: `(ok, text)`.
     pub(crate) answers: Mutex<Vec<(String, bool, String)>>,
     pub(crate) turns_sent: AtomicUsize,
+    /// How many times the engine interrupted a turn.
+    pub(crate) interrupts: AtomicUsize,
+    /// Provider conversations started, numbered, as a CLI's own ids would be.
+    pub(crate) conversations: AtomicU64,
     pub(crate) open_now: AtomicUsize,
     pub(crate) open_most: AtomicUsize,
     pub(crate) next: AtomicU64,
@@ -141,6 +156,8 @@ impl FakeHost {
             opened: Mutex::new(Vec::new()),
             answers: Mutex::new(Vec::new()),
             turns_sent: AtomicUsize::new(0),
+            interrupts: AtomicUsize::new(0),
+            conversations: AtomicU64::new(0),
             open_now: AtomicUsize::new(0),
             open_most: AtomicUsize::new(0),
             next: AtomicU64::new(1),
@@ -349,6 +366,29 @@ impl FakeHost {
                 }
                 self.finish_turn(session);
             }
+            Behaviour::Tools(calls, end) => {
+                for (tool, args) in calls {
+                    self.call(session, tool, args);
+                }
+                if end {
+                    self.finish_turn(session);
+                }
+            }
+            Behaviour::Reply(words) => {
+                self.emit(
+                    session,
+                    &AgentEvent::TurnStarted {
+                        turn: "t".to_owned(),
+                    },
+                );
+                self.emit(
+                    session,
+                    &AgentEvent::MessageDelta {
+                        text: words.to_owned(),
+                    },
+                );
+                self.finish_turn(session);
+            }
             Behaviour::ProgressThenSubmit(payload) => {
                 for line in [
                     "reading export.rs",
@@ -377,14 +417,6 @@ impl RoleHost for FakeHost {
 
     fn open(&self, spec: &RoleSession, sink: Arc<dyn AgentSink>) -> Result<SessionId, String> {
         let attempt = self.attempts_of(&spec.role.role) + 1;
-        self.opened.lock().push(Opened {
-            role: spec.role.role.clone(),
-            cwd: spec.cwd.clone(),
-            cwd_existed: spec.cwd.as_ref().is_some_and(|cwd| cwd.is_dir()),
-            brief: spec.brief.clone(),
-            browser: spec.role.browser.clone(),
-        });
-        let behaviour = (self.script.lock())(&spec.role.role, attempt);
         let id = format!("fake-{}", self.next.fetch_add(1, Ordering::SeqCst));
         let token = self.app.handoff.issue(Caller {
             scope: SessionScope::run(&spec.project, &spec.worktree, spec.role.clone()),
@@ -393,6 +425,18 @@ impl RoleHost for FakeHost {
             mode: None,
             session: None,
         });
+        let turns = Arc::new(Mutex::new(Vec::new()));
+        self.opened.lock().push(Opened {
+            role: spec.role.role.clone(),
+            cwd: spec.cwd.clone(),
+            cwd_existed: spec.cwd.as_ref().is_some_and(|cwd| cwd.is_dir()),
+            brief: spec.brief.clone(),
+            resume: spec.resume.clone(),
+            token: token.clone(),
+            turns: Arc::clone(&turns),
+            browser: spec.role.browser.clone(),
+        });
+        let behaviour = (self.script.lock())(&spec.role.role, attempt);
         self.app.flow_ledger.brief(&spec.role, &spec.brief);
         self.sessions.lock().insert(
             id.clone(),
@@ -407,6 +451,24 @@ impl RoleHost for FakeHost {
         );
         let now = self.open_now.fetch_add(1, Ordering::SeqCst) + 1;
         self.open_most.fetch_max(now, Ordering::SeqCst);
+
+        // The conversation it continues, or a new one, as a CLI reports on its handshake.
+        let conversation = spec.resume.clone().unwrap_or_else(|| {
+            format!(
+                "conv-{}",
+                self.conversations.fetch_add(1, Ordering::SeqCst) + 1
+            )
+        });
+        sink.on_event(
+            &SessionId::new(&id),
+            &AgentEvent::SessionReady {
+                provider_session_id: conversation,
+                model: None,
+                effort: None,
+                mode: None,
+                tools: Vec::new(),
+            },
+        );
 
         // Said while opening, before the engine has the id back: the provider's own skill list,
         // which is what a CLI's `initialize` or `skills/list` reply is.
@@ -429,8 +491,16 @@ impl RoleHost for FakeHost {
         Ok(SessionId::new(&id))
     }
 
-    fn send(&self, session: &SessionId, _text: &str) -> Result<(), String> {
+    fn send(&self, session: &SessionId, text: &str) -> Result<(), String> {
         self.turns_sent.fetch_add(1, Ordering::SeqCst);
+        if let Some(opened) = self.opened.lock().iter().find(|o| {
+            self.sessions
+                .lock()
+                .get(session.as_str())
+                .is_some_and(|s| s.token == o.token)
+        }) {
+            opened.turns.lock().push(text.to_owned());
+        }
         let me = self.me.upgrade().ok_or("the host is gone")?;
         let id = session.as_str().to_owned();
         // On a thread of its own, as a CLI answers on its own process: the engine's role thread is
@@ -443,6 +513,13 @@ impl RoleHost for FakeHost {
         if self.sessions.lock().remove(session.as_str()).is_some() {
             self.open_now.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+
+    /// As a CLI does when it is interrupted: the turn ends, and the conversation is kept.
+    fn interrupt(&self, session: &SessionId) -> Result<(), String> {
+        self.interrupts.fetch_add(1, Ordering::SeqCst);
+        self.finish_turn(session.as_str());
+        Ok(())
     }
 
     fn open_runtime_browser(
