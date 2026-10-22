@@ -343,6 +343,43 @@ fn ask_then_plan() -> Script {
 // ═══════════════════════════════ asking and resuming ═══════════════════════════════
 
 #[test]
+fn a_planner_session_holds_a_run_session_place_for_exactly_as_long_as_it_is_open() {
+    // The caps count every run session (C3), the planner's included: it asks for a place before
+    // its invocation is recorded and lets it go when its session closes.
+    let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let held = Arc::clone(&go);
+    let h = Harness::new(Box::new(move |_, _| {
+        Behaviour::Hold(Arc::clone(&held), plan("Export the unit list as CSV"))
+    }));
+    let flow = h.start();
+    let mut holding = false;
+    for _ in 0..4_000 {
+        holding = h
+            .engine
+            .seats_view()
+            .seating
+            .holding
+            .iter()
+            .any(|seat| seat.flow == flow && seat.role == "planner");
+        if holding {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        holding,
+        "the planner's session held a place while it planned"
+    );
+
+    go.store(true, Ordering::SeqCst);
+    h.planned(flow);
+    assert!(
+        h.engine.seats_view().seating.holding.is_empty(),
+        "and let it go when its session closed"
+    );
+}
+
+#[test]
 fn a_planners_question_holds_the_run_and_ends_its_turn_and_the_answer_resumes_the_same_conversation()
  {
     let h = Harness::new(ask_then_plan());

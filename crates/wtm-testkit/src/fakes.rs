@@ -193,6 +193,12 @@ impl FakeClock {
         *self.unix_ms.lock() += delta;
         *self.monotonic_ms.lock() += delta;
     }
+
+    /// Move the wall clock forward and leave the monotonic one where it is, as a Mac asleep for
+    /// `delta` does: macOS's uptime clock, behind `Instant`, does not advance during sleep.
+    pub fn sleep_ms(&self, delta: u64) {
+        *self.unix_ms.lock() += delta;
+    }
 }
 
 impl Clock for FakeClock {

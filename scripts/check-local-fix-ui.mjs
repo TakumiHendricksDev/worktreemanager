@@ -115,6 +115,10 @@ const view = () => ({
   writers: [{ id: 'fixer', provider: 'claude', model: 'sonnet', objective: 'Fix the findings you are given' }],
   screenshots: [],
   pendingStart: null,
+  queued: [],
+  holding: [],
+  switches: [],
+  capacity: null,
 });
 const PR_MARK = '<!-- wtm:5e6f7a8b9c0d1e2f -->';
 const BRANCH = 'wtm/pr-4031-fix-f1a2b3c';

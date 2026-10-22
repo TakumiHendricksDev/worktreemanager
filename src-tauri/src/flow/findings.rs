@@ -791,10 +791,23 @@ impl Engine {
             let change = if skipped.contains(step.role.as_str()) {
                 StepChange::status(StepStatus::Skipped).detail("none of its paths changed")
             } else {
+                // A role you ran once on another provider at a limit goes back to its own: "once"
+                // was that round. A fallback's step is another role, and keeps its own runner.
+                let own = workflow
+                    .role
+                    .get(&step.role)
+                    .filter(|spec| step.stands_in_for.is_none() && spec.provider != step.provider);
                 StepChange {
                     detail: Field::Clear,
                     resets_at: Field::Clear,
                     skill_problem: Field::Clear,
+                    provider: own.map(|spec| spec.provider),
+                    model: own.map_or(Field::Keep, |spec| Field::from(spec.model.clone())),
+                    handover: if own.is_some() {
+                        Field::Clear
+                    } else {
+                        Field::Keep
+                    },
                     ..StepChange::status(StepStatus::Pending)
                 }
             };

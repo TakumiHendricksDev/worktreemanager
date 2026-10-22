@@ -261,3 +261,121 @@ fn only_runs_whose_flows_are_still_open_come_back_for_recovery() {
     assert_eq!(open, [open_run.flow]);
     assert_eq!(db.reviews_of(&project(), "/work/two").unwrap().len(), 1);
 }
+
+fn handover(to_role: &str, to: RoleProvider) -> wtm_core::flow::Handover {
+    wtm_core::flow::Handover {
+        from: wtm_core::flow::Runner {
+            role: "correctness".to_owned(),
+            provider: RoleProvider::Codex,
+            model: Some("gpt-6".to_owned()),
+        },
+        to: wtm_core::flow::Runner {
+            role: to_role.to_owned(),
+            provider: to,
+            model: None,
+        },
+        reason: wtm_core::flow::SwitchReason::Limit,
+        why: "You've hit your usage limit.".to_owned(),
+        objective: "Find bugs".to_owned(),
+        stage: 0,
+        attempts: 1,
+        progress: vec!["reading export.rs".to_owned()],
+        plan: None,
+        snapshot: None,
+        diff: Some(Vec::new()),
+        findings: Vec::new(),
+        answers: Vec::new(),
+    }
+}
+
+#[test]
+fn a_provider_switch_is_kept_with_its_handover_and_never_rewritten() {
+    let (dir, db) = open();
+    let review = a_review(&db, "/work/webapp-wt");
+    let steps = db
+        .add_steps(
+            review.flow,
+            &[step("correctness", 0), step("correctness-claude", 0)],
+            2_000,
+        )
+        .unwrap();
+    let kept = db
+        .record_switch(
+            &wtm_core::flow::NewProviderSwitch {
+                flow: review.flow,
+                from_step: steps[0].id,
+                to_step: steps[1].id,
+                reason: wtm_core::flow::SwitchReason::Limit,
+                by: wtm_core::flow::SwitchedBy::Config,
+                handover: handover("correctness-claude", RoleProvider::Claude),
+            },
+            3_000,
+        )
+        .unwrap();
+    assert_eq!(db.switches(review.flow).unwrap(), vec![kept.clone()]);
+    assert_eq!(
+        db.switches(review.flow).unwrap()[0].handover.progress,
+        ["reading export.rs"]
+    );
+
+    // A person's "run it once elsewhere" keeps the role's own step; the config's never does.
+    let wrong = db.record_switch(
+        &wtm_core::flow::NewProviderSwitch {
+            flow: review.flow,
+            from_step: steps[0].id,
+            to_step: steps[0].id,
+            reason: wtm_core::flow::SwitchReason::Limit,
+            by: wtm_core::flow::SwitchedBy::Config,
+            handover: handover("correctness", RoleProvider::Claude),
+        },
+        4_000,
+    );
+    assert!(wrong.is_err(), "{wrong:?}");
+
+    let conn = rusqlite::Connection::open(dir.path().join("flow.db")).unwrap();
+    let rewritten = conn.execute("UPDATE provider_switches SET reason = 'failure'", []);
+    assert!(rewritten.is_err(), "append-only");
+    let deleted = conn.execute("DELETE FROM provider_switches", []);
+    assert!(deleted.is_err(), "append-only");
+}
+
+#[test]
+fn running_a_step_once_elsewhere_changes_who_runs_it_and_what_it_is_handed() {
+    let (_dir, db) = open();
+    let review = a_review(&db, "/work/webapp-wt");
+    let added = db
+        .add_steps(review.flow, &[step("correctness", 0)], 2_000)
+        .unwrap();
+    let changed = db
+        .update_step(
+            added[0].id,
+            &StepChange {
+                provider: Some(RoleProvider::Claude),
+                model: wtm_core::flow::Field::Set("opus".to_owned()),
+                handover: wtm_core::flow::Field::Set("where it got to".to_owned()),
+                ..StepChange::default()
+            },
+            3_000,
+        )
+        .unwrap();
+    assert_eq!(changed.provider, RoleProvider::Claude);
+    let read = db.steps(review.flow).unwrap().remove(0);
+    assert_eq!(read.provider, RoleProvider::Claude);
+    assert_eq!(read.model.as_deref(), Some("opus"));
+    assert_eq!(read.handover.as_deref(), Some("where it got to"));
+
+    let back = db
+        .update_step(
+            added[0].id,
+            &StepChange {
+                provider: Some(RoleProvider::Codex),
+                model: wtm_core::flow::Field::Set("gpt-6".to_owned()),
+                handover: wtm_core::flow::Field::Clear,
+                ..StepChange::default()
+            },
+            4_000,
+        )
+        .unwrap();
+    assert_eq!(back.provider, RoleProvider::Codex);
+    assert_eq!(back.handover, None);
+}

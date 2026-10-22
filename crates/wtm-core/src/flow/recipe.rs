@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use super::ForgeKind;
+use super::capacity::MAX_FALLBACKS;
 use super::glob;
 use super::instructions::DEFAULT_INSTRUCTION_SOURCES;
 use super::start::StartSpec;
@@ -342,10 +343,15 @@ pub enum OutputKind {
 
 /// What happens when a role fails after its retries, or its provider runs out of capacity.
 ///
-/// Written as a plain string: `"ask"`, or the id of the role to run instead. That makes `ask` a
+/// Written as `"ask"`, the id of one role to run instead, or a list of up to
+/// [`MAX_FALLBACKS`](super::capacity::MAX_FALLBACKS) role ids tried in order. That makes `ask` a
 /// reserved role id, which validation enforces.
+///
+/// One id is followed through that role's own `fallback`, which is how a chain was written before
+/// lists existed. A list is the whole chain: the roles in it are tried in its order, and their own
+/// fallbacks are not consulted, so what a role falls back to is read in one place.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "String", into = "String")]
+#[serde(from = "FallbackSpelling", into = "FallbackSpelling")]
 pub enum Fallback {
     /// Put it in front of you. The default, because switching provider changes what a review is
     /// worth and is not something to do on a role's behalf unless you said so.
@@ -353,23 +359,34 @@ pub enum Fallback {
     Ask,
     /// Run this role instead, from a summary of where the first one got to.
     Role(String),
+    /// Run these roles instead, the first that can, each from a summary of where the run got to.
+    Chain(Vec<String>),
 }
 
-impl From<String> for Fallback {
-    fn from(value: String) -> Self {
-        if value == ASK {
-            Self::Ask
-        } else {
-            Self::Role(value)
+/// How `fallback` is written in TOML: one string, or a list of them.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum FallbackSpelling {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl From<FallbackSpelling> for Fallback {
+    fn from(value: FallbackSpelling) -> Self {
+        match value {
+            FallbackSpelling::One(value) if value == ASK => Self::Ask,
+            FallbackSpelling::One(value) => Self::Role(value),
+            FallbackSpelling::Many(roles) => Self::Chain(roles),
         }
     }
 }
 
-impl From<Fallback> for String {
+impl From<Fallback> for FallbackSpelling {
     fn from(value: Fallback) -> Self {
         match value {
-            Fallback::Ask => ASK.to_owned(),
-            Fallback::Role(role) => role,
+            Fallback::Ask => Self::One(ASK.to_owned()),
+            Fallback::Role(role) => Self::One(role),
+            Fallback::Chain(roles) => Self::Many(roles),
         }
     }
 }
@@ -451,6 +468,13 @@ pub struct RoleSpec {
     pub retries: u32,
     #[serde(default)]
     pub fallback: Fallback,
+    /// Whether this role may run a model that bills usage credits rather than your plan's included
+    /// limits (Fable, under Claude Code's headless mode; see
+    /// [`bills_credits`](super::capacity::bills_credits)). Off unless you say so, for this role
+    /// alone: a run session has nobody watching it to see a credits prompt, and headless Claude
+    /// Code does not show one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_credit_billing: bool,
     /// Static, the default, or runtime: a role that exercises the running app.
     #[serde(default, skip_serializing_if = "RoleKind::is_static")]
     pub kind: RoleKind,
@@ -802,9 +826,82 @@ impl WorkflowSpec {
 
     fn check_fallback(&self, id: &str, role: &RoleSpec) -> Result<(), WorkflowError> {
         let key = format!("role.{id}.fallback");
-        let Fallback::Role(alternative) = &role.fallback else {
-            return Ok(());
+        let named: Vec<&String> = match &role.fallback {
+            Fallback::Ask => return Ok(()),
+            Fallback::Role(alternative) => vec![alternative],
+            Fallback::Chain(roles) => {
+                if roles.is_empty() {
+                    return Err(WorkflowError::new(
+                        key,
+                        "an empty list falls back to nothing; write `fallback = \"ask\"`",
+                    ));
+                }
+                if roles.len() > MAX_FALLBACKS {
+                    return Err(WorkflowError::new(
+                        key,
+                        format!(
+                            "at most {MAX_FALLBACKS} alternatives: each is a whole role on another \
+                             account, usually with nobody watching"
+                        ),
+                    ));
+                }
+                if roles.iter().any(|r| r == ASK) {
+                    return Err(WorkflowError::new(
+                        key,
+                        "`ask` is what happens after the last alternative; leave it out of the list",
+                    ));
+                }
+                let mut once = BTreeSet::new();
+                if let Some(twice) = roles.iter().find(|r| !once.insert(r.as_str())) {
+                    return Err(WorkflowError::new(
+                        key,
+                        format!("`{twice}` is listed twice; it would only ever run once"),
+                    ));
+                }
+                roles.iter().collect()
+            }
         };
+        for alternative in named {
+            self.check_alternative(&key, id, role, alternative)?;
+        }
+        if let Fallback::Role(alternative) = &role.fallback {
+            let mut seen = BTreeSet::from([id]);
+            let mut next = alternative.as_str();
+            loop {
+                if !seen.insert(next) {
+                    return Err(WorkflowError::new(
+                        key,
+                        format!(
+                            "the fallbacks from `{id}` lead back to `{next}` and would never end"
+                        ),
+                    ));
+                }
+                match self.role.get(next).map(|role| &role.fallback) {
+                    Some(Fallback::Role(after)) => next = after,
+                    _ => break,
+                }
+            }
+        }
+        if self.chain_from(id).len() > MAX_FALLBACKS {
+            return Err(WorkflowError::new(
+                key,
+                format!(
+                    "the fallbacks from `{id}` are more than {MAX_FALLBACKS} roles long; list the \
+                     ones you want, at most {MAX_FALLBACKS}, as `fallback = [...]`"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// One alternative a role names: a different role that exists and stands in for it exactly.
+    fn check_alternative(
+        &self,
+        key: &str,
+        id: &str,
+        role: &RoleSpec,
+        alternative: &str,
+    ) -> Result<(), WorkflowError> {
         if alternative == id {
             return Err(WorkflowError::new(
                 key,
@@ -841,18 +938,7 @@ impl WorkflowSpec {
                 ),
             ));
         }
-        let mut seen = BTreeSet::from([id]);
-        let mut next = alternative.as_str();
-        while seen.insert(next) {
-            match self.role.get(next).map(|role| &role.fallback) {
-                Some(Fallback::Role(after)) => next = after,
-                _ => return Ok(()),
-            }
-        }
-        Err(WorkflowError::new(
-            key,
-            format!("the fallbacks from `{id}` lead back to `{next}` and would never end"),
-        ))
+        Ok(())
     }
 
     fn check_recipe(&self, id: &str, recipe: &RecipeSpec) -> Result<(), WorkflowError> {
@@ -949,37 +1035,61 @@ impl WorkflowSpec {
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         for name in recipe.stages.iter().flat_map(|stage| &stage.roles) {
-            let mut next = Some(name.as_str());
-            while let Some(id) = next {
-                let Some((id, role)) = self.role.get_key_value(id) else {
-                    break;
+            let chain = self.fallback_chain(name);
+            for id in std::iter::once(name).chain(&chain) {
+                let Some((id, role)) = self.role.get_key_value(id.as_str()) else {
+                    continue;
                 };
-                if !seen.insert(id.as_str()) {
-                    break;
+                if seen.insert(id.as_str()) {
+                    out.push((id.as_str(), role));
                 }
-                out.push((id.as_str(), role));
-                next = match &role.fallback {
-                    Fallback::Role(after) => Some(after.as_str()),
-                    Fallback::Ask => None,
-                };
             }
         }
         out
     }
 
-    /// The fallbacks a role leads to, in the order they would be tried. `ask` is implied after the
-    /// last one.
+    /// The fallbacks a role leads to, in the order they would be tried, at most
+    /// [`MAX_FALLBACKS`]. `ask` is implied after the last one.
+    ///
+    /// The chain is always the role's own: when its first alternative also runs out, the engine
+    /// takes the next from this list, not from the alternative's config.
     #[must_use]
     pub fn fallback_chain(&self, role: &str) -> Vec<String> {
-        let mut seen = BTreeSet::from([role]);
+        let mut chain = self.chain_from(role);
+        chain.truncate(MAX_FALLBACKS);
+        chain
+    }
+
+    /// [`Self::fallback_chain`] without the cap, so validation can say a chain is too long.
+    fn chain_from(&self, role: &str) -> Vec<String> {
+        let mut seen = BTreeSet::from([role.to_owned()]);
         let mut chain = Vec::new();
-        let mut next = self.role.get(role).map(|role| &role.fallback);
-        while let Some(Fallback::Role(id)) = next {
-            if !seen.insert(id) {
-                break;
+        let mut push = |id: &str, chain: &mut Vec<String>| {
+            if seen.insert(id.to_owned()) {
+                chain.push(id.to_owned());
+                true
+            } else {
+                false
             }
-            chain.push(id.clone());
-            next = self.role.get(id).map(|role| &role.fallback);
+        };
+        let mut next = self.role.get(role).map(|role| &role.fallback);
+        while let Some(fallback) = next {
+            match fallback {
+                Fallback::Ask => break,
+                Fallback::Chain(roles) => {
+                    for id in roles {
+                        push(id, &mut chain);
+                    }
+                    break;
+                }
+                // One id: followed through that role's own fallback, as chains were first written.
+                Fallback::Role(id) => {
+                    if !push(id, &mut chain) {
+                        break;
+                    }
+                    next = self.role.get(id).map(|role| &role.fallback);
+                }
+            }
         }
         chain
     }
@@ -1486,6 +1596,103 @@ mod tests {
         let error = refusal(&spec);
         assert!(error.key.ends_with(".fallback"), "{error}");
         assert!(error.message.contains("never end"), "{error}");
+    }
+
+    /// Three Claude alternatives and one Codex one beside the review's roles, for chain tests.
+    fn with_alternatives(fallback: &serde_json::Value) -> WorkflowSpec {
+        let alternative = |provider: &str| {
+            json!({
+                "objective": "Find bugs the change introduces",
+                "provider": provider,
+                "inputs": ["diff"]
+            })
+        };
+        review_with(&json!({ "role": {
+            "correctness": { "fallback": fallback },
+            "on-claude": alternative("claude"),
+            "on-haiku": alternative("claude"),
+            "on-codex-mini": alternative("codex"),
+            "fourth": alternative("claude"),
+        }}))
+    }
+
+    #[test]
+    fn a_fallback_list_is_the_whole_chain_in_the_order_written() {
+        let spec = with_alternatives(&json!(["on-codex-mini", "on-claude", "on-haiku"]));
+        spec.validate().unwrap();
+        assert_eq!(
+            spec.fallback_chain("correctness"),
+            ["on-codex-mini", "on-claude", "on-haiku"]
+        );
+        // A listed role's own fallback is not followed: the list is read in one place.
+        let mut followed = spec.clone();
+        followed.role.get_mut("on-haiku").unwrap().fallback = Fallback::Role("fourth".to_owned());
+        assert_eq!(
+            followed.fallback_chain("correctness"),
+            ["on-codex-mini", "on-claude", "on-haiku"]
+        );
+        let written = serde_json::to_value(&spec.role["correctness"]).unwrap();
+        assert_eq!(
+            written["fallback"],
+            json!(["on-codex-mini", "on-claude", "on-haiku"])
+        );
+    }
+
+    #[test]
+    fn a_fallback_chain_may_name_at_most_three_alternatives_written_either_way() {
+        let four = with_alternatives(&json!(["on-codex-mini", "on-claude", "on-haiku", "fourth"]));
+        let error = refusal(&four);
+        assert_eq!(error.key, "role.correctness.fallback");
+        assert!(error.message.contains("at most 3"), "{error}");
+
+        // One name followed through each role's own fallback counts the same way.
+        let walked = review_with(&json!({ "role": {
+            "correctness": { "fallback": "a" },
+            "a": { "objective": "x", "provider": "claude", "inputs": ["diff"], "fallback": "b" },
+            "b": { "objective": "x", "provider": "codex", "inputs": ["diff"], "fallback": "c" },
+            "c": { "objective": "x", "provider": "claude", "inputs": ["diff"], "fallback": "d" },
+            "d": { "objective": "x", "provider": "codex", "inputs": ["diff"] },
+        }}));
+        let error = refusal(&walked);
+        assert_eq!(error.key, "role.correctness.fallback");
+        assert!(error.message.contains("more than 3"), "{error}");
+    }
+
+    #[test]
+    fn a_fallback_list_refuses_ask_a_repeat_an_empty_list_and_a_role_that_could_not_stand_in() {
+        let ask = with_alternatives(&json!(["on-claude", "ask"]));
+        assert!(refusal(&ask).message.contains("leave it out"));
+        let twice = with_alternatives(&json!(["on-claude", "on-claude"]));
+        assert!(refusal(&twice).message.contains("listed twice"));
+        let empty = with_alternatives(&json!([]));
+        assert!(refusal(&empty).message.contains("empty list"));
+        let mut writer = with_alternatives(&json!(["on-claude"]));
+        writer.role.get_mut("on-claude").unwrap().profile = RoleProfile::Writer;
+        writer.role.get_mut("on-claude").unwrap().workspace = Some(Workspace::Worktree);
+        assert!(refusal(&writer).message.contains("different profile"));
+    }
+
+    #[test]
+    fn a_recipe_naming_a_credit_billing_model_is_refused_unless_that_role_opted_in() {
+        let spec = review_with(&json!({ "role": {
+            "conventions-codex": { "provider": "claude", "model": "fable" }
+        }}));
+        spec.validate().unwrap();
+        let problems = spec.credit_problems("review");
+        assert_eq!(problems.len(), 1, "the fallback is reachable, so it counts");
+        assert_eq!(problems[0].role, "conventions-codex");
+        assert!(
+            problems[0]
+                .to_string()
+                .contains("allow_credit_billing = true"),
+            "{}",
+            problems[0]
+        );
+
+        let opted = review_with(&json!({ "role": {
+            "conventions-codex": { "provider": "claude", "model": "fable", "allow_credit_billing": true }
+        }}));
+        assert!(opted.credit_problems("review").is_empty());
     }
 
     #[test]

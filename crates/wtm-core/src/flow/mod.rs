@@ -70,6 +70,7 @@ macro_rules! id {
 }
 
 pub mod approval;
+pub mod capacity;
 pub mod comment;
 pub mod consolidate;
 pub mod env;
@@ -105,6 +106,13 @@ pub mod work;
 pub use approval::{
     Approval, ApprovalError, ApprovalId, ApprovalIntent, ApprovalSubject, Binding, NewApproval,
     PinChange, Pinned, Stale, review_binding,
+};
+pub use capacity::{
+    AfterRecheck, CapacityChoice, CreditProblem, FileStat, Handover, HandoverAnswer,
+    HandoverFinding, HandoverSnapshot, Ledger, LimitReading, MAX_FALLBACKS, NewProviderSwitch,
+    ProviderSwitch, QueueReason, QueuedSeat, Runner, Seat, SeatId, SeatRequest, Seating,
+    SessionCaps, SwitchId, SwitchReason, SwitchedBy, WaitTurn, after_recheck, bills_credits,
+    credit_problem, limit_reading, slept, wait_turn,
 };
 pub use comment::{CommentError, CommentPayload, CommentRequest};
 pub use consolidate::{

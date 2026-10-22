@@ -689,7 +689,7 @@ fn a_limit_hands_over_to_the_roles_configured_fallback_on_another_provider_with_
     assert!(view.flow.state.hold.is_none(), "it never waited");
     let brief = &h.host.opened.lock()[1].brief;
     assert!(
-        brief.contains("You run in place of another role"),
+        brief.contains("You take over another session's work"),
         "{brief}"
     );
     assert_eq!(needs_you(&view), [InboxKind::Capacity]);

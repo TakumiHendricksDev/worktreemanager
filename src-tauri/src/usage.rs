@@ -220,6 +220,18 @@ fn ask(app: &Arc<App>, provider: &str) -> Result<(UsageLimits, bool), String> {
     }
 }
 
+/// Ask a provider for its figures now, fold the answer into the record every window shows, and
+/// return that record: what a run waiting at a usage limit asks after a sleep or at launch. The
+/// window is told as it is after the usage view's own Refresh, when there is one.
+pub fn recheck(app: &Arc<App>, handle: Option<&AppHandle>, provider: &str) -> AccountUsage {
+    let answer = ask(app, provider);
+    let account = app.usage.answer(provider, answer, app.clock.now_unix_ms());
+    if let Some(handle) = handle {
+        announce(handle, &account);
+    }
+    account
+}
+
 /// [`ask`], reachable from an integration test, which is the only place a real CLI's answer can be
 /// checked. The command around it needs a running Tauri runtime.
 ///

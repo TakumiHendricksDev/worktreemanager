@@ -22,6 +22,8 @@
    * - **A review blocked on its environment** — a check that needs services which were not
    *   answering, or a runtime role waiting for them — is the Start environment and run card
    *   (`WorkStartApproval`), read from the worktree's run as the Reviews tab has it.
+   * - **A usage pause** is the capacity card (`WorkCapacity`), read from the worktree's run as the
+   *   Reviews tab has it: wait, run the role once on another provider, or finish without it.
    * - **A ready review** names the worst of what it found; each finding is a link to that finding
    *   in the Reviews tab, which is the exact place the item is about. Reading the review settles
    *   it.
@@ -54,6 +56,7 @@
   import CodeText from './CodeText.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import Button from './ui/Button.svelte';
+  import WorkCapacity from './WorkCapacity.svelte';
   import WorkEnvApproval from './WorkEnvApproval.svelte';
   import WorkPublication from './WorkPublication.svelte';
   import WorkRoute from './WorkRoute.svelte';
@@ -118,6 +121,26 @@
   $effect(() => {
     const wanted =
       item.kind === 'approval' && item.target.kind === 'flow' ? item.worktree : null;
+    const project = item.project;
+    untrack(() => {
+      if (wanted && project && reviewRuns.latest[wanted] === undefined) {
+        void reviewRuns.load(project, wanted);
+      }
+    });
+  });
+  /**
+   * A role waiting at its provider's limit: the run's capacity card, while that role still waits.
+   * Read from the worktree's run as the Reviews tab has it, so choosing here updates both.
+   */
+  const pausedRun = $derived.by(() => {
+    if (item.kind !== 'capacity' || item.target.kind !== 'step' || !item.worktree)
+      return null;
+    const run = reviewRuns.latest[item.worktree];
+    const step = item.target.step;
+    return run && run.flow.id === item.flow && run.capacity?.step === step ? run : null;
+  });
+  $effect(() => {
+    const wanted = item.kind === 'capacity' ? item.worktree : null;
     const project = item.project;
     untrack(() => {
       if (wanted && project && reviewRuns.latest[wanted] === undefined) {
@@ -325,6 +348,17 @@
           )}
         onopen={(url) => void commands.openUrl(url)}
       />
+    {:else if pausedRun?.capacity && item.worktree}
+      {@const capacity = pausedRun.capacity}
+      {@const worktree = item.worktree}
+      <WorkCapacity
+        {capacity}
+        busy={reviewRuns.busy[worktree] ?? false}
+        error={reviewRuns.errors[worktree] ?? null}
+        onchoose={(choice) =>
+          void reviewRuns.chooseCapacity(worktree, item.flow, capacity.step, choice)}
+        ontry={() => void reviewRuns.resume(worktree, item.flow)}
+      />
     {:else if item.kind === 'approval' && item.target.kind === 'approval'}
       <p class="c-inbox-card__note">Reading this publish…</p>
     {:else if item.kind === 'approval' && item.target.kind === 'flow'}
@@ -380,7 +414,8 @@
     {/if}
 
     <div class="c-inbox-card__actions">
-      {#if resume && item.worktree}
+      <!-- A usage pause is acted on through its card; a fallback taking over needs nothing. -->
+      {#if resume && item.worktree && item.kind !== 'capacity'}
         {@const worktree = item.worktree}
         <Button
           variant="accent"
@@ -422,7 +457,7 @@
     </div>
     {#if error}
       <p class="c-inbox-card__error" role="alert"><CodeText text={error} /></p>
-    {:else if resumeError}
+    {:else if resumeError && !pausedRun}
       <p class="c-inbox-card__error" role="alert"><CodeText text={resumeError} /></p>
     {/if}
   </article>

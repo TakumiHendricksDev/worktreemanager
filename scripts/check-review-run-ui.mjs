@@ -5,8 +5,11 @@
  * can't start over billing, and can't run for want of a skill — and through a review with findings
  * of every class: their grouping, evidence, checks, applied rules and sources, Dismiss, Save as
  * rule and Rerun affected. Plus E3's two: a runtime role waiting for its environment, with Start
- * environment and run, and a runtime role's finding with its screenshot evidence. Plus the run
- * inbox, Run Review's request, and Resume's.
+ * environment and run, and a runtime role's finding with its screenshot evidence. Plus C1/C3's: the
+ * capacity card under a usage pause (Wait and resume, Run this role once elsewhere with its model
+ * picker, the usage line saying "unknown" without figures), a role queued for a run-session place,
+ * and a fallback's handover opened under its row. Plus the run inbox, Run Review's request, and
+ * Resume's.
  *
  * No Tauri, no CLI, no credits. What it proves is the readout's words and wiring against the shapes
  * `review_run` returns; the engine behind them is `src-tauri/tests/review_engine.rs`'s.
@@ -82,7 +85,8 @@ const run = (flow, worktree, state, steps, invocations = [], inbox = [], running
   snapshot: { headSha: 'a1b2c3d4e5f6', treeSha: '9f00aa', baseSha: 'c0ffee11' },
   steps, invocations, inbox, running,
   findings: [], checks: [], expectedChecks: [], applied: noKnowledge,
-  pullRequest: null, fixes: [], leases: [], writers: [], screenshots: [], pendingStart: null, ...more });
+  pullRequest: null, fixes: [], leases: [], writers: [], screenshots: [], pendingStart: null,
+  queued: [], holding: [], switches: [], capacity: null, ...more });
 const source = (role, provider, invocationId, ordinal = 0) => ({ step: invocationId, invocation: invocationId,
   ordinal, role, provider, model: provider === 'claude' ? 'sonnet' : 'gpt-6', workspace: 'snapshot', treeSha: '9f00aa' });
 const reported = (title, cls, extra = {}) => ({ title, severity: 'notable', class: cls, body: 'Why it matters.', ...extra });
@@ -112,11 +116,15 @@ const runs = {
       step(11, 'conventions', 'claude', 'done', { result: findings(2) }),
       step(12, 'correctness', 'codex', 'running'),
       step(13, 'ui', 'claude', 'skipped', { detail: 'none of its paths changed' }),
-    ], [invocation(1, 12, 'correctness', 'running', { progress: 'reading export.py', attempt: 2 })], [], true),
+      step(14, 'security', 'codex', 'pending'),
+    ], [invocation(1, 12, 'correctness', 'running', { progress: 'reading export.py', attempt: 2 })], [], true, {
+      queued: [{ seat: { id: 7, flow: 1, step: 14, role: 'security', provider: 'codex', askedAt: 1, admittedAt: null },
+        reason: { kind: 'provider', provider: 'codex', open: 3, cap: 3 }, position: 1, words: 'queued: Codex at 3/3' }] }),
   [id('waiting')]: run(2, 'waiting', { phase: 'reviewing', hold: { kind: 'waiting_capacity', provider: 'codex', resetsAt: 1792560000 } }, [
       step(21, 'conventions', 'claude', 'done', { result: findings(1) }),
       step(22, 'correctness', 'codex', 'waiting_capacity', { resetsAt: 1792560000, detail: "You've hit your usage limit." }),
-    ], [], [], true),
+    ], [], [], true, { capacity: { step: 22, role: 'correctness', provider: 'codex', model: null,
+      resetsAt: 1792560000, fallbacks: [], allowCreditBilling: false, recheck: null } }),
   [id('interrupted')]: run(3, 'interrupted', { phase: 'reviewing', hold: { kind: 'interrupted', cause: 'quit' } }, [
       step(31, 'conventions', 'claude', 'done', { result: findings(0) }),
       step(32, 'correctness', 'codex', 'interrupted'),
@@ -128,8 +136,12 @@ const runs = {
   [id('reviewed')]: run(5, 'reviewed', { phase: 'consolidated' }, [
       step(51, 'conventions', 'claude', 'done', { result: findings(0) }),
       step(52, 'correctness', 'codex', 'replaced', { detail: 'handed over to correctness-claude' }),
-      step(53, 'correctness-claude', 'claude', 'done', { result: findings(1), standsInFor: 'correctness' }),
-    ], [], [], false, { findings: [record(50, 5, { kind: 'suggestion' }, 'Finding 0', 'x', at('src/a.rs', 3),
+      step(53, 'correctness-claude', 'claude', 'done', { result: findings(1), standsInFor: 'correctness',
+        handover: '\`correctness\` on Codex stopped before handing in a result, because its provider reached a usage limit.\\nDiff stat: 1 file, +2 −0' }),
+    ], [], [], false, { switches: [{ id: 1, flow: 5, fromStep: 52, toStep: 53, reason: 'limit', by: 'config', at: 1,
+      handover: { from: { role: 'correctness', provider: 'codex', model: null }, to: { role: 'correctness-claude', provider: 'claude', model: 'sonnet' },
+        reason: 'limit', why: 'x', objective: 'x', stage: 0, attempts: 1, progress: [], plan: null, snapshot: null, diff: [], findings: [], answers: [] } }],
+      findings: [record(50, 5, { kind: 'suggestion' }, 'Finding 0', 'x', at('src/a.rs', 3),
       [{ source: source('correctness-claude', 'claude', 53), reported: reported('Finding 0', 'suggestion') }])] }),
   // A review with a finding of every class, two roles agreeing on one, a dismissed one, and checks.
   [id('findings')]: run(6, 'findings', { phase: 'consolidated' }, done2, ended, [], false, {
@@ -271,6 +283,13 @@ mockIPC((cmd, args) => {
       return structuredClone({ ...r, pendingStart: null, running: true,
         flow: { ...r.flow, state: { ...r.flow.state, hold: null } } });
     }
+    case 'choose_capacity': {
+      const r = Object.values(runs).find((x) => x.flow.id === a.flow);
+      if (a.choice.kind === 'wait') return structuredClone(r);
+      return structuredClone({ ...r, capacity: null, running: true,
+        flow: { ...r.flow, state: { ...r.flow.state, hold: null } } });
+    }
+    case 'run_sessions': return { seq: 1, caps: { total: 6, claude: 3, codex: 3 }, holding: [], queued: [], labels: {} };
     case 'resume_review': return structuredClone({ ...Object.values(runs).find((r) => r.flow.id === a.flow), running: true, flow: { ...Object.values(runs).find((r) => r.flow.id === a.flow).flow, state: { kind: 'review_mine', end: null, hold: null, phase: 'reviewing' } } });
     // Open in Code lands on the Code tab, which reads the file: a small one is enough to draw.
     case 'code_tree': return { files: ['src/exports/ExportModal.vue'], ignored: [], dirs: [], symlinks: [], missing: [], truncated: false };
@@ -415,6 +434,8 @@ try {
         assert(text.includes('done · 2 findings'), text);
         assert(text.includes('reading export.py · attempt 2'), text);
         assert(text.includes('Skipped, because none of their paths changed: ui.'), text);
+        assert(text.includes('queued: Codex at 3/3 · next in line'), text);
+        assert(text.includes('Waiting for a run-session place under your caps'), text);
         assert(await panel(page).getByRole('button', { name: 'Stop review' }).isVisible());
         assert.equal(
             await page.locator('.c-work__header .c-badge').textContent(),
@@ -433,7 +454,28 @@ try {
         assert(await panel(page).getByRole('button', { name: 'Try now' }).isVisible());
         assert(text.includes('never uses an API key'), text);
         assert(text.includes('paused for usage capacity'), text);
+        assert(text.includes('resumes automatically if wtm is open and the Mac is awake'), text);
+        assert(text.includes('None configured for this role'), text);
+        assert(text.includes('unknown: Codex has not reported figures'), text);
         await shot(page, join(shots, `waiting-capacity-${scheme}.png`));
+        const capacity = panel(page).locator('.c-capacity');
+        await capacity.getByRole('button', { name: 'Wait and resume' }).click();
+        await capacity.getByRole('button', { name: 'Run this role on Claude once…' }).click();
+        await capacity.getByRole('combobox', { name: 'Model' }).waitFor();
+        await shot(page, join(shots, `run-once-${scheme}.png`));
+        await capacity.getByRole('button', { name: 'Run once on Claude' }).click();
+        assert.deepEqual(
+            (await calls(page, 'choose_capacity')).map((c) => c.args),
+            [
+                { flow: 2, step: 22, choice: { kind: 'wait' } },
+                { flow: 2, step: 22, choice: { kind: 'run_once', provider: 'claude', model: null } },
+            ],
+        );
+        // The mock answers as if the role started on Claude; the run itself is unchanged, so
+        // reading it again puts the waiting state back for the queue row below.
+        await pick(page, 'running');
+        await pick(page, 'waiting');
+        await readout(page, 'Waiting for usage capacity', 'correctness is paused');
 
         // ── Interrupted by a quit: Resume asks the engine, nothing else does ────────────────
         await pick(page, 'interrupted');
@@ -464,6 +506,14 @@ try {
         text = await readout(page, 'Reviewed', '1 finding from 2 roles');
         assert(text.includes('correctness-claude (for correctness)'), text);
         assert(text.includes('handed over'), text);
+        const handover = panel(page).locator('.c-handover');
+        assert(
+            (await handover.locator('summary').textContent()).includes(
+                'because its provider reached a usage limit · by its fallback chain in your config',
+            ),
+        );
+        await handover.locator('summary').click();
+        assert((await handover.locator('pre').textContent()).includes('Diff stat: 1 file'));
         await shot(page, join(shots, `reviewed-${scheme}.png`));
 
         // ── A review with findings of every class ───────────────────────────────────────────

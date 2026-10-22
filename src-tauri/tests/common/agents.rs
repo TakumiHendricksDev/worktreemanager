@@ -19,7 +19,7 @@ use wtm_app_lib::flow::host::{PaneStore, RoleHost, RuntimePane};
 use wtm_app_lib::flow::{Engine, Notice, Refusal};
 use wtm_app_lib::flow_session::RoleSession;
 use wtm_app_lib::handoff::{Caller, CodeCall};
-use wtm_core::flow::{FlowId, InboxItem};
+use wtm_core::flow::{FlowId, InboxItem, LimitReading, RoleProvider};
 use wtm_core::model::{AgentEvent, AgentSkill, ApprovalRequest, SessionId, Usage};
 
 // ═══════════════════════════════ the fake agents ═══════════════════════════════
@@ -59,6 +59,10 @@ pub(crate) enum Behaviour {
     Tools(Vec<(&'static str, Value)>, bool),
     /// Say this as the turn's reply, in words, and end the turn: a discussion turn.
     Reply(&'static str),
+    /// Keep the session open, working, until the flag is set, then submit. A role still mid-turn,
+    /// which is what holds a run-session place. A value with a `kind` is the whole `flow_submit`
+    /// call, as a planner's plan is; anything else is a findings payload.
+    Hold(Arc<AtomicBool>, Value),
 }
 
 /// One thing a fake writer does.
@@ -94,6 +98,9 @@ pub(crate) struct FakeSession {
 #[derive(Debug, Clone)]
 pub(crate) struct Opened {
     pub(crate) role: String,
+    /// The provider it was opened on, which is not always the role's own.
+    pub(crate) provider: String,
+    pub(crate) model: Option<String>,
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) cwd_existed: bool,
     pub(crate) brief: String,
@@ -141,6 +148,12 @@ pub(crate) struct FakeHost {
     /// The store this host says it built runtime panes on. Incognito unless a test says otherwise.
     pub(crate) pane_store: Mutex<PaneStore>,
     pub(crate) panes: Mutex<Vec<FakePane>>,
+    /// What each recheck of a provider's limits answers, in order; unknown once they run out.
+    pub(crate) readings: Mutex<std::collections::VecDeque<LimitReading>>,
+    /// How many times the engine asked a provider for its limits.
+    pub(crate) limits_asked: AtomicUsize,
+    /// The model a session says it runs when it starts, by provider: what a CLI's `init` reports.
+    pub(crate) ready_models: Mutex<BTreeMap<String, String>>,
 }
 
 impl FakeHost {
@@ -163,6 +176,9 @@ impl FakeHost {
             next: AtomicU64::new(1),
             pane_store: Mutex::new(PaneStore::Incognito),
             panes: Mutex::new(Vec::new()),
+            readings: Mutex::new(std::collections::VecDeque::new()),
+            limits_asked: AtomicUsize::new(0),
+            ready_models: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -389,6 +405,21 @@ impl FakeHost {
                 );
                 self.finish_turn(session);
             }
+            Behaviour::Hold(flag, payload) => {
+                self.call(session, "flow_progress", json!({ "text": "working" }));
+                for _ in 0..8_000 {
+                    if flag.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                if payload.get("kind").is_some() {
+                    self.call(session, "flow_submit", payload);
+                } else {
+                    self.submit(session, &payload);
+                }
+                self.finish_turn(session);
+            }
             Behaviour::ProgressThenSubmit(payload) => {
                 for line in [
                     "reading export.rs",
@@ -410,6 +441,7 @@ impl RoleHost for FakeHost {
             Some(message) => Err(Refusal {
                 message,
                 billing: providers.iter().map(|p| (*p).to_owned()).collect(),
+                credits: Vec::new(),
             }),
             None => Ok(()),
         }
@@ -428,6 +460,8 @@ impl RoleHost for FakeHost {
         let turns = Arc::new(Mutex::new(Vec::new()));
         self.opened.lock().push(Opened {
             role: spec.role.role.clone(),
+            provider: spec.provider.clone(),
+            model: spec.model.clone(),
             cwd: spec.cwd.clone(),
             cwd_existed: spec.cwd.as_ref().is_some_and(|cwd| cwd.is_dir()),
             brief: spec.brief.clone(),
@@ -463,7 +497,7 @@ impl RoleHost for FakeHost {
             &SessionId::new(&id),
             &AgentEvent::SessionReady {
                 provider_session_id: conversation,
-                model: None,
+                model: self.ready_models.lock().get(&spec.provider).cloned(),
                 effort: None,
                 mode: None,
                 tools: Vec::new(),
@@ -520,6 +554,14 @@ impl RoleHost for FakeHost {
         self.interrupts.fetch_add(1, Ordering::SeqCst);
         self.finish_turn(session.as_str());
         Ok(())
+    }
+
+    fn limits(&self, _provider: RoleProvider, _model: Option<&str>) -> LimitReading {
+        self.limits_asked.fetch_add(1, Ordering::SeqCst);
+        self.readings
+            .lock()
+            .pop_front()
+            .unwrap_or(LimitReading::Unknown)
     }
 
     fn open_runtime_browser(

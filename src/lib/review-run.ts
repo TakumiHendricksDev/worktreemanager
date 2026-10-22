@@ -16,6 +16,9 @@ import { fixHeadline } from './local-fix';
 import type {
   CheckRun,
   CheckStatus,
+  CreditProblem,
+  ProviderSwitch,
+  QueuedSeat,
   FindingRecord,
   ReviewRunView,
   ReviewStaleness,
@@ -87,8 +90,26 @@ export function findingCount(step: ReviewStep): number | null {
   return step.result.payload.findings.length;
 }
 
+/** "next in line", "2nd in line": where a queued role is among those waiting for the same cap. */
+export function inLine(position: number): string {
+  if (position <= 1) return 'next in line';
+  const tens = position % 100;
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? 'th'
+      : (({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[position % 10] ?? 'th');
+  return `${position}${suffix} in line`;
+}
+
+/** The seat a role waits with for a run-session place, if it waits for one. */
+export function queuedFor(view: ReviewRunView, step: ReviewStep): QueuedSeat | null {
+  return view.queued.find((q) => q.seat.step === step.id) ?? null;
+}
+
 /** The one line beside a role: its count, what it is doing, or why it stopped. */
 export function stepLine(view: ReviewRunView, step: ReviewStep): string {
+  const queued = queuedFor(view, step);
+  if (queued) return `${queued.words} · ${inLine(queued.position)}`;
   const count = findingCount(step);
   if (step.status === 'done' && count !== null) {
     return `done · ${count} finding${count === 1 ? '' : 's'}`;
@@ -104,9 +125,23 @@ export function stepLine(view: ReviewRunView, step: ReviewStep): string {
   return step.detail ? `${words}: ${step.detail}` : words;
 }
 
-/** The roles worth listing: a skipped role is said in a sentence, not a row. */
+/**
+ * Whether the plan left a role out because none of its paths changed. Such a role never ran, which
+ * is what tells it from one you finished the review without at a usage limit: that one ran into
+ * the limit first, so it has an attempt on record.
+ */
+export function plannedOut(view: ReviewRunView, step: ReviewStep): boolean {
+  return step.status === 'skipped' && !view.invocations.some((i) => i.step === step.id);
+}
+
+/** The roles worth listing: a role the plan left out is said in a sentence, not a row. */
 export function listedSteps(view: ReviewRunView): ReviewStep[] {
-  return view.steps.filter((step) => step.status !== 'skipped');
+  return view.steps.filter((step) => !plannedOut(view, step));
+}
+
+/** Roles you finished the review without, at a usage limit. */
+export function leftOut(view: ReviewRunView): ReviewStep[] {
+  return view.steps.filter((step) => step.status === 'skipped' && !plannedOut(view, step));
 }
 
 /** A Unix-seconds reset as a time of day, or null when the provider did not say. */
@@ -158,13 +193,15 @@ export function headline(
   }
   if (state.hold?.kind === 'waiting_capacity') {
     const paused = steps.find((s) => s.status === 'waiting_capacity');
+    const provider = providerName(state.hold.provider);
     const at = resetTime(state.hold.resetsAt);
+    const recheck = view.capacity?.recheck ? ` ${view.capacity.recheck}` : '';
     return {
       eyebrow: 'Waiting for usage capacity',
-      title: `${paused?.role ?? 'A role'} is paused: ${providerName(state.hold.provider)} limit reached`,
+      title: `${paused?.role ?? 'A role'} is paused: ${provider} limit reached`,
       prose: at
-        ? `The limit resets at ${at}. ${kept} The paused role runs again by itself then, if wtm is open. Nothing switches provider by itself, and wtm never uses an API key.`
-        : `The provider did not say when its limit resets. ${kept} Resume when it has.`,
+        ? `The limit resets at ${at}. ${kept} The paused role resumes automatically if wtm is open and the Mac is awake; after a sleep or a relaunch, wtm asks ${provider} again before it runs.${recheck}`
+        : `${provider} did not say when its limit resets, so wtm does not guess. ${kept}${recheck} Try it when you think the limit has reset.`,
       tone: 'warn',
     };
   }
@@ -296,6 +333,11 @@ export function headline(
       };
     }
     const findings = view.findings.filter((f) => f.dismissed === null).length;
+    const without = leftOut(view).map((s) => `\`${s.role}\``);
+    const missingRoles =
+      without.length > 0
+        ? ` You finished it without ${without.join(', ')} at ${without.length === 1 ? 'its' : 'their'} usage limit.`
+        : '';
     const checks = checkLines(view, stale);
     const unproven = checks.filter((c) => c.state !== 'passed');
     const passed = checks.filter((c) => c.state === 'passed').map((c) => c.label);
@@ -318,7 +360,7 @@ export function headline(
         findings === 0
           ? 'No findings'
           : `${findings} finding${findings === 1 ? '' : 's'} from ${roles}`,
-      prose: `${ran}${proved}${caveat}`,
+      prose: `${ran}${proved}${caveat}${missingRoles}`,
       tone: findings === 0 ? 'ok' : 'info',
     };
   }
@@ -405,7 +447,7 @@ export function canRunAgain(view: ReviewRunView): boolean {
 
 /** The roles the plan skipped, as one sentence, or null. */
 export function skippedLine(view: ReviewRunView): string | null {
-  const skipped = view.steps.filter((s) => s.status === 'skipped').map((s) => s.role);
+  const skipped = view.steps.filter((s) => plannedOut(view, s)).map((s) => s.role);
   if (skipped.length === 0) return null;
   return `Skipped, because none of their paths changed: ${skipped.join(', ')}.`;
 }
@@ -580,6 +622,7 @@ export function checkLines(
 /** Why a start was refused, as the Reviews tab draws it. */
 export type StartProblem =
   | { kind: 'billing'; providers: string[]; message: string }
+  | { kind: 'credits'; roles: CreditProblem[]; message: string }
   | { kind: 'other'; message: string };
 
 /** Read a refused start, rerun or resume. A billing refusal is its own state in the design. */
@@ -590,6 +633,11 @@ export function startProblem(error: unknown): StartProblem {
       ? detail.providers.filter((p): p is string => typeof p === 'string')
       : [];
     return { kind: 'billing', providers, message: error.message };
+  }
+  if (isWtmError(error) && error.kind === 'credits') {
+    const detail = error.detail as { roles?: unknown } | null;
+    const roles = Array.isArray(detail?.roles) ? (detail.roles as CreditProblem[]) : [];
+    return { kind: 'credits', roles, message: error.message };
   }
   if (isWtmError(error)) return { kind: 'other', message: error.message };
   return { kind: 'other', message: error instanceof Error ? error.message : String(error) };
@@ -645,4 +693,34 @@ export function citedScreenshots(
   return [...new Set(ids)]
     .map((id) => shots.find((shot) => shot.id === id))
     .filter((shot): shot is Screenshot => shot !== undefined);
+}
+
+// ── capacity: switches and the queue ──
+
+/** Why a role's work moved, in the Reviews tab's words. */
+export const SWITCH_WORDS: Record<ProviderSwitch['reason'], string> = {
+  limit: 'its provider reached a usage limit',
+  failure: 'it failed after its retries',
+  once: 'you ran it once on another provider at a limit',
+};
+
+/** The switch that put `step` where it is, if its work came from another session. */
+export function switchInto(view: ReviewRunView, step: ReviewStep): ProviderSwitch | null {
+  return [...view.switches].reverse().find((s) => s.toStep === step.id) ?? null;
+}
+
+/** "From `correctness` on Codex, because its provider reached a usage limit · by your config". */
+export function switchLine(change: ProviderSwitch): string {
+  const from = change.handover.from;
+  const who = change.by === 'config' ? 'by its fallback chain in your config' : 'by you';
+  return `From \`${from.role}\` on ${runsOn(from)}, because ${SWITCH_WORDS[change.reason]} · ${who}`;
+}
+
+/** The run's roles waiting for a run-session place, as one sentence, or null. */
+export function queueLine(view: ReviewRunView): string | null {
+  if (view.queued.length === 0) return null;
+  const roles = view.queued.map((q) => `\`${q.seat.role}\` (${q.words})`);
+  return `Waiting for a run-session place under your caps: ${roles.join(', ')}. ${
+    view.queued.length === 1 ? 'It starts' : 'They start'
+  } as soon as a session closes, oldest first.`;
 }

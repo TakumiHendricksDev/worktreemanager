@@ -18,6 +18,7 @@
   import { work } from '../state/work.svelte';
   import CodeText from './CodeText.svelte';
   import Button from './ui/Button.svelte';
+  import WorkSeatQueue from './WorkSeatQueue.svelte';
 
   /** What a card's main button says. */
   function openWords(item: InboxItem): string {
@@ -41,6 +42,7 @@
     >
   {/if}
 </div>
+<WorkSeatQueue />
 {#if inbox.items.length === 0}
   <p class="c-work__hint">
     Nothing needs you. Questions, approvals, failures, usage pauses and finished reviews

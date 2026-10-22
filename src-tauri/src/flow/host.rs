@@ -23,6 +23,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::Manager;
 use wtm_agent::session::AgentSink;
+use wtm_core::flow::{LimitReading, RoleProvider, limit_reading};
 use wtm_core::model::{AgentEvent, ExitOutcome, SessionId};
 use wtm_core::ports::PtySink;
 
@@ -37,7 +38,24 @@ fn checked(app: &App, providers: &[&str]) -> Result<(), Refusal> {
         .map_err(|refused| Refusal {
             message: refused.message,
             billing: refused.billing,
+            credits: Vec::new(),
         })
+}
+
+/// Both real hosts' recheck: ask the provider now, through the same record the usage view shows,
+/// and read it for `model`. A failed ask is unknown, not the last figures: those were read before
+/// whatever made the recheck necessary.
+fn reading(
+    app: &Arc<App>,
+    handle: Option<&tauri::AppHandle>,
+    provider: RoleProvider,
+    model: Option<&str>,
+) -> LimitReading {
+    let account = crate::usage::recheck(app, handle, provider.id());
+    if account.error.is_some() {
+        return LimitReading::Unknown;
+    }
+    limit_reading(&account.limits, model, app.clock.now_unix_ms() / 1000)
 }
 
 /// Opens, drives and closes a run's role sessions.
@@ -76,6 +94,14 @@ pub trait RoleHost: Send + Sync {
     /// When the session cannot be interrupted; the engine closes it instead.
     fn interrupt(&self, session: &SessionId) -> Result<(), String> {
         Err(format!("{session} cannot be interrupted by this host"))
+    }
+
+    /// What `provider`'s own figures say now about running `model`, asked fresh: after the Mac
+    /// slept through a wait at a limit, or when a wait is picked up at launch. A host that cannot
+    /// ask says it does not know, which is never read as room.
+    fn limits(&self, provider: RoleProvider, model: Option<&str>) -> LimitReading {
+        let _ = (provider, model);
+        LimitReading::Unknown
     }
 
     /// Where the setup of a worktree Start Work makes sends its terminal: kept for a window to
@@ -200,6 +226,13 @@ impl RoleHost for TauriHost {
             .map_err(|e| e.to_string())
     }
 
+    fn limits(&self, provider: RoleProvider, model: Option<&str>) -> LimitReading {
+        match self.app() {
+            Ok(app) => reading(&app, Some(&self.handle), provider, model),
+            Err(_) => LimitReading::Unknown,
+        }
+    }
+
     /// Recorded, as a Home job's setup is, so the issue workspace can attach to the terminal
     /// after the setup started and still show what it printed first.
     fn setup_sink(&self) -> Arc<dyn PtySink> {
@@ -298,6 +331,10 @@ impl RoleHost for HeadlessHost {
         self.app
             .with_agent(session.as_str(), wtm_agent::AgentSession::interrupt)
             .map_err(|e| e.to_string())
+    }
+
+    fn limits(&self, provider: RoleProvider, model: Option<&str>) -> LimitReading {
+        reading(&self.app, None, provider, model)
     }
 }
 

@@ -222,6 +222,12 @@ pub struct StepChange {
     pub resets_at: Field<u64>,
     pub skill_problem: Field<SkillProblem>,
     pub result: Option<Submission>,
+    /// Who runs the step from here on: set when you run a role once on another provider at a
+    /// limit, and set back to the role's own by a rerun.
+    pub provider: Option<RoleProvider>,
+    pub model: Field<String>,
+    /// The written summary the step's next session starts from.
+    pub handover: Field<String>,
 }
 
 impl StepChange {

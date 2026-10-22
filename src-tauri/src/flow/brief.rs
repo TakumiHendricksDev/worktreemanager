@@ -160,7 +160,7 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
     }
 
     if let Some(handover) = facts.handover {
-        let _ = writeln!(out, "\nYou run in place of another role.\n{handover}");
+        let _ = writeln!(out, "\nYou take over another session's work.\n{handover}");
     }
 
     let short = |sha: &str| sha.chars().take(10).collect::<String>();
@@ -807,26 +807,6 @@ pub fn nudge(kind: OutputKind) -> String {
     )
 }
 
-/// What a fallback is told about the role it runs in place of, and what the record keeps.
-///
-/// Text, never the session: a fallback on another provider cannot resume the first one's
-/// conversation, and handing over less than everything it said is the point — the fallback reviews
-/// the change itself rather than inheriting another model's conclusions.
-#[must_use]
-pub fn handover(from: &str, why: &str, progress: &[String]) -> String {
-    let mut out = format!("`{from}` stopped before handing in a result: {why}.");
-    if progress.is_empty() {
-        out.push_str(" It reported no progress first.");
-    } else {
-        out.push_str(" What it reported doing first:");
-        for line in progress {
-            let _ = write!(out, "\n- {line}");
-        }
-    }
-    out.push_str("\nNothing it found reached the run. Review the change in full yourself.");
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -959,17 +939,5 @@ mod tests {
     fn a_codex_skill_keeps_its_own_name() {
         assert_eq!(invocable(RoleProvider::Codex, "/review"), "review");
         assert_eq!(invocable(RoleProvider::Claude, "review"), "wtm:review");
-    }
-
-    #[test]
-    fn a_handover_says_what_the_first_role_did_and_that_none_of_it_counts() {
-        let text = handover(
-            "correctness",
-            "Codex reached its usage limit",
-            &["reading export.py".to_owned()],
-        );
-        assert!(text.contains("`correctness` stopped"));
-        assert!(text.contains("- reading export.py"));
-        assert!(text.contains("Nothing it found reached the run"));
     }
 }

@@ -42,6 +42,13 @@
    * the Start environment and run card (also in the inbox) is the one action. A runtime role's
    * screenshots are listed under Runtime, and a finding that cites one (`s12`) shows it.
    *
+   * # Usage capacity
+   *
+   * A role waiting at its provider's limit is the capacity card (`WorkCapacity`, also in the inbox),
+   * with its three choices. A role whose work came from another session — a fallback, or a role you
+   * ran once elsewhere — shows where from, and the handover it was given is one click open under its
+   * row. A role waiting for a run-session place says which cap is full on its own line.
+   *
    * # Arriving from the inbox
    *
    * An inbox item or a notification about a role or a finding sets `work.focus`; once that target
@@ -83,6 +90,7 @@
     listedSteps,
     providerName,
     latestRound,
+    queueLine,
     resumeWords,
     ruleLabel,
     runsOn,
@@ -90,6 +98,8 @@
     skippedLine,
     STEP_TONE,
     stepLine,
+    switchInto,
+    switchLine,
   } from '../review-run';
   import { commands } from '../ipc/commands';
   import { draftOf } from '../publish';
@@ -101,6 +111,7 @@
   import CodeText from './CodeText.svelte';
   import RuleDialog from './RuleDialog.svelte';
   import Button from './ui/Button.svelte';
+  import WorkCapacity from './WorkCapacity.svelte';
   import WorkFinding from './WorkFinding.svelte';
   import WorkPrOutcome from './WorkPrOutcome.svelte';
   import WorkPublication from './WorkPublication.svelte';
@@ -327,6 +338,25 @@
   );
 </script>
 
+{#snippet credits(message: string)}
+  <section class="c-work-state c-work-state--danger" aria-labelledby="work-credits-title">
+    <span class="c-work-state__eyebrow">Can't start: usage credits</span>
+    <h2 class="c-work-state__title" id="work-credits-title">
+      A role would bill usage credits it was not allowed to
+    </h2>
+    <p class="c-work-state__prose"><CodeText text={message} /></p>
+    <p class="c-work-state__note">
+      Headless Claude Code bills Fable to usage credits without asking, and a run session
+      has nobody watching it. Nothing was started.
+    </p>
+    <div class="c-work-state__actions">
+      <Button size="sm" disabled={busy || recipe === null} onclick={start}
+        >Check again</Button
+      >
+    </div>
+  </section>
+{/snippet}
+
 {#snippet billing(providers: string[], message: string)}
   <section class="c-work-state c-work-state--danger" aria-labelledby="work-billing-title">
     <span class="c-work-state__eyebrow">Can't start: billing</span>
@@ -402,6 +432,9 @@
 
     {#if problem?.kind === 'billing'}
       {@render billing(problem.providers, problem.message)}
+    {:else if problem?.kind === 'credits' && !run.capacity}
+      <!-- A refused "run once" is the capacity card's to say, beside the choice it refused. -->
+      {@render credits(problem.message)}
     {/if}
 
     <section class="c-work-state c-work-state--{top.tone}" aria-labelledby="work-run-title">
@@ -427,11 +460,27 @@
               )}
             </span>
             <span class="c-run-roles__line"><CodeText text={stepLine(run, step)} /></span>
+            {#if step.handover}
+              {@const came = switchInto(run, step)}
+              <details class="c-handover">
+                <summary class="c-handover__summary"
+                  ><CodeText
+                    text={came
+                      ? `${switchLine(came)} · the handover it was given`
+                      : 'The handover it was given'}
+                  /></summary
+                >
+                <pre class="c-handover__text">{step.handover}</pre>
+              </details>
+            {/if}
           </li>
         {/each}
       </ul>
       {#if skippedLine(run)}
         <p class="c-work-state__note">{skippedLine(run)}</p>
+      {/if}
+      {#if queueLine(run)}
+        <p class="c-work-state__note"><CodeText text={queueLine(run) ?? ''} /></p>
       {/if}
 
       <div class="c-work-state__actions">
@@ -454,7 +503,7 @@
             >Rerun everything</Button
           >
         {/if}
-        {#if canResume(run)}
+        {#if canResume(run) && !run.capacity}
           <Button
             variant={showRerun ? 'neutral' : 'accent'}
             size="sm"
@@ -525,10 +574,22 @@
             : ''}
         </p>
       {/if}
-      {#if error && problem?.kind !== 'billing'}
+      {#if error && problem?.kind !== 'billing' && problem?.kind !== 'credits' && !run.capacity}
         <p class="c-work-state__error" role="alert"><CodeText text={error} /></p>
       {/if}
     </section>
+
+    {#if run.capacity}
+      {@const capacity = run.capacity}
+      <WorkCapacity
+        {capacity}
+        {busy}
+        error={problem?.kind === 'credits' ? problem.message : error}
+        onchoose={(choice) =>
+          void reviewRuns.chooseCapacity(worktreeId, run.flow.id, capacity.step, choice)}
+        ontry={() => void reviewRuns.resume(worktreeId, run.flow.id)}
+      />
+    {/if}
 
     {#if run.pendingStart}
       {@const start = run.pendingStart}
@@ -747,6 +808,8 @@
   </div>
 {:else if problem?.kind === 'billing'}
   {@render billing(problem.providers, problem.message)}
+{:else if problem?.kind === 'credits'}
+  {@render credits(problem.message)}
 {:else}
   <section class="c-work-state" aria-labelledby="work-review-title">
     <span class="c-work-state__eyebrow">Not reviewed yet</span>
