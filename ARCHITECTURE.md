@@ -54,10 +54,10 @@ wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl 
 wtm-exec     the ONLY place a process is spawned: CommandRunner, PtyHost, ServiceHost.
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
-wtm-appdb    the app's own SQLite store: work items, flows, rules, the tracker mirror, environments
-             (§9).                                impl FlowStore, RuleStore, TrackerMirror, EnvStore
+wtm-appdb    the app's own SQLite store: work items, flows, rules, the tracker mirror, environments,
+             Start Work's jobs (§9).        impl FlowStore, RuleStore, TrackerMirror, EnvStore, StartStore
 wtm-forge    pull requests through the user's own `gh` (§6a).    impl Forge, ReviewWriter, PullRequestWriter
-wtm-tracker  issues and sprints through the user's own `acli` (§6a).  impl Tracker (reads only)
+wtm-tracker  issues and sprints through the user's own `acli` (§6a).  impl Tracker, TrackerWriter
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
 ```
@@ -1019,20 +1019,23 @@ It is called only while the Work view is on and only for a project whose *own* c
 forge (`[workflow] forge = "github"`); a repository's committed `wtm.toml` may not name one,
 because that is the consent this paragraph is about.
 
-`wtm-tracker` is the second, and it only reads: a project's queue (its query's issues, narrowed to a
-board's active sprint when the queue names a board, with that sprint's name and goal) and one issue
-whole when it is opened, through `acli … --json`; `tests/acli.rs` holds it to that list of commands.
-Its write port, `TrackerWriter`, is declared and implemented by nothing, so this build cannot move an
-issue or comment on one. It is called only while the Work view is on and only for a project whose own
+`wtm-tracker` is the second. It reads a project's queue (its query's issues, narrowed to a board's
+active sprint when the queue names a board, with that sprint's name and goal) and one issue whole
+when it is opened, through `acli … --json`, and it makes one kind of write: moving one issue, by key,
+to a status by name (`acli jira workitem transition --key --status --yes`). `tests/acli.rs` holds
+it to exactly that list of commands; nothing comments, edits, assigns or creates. Moving is the
+port `TrackerWriter`, held only by the outbox's executor, and it is sent only for Start Work's move
+to the mapped "started" status or a card dropped on another board column, each the approval of
+that one move (§6k). It is called only while the Work view is on and only for a project whose own
 config names a tracker (`[workflow] tracker = "jira"`). A committed `wtm.toml` may carry the status
-mapping, the field names and the queue's query, which grant nothing, but not the tracker. A sync
-writes the mirror tables and nothing else, and the use-case that does it is handed nothing that could
-start a run (`wtm_core::usecase::tracker_sync` makes that argument); it runs when Work opens on a
-project, when the window comes back into focus, on Sync, and after the app's own actions, never on a
-timer. What `acli` cannot read, such as custom fields in a search or the list of an issue's
-transitions, is recorded in the crate's docs with what another route would cost: Jira's REST API with
-an API token that wtm would have to store, which is a decision for this section rather than for a
-diff.
+mapping, the field names, the queue's query and `[workflow.start]`, which grant nothing, but not
+the tracker. A sync writes the mirror tables and nothing else, and the use-case that does it is
+handed nothing that could start a run (`wtm_core::usecase::tracker_sync` makes that argument); it
+runs when Work opens on a project, when the window comes back into focus, on Sync, and after the
+app's own actions, never on a timer. What `acli` cannot read, such as custom fields in a search or
+the list of an issue's transitions, is recorded in the crate's docs with what another route would
+cost: Jira's REST API with an API token that wtm would have to store, which is a decision for this
+section rather than for a diff.
 
 **The egress is in Rust, and that placement is the whole design.** A `fetch` from the webview
 would have been fewer lines and would have widened `connect-src` — after which "the frontend
@@ -1553,6 +1556,57 @@ on their own. What is not covered: E3's checks that start the services they need
 daemon.
 
 ---
+
+## 6k. Start Work: one run and one worktree per issue, and a move read first
+
+Start (the issue's button, ⌘↵ on its queue row, a card dropped on the board's start column) turns a
+sprint issue into an Implement run with a worktree (`src-tauri/src/flow/start.rs`). The shape and
+its reasons; the module docs have the rest.
+
+**Once, by the store.** Any two Starts can arrive together. One work item per `(tracker, key)`, one
+open flow of each kind per work item (migration 1), and one start job per work item (migration 11,
+`start_jobs`, keyed by it) are the database's, so the second Start meets the first's rows in the
+transaction that would have written its own, and focuses the first's run. `start_work.rs` starts
+four at once and gets one worktree and one run; it went red with those three guards taken out.
+
+**Where the work happens is resolved, in the plan's order** (`wtm_core::flow::start::resolve`): the
+worktree an earlier Start bound the item to, while it exists; a worktree whose branch or directory
+carries the key; the item's pull request's head branch; a branch the project's
+`existing_branch_match` offers; a new worktree. The last two come from the New Worktree form's own
+pipeline, previewed with the key in the form field `[workflow.start] issue_field` names, so Start
+plans exactly what the form would. More than one candidate is a preview, and nothing is recorded
+until one is picked. The choice is linked to the work item at once, so the next resolution starts
+from it.
+
+**Making it is the form's pipeline, and a crash resumes on what is there.** An existing worktree is
+bound as it is, its setup not run again. Anything else is `CreatePipeline::execute`, the form's
+Create, with the setup's terminal kept for the issue workspace. The job is written before `git
+worktree add`, with the path it makes; at launch a job still creating or setting up was cut off, and
+its run is held `Interrupted(crash)`. Resume looks at the path: a worktree there gets Retry setup,
+`run_setup`, which is also how the form adopts a worktree made elsewhere, or is used as it is; no
+worktree there is made again from the same plan. Never a second one. The run then stays in
+Preparing, which the workspace calls "Ready to plan": investigating is the planner's, a later item.
+
+**Moving the issue is an outbox operation, read before and after** (`flow/moves.rs`). Start's move
+to the first `started` status is on by default (`[workflow.start] move_issue`), shown on the button
+before it is pressed, and made only from an explicit Start, as the approval of that one move. A drop
+on another column is the same kind of approval; out of a `needs_review` status it asks first. The
+executor reads the issue's status: already at the destination is adopted and nothing is sent;
+somewhere other than where the move expected stops it and files an approval item, because moving it
+would undo someone's change; otherwise it is marked executing, sent, and the status read again, which
+settles a lost reply. Jira has no compare-and-swap for a transition, so a change made between the
+read and the move would be overwritten; the window says so beside every move. A crash leaves the
+operation executing, and recovery settles it by reading the issue, never by sending it again.
+
+**Backward on the board is a status, never a run.** A drop toward the start of the board changes
+the team status and nothing else: the run's events, its job and its worktree are untouched, which
+`start_work.rs` checks event by event, and the inbox offers to pause the run, a hold and only a
+hold. An issue with no run in wtm moves only by Start: wtm writes to an issue for work it is doing.
+
+**Clicked through without writing to a real tracker.** A debug build started with
+`WTM_DEV_TRACKER_WRITES=fake` reads the real tracker and keeps its moves in a file beside its
+database, laid over every later read of the issue (`dev_tracker.rs`). A release build never reads
+the variable.
 
 ## 7. Toolchain policy
 

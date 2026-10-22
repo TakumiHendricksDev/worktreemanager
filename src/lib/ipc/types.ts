@@ -1679,6 +1679,8 @@ export interface InboxItem {
   /** The project and worktree the run is of: where a click on it arrives. */
   project: string | null;
   worktree: string | null;
+  /** The issue's key, when the run is an issue's own (Start Work's). */
+  issue: string | null;
   /** The question itself, for an item about one. */
   question: Question | null;
 }
@@ -2066,7 +2068,8 @@ export type OperationPayload =
         title: string;
         body: string;
       };
-    };
+    }
+  | { kind: 'move_issue'; tracker: 'jira'; key: string; from: string; to: string };
 
 /** What an operation left on GitHub. */
 export type OperationResult =
@@ -2079,7 +2082,9 @@ export type OperationResult =
       adopted: boolean;
     }
   | { kind: 'pushed'; url: string; reference: string; commit: string; adopted: boolean }
-  | { kind: 'pull_request'; number: number; url: string; adopted: boolean };
+  | { kind: 'pull_request'; number: number; url: string; adopted: boolean }
+  /** An issue now in the status a move asked for; `adopted` when it was there already. */
+  | { kind: 'moved'; key: string; status: string; adopted: boolean };
 
 /** Why an operation stopped and waits for you. `wtm_core::flow::Attention`. */
 export type Attention =
@@ -2092,7 +2097,9 @@ export type Attention =
       comments: number;
       startedByWtm: boolean;
     }
-  | { kind: 'refused'; message: string };
+  | { kind: 'refused'; message: string }
+  /** An issue found in another status than the move was asked from: nothing was sent. */
+  | { kind: 'status_moved'; expected: string; current: string; to: string };
 
 export type Resolution = { kind: 'add_to_pending_review'; review: number; nodeId: string };
 

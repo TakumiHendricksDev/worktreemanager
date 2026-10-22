@@ -17,6 +17,7 @@
  */
 
 import type { FlowState } from './ipc/types';
+import { JOB_WORDS, type StartJobState } from './start-work';
 
 export type TrackerKind = 'jira';
 export type StatusCategory = 'to_do' | 'in_progress' | 'done' | 'unknown';
@@ -60,6 +61,8 @@ export interface IssueRun {
   worktree: string;
   state: FlowState;
   openItems: number;
+  /** For the issue's own run, how far Start Work has got with its worktree; null for a review. */
+  start: StartJobState | null;
 }
 
 export interface IssueRow {
@@ -206,6 +209,8 @@ export function runWords(run: IssueRun | null): string {
     case undefined:
       break;
   }
+  // An issue's own run says where its worktree is: "Ready to plan" until planning exists.
+  if (run.start && state.phase === 'preparing') return JOB_WORDS[run.start];
   if (run.openItems > 0) return 'Run has news for you';
   switch (state.phase) {
     case 'reviewing':
@@ -279,10 +284,23 @@ export function boardColumns(
 /** The words for a status's workflow role, as a column's caption says it. */
 export const ROLE_WORDS: Record<StatusRole, string> = {
   todo: 'To do',
-  started: 'Start column',
+  started: 'Started',
   needs_review: 'Needs review',
   done: 'Done',
 };
+
+/**
+ * The board's start column: the first status mapped to `started`, which is where Start Work moves
+ * an issue and the one column a drop on starts work (`wtm_core::flow::start::start_status`).
+ */
+export function startColumn(queue: Pick<TrackerQueue, 'columns'>): string | null {
+  return queue.columns.find((column) => column.role === 'started')?.status ?? null;
+}
+
+/** Whether two status names are the same status, as the board compares them. */
+export function sameStatus(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 /** The sprint the queue is about: the first active one the board reported. */
 export function currentSprint(queue: Pick<TrackerQueue, 'sprints'>): Sprint | null {
@@ -304,4 +322,19 @@ export function syncedAt(readAt: number | null): string {
   if (readAt === null) return 'Not synced yet';
   const at = new Date(readAt);
   return `Synced ${at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+}
+
+/** A board column's horizontal extent, measured when a drag arms. */
+export interface ColumnSlot {
+  status: string;
+  left: number;
+  right: number;
+}
+
+/**
+ * The mapped column under a pointer at `x`, or null between columns and off the board. Pure, so the
+ * hit test a drag runs at pointer rate reads no DOM: the slots are measured once, when it arms.
+ */
+export function columnAt(slots: readonly ColumnSlot[], x: number): string | null {
+  return slots.find((slot) => x >= slot.left && x <= slot.right)?.status ?? null;
 }

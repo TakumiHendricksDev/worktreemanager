@@ -158,6 +158,9 @@ export function attentionWords(attention: Attention, number: number): string {
       return `You already have a pending review on #${number}, holding ${plural(attention.comments, 'comment', 'comments')}, and GitHub allows one per person: it refuses a second (HTTP 422). ${attention.startedByWtm ? 'An earlier publish from wtm started it.' : 'It may have been started in the browser.'}`;
     case 'refused':
       return `GitHub refused it: ${attention.message}`;
+    case 'status_moved':
+      // An issue's move, never a review's: said in case one is ever shown here.
+      return `The issue is in ${attention.current}, not ${attention.expected}.`;
   }
 }
 

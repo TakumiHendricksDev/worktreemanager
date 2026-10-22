@@ -74,7 +74,8 @@ for the latest release, also through `curl`, the Work view reads pull requests t
 user's own `gh`, only for a project whose own config names that forge, and posts a review or opens a
 fix's follow-up pull request there only after the user approved exactly what is sent, and the Work
 view reads a project's issues and sprint through the user's own `acli`, only for a project whose own
-config names that tracker, and writes nothing there.
+config names that tracker, and moves an issue there only from the user's own Start or a card they
+dropped on its board, reading it first.
 `src-tauri/tests/network_boundary.rs` pins the CSP, both fixed hosts, `wtm-forge`'s and
 `wtm-tracker`'s dependency lists, and the absence of a linked HTTP client. A new kind of egress, or reaching
 for `reqwest`, is an open-an-issue-first change — ARCHITECTURE §6a records the boundary. Browser

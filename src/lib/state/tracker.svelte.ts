@@ -117,6 +117,21 @@ class TrackerQueueState {
   }
 
   /**
+   * Show the issue as the mirror keeps it now, asking the tracker nothing: after the app's own
+   * move, which read it whole and kept it, so the workspace says where it is now.
+   */
+  async kept(projectId: string, key: string): Promise<void> {
+    if (this.projectId !== projectId) return;
+    try {
+      const kept = await commands.trackerIssue(projectId, key, false);
+      if (kept && this.projectId === projectId)
+        this.details = { ...this.details, [key]: kept };
+    } catch {
+      // The workspace's own read says what is wrong, if anything is.
+    }
+  }
+
+  /**
    * Show an issue whole: as last kept, at once, then as the tracker has it now. Opening one is an
    * action, so this is where an issue is read one by one, never in a sync.
    */

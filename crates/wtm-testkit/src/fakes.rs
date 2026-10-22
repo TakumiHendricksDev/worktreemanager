@@ -1483,13 +1483,17 @@ impl wtm_core::ports::forge::Forge for FakeForge {
 /// test move an issue "in the tracker" between two syncs.
 ///
 /// Its call log is the point, as [`FakeForge`]'s is: a project without a tracker must cause no
-/// tracker call, and a sync must ask only what it needs.
+/// tracker call, and a sync must ask only what it needs. As a
+/// [`TrackerWriter`](wtm_core::ports::TrackerWriter) it moves its own issues, so what a move did
+/// is read back exactly as the app would read it from the tracker, and it can lose a move's reply
+/// after making it, as a connection that drops on the way back does.
 #[derive(Debug, Default)]
 pub struct FakeTracker {
     issues: Mutex<Vec<(wtm_core::flow::Issue, Vec<u64>)>>,
     sprints: Mutex<Vec<wtm_core::flow::Sprint>>,
     failure: Mutex<Option<wtm_core::error::TrackerError>>,
     calls: Mutex<Vec<String>>,
+    lose_move_reply: Mutex<bool>,
 }
 
 impl FakeTracker {
@@ -1526,6 +1530,33 @@ impl FakeTracker {
     /// The next call fails with `error`, once.
     pub fn fail_next(&self, error: wtm_core::error::TrackerError) {
         *self.failure.lock() = Some(error);
+    }
+
+    /// The next move happens in the tracker and its reply is lost: the caller is told it timed
+    /// out.
+    pub fn lose_next_move_reply(&self) {
+        *self.lose_move_reply.lock() = true;
+    }
+
+    /// The issue's status now, as the tracker holds it.
+    #[must_use]
+    pub fn status_of(&self, key: &str) -> Option<String> {
+        self.issues
+            .lock()
+            .iter()
+            .find(|(issue, _)| issue.key == key)
+            .map(|(issue, _)| issue.status.name.clone())
+    }
+
+    /// The moves sent, as `move KEY STATUS`, in order.
+    #[must_use]
+    pub fn moves(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .iter()
+            .filter(|call| call.starts_with("move "))
+            .cloned()
+            .collect()
     }
 
     /// Each question asked, as `method target`, in order.
@@ -1653,6 +1684,43 @@ impl wtm_core::ports::Tracker for FakeTracker {
     ) -> Result<Vec<wtm_core::flow::Transition>, wtm_core::error::TrackerError> {
         self.note(format!("transitions {key}"))?;
         Ok(Vec::new())
+    }
+}
+
+impl wtm_core::ports::TrackerWriter for FakeTracker {
+    fn move_to(
+        &self,
+        _cwd: &Path,
+        key: &str,
+        status: &str,
+    ) -> Result<(), wtm_core::error::TrackerError> {
+        self.note(format!("move {key} {status}"))?;
+        let mut issues = self.issues.lock();
+        // The category another issue in that status has, as a tracker's workflow would give it.
+        let category = issues
+            .iter()
+            .find(|(issue, _)| issue.status.name.eq_ignore_ascii_case(status))
+            .map_or(wtm_core::flow::StatusCategory::InProgress, |(issue, _)| {
+                issue.status.category
+            });
+        let (issue, _) = issues
+            .iter_mut()
+            .find(|(issue, _)| issue.key == key)
+            .ok_or_else(|| wtm_core::error::TrackerError::NotFound {
+                what: format!("issue {key}"),
+            })?;
+        issue.status = wtm_core::flow::IssueStatus {
+            name: status.to_owned(),
+            category,
+        };
+        drop(issues);
+        if std::mem::take(&mut *self.lose_move_reply.lock()) {
+            return Err(wtm_core::error::TrackerError::Timeout {
+                argv: format!("acli jira workitem transition --key={key}"),
+                timeout_ms: 60_000,
+            });
+        }
+        Ok(())
     }
 }
 

@@ -324,8 +324,10 @@ impl Engine {
             OperationPayload::SubmitReview(payload) => {
                 self.submit(&target, publication, op, payload)
             }
-            OperationPayload::PushBranch(_) | OperationPayload::OpenPullRequest(_) => {
-                self.failed(publication, op, "this is a route's write, not a review's");
+            OperationPayload::PushBranch(_)
+            | OperationPayload::OpenPullRequest(_)
+            | OperationPayload::MoveIssue(_) => {
+                self.failed(publication, op, "this is not a review's write");
                 Then::Stop
             }
         }
@@ -750,6 +752,8 @@ impl Engine {
             self.notice.changed(op.key.flow);
             if self.recover_route(op.approval, &op) {
                 // A fix's route, checked by its own executor's rules (`routes.rs`).
+            } else if self.recover_move(op.approval, &op) {
+                // An issue's move, settled by reading the issue (`moves.rs`).
             } else if let Ok(Some(publication)) = db.publication(op.approval) {
                 self.settle_unsent(&publication, &op);
                 // Whatever the check found, a publish that is not finished waits for you, so it is
@@ -878,8 +882,10 @@ impl Engine {
                     (None, Ok(_)) => OperationChange::failed(gone),
                 }
             }
-            OperationPayload::PushBranch(_) | OperationPayload::OpenPullRequest(_) => {
-                OperationChange::failed("this is a route's write, not a review's")
+            OperationPayload::PushBranch(_)
+            | OperationPayload::OpenPullRequest(_)
+            | OperationPayload::MoveIssue(_) => {
+                OperationChange::failed("this is not a review's write")
             }
         };
         tracing::info!(op = %op.id, to = ?change.state, "settled an operation a crash left mid-write");

@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
 use super::env::CommandRequest;
+use super::moves::MoveRequest;
 use super::publish::ReviewPayload;
 use super::route::{RoutePlan, SuggestionRoute};
 use super::state::FlowId;
@@ -48,6 +49,9 @@ pub enum ApprovalIntent {
     Merge,
     /// Run this environment command once: a destructive one on a resource every worktree shares.
     Command,
+    /// Move an issue from one team status to another: Start Work's move, or a card dropped on
+    /// another board column. The click is the approval, and it pins exactly that move.
+    Move,
 }
 
 impl ApprovalIntent {
@@ -58,8 +62,9 @@ impl ApprovalIntent {
             Self::Plan => &[Pinned::PlanRevision],
             Self::Design => &[Pinned::DesignRevision],
             Self::Publish | Self::Merge => &[Pinned::Head],
-            // A command pins the hash of exactly what runs, as a post pins exactly what is sent.
-            Self::Post | Self::Command => &[Pinned::Payload],
+            // A command pins the hash of exactly what runs, and a move exactly what it sends (the
+            // issue, from where and to where), as a post pins exactly what is sent.
+            Self::Post | Self::Command | Self::Move => &[Pinned::Payload],
             Self::Route => &[Pinned::Remote, Pinned::Ref, Pinned::Diff],
         }
     }
@@ -206,6 +211,8 @@ pub enum ApprovalSubject {
     /// One run of an environment command. See [`CommandRequest`] for why it holds the declared
     /// argv and not the rendered one.
     Command(Box<CommandRequest>),
+    /// An issue moved to another team status, and why.
+    Move(Box<MoveRequest>),
 }
 
 /// An approval to record, not yet numbered.
@@ -332,6 +339,25 @@ impl NewApproval {
             binding,
             subject: ApprovalSubject::Command(Box::new(request.clone())),
         })
+    }
+}
+
+impl NewApproval {
+    /// Approval to move an issue exactly as `request` says: from the status it was in when you
+    /// asked, to the one you asked for. The pin is the hash its operation is keyed by, and the only
+    /// one, because the executor checks the rest against the tracker itself, by reading the issue
+    /// (`flow::moves`).
+    #[must_use]
+    pub fn move_issue(flow: FlowId, request: &MoveRequest) -> Self {
+        Self {
+            flow,
+            intent: ApprovalIntent::Move,
+            binding: Binding::default().with(
+                Pinned::Payload,
+                super::outbox::OperationPayload::MoveIssue(request.payload.clone()).hash(),
+            ),
+            subject: ApprovalSubject::Move(Box::new(request.clone())),
+        }
     }
 }
 

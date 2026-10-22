@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use super::ForgeKind;
 use super::glob;
 use super::instructions::DEFAULT_INSTRUCTION_SOURCES;
+use super::start::StartSpec;
 use super::tracker::{self, QueueSpec, StatusMap, TrackerKind};
 use crate::model::AgentSkill;
 
@@ -73,6 +74,10 @@ pub struct WorkflowSpec {
     /// only read once you have named a tracker, and none of them can write anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<QueueSpec>,
+    /// What Start Work does beyond starting the run: whether it moves the issue, and which form
+    /// field takes the key. A repository may declare it too; moving needs a tracker you named.
+    #[serde(default, skip_serializing_if = "StartSpec::is_default")]
+    pub start: StartSpec,
     /// Where pull requests are read from. Absent, nothing is: see [`ForgeKind`] for why a workflow
     /// does not assume one. Accepted from your own config and the local layer only, because naming
     /// it is what lets the Work view call a forge on your behalf (ARCHITECTURE §6a), and a

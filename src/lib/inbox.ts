@@ -80,12 +80,16 @@ export interface ReviewFocus {
 
 /** Where a click on an item arrives in the Work view. */
 export type Arrival =
-  { place: 'inbox'; item: number } | { place: 'reviews'; focus: ReviewFocus | null };
+  | { place: 'inbox'; item: number }
+  | { place: 'reviews'; focus: ReviewFocus | null }
+  | { place: 'issue'; key: string };
 
 export function arrival(item: InboxItem): Arrival {
   if (item.kind === 'question' || item.kind === 'approval') {
     return { place: 'inbox', item: item.id };
   }
+  // An issue's own run lives in its workspace, where its Run section has the remedies.
+  if (item.issue) return { place: 'issue', key: item.issue };
   switch (item.target.kind) {
     case 'finding':
       return { place: 'reviews', focus: { kind: 'finding', id: item.target.finding } };
@@ -134,9 +138,9 @@ export function notificationWords(
   const heads: Record<InboxKind, string> = {
     question: `${where}: a review role asks you something`,
     approval: `${where}: a run needs your approval`,
-    failure: `${where}: review needs you`,
+    failure: `${where}: ${item.issue ? 'run' : 'review'} needs you`,
     capacity: `${where}: review paused for usage`,
-    interrupted: `${where}: review interrupted`,
+    interrupted: `${where}: ${item.issue ? 'run' : 'review'} interrupted`,
     review_ready: `${where}: ${item.title}`,
   };
   const detail =

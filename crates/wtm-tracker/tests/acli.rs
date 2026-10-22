@@ -4,9 +4,10 @@
 //! queue, the board and the issue workspace need, including the paginated listing that prints one
 //! JSON document per page and the sign-in check that answers in text: the fixtures are acli
 //! 1.3.18's own output with every identifying value replaced (`fixtures/README.md`). And that the
-//! adapter only ever *reads*: every argv it hands the runner is checked against the list of
-//! read-only `acli` commands, because "nothing is written to Jira" is a promise nothing else in the
-//! app could notice being broken.
+//! adapter reads, and writes in exactly one way: every argv it hands the runner is checked against
+//! the list of read-only `acli` commands, or, for a move, against the one transition of one issue
+//! by key, because "nothing else is written to Jira" is a promise nothing else in the app could
+//! notice being broken.
 
 #![allow(clippy::unwrap_used)]
 
@@ -18,7 +19,7 @@ use pretty_assertions::assert_eq;
 use wtm_core::error::ExecError;
 use wtm_core::flow::{IssueQuery, SPRINT_FIELD, SprintRef, SprintState, StatusCategory};
 use wtm_core::ports::exec::Output;
-use wtm_core::ports::tracker::{Tracker, TrackerError};
+use wtm_core::ports::tracker::{Tracker, TrackerError, TrackerWriter};
 use wtm_testkit::FakeRunner;
 use wtm_tracker::AcliTracker;
 
@@ -64,6 +65,29 @@ fn is_read_only(argv: &[String]) -> bool {
             | ["acli", "jira", "sprint", "view" | "list-workitems", ..]
     );
     read && !words.iter().any(|word| *word == "--web" || *word == "-w")
+}
+
+/// Whether an argv is the one write this adapter makes: a transition of one issue by its key, by
+/// status name, without a prompt. A `--jql` or `--filter` selection, or a list of keys, would move
+/// more than one issue.
+fn is_one_move(argv: &[String]) -> bool {
+    let words: Vec<&str> = argv.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        [
+            "acli",
+            "jira",
+            "workitem",
+            "transition",
+            key,
+            status,
+            "--yes",
+        ] => {
+            key.strip_prefix("--key=")
+                .is_some_and(|key| !key.is_empty() && !key.contains(','))
+                && status.starts_with("--status=")
+        }
+        _ => false,
+    }
 }
 
 fn assert_only_reads(runner: &FakeRunner) {
@@ -498,5 +522,113 @@ fn the_read_only_list_refuses_every_acli_write() {
         argv(&["acli", "jira", "auth", "logout"]),
     ] {
         assert!(!is_read_only(&write), "{write:?} must not pass as a read");
+    }
+}
+
+#[test]
+fn a_move_is_one_transition_of_one_issue_by_key_and_status_without_a_prompt() {
+    let (tracker, runner) = harness(vec![FakeRunner::ok("✓ Work item ACME-12 transitioned\n")]);
+
+    tracker
+        .move_to(Path::new(ROOT), "ACME-12", "In Progress")
+        .unwrap();
+
+    let argvs = runner.argvs();
+    assert_eq!(argvs.len(), 1);
+    assert!(is_one_move(&argvs[0]), "{:?}", argvs[0]);
+    assert_eq!(argvs[0][4], "--key=ACME-12");
+    assert_eq!(argvs[0][5], "--status=In Progress");
+    assert!(!is_read_only(&argvs[0]), "a move is not a read");
+}
+
+#[test]
+fn a_key_list_or_a_key_read_as_a_flag_moves_nothing_and_runs_nothing() {
+    let (tracker, runner) = harness(Vec::new());
+    for key in ["ACME-1,ACME-2", "--jql=project=ACME", "acme-1", ""] {
+        assert!(
+            matches!(
+                tracker.move_to(Path::new(ROOT), key, "Done"),
+                Err(TrackerError::NotFound { .. })
+            ),
+            "{key}"
+        );
+    }
+    assert!(matches!(
+        tracker.move_to(Path::new(ROOT), "ACME-1", "  "),
+        Err(TrackerError::Unsupported { .. })
+    ));
+    assert_eq!(runner.call_count(), 0);
+}
+
+#[test]
+fn a_move_jira_refuses_is_a_failure_in_the_clis_own_words() {
+    let (tracker, _) = harness(vec![FakeRunner::failed(
+        1,
+        "✗ Error: no transition to status 'Done' is available for ACME-12",
+    )]);
+    match tracker
+        .move_to(Path::new(ROOT), "ACME-12", "Done")
+        .unwrap_err()
+    {
+        TrackerError::Failed { message, argv } => {
+            assert!(message.contains("no transition"), "{message}");
+            assert!(argv.contains("transition"), "{argv}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_one_move_shape_admits_no_selection_list_or_other_write() {
+    let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+    for not_one in [
+        argv(&[
+            "acli",
+            "jira",
+            "workitem",
+            "transition",
+            "--key=ACME-1,ACME-2",
+            "--status=Done",
+            "--yes",
+        ]),
+        argv(&[
+            "acli",
+            "jira",
+            "workitem",
+            "transition",
+            "--jql=project = ACME",
+            "--status=Done",
+            "--yes",
+        ]),
+        argv(&[
+            "acli",
+            "jira",
+            "workitem",
+            "transition",
+            "--filter=10001",
+            "--status=Done",
+            "--yes",
+        ]),
+        argv(&[
+            "acli",
+            "jira",
+            "workitem",
+            "transition",
+            "--key=ACME-1",
+            "--status=Done",
+        ]),
+        argv(&[
+            "acli",
+            "jira",
+            "workitem",
+            "comment",
+            "create",
+            "--key=ACME-1",
+        ]),
+    ] {
+        assert!(
+            !is_one_move(&not_one),
+            "{not_one:?} must not pass as one move"
+        );
     }
 }

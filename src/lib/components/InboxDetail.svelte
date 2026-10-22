@@ -17,6 +17,8 @@
    *   Retry, the pending-review choices, or re-review and publish anyway. It reads the run the
    *   Reviews tab reads, so a retry here updates both. A local fix's route that stopped — their
    *   branch moved, or a push failed — is the route's own card (`WorkRoute`) the same way.
+   * - **An issue's own run** — a pause offered after a backward drag, a move that stopped or failed,
+   *   a worktree's setup that failed or was cut off — is Start Work's card (`WorkStartItem`).
    * - **A ready review** names the worst of what it found; each finding is a link to that finding
    *   in the Reviews tab, which is the exact place the item is about. Reading the review settles
    *   it.
@@ -52,6 +54,7 @@
   import WorkEnvApproval from './WorkEnvApproval.svelte';
   import WorkPublication from './WorkPublication.svelte';
   import WorkRoute from './WorkRoute.svelte';
+  import WorkStartItem from './WorkStartItem.svelte';
 
   const { item }: { item: InboxItem } = $props();
 
@@ -205,175 +208,180 @@
   }
 </script>
 
-<article class="c-inbox-card" aria-labelledby="inbox-card-{item.id}">
-  <div class="c-inbox-card__meta">
-    <span class="c-inbox-card__badge c-inbox-card__badge--{KIND_TONE[item.kind]}"
-      >{KIND_WORDS[item.kind]}</span
-    >
-    <span>{inbox.placeOf(item)} · {filedAt(item.createdAt)}</span>
-  </div>
-  <h2 class="c-inbox-card__title" id="inbox-card-{item.id}">
-    <CodeText text={item.title} />
-  </h2>
-
-  {#if item.kind === 'review_ready' && groups.length > 0}
-    {#each groups as section (section.group)}
-      <section class="c-inbox-card__findings" aria-label={GROUP_WORDS[section.group]}>
-        <span class="c-inbox-card__label"
-          >{GROUP_WORDS[section.group]} · {section.findings.length}</span
-        >
-        <ul class="c-inbox-card__list">
-          {#each section.findings as finding (finding.id)}
-            <li>
-              <Button
-                variant="link"
-                size="sm"
-                title="Show this finding in the Reviews tab"
-                onclick={() => inbox.open(item, { kind: 'finding', id: finding.id })}
-                ><CodeText text={finding.title} /></Button
-              >
-              <span class="c-inbox-card__where u-mono">{place(finding)}</span>
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/each}
-  {:else}
-    <p class="c-inbox-card__body"><CodeText text={item.body} /></p>
-  {/if}
-
-  {#if publication}
-    <WorkPublication
-      view={publication}
-      head={null}
-      busy={publishing}
-      error={publishError}
-      onretry={() => act(() => commands.retryPublication(publication.approval.id))}
-      onadd={() => act(() => commands.addToPendingReview(publication.approval.id))}
-      onleave={() => act(() => commands.cancelPublication(publication.approval.id))}
-      onrereview={publication.state === 'stale'
-        ? () => {
-            const stopped = publication.operations.find(
-              (op) => op.attention?.kind === 'head_moved',
-            );
-            if (stopped?.attention?.kind === 'head_moved') {
-              void rereviewInstead(publication, stopped.attention.current);
-            }
-          }
-        : null}
-      onagainst={(head) => {
-        const hash = publication.approval.binding.payload;
-        const worktree = item.worktree;
-        if (!hash || !worktree) return;
-        act(() =>
-          reviewRuns.approvePublish(
-            worktree,
-            item.flow,
-            draftOf(publication.review),
-            hash,
-            head,
-          ),
-        );
-      }}
-      onopen={(url) => void commands.openUrl(url)}
-    />
-  {:else if route}
-    {@const worktree = item.worktree ?? ''}
-    <WorkRoute
-      view={route}
-      busy={routing}
-      error={routeError}
-      onretry={() =>
-        void reviewRuns.route(worktree, item.flow, () =>
-          commands.retryFixRoute(route.approval.id),
-        )}
-      onleave={() =>
-        void reviewRuns.route(worktree, item.flow, () =>
-          commands.cancelFixRoute(route.approval.id),
-        )}
-      onopen={(url) => void commands.openUrl(url)}
-    />
-  {:else if item.kind === 'approval' && item.target.kind === 'approval'}
-    <p class="c-inbox-card__note">Reading this publish…</p>
-  {:else if item.kind === 'approval' && item.target.kind === 'flow'}
-    {#if pendingCommand}
-      {@const pending = pendingCommand}
-      <WorkEnvApproval
-        {pending}
-        busy={commandBusy}
-        error={commandError}
-        onapprove={() =>
-          void environments.approve(pending.project, pending.worktree, pending.run.id)}
-        ondecline={() =>
-          void environments.decline(pending.project, pending.worktree, pending.run.id)}
-      />
-    {:else if pendingCommand === null}
-      <p class="c-inbox-card__note">
-        Nothing is waiting any more: the command was approved, declined, or went stale.
-      </p>
-    {:else}
-      <p class="c-inbox-card__note">Reading this command…</p>
-    {/if}
-  {:else if item.kind === 'approval'}
-    {#if asking}
-      <div class="c-inbox-card__approval">
-        <ApprovalCard
-          request={asking.approval.request}
-          focusOnMount={false}
-          onanswer={(reply) => void answered(reply)}
-        />
-      </div>
-    {:else}
-      <p class="c-inbox-card__note">
-        The session that asked has ended, so there is nothing left to answer. It is kept
-        here because a run's profile should never need to ask: dismiss it once you have
-        looked.
-      </p>
-    {/if}
-  {/if}
-
-  <div class="c-inbox-card__actions">
-    {#if resume && item.worktree}
-      {@const worktree = item.worktree}
-      <Button
-        variant="accent"
-        size="sm"
-        disabled={resuming}
-        onclick={() => void reviewRuns.resume(worktree, item.flow)}>{resume}</Button
+{#if item.issue}
+  <!-- An issue's own run: its start, its moves, a pause. Settled by Start Work's actions. -->
+  <WorkStartItem item={{ ...item, issue: item.issue }} />
+{:else}
+  <article class="c-inbox-card" aria-labelledby="inbox-card-{item.id}">
+    <div class="c-inbox-card__meta">
+      <span class="c-inbox-card__badge c-inbox-card__badge--{KIND_TONE[item.kind]}"
+        >{KIND_WORDS[item.kind]}</span
       >
+      <span>{inbox.placeOf(item)} · {filedAt(item.createdAt)}</span>
+    </div>
+    <h2 class="c-inbox-card__title" id="inbox-card-{item.id}">
+      <CodeText text={item.title} />
+    </h2>
+
+    {#if item.kind === 'review_ready' && groups.length > 0}
+      {#each groups as section (section.group)}
+        <section class="c-inbox-card__findings" aria-label={GROUP_WORDS[section.group]}>
+          <span class="c-inbox-card__label"
+            >{GROUP_WORDS[section.group]} · {section.findings.length}</span
+          >
+          <ul class="c-inbox-card__list">
+            {#each section.findings as finding (finding.id)}
+              <li>
+                <Button
+                  variant="link"
+                  size="sm"
+                  title="Show this finding in the Reviews tab"
+                  onclick={() => inbox.open(item, { kind: 'finding', id: finding.id })}
+                  ><CodeText text={finding.title} /></Button
+                >
+                <span class="c-inbox-card__where u-mono">{place(finding)}</span>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/each}
+    {:else}
+      <p class="c-inbox-card__body"><CodeText text={item.body} /></p>
     {/if}
-    <Button
-      variant={resume || publication || route ? 'neutral' : 'accent'}
-      size="sm"
-      onclick={() => {
-        // An environment's approval goes to its Environment tab when that worktree is in the
-        // project on screen; anywhere else, the run's own route.
-        if (
-          isEnvironmentApproval(item) &&
-          item.worktree &&
-          item.project === workspace.activeProjectId
-        ) {
-          work.pick(item.worktree);
-          work.tab = 'environment';
-          return;
-        }
-        inbox.open(
-          item,
-          approvalId !== null ? { kind: 'publication', id: approvalId } : undefined,
-        );
-      }}>{showWords(item)}</Button
-    >
-    <span class="c-inbox-card__spacer"></span>
-    <Button
-      variant="quiet"
-      size="sm"
-      disabled={busy}
-      onclick={() => void inbox.dismiss(item)}>Dismiss</Button
-    >
-  </div>
-  {#if error}
-    <p class="c-inbox-card__error" role="alert"><CodeText text={error} /></p>
-  {:else if resumeError}
-    <p class="c-inbox-card__error" role="alert"><CodeText text={resumeError} /></p>
-  {/if}
-</article>
+
+    {#if publication}
+      <WorkPublication
+        view={publication}
+        head={null}
+        busy={publishing}
+        error={publishError}
+        onretry={() => act(() => commands.retryPublication(publication.approval.id))}
+        onadd={() => act(() => commands.addToPendingReview(publication.approval.id))}
+        onleave={() => act(() => commands.cancelPublication(publication.approval.id))}
+        onrereview={publication.state === 'stale'
+          ? () => {
+              const stopped = publication.operations.find(
+                (op) => op.attention?.kind === 'head_moved',
+              );
+              if (stopped?.attention?.kind === 'head_moved') {
+                void rereviewInstead(publication, stopped.attention.current);
+              }
+            }
+          : null}
+        onagainst={(head) => {
+          const hash = publication.approval.binding.payload;
+          const worktree = item.worktree;
+          if (!hash || !worktree) return;
+          act(() =>
+            reviewRuns.approvePublish(
+              worktree,
+              item.flow,
+              draftOf(publication.review),
+              hash,
+              head,
+            ),
+          );
+        }}
+        onopen={(url) => void commands.openUrl(url)}
+      />
+    {:else if route}
+      {@const worktree = item.worktree ?? ''}
+      <WorkRoute
+        view={route}
+        busy={routing}
+        error={routeError}
+        onretry={() =>
+          void reviewRuns.route(worktree, item.flow, () =>
+            commands.retryFixRoute(route.approval.id),
+          )}
+        onleave={() =>
+          void reviewRuns.route(worktree, item.flow, () =>
+            commands.cancelFixRoute(route.approval.id),
+          )}
+        onopen={(url) => void commands.openUrl(url)}
+      />
+    {:else if item.kind === 'approval' && item.target.kind === 'approval'}
+      <p class="c-inbox-card__note">Reading this publish…</p>
+    {:else if item.kind === 'approval' && item.target.kind === 'flow'}
+      {#if pendingCommand}
+        {@const pending = pendingCommand}
+        <WorkEnvApproval
+          {pending}
+          busy={commandBusy}
+          error={commandError}
+          onapprove={() =>
+            void environments.approve(pending.project, pending.worktree, pending.run.id)}
+          ondecline={() =>
+            void environments.decline(pending.project, pending.worktree, pending.run.id)}
+        />
+      {:else if pendingCommand === null}
+        <p class="c-inbox-card__note">
+          Nothing is waiting any more: the command was approved, declined, or went stale.
+        </p>
+      {:else}
+        <p class="c-inbox-card__note">Reading this command…</p>
+      {/if}
+    {:else if item.kind === 'approval'}
+      {#if asking}
+        <div class="c-inbox-card__approval">
+          <ApprovalCard
+            request={asking.approval.request}
+            focusOnMount={false}
+            onanswer={(reply) => void answered(reply)}
+          />
+        </div>
+      {:else}
+        <p class="c-inbox-card__note">
+          The session that asked has ended, so there is nothing left to answer. It is kept
+          here because a run's profile should never need to ask: dismiss it once you have
+          looked.
+        </p>
+      {/if}
+    {/if}
+
+    <div class="c-inbox-card__actions">
+      {#if resume && item.worktree}
+        {@const worktree = item.worktree}
+        <Button
+          variant="accent"
+          size="sm"
+          disabled={resuming}
+          onclick={() => void reviewRuns.resume(worktree, item.flow)}>{resume}</Button
+        >
+      {/if}
+      <Button
+        variant={resume || publication || route ? 'neutral' : 'accent'}
+        size="sm"
+        onclick={() => {
+          // An environment's approval goes to its Environment tab when that worktree is in the
+          // project on screen; anywhere else, the run's own route.
+          if (
+            isEnvironmentApproval(item) &&
+            item.worktree &&
+            item.project === workspace.activeProjectId
+          ) {
+            work.pick(item.worktree);
+            work.tab = 'environment';
+            return;
+          }
+          inbox.open(
+            item,
+            approvalId !== null ? { kind: 'publication', id: approvalId } : undefined,
+          );
+        }}>{showWords(item)}</Button
+      >
+      <span class="c-inbox-card__spacer"></span>
+      <Button
+        variant="quiet"
+        size="sm"
+        disabled={busy}
+        onclick={() => void inbox.dismiss(item)}>Dismiss</Button
+      >
+    </div>
+    {#if error}
+      <p class="c-inbox-card__error" role="alert"><CodeText text={error} /></p>
+    {:else if resumeError}
+      <p class="c-inbox-card__error" role="alert"><CodeText text={resumeError} /></p>
+    {/if}
+  </article>
+{/if}

@@ -5,9 +5,9 @@
 //!
 //! The tracker owns an issue's status, its assignee and its sprint (plan §4.1). wtm reads them,
 //! keeps the last reading in the app database as a mirror, and shows it. Nothing here moves an
-//! issue or writes a comment: those are [`TrackerWriter`](crate::ports::TrackerWriter)'s, a separate
-//! port that no code holds yet, and a sync has no route to a flow at all (`usecase::tracker_sync`
-//! says how that is held).
+//! issue: that is [`TrackerWriter`](crate::ports::TrackerWriter)'s, a separate port only the
+//! outbox's executor holds, for the moves Start Work and the board ask for ([`super::moves`]), and
+//! a sync has no route to a flow at all (`usecase::tracker_sync` says how that is held).
 //!
 //! # A project's words, not wtm's
 //!
@@ -384,7 +384,10 @@ impl StatusMap {
     }
 }
 
-fn same_status(a: &str, b: &str) -> bool {
+/// Whether two status names are the same status, as the board places an issue in a column:
+/// ignoring case and the spaces around them.
+#[must_use]
+pub fn same_status(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 

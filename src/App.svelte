@@ -57,6 +57,7 @@
   import { environments } from './lib/state/environments.svelte';
   import { reviews } from './lib/state/reviews.svelte';
   import { trackerQueue } from './lib/state/tracker.svelte';
+  import { startWork } from './lib/state/start-work.svelte';
   import { work } from './lib/state/work.svelte';
   import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
@@ -205,6 +206,8 @@
       inbox.filter = 'all';
       inbox.chosen = to.item;
       work.inboxOpen = true;
+    } else if (to.place === 'issue') {
+      work.pickIssue(to.key);
     } else {
       work.showReviews(worktreeId, to.focus);
     }
@@ -419,6 +422,8 @@
      * That is a read of the mirror, never of the tracker.
      */
     const unlistenTracker = trackerQueue.init();
+    /* An issue's start: a worktree being made or a move being sent is a run changing. */
+    const unlistenStarts = startWork.init();
 
     /*
      * A macOS notification was clicked. The payload is the pane's address, attached by
@@ -543,6 +548,7 @@
       void unlistenEnvironments.then((off) => off());
       void unlistenInbox.then((off) => off());
       void unlistenTracker.then((off) => off());
+      void unlistenStarts.then((off) => off());
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
       offFleet?.();

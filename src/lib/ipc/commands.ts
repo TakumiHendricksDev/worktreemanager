@@ -11,6 +11,14 @@ import type { DesignDiscovery, PrototypeState } from '../open-design';
 import type { InstructionSources, RuleChange, RuleDraft, RuleView } from '../knowledge';
 import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 import type { IssueDetailView, SyncReason, SyncedQueue, TrackerQueue } from '../tracker';
+import type {
+  DropOutcome,
+  IssueStartView,
+  MoveAction,
+  StartOutcome,
+  StartPreview,
+  StartWorkRequest,
+} from '../start-work';
 
 import type {
   CommandRunView,
@@ -204,6 +212,30 @@ export const commands = {
   /** One issue read whole: from the mirror, or from the tracker now when `fresh`. */
   trackerIssue: (projectId: string, key: string, fresh: boolean) =>
     invoke<IssueDetailView | null>('tracker_issue', { projectId, key, fresh }),
+
+  // ── Start Work: an issue's run, its worktree and its moves ──
+  /** Where an issue's work would happen and what starting it would do. Changes nothing. */
+  startWorkPreview: (project: string, key: string, byDrop: boolean) =>
+    invoke<StartPreview>('start_work_preview', { project, key, byDrop }),
+  /** Start work on an issue, or focus its run. May answer with a choice or a confirmation. */
+  startWork: (request: StartWorkRequest) => invoke<StartOutcome>('start_work', { request }),
+  /** An issue's start, run, moves and inbox. */
+  issueStart: (project: string, key: string) =>
+    invoke<IssueStartView>('issue_start', { project, key }),
+  /** Retry setup on an interrupted or failed start's worktree, or use it as it is. */
+  resumeStart: (flow: number, asIs: boolean) =>
+    invoke<void>('resume_start', { flow, asIs }),
+  /** Stop an issue's run. Its worktree and branch stay. */
+  cancelIssueRun: (flow: number) => invoke<void>('cancel_issue_run', { flow }),
+  /** A card dropped on another column than the start column: a team status change only. */
+  moveIssue: (project: string, key: string, to: string, confirmed: boolean) =>
+    invoke<DropOutcome>('move_issue', { project, key, to, confirmed }),
+  /** Retry, force or leave a move that stopped or failed. */
+  settleMove: (approval: number, action: MoveAction) =>
+    invoke<void>('settle_move', { approval, action }),
+  /** Hold an issue's run paused, or release it. */
+  pauseRun: (flow: number) => invoke<void>('pause_run', { flow }),
+  unpauseRun: (flow: number) => invoke<void>('unpause_run', { flow }),
 
   // ── reviews: pull requests in the Work view ──
   /** The project's Reviews queue, from the local store. Reads no forge. */

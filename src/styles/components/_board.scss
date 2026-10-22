@@ -115,7 +115,7 @@
   font-size: var(--step--2);
 }
 
-/* One issue. A button: it opens the issue, and nothing about it drags. */
+/* One issue. A button: a click opens the issue, and a press that travels drags it. */
 .c-board-card {
   display: flex;
   flex-direction: column;
@@ -139,6 +139,15 @@
   &.is-selected {
     background: var(--bg-active);
     border-color: var(--border-strong);
+  }
+
+  /* Left where it is while it is dragged; the column under the pointer says what a drop does. */
+  &.is-dragged {
+    opacity: 0.5;
+  }
+
+  &.is-busy {
+    cursor: progress;
   }
 }
 
@@ -167,4 +176,38 @@
 
 .c-board-card__who {
   color: var(--fg-subtle);
+}
+
+/* While a card is dragged the whole board says so, and nothing in it selects as text. */
+.c-board.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.c-board__error {
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+/* The start column's own caption: the one column a drop on starts work. */
+.c-board__start {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* What dropping here would do, under the column's head while a card is over it. */
+.c-board__hint {
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--info-soft);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  font-size: var(--step--2);
+}
+
+.c-board__column.is-drop-target {
+  border-color: var(--border-focus);
+}
+
+.c-board__column.is-start-target {
+  background: var(--accent-soft);
 }

@@ -3,9 +3,9 @@
 //! # Three capabilities, three traits
 //!
 //! [`Tracker`] only reads: a search, one issue, a board's sprints, one sprint. [`TrackerWriter`]
-//! moves an issue and comments on one, and is declared here only so its shape is settled before
-//! the item that sends them; nothing implements it yet, so no code in this build can write to a
-//! tracker. [`TrackerMirror`] is the app database's half: the tables a sync writes.
+//! moves an issue, and is held only by the outbox's executor, which reads the issue before every
+//! move (`flow::moves`), as the forge's writers are held only by it. [`TrackerMirror`] is the app
+//! database's half: the tables a sync writes.
 //!
 //! The split is what makes "a sync never starts a run" a property of types rather than of care.
 //! The sync use-case is handed a [`Tracker`] and a [`TrackerMirror`] and nothing else, and neither
@@ -70,18 +70,17 @@ pub trait Tracker: Send + Sync {
     fn transitions(&self, cwd: &Path, key: &str) -> Result<Vec<Transition>, TrackerError>;
 }
 
-/// Moving an issue and commenting on one. Declared, and implemented by nothing in this build.
+/// Moving an issue to another team status: the one write to a tracker this build makes.
 ///
-/// Both are approvals in the plan (§4.2): a move to the mapped "needs review" status rides on the
-/// publish approval, and a comment is sent only from its own second click. The outbox's executor
-/// will be the only holder, as it is of the forge's writers, and it reads the issue's status first
-/// because a tracker has no compare-and-swap for a transition (§4.4).
+/// Every move is an approval in the plan (§4.2): Start Work's move to the mapped "started" status
+/// rides on your Start, a drop on another board column is its own, and a move to "needs review"
+/// will ride on the publish approval. The outbox's executor is the only holder, as it is of the
+/// forge's writers, and it reads the issue's status before it moves it, because a tracker has no
+/// compare-and-swap for a transition (§4.4). Commenting is a later item, and is not on the port
+/// until something sends one, so nothing in this build can.
 pub trait TrackerWriter: Send + Sync {
     /// Move `key` to `status` by name. The tracker picks the transition that reaches it.
     fn move_to(&self, cwd: &Path, key: &str, status: &str) -> Result<(), TrackerError>;
-
-    /// Add a comment to `key`.
-    fn comment(&self, cwd: &Path, key: &str, body: &str) -> Result<(), TrackerError>;
 }
 
 /// The mirror tables: the last thing the tracker said, per project's queue and per issue.

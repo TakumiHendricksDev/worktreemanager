@@ -1,0 +1,40 @@
+/*
+ * The Start sheet: where an issue's work should happen when there is more than one place, and
+ * whether it may leave review. The dialog is `Dialog`'s; these are its contents.
+ */
+
+.c-start-sheet__lead {
+  margin-bottom: var(--sp-3);
+}
+
+.c-start-sheet__choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+/* A candidate: its branch, then why it is offered. */
+.c-start-sheet__choice {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.c-start-sheet__why {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-start-sheet__move {
+  margin-top: var(--sp-2);
+}
+
+.c-start-sheet__note {
+  margin-top: var(--sp-2);
+  color: var(--fg-subtle);
+  font-size: var(--step--1);
+  line-height: 1.45;
+}

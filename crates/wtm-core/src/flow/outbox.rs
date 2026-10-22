@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use super::UnixMs;
 use super::approval::{Approval, ApprovalId, ApprovalSubject, Binding, review_binding};
 use super::env::CommandRequest;
+use super::moves::{MoveIssuePayload, MoveRequest, MovedElsewhere};
 use super::publish::{PendingReviewPayload, ReviewPayload, SubmitReviewPayload, hash_of, target};
 use super::route::{OpenPullRequestPayload, PushPayload, RoutePlan, SuggestionRoute};
 use super::state::FlowId;
@@ -104,6 +105,8 @@ pub enum OperationPayload {
     PushBranch(PushPayload),
     /// The follow-up pull request of local fixes.
     OpenPullRequest(OpenPullRequestPayload),
+    /// An issue moved to another team status.
+    MoveIssue(MoveIssuePayload),
 }
 
 impl OperationPayload {
@@ -114,11 +117,12 @@ impl OperationPayload {
             Self::SubmitReview(_) => OperationKind::SubmitReview,
             Self::PushBranch(_) => OperationKind::PushBranch,
             Self::OpenPullRequest(_) => OperationKind::OpenPullRequest,
+            Self::MoveIssue(_) => OperationKind::MoveIssue,
         }
     }
 
-    /// What it writes to: `owner/name#40` for a review, the remote's URL and ref for a push, and
-    /// the repository with both branches for a pull request.
+    /// What it writes to: `owner/name#40` for a review, the remote's URL and ref for a push, the
+    /// repository with both branches for a pull request, and the tracker and key for a move.
     #[must_use]
     pub fn target(&self) -> String {
         match self {
@@ -131,6 +135,7 @@ impl OperationPayload {
                 p.pull_request.base,
                 p.pull_request.head
             ),
+            Self::MoveIssue(p) => p.target(),
         }
     }
 
@@ -255,6 +260,14 @@ pub enum OperationResult {
         /// Found open with this head and base, or by its marker, rather than opened this time.
         adopted: bool,
     },
+    /// An issue now in the status the move asked for.
+    #[serde(rename_all = "camelCase")]
+    Moved {
+        key: String,
+        status: String,
+        /// It was there before anything was sent.
+        adopted: bool,
+    },
 }
 
 impl OperationResult {
@@ -265,7 +278,7 @@ impl OperationResult {
             Self::Review {
                 review, node_id, ..
             } => Some((*review, node_id)),
-            Self::Pushed { .. } | Self::PullRequest { .. } => None,
+            Self::Pushed { .. } | Self::PullRequest { .. } | Self::Moved { .. } => None,
         }
     }
 
@@ -301,6 +314,9 @@ pub enum Attention {
     },
     /// The forge refused the write as it stands, so sending it again would be refused again.
     Refused { message: String },
+    /// The issue was in another status than the one the move was asked from. Nothing was sent:
+    /// moving it now would undo a change someone made on purpose.
+    StatusMoved(MovedElsewhere),
 }
 
 /// How you settled what stopped an operation.
@@ -589,7 +605,9 @@ impl Approved {
                     }),
                 )
             }
-            ApprovalSubject::Route(_) | ApprovalSubject::Command(_) => return None,
+            ApprovalSubject::Route(_) | ApprovalSubject::Command(_) | ApprovalSubject::Move(_) => {
+                return None;
+            }
         };
         Some(Publication {
             approval: self.approval,
@@ -610,7 +628,8 @@ impl Approved {
             }),
             ApprovalSubject::Review(_)
             | ApprovalSubject::Suggestions(_)
-            | ApprovalSubject::Command(_) => None,
+            | ApprovalSubject::Command(_)
+            | ApprovalSubject::Move(_) => None,
         }
     }
 
@@ -621,8 +640,47 @@ impl Approved {
             ApprovalSubject::Command(request) => Some((self.approval, *request)),
             ApprovalSubject::Review(_)
             | ApprovalSubject::Suggestions(_)
-            | ApprovalSubject::Route(_) => None,
+            | ApprovalSubject::Route(_)
+            | ApprovalSubject::Move(_) => None,
         }
+    }
+
+    /// A move of an issue. `None` for anything sent to a forge.
+    #[must_use]
+    pub fn into_move(self) -> Option<MoveSend> {
+        match self.subject {
+            ApprovalSubject::Move(request) => Some(MoveSend {
+                approval: self.approval,
+                request: *request,
+                operations: self.operations,
+            }),
+            ApprovalSubject::Review(_)
+            | ApprovalSubject::Suggestions(_)
+            | ApprovalSubject::Route(_)
+            | ApprovalSubject::Command(_) => None,
+        }
+    }
+}
+
+/// One approval of an issue's move, with its one operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveSend {
+    pub approval: Approval,
+    pub request: MoveRequest,
+    /// One: a move is a single write. A list so it reads like every other approval's.
+    pub operations: Vec<Operation>,
+}
+
+impl MoveSend {
+    #[must_use]
+    pub fn state(&self, activity: Option<Activity>) -> PublicationState {
+        progress(&self.operations, activity)
+    }
+
+    #[must_use]
+    pub fn operation(&self) -> Option<&Operation> {
+        self.operations.first()
     }
 }
 

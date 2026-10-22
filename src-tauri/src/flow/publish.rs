@@ -122,7 +122,9 @@ pub(super) fn preview_of(
                     .collect();
             }
             OperationPayload::SubmitReview(p) => body = submit_body(p, &marker),
-            OperationPayload::PushBranch(_) | OperationPayload::OpenPullRequest(_) => {}
+            OperationPayload::PushBranch(_)
+            | OperationPayload::OpenPullRequest(_)
+            | OperationPayload::MoveIssue(_) => {}
         }
     }
     PublishPreview {
