@@ -1014,6 +1014,21 @@ export const commands = {
   declineEnvironmentCommand: (run: number) =>
     invoke<CommandRunView>('decline_environment_command', { run }),
 
+  /**
+   * Approve starting a review's environment, as shown with `binding`, and run what it blocks. A
+   * plan that changed since it was shown is refused and runs nothing.
+   */
+  startReviewEnvironment: (flow: number, binding: string) =>
+    invoke<ReviewRunView>('start_review_environment', { flow, binding }),
+
+  /** Decline starting a review's environment: what it blocks stays blocked. */
+  declineReviewEnvironment: (flow: number) =>
+    invoke<ReviewRunView>('decline_review_environment', { flow }),
+
+  /** A runtime role's screenshot, base64 PNG. */
+  reviewScreenshot: (flow: number, id: number) =>
+    invoke<string>('review_screenshot', { flow, id }),
+
   /** Stop a project's services after this many minutes with wtm in the background, or never. */
   setIdleStop: (project: string, minutes: number | null) =>
     invoke<void>('set_idle_stop', { project, minutes }),

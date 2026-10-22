@@ -8,8 +8,8 @@
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use wtm_core::flow::{
     BlobRef, CheckRun, FindingId, FindingRecord, FlowId, Invocation, InvocationChange,
-    InvocationId, NewCheckRun, NewInvocation, NewReviewRun, NewStep, Reconciled, ReviewRun,
-    Snapshot, SnapshotId, Step, StepChange, StepId, UnixMs, WorkItemId,
+    InvocationId, NewCheckRun, NewInvocation, NewReviewRun, NewScreenshot, NewStep, Reconciled,
+    ReviewRun, Screenshot, Snapshot, SnapshotId, Step, StepChange, StepId, UnixMs, WorkItemId,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStoreError, RunStore};
@@ -420,6 +420,20 @@ impl RunStore for AppDb {
 
     fn checks(&self, flow: FlowId) -> Result<Vec<CheckRun>, FlowStoreError> {
         findings::checks(&self.conn.lock(), flow)
+    }
+
+    fn record_screenshot(
+        &self,
+        shot: &NewScreenshot,
+        at: UnixMs,
+    ) -> Result<Screenshot, FlowStoreError> {
+        let conn = self.conn.lock();
+        ensure_flow(&conn, shot.flow)?;
+        findings::record_screenshot(&conn, shot, at)
+    }
+
+    fn screenshots(&self, flow: FlowId) -> Result<Vec<Screenshot>, FlowStoreError> {
+        findings::screenshots(&self.conn.lock(), flow)
     }
 }
 

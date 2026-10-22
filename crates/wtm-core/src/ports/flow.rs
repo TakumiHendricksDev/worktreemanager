@@ -29,7 +29,9 @@ use crate::flow::{
     ApprovalId, Approved, NewApproval, NewOperation, Operation, OperationChange, OperationId,
     OutboxError, Publication, RouteSend,
 };
-use crate::flow::{CheckRun, FindingId, FindingRecord, NewCheckRun, Reconciled};
+use crate::flow::{
+    CheckRun, FindingId, FindingRecord, NewCheckRun, NewScreenshot, Reconciled, Screenshot,
+};
 use crate::flow::{
     CommandRun, CommandRunChange, CommandRunId, CommandRunRefused, NewCommandRun, ServiceRecord,
 };
@@ -308,6 +310,17 @@ pub trait RunStore: Send + Sync {
 
     /// A run's check records, oldest first.
     fn checks(&self, flow: FlowId) -> Result<Vec<CheckRun>, FlowStoreError>;
+
+    /// Keep the record of a screenshot a runtime role took, or wtm took for it. Never changed
+    /// afterwards.
+    fn record_screenshot(
+        &self,
+        shot: &NewScreenshot,
+        at: UnixMs,
+    ) -> Result<Screenshot, FlowStoreError>;
+
+    /// A run's screenshots, oldest first.
+    fn screenshots(&self, flow: FlowId) -> Result<Vec<Screenshot>, FlowStoreError>;
 }
 
 /// What wtm keeps about a teammate's pull request beyond its review runs: what the forge last

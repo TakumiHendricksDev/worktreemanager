@@ -13,6 +13,14 @@
 //!
 //! An agent may close only the browsers it opened. The user's own panes are theirs.
 //!
+//! # A runtime role drives one pane, and only that one
+//!
+//! A workflow run's session is refused every browser tool at the socket, except a runtime role's,
+//! whose token names the incognito pane the engine opened for it on a verified preview. For that
+//! token every tool means that pane: another id answers as a pane that does not exist, it cannot
+//! open or close panes, and the comments people leave on their own panes are not its to read. Every
+//! screenshot it takes is also kept as evidence it can cite in a finding (`s<id>`).
+//!
 //! # Page content is untrusted, and the result says so
 //!
 //! A snapshot, a page's text, its console — all of it is authored by whoever wrote the page, and a
@@ -399,11 +407,15 @@ pub fn run(handle: &AppHandle, app: &Arc<App>, token: &str, call: &BrowserCall) 
     let label = wtm_agent::entry(&caller.provider)
         .map_or_else(|| caller.provider.clone(), |entry| entry.label.to_owned());
 
-    let outcome = match call.tool.as_str() {
-        "browser_open" => open(handle, app, &caller, &call.args),
-        "browser_list" => list(app, &caller),
-        "browser_close" => close(handle, app, &caller, &call.args),
-        _ => driven(handle, app, &caller, &label, call),
+    let outcome = if caller.scope.flow().is_some() {
+        runtime_call(handle, app, &caller, &label, call)
+    } else {
+        match call.tool.as_str() {
+            "browser_open" => open(handle, app, &caller, &call.args),
+            "browser_list" => list(app, &caller),
+            "browser_close" => close(handle, app, &caller, &call.args),
+            _ => driven(handle, app, &caller, &label, call),
+        }
     };
     match outcome {
         Ok(response) => response,
@@ -423,6 +435,109 @@ fn place(caller: &Caller) -> Result<(&str, &str), String> {
          worktree and have it drive the browser"
             .to_owned()
     })
+}
+
+/// The tools a runtime role's token may call, which are the ones that drive or read its one pane.
+/// Opening and closing are the engine's, and comments are what a person left on their own pane.
+pub const RUNTIME_TOOLS: [&str; 15] = [
+    "browser_navigate",
+    "browser_history",
+    "browser_snapshot",
+    "browser_screenshot",
+    "browser_click",
+    "browser_hover",
+    "browser_type",
+    "browser_press_key",
+    "browser_select_option",
+    "browser_scroll",
+    "browser_fill_form",
+    "browser_wait_for",
+    "browser_evaluate",
+    "browser_get_content",
+    "browser_console",
+];
+
+/// A call from a workflow run's token. Only a runtime role holding a pane gets here — the socket
+/// refused the rest — and every call means that pane.
+fn runtime_call(
+    handle: &AppHandle,
+    app: &Arc<App>,
+    caller: &Caller,
+    label: &str,
+    call: &BrowserCall,
+) -> Result<Response, String> {
+    let role = caller
+        .scope
+        .flow()
+        .ok_or("this session is not a workflow run's")?;
+    let Some(pane) = role.browser.as_deref() else {
+        return Err(
+            "this workflow run's role has no browser pane; only a runtime role drives one"
+                .to_owned(),
+        );
+    };
+    if !RUNTIME_TOOLS.contains(&call.tool.as_str()) {
+        return Err(format!(
+            "`{}` is not one of a runtime role's browser tools: wtm opened your pane on the \
+             verified preview and closes it when you hand in, and you drive only that pane",
+            call.tool
+        ));
+    }
+    if let Some(named) = call.args.get("browser").and_then(Value::as_str)
+        && named != pane
+    {
+        return Err(
+            "there is no browser pane with that id in this worktree; leave `browser` out to drive \
+             yours"
+                .to_owned(),
+        );
+    }
+    if app.browsers.view_of(pane).is_none() {
+        return Err("your browser pane is no longer open".to_owned());
+    }
+    let driving = app.browsers.begin_driving(pane, label)?;
+    browser_bridge::announce_state(handle, &driving);
+    let outcome = if call.tool == "browser_screenshot" {
+        kept_screenshot(handle, app, role, pane)
+    } else {
+        act(handle, app, pane, call)
+    };
+    if let Some(rested) = app.browsers.end_driving(pane) {
+        browser_bridge::announce_state(handle, &rested);
+    }
+    outcome
+}
+
+/// A runtime role's screenshot: the picture, and the same picture kept as evidence it can cite,
+/// so a finding points at exactly what the role looked at.
+fn kept_screenshot(
+    handle: &AppHandle,
+    app: &Arc<App>,
+    role: &crate::app::FlowRole,
+    pane: &str,
+) -> Result<Response, String> {
+    let png = browser::snapshot_png(handle, app, pane, None).map_err(|e| e.message)?;
+    let url = app
+        .browsers
+        .view_of(pane)
+        .map(|v| v.url)
+        .unwrap_or_default();
+    let kept = handle
+        .try_state::<Arc<crate::flow::Engine>>()
+        .and_then(|engine| engine.keep_role_screenshot(role, &png, &url));
+    let note = match kept {
+        Some(Ok(shot)) => format!(
+            "Kept as evidence {0}: put \"{0}\" in a finding's `evidence` when this picture shows \
+             what the finding says.",
+            shot.id.label()
+        ),
+        Some(Err(e)) => format!("It could not be kept as evidence: {e}"),
+        None => "It could not be kept as evidence: this run is not running here.".to_owned(),
+    };
+    Ok(Response::with_image(
+        format!("{}\n\n{note}", header(app, pane)),
+        crate::pty_bridge::base64_encode(&png),
+    ))
 }
 
 /// Which browser a call means. A browser in another worktree answers exactly like one that does not

@@ -69,6 +69,7 @@ fn role(name: &str, authority: Authority) -> FlowRole {
         flow: wtm_core::flow::FlowId(7),
         role: name.to_owned(),
         authority,
+        browser: None,
     }
 }
 

@@ -338,9 +338,9 @@ impl InvocationChange {
 /// How a check the app ran for a role came out.
 ///
 /// There is no "unknown" and nothing that reads as a pass unless the command exited 0: a check that
-/// could not start is an error, one that ran too long timed out, and one whose services are not
-/// running was skipped, with the reason. A check nobody ran has no record at all, which the Reviews
-/// tab shows as not run.
+/// could not start is an error, one that ran too long timed out, and one whose services were not
+/// answering was blocked, with the services named. A check nobody ran has no record at all, which
+/// the Reviews tab shows as not run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
@@ -351,6 +351,10 @@ pub enum CheckStatus {
     Skipped,
     /// It could not be started at all, such as a program not on the PATH.
     Error,
+    /// Not run, because a service it needs was not answering: "blocked: environment not started".
+    /// Its record names the services, and a later record of the same check is what ran once they
+    /// were started.
+    Blocked,
 }
 
 /// One run of a configured check, at a role's request. Its record is the evidence: a role can say
@@ -375,6 +379,10 @@ pub struct CheckRun {
     pub cwd: String,
     /// Everything it printed, under the flow's directory.
     pub output: Option<super::review::BlobRef>,
+    /// The services it needed, as the health gate found them: what was up, at which address, when
+    /// it ran, or what was missing when it was blocked. Empty for a check that needs none.
+    #[serde(default)]
+    pub services: Vec<super::runtime::GatedService>,
     pub started_at: UnixMs,
     pub ended_at: UnixMs,
 }
@@ -393,6 +401,7 @@ pub struct NewCheckRun {
     pub tree_sha: String,
     pub cwd: String,
     pub output: Option<super::review::BlobRef>,
+    pub services: Vec<super::runtime::GatedService>,
     pub started_at: UnixMs,
 }
 

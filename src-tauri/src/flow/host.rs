@@ -20,6 +20,7 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
 use tauri::Manager;
 use wtm_agent::session::AgentSink;
 use wtm_core::model::{AgentEvent, ExitOutcome, SessionId};
@@ -72,6 +73,37 @@ pub trait RoleHost: Send + Sync {
     fn setup_sink(&self) -> Arc<dyn PtySink> {
         Arc::new(Unseen)
     }
+
+    /// Open the browser pane a runtime role drives, on `url`, which the environment has just
+    /// verified, and wait for its first load. A host with no window has no pane to give.
+    ///
+    /// # Errors
+    ///
+    /// Why it did not open, in a sentence.
+    fn open_runtime_browser(
+        &self,
+        project: &str,
+        worktree: &str,
+        url: &str,
+    ) -> Result<RuntimePane, String> {
+        let _ = (project, worktree, url);
+        Err("this run has no window to open a browser pane in".to_owned())
+    }
+
+    /// Close a runtime role's pane, which drops its store. Idempotent.
+    fn close_runtime_browser(&self, pane: &str) {
+        let _ = pane;
+    }
+
+    /// A PNG of a runtime pane's page, and its address at that moment.
+    ///
+    /// # Errors
+    ///
+    /// When the pane is gone or the picture could not be taken.
+    fn screenshot(&self, pane: &str) -> Result<(Vec<u8>, String), String> {
+        let _ = pane;
+        Err("this run has no window to take a screenshot in".to_owned())
+    }
 }
 
 /// A terminal nobody is shown.
@@ -80,6 +112,29 @@ struct Unseen;
 impl PtySink for Unseen {
     fn on_output(&self, _session: &SessionId, _chunk: &[u8]) {}
     fn on_exit(&self, _session: &SessionId, _outcome: &ExitOutcome) {}
+}
+
+/// Where a browser pane keeps its cookies and storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneStore {
+    /// In memory, made for this pane and dropped with it. What a runtime role always gets.
+    Incognito,
+    /// The jar every user-opened pane shares across launches, where your sign-ins live.
+    Persistent,
+}
+
+/// The pane a runtime role was given.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimePane {
+    /// The browser's id, which the role's token is scoped to.
+    pub id: String,
+    /// The verified preview it opened on.
+    pub url: String,
+    /// The store it was built on, as the host built it. The engine refuses anything but
+    /// [`PaneStore::Incognito`].
+    pub store: PaneStore,
 }
 
 /// The real host: [`crate::flow_session::open`], headless behind the run's rail.
@@ -136,6 +191,45 @@ impl RoleHost for TauriHost {
             Ok(app) => crate::pty_bridge::EventSink::recording(self.handle.clone(), app),
             Err(_) => Arc::new(Unseen),
         }
+    }
+
+    fn open_runtime_browser(
+        &self,
+        project: &str,
+        worktree: &str,
+        url: &str,
+    ) -> Result<RuntimePane, String> {
+        let app = self.app()?;
+        let view = crate::browser::open_runtime(&self.handle, &app, project, worktree, url)
+            .map_err(|e| e.message)?;
+        crate::browser::wait_for_load(&app, &view.id, crate::browser::LOAD_TIMEOUT);
+        if let Some(error) = app.browsers.view_of(&view.id).and_then(|v| v.load_error) {
+            crate::browser::close(&self.handle, &app, &view.id);
+            return Err(format!("the preview did not load in the pane: {error}"));
+        }
+        Ok(RuntimePane {
+            id: view.id,
+            url: url.to_owned(),
+            store: crate::browser::store_for(crate::browser::PaneKind::Runtime),
+        })
+    }
+
+    fn close_runtime_browser(&self, pane: &str) {
+        if let Ok(app) = self.app() {
+            crate::browser::close(&self.handle, &app, pane);
+        }
+    }
+
+    fn screenshot(&self, pane: &str) -> Result<(Vec<u8>, String), String> {
+        let app = self.app()?;
+        let png =
+            crate::browser::snapshot_png(&self.handle, &app, pane, None).map_err(|e| e.message)?;
+        let url = app
+            .browsers
+            .view_of(pane)
+            .map(|v| v.url)
+            .unwrap_or_default();
+        Ok((png, url))
     }
 }
 

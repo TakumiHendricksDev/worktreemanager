@@ -798,6 +798,52 @@ pub async fn decline_environment_command(
     .await
 }
 
+/// Approve starting a review's environment, as the Reviews tab or the inbox showed it, and run what
+/// it blocks. `binding` is the pin the shown plan carried; a different one runs nothing. Only the
+/// window calls this; no agent tool reaches it.
+#[tauri::command]
+pub async fn start_review_environment(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+    binding: String,
+) -> Reply<FlowView> {
+    if !app.work_view_enabled() {
+        return Err(environment_off());
+    }
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine
+            .start_environment(FlowId(flow), &binding)
+            .map_err(refused)?;
+        engine.view(FlowId(flow)).map_err(refused)
+    })
+    .await
+}
+
+/// Decline starting a review's environment: what it blocks stays blocked.
+#[tauri::command]
+pub async fn decline_review_environment(engine: EngineState<'_>, flow: i64) -> Reply<FlowView> {
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine.decline_environment(FlowId(flow)).map_err(refused)?;
+        engine.view(FlowId(flow)).map_err(refused)
+    })
+    .await
+}
+
+/// A runtime role's screenshot, as base64 PNG: the window cannot read the data directory.
+#[tauri::command]
+pub async fn review_screenshot(engine: EngineState<'_>, flow: i64, id: i64) -> Reply<String> {
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine
+            .screenshot_png(FlowId(flow), wtm_core::flow::ScreenshotId(id))
+            .map_err(refused)
+    })
+    .await
+}
+
 /// Stop a project's services after this many minutes with wtm in the background, or never.
 #[tauri::command]
 pub async fn set_idle_stop(

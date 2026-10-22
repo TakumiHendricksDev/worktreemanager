@@ -8,7 +8,8 @@
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use wtm_core::flow::{
     BlobRef, CheckRun, CheckRunId, Dismissal, Evidence, Finding, FindingId, FindingRecord, FlowId,
-    InvocationId, Location, NewCheckRun, Reconciled, Source, StepId, UnixMs,
+    InvocationId, Location, NewCheckRun, NewScreenshot, Reconciled, Screenshot, ScreenshotId,
+    Source, StepId, UnixMs,
 };
 use wtm_core::ports::FlowStoreError;
 
@@ -18,7 +19,11 @@ const FINDING_COLUMNS: &str = "id, flow_id, class, severity, path, start_line, e
      title, rationale, requirement, tree_sha, dismissed_reason, dismissed_at";
 
 const CHECK_COLUMNS: &str = "id, flow_id, check_id, step_id, invocation_id, role, status, detail, \
-     exit_code, tree_sha, cwd, output_path, output_sha256, output_bytes, started_at, ended_at";
+     exit_code, tree_sha, cwd, output_path, output_sha256, output_bytes, started_at, ended_at, \
+     services";
+
+const SHOT_COLUMNS: &str = "id, flow_id, step_id, invocation_id, role, url, taken_by, image_path, \
+     image_sha256, image_bytes, taken_at";
 
 pub(crate) fn findings(
     conn: &Connection,
@@ -149,8 +154,8 @@ pub(crate) fn record_check(
     conn.execute(
         "INSERT INTO check_runs (flow_id, check_id, step_id, invocation_id, role, status, detail,
                                  exit_code, tree_sha, cwd, output_path, output_sha256,
-                                 output_bytes, started_at, ended_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                                 output_bytes, started_at, ended_at, services)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             run.flow.0,
             run.check,
@@ -166,7 +171,8 @@ pub(crate) fn record_check(
             run.output.as_ref().map(|o| o.sha256.as_str()),
             run.output.as_ref().map(|o| o.bytes),
             run.started_at,
-            at
+            at,
+            json(&run.services)?
         ],
     )
     .map_err(storage)?;
@@ -194,6 +200,109 @@ pub(crate) fn checks(conn: &Connection, flow: FlowId) -> Result<Vec<CheckRun>, F
         .into_iter()
         .map(CheckRow::into_run)
         .collect()
+}
+
+pub(crate) fn record_screenshot(
+    conn: &Connection,
+    shot: &NewScreenshot,
+    at: UnixMs,
+) -> Result<Screenshot, FlowStoreError> {
+    conn.execute(
+        "INSERT INTO screenshots (flow_id, step_id, invocation_id, role, url, taken_by, image_path,
+                                  image_sha256, image_bytes, taken_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            shot.flow.0,
+            shot.step.map(|s| s.0),
+            shot.invocation.map(|i| i.0),
+            shot.role,
+            shot.url,
+            tag(&shot.taken_by)?,
+            shot.image.path,
+            shot.image.sha256,
+            shot.image.bytes,
+            at
+        ],
+    )
+    .map_err(storage)?;
+    let id = conn.last_insert_rowid();
+    conn.query_row(
+        &format!("SELECT {SHOT_COLUMNS} FROM screenshots WHERE id = ?1"),
+        params![id],
+        ShotRow::read,
+    )
+    .map_err(storage)?
+    .into_screenshot()
+}
+
+pub(crate) fn screenshots(
+    conn: &Connection,
+    flow: FlowId,
+) -> Result<Vec<Screenshot>, FlowStoreError> {
+    let mut statement = conn
+        .prepare(&format!(
+            "SELECT {SHOT_COLUMNS} FROM screenshots WHERE flow_id = ?1 ORDER BY id"
+        ))
+        .map_err(storage)?;
+    statement
+        .query_map(params![flow.0], ShotRow::read)
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?
+        .into_iter()
+        .map(ShotRow::into_screenshot)
+        .collect()
+}
+
+/// A `screenshots` row as SQLite hands it back.
+struct ShotRow {
+    id: i64,
+    flow_id: i64,
+    step_id: Option<i64>,
+    invocation_id: Option<i64>,
+    role: Option<String>,
+    url: String,
+    taken_by: String,
+    image_path: String,
+    image_sha256: String,
+    image_bytes: u64,
+    taken_at: UnixMs,
+}
+
+impl ShotRow {
+    fn read(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get(0)?,
+            flow_id: row.get(1)?,
+            step_id: row.get(2)?,
+            invocation_id: row.get(3)?,
+            role: row.get(4)?,
+            url: row.get(5)?,
+            taken_by: row.get(6)?,
+            image_path: row.get(7)?,
+            image_sha256: row.get(8)?,
+            image_bytes: row.get(9)?,
+            taken_at: row.get(10)?,
+        })
+    }
+
+    fn into_screenshot(self) -> Result<Screenshot, FlowStoreError> {
+        Ok(Screenshot {
+            id: ScreenshotId(self.id),
+            flow: FlowId(self.flow_id),
+            step: self.step_id.map(StepId),
+            invocation: self.invocation_id.map(InvocationId),
+            role: self.role,
+            url: self.url,
+            taken_by: untag(self.taken_by)?,
+            image: BlobRef {
+                path: self.image_path,
+                sha256: self.image_sha256,
+                bytes: self.image_bytes,
+            },
+            taken_at: self.taken_at,
+        })
+    }
 }
 
 /// A `findings` row as SQLite hands it back.
@@ -330,6 +439,7 @@ struct CheckRow {
     output_bytes: Option<u64>,
     started_at: UnixMs,
     ended_at: UnixMs,
+    services: String,
 }
 
 impl CheckRow {
@@ -351,6 +461,7 @@ impl CheckRow {
             output_bytes: row.get(13)?,
             started_at: row.get(14)?,
             ended_at: row.get(15)?,
+            services: row.get(16)?,
         })
     }
 
@@ -376,6 +487,7 @@ impl CheckRow {
             tree_sha: self.tree_sha,
             cwd: self.cwd,
             output,
+            services: from_json(&self.services)?,
             started_at: self.started_at,
             ended_at: self.ended_at,
         })

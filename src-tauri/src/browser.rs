@@ -258,6 +258,9 @@ struct Entry {
     console: VecDeque<ConsoleEntry>,
     console_bytes: usize,
     shown: bool,
+    /// For a runtime role's pane: the origin of the verified preview it was opened on, which is
+    /// the only origin it may navigate to. `None` for every pane a person or an agent opened.
+    runtime_origin: Option<String>,
 }
 
 /// A reply the page owes: which browser asked, and where to send the answer.
@@ -306,14 +309,24 @@ impl Host {
         }
     }
 
-    /// Every browser, or every browser in one worktree.
+    /// Every browser, or every browser in one worktree. A runtime role's pane is neither: it
+    /// belongs to its run, no tile shows it, and no other agent may find it.
     pub fn list(&self, worktree: Option<&str>) -> Vec<BrowserView> {
         self.entries
             .lock()
             .iter()
+            .filter(|(_, entry)| entry.runtime_origin.is_none())
             .filter(|(_, entry)| worktree.is_none_or(|w| entry.worktree == w))
             .map(|(id, entry)| Self::view(id, entry))
             .collect()
+    }
+
+    /// Whether `id` is a runtime role's pane.
+    pub fn is_runtime(&self, id: &str) -> bool {
+        self.entries
+            .lock()
+            .get(id)
+            .is_some_and(|entry| entry.runtime_origin.is_some())
     }
 
     pub fn view_of(&self, id: &str) -> Option<BrowserView> {
@@ -327,7 +340,7 @@ impl Host {
         self.entries
             .lock()
             .iter()
-            .filter(|(_, entry)| entry.worktree == worktree)
+            .filter(|(_, entry)| entry.worktree == worktree && entry.runtime_origin.is_none())
             .map(|(id, _)| id.clone())
             .collect()
     }
@@ -408,6 +421,7 @@ impl Host {
                 console: VecDeque::new(),
                 console_bytes: 0,
                 shown: false,
+                runtime_origin: None,
             },
         );
         Ok(id)
@@ -583,6 +597,45 @@ pub fn navigation_allowed(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https" | "about")
 }
 
+/// Whether a runtime role's pane may go to `url`: only the origin of the preview it was opened on,
+/// and `about:` for the blank page it is born on.
+///
+/// The role is there to exercise this app. A link off it, or a navigation the role was talked
+/// into by the page, would take an unwatched pane to somewhere nobody verified.
+#[must_use]
+pub fn runtime_navigation_allowed(url: &Url, origin: &str) -> bool {
+    url.scheme() == "about" || url.origin().ascii_serialization() == origin
+}
+
+/// Which kind of pane is being built, and so which store it gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneKind {
+    /// Opened by you, or by an agent in your worktree: your pane.
+    User,
+    /// A fixed prototype document.
+    Prototype,
+    /// A runtime role's pane on a verified preview.
+    Runtime,
+}
+
+/// The store a pane is built on.
+///
+/// A user's pane keeps its cookies across launches, which is what makes a sign-in stick. Nothing
+/// else may share that jar: a prototype has no business with your sessions, and a runtime role's
+/// pane is driven by a model nobody is watching, against an app that might set or read any cookie
+/// for `localhost` — a signed-in tab there is a session it could use. So both get a store WebKit
+/// keeps in memory and drops with the pane.
+#[must_use]
+pub fn store_for(kind: PaneKind) -> crate::flow::host::PaneStore {
+    match kind {
+        PaneKind::User => crate::flow::host::PaneStore::Persistent,
+        PaneKind::Prototype | PaneKind::Runtime => crate::flow::host::PaneStore::Incognito,
+    }
+}
+
+/// How big a runtime pane renders, since no tile ever sizes it: a common laptop viewport.
+const RUNTIME_SIZE: (f64, f64) = (1280.0, 800.0);
+
 /// Turn what a person typed or an agent sent into a URL the pane may show.
 ///
 /// Same two checks as `commands::open_url`, for the same reasons: a scheme other than http(s) is
@@ -657,7 +710,31 @@ pub fn open(
     url: Option<&str>,
     opened_by: Option<&str>,
 ) -> Result<BrowserView, ErrorView> {
-    open_document(handle, app, project, worktree, url, opened_by, None)
+    open_document(handle, app, project, worktree, url, opened_by, None, None)
+}
+
+/// Open a runtime role's pane on `url`, a preview the environment has just verified: built on an
+/// incognito store ([`store_for`]), held to that origin, at a laptop's size, and never shown in a
+/// tile or announced to the window — its run's screenshots are how you see what it saw.
+pub fn open_runtime(
+    handle: &AppHandle,
+    app: &Arc<App>,
+    project: &str,
+    worktree: &str,
+    url: &str,
+) -> Result<BrowserView, ErrorView> {
+    let target = parse_target(url)?;
+    let origin = target.origin().ascii_serialization();
+    open_document(
+        handle,
+        app,
+        project,
+        worktree,
+        Some(url),
+        None,
+        None,
+        Some(&origin),
+    )
 }
 
 /// A fixed document in the browser's capability-isolated child. No server or file URL is needed.
@@ -694,9 +771,11 @@ pub fn open_prototype(
         None,
         Some(session),
         Some((document, identity)),
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn open_document(
     handle: &AppHandle,
     app: &Arc<App>,
@@ -705,8 +784,17 @@ fn open_document(
     url: Option<&str>,
     opened_by: Option<&str>,
     document: Option<(&str, &str)>,
+    runtime_origin: Option<&str>,
 ) -> Result<BrowserView, ErrorView> {
+    let runtime_origin = runtime_origin.map(str::to_owned);
     let fixed = document.is_some();
+    let kind = if fixed {
+        PaneKind::Prototype
+    } else if runtime_origin.is_some() {
+        PaneKind::Runtime
+    } else {
+        PaneKind::User
+    };
     debug_assert!(
         !wtm_webview::on_main_thread(),
         "browser::open blocks on the main thread and must not be called from it"
@@ -724,6 +812,12 @@ fn open_document(
         .browsers
         .register(project, worktree, target.as_str(), opened_by)?;
 
+    if let Some(origin) = &runtime_origin {
+        app.browsers.update(&id, |entry| {
+            entry.runtime_origin = Some(origin.clone());
+            entry.agent_access = true;
+        });
+    }
     if let Some((html, identity)) = document {
         app.browsers.update(&id, |entry| {
             entry.prototype_id = Some(identity.to_owned());
@@ -734,12 +828,24 @@ fn open_document(
     }
     let new_window_handle = handle.clone();
     let new_window_label = id.clone();
+    let navigation_origin = runtime_origin.clone();
+    let popup_origin = runtime_origin.clone();
+    let runtime = runtime_origin.is_some();
+    let allowed = move |url: &Url, origin: Option<&String>| {
+        if fixed {
+            url.scheme() == "about"
+        } else if let Some(origin) = origin {
+            runtime_navigation_allowed(url, origin)
+        } else {
+            navigation_allowed(url)
+        }
+    };
     let builder = WebviewBuilder::new(id.clone(), WebviewUrl::External(blank))
-        .on_navigation(move |url| if fixed { url.scheme() == "about" } else { navigation_allowed(url) })
+        .on_navigation(move |url| allowed(url, navigation_origin.as_ref()))
         // A popup becomes a navigation of this same pane. Tiling a second child for every
         // `target="_blank"` would spend a WebContent process on a link the user can press Back from.
         .on_new_window(move |url, _features| {
-            if !fixed && navigation_allowed(&url)
+            if !fixed && allowed(&url, popup_origin.as_ref())
                 && let Some(webview) = new_window_handle.get_webview(&new_window_label)
                 && let Err(error) = webview.navigate(url)
             {
@@ -748,9 +854,10 @@ fn open_document(
             NewWindowResponse::Deny
         })
         // Downloads go to the user's browser. The pane has no download UI, no place to put a file,
-        // and no business writing to disk on a page's say-so.
+        // and no business writing to disk on a page's say-so. A runtime role's pane hands nothing
+        // to anyone: nobody clicked anything there.
         .on_download(move |webview, event| {
-            if fixed { return false; }
+            if fixed || runtime { return false; }
             if let DownloadEvent::Requested { url, .. } = event {
                 hand_to_system_browser(webview.app_handle(), url.clone());
             }
@@ -846,18 +953,19 @@ fn open_document(
         // A hidden pane still answers an agent, so its timers must keep running.
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled);
 
-    let builder = if fixed {
-        builder.incognito(true)
-    } else {
-        builder.data_store_identifier(data_store_id())
+    let builder = match store_for(kind) {
+        crate::flow::host::PaneStore::Incognito => builder.incognito(true),
+        crate::flow::host::PaneStore::Persistent => builder.data_store_identifier(data_store_id()),
     };
 
     // Born at one pixel and hidden, because the frontend has not yet said where the tile is. The
-    // first `set_bounds` shows it.
+    // first `set_bounds` shows it. A runtime pane has no tile and stays hidden, at a real size so
+    // its page lays out as it would for a person.
+    let (width, height) = if runtime { RUNTIME_SIZE } else { (1.0, 1.0) };
     let created = window.add_child(
         builder,
         Position::Logical(LogicalPosition::new(0.0, 0.0)),
-        Size::Logical(LogicalSize::new(1.0, 1.0)),
+        Size::Logical(LogicalSize::new(width, height)),
     );
     let webview = match created {
         Ok(webview) => webview,
@@ -895,7 +1003,7 @@ fn open_document(
     tracing::debug!(%id, project, worktree, ?opened_by, "browser opened");
 
     let view = app.browsers.view_of(&id).ok_or_else(gone)?;
-    if opened_by.is_some() {
+    if opened_by.is_some() && !runtime {
         browser_bridge::announce_opened(handle, &view);
     }
     Ok(view)
@@ -1350,7 +1458,9 @@ pub fn snapshot_png(
             format!("the page did not load, so there is nothing to capture: {error}"),
         ));
     }
-    if !app.browsers.shown(id).ok_or_else(gone)? {
+    // A runtime role's pane is never placed in a tile, and WebKit still paints a hidden view of
+    // a real size for a snapshot (measured before relying on it), so it is captured as it is.
+    if !app.browsers.shown(id).ok_or_else(gone)? && !app.browsers.is_runtime(id) {
         return Err(ErrorView::new(
             "browserHidden",
             "the browser pane is hidden right now, so there is nothing to capture; show it first",
@@ -1791,6 +1901,43 @@ mod tests {
         assert!(!navigation_allowed(&url("javascript:alert(1)")));
         assert!(!navigation_allowed(&url("data:text/html,hi")));
         assert!(!navigation_allowed(&url("asset://localhost/x")));
+    }
+
+    #[test]
+    fn a_runtime_pane_is_built_on_an_incognito_store_and_never_the_persistent_jar() {
+        use crate::flow::host::PaneStore;
+        assert_eq!(store_for(PaneKind::Runtime), PaneStore::Incognito);
+        assert_eq!(store_for(PaneKind::Prototype), PaneStore::Incognito);
+        // The jar is yours: only the panes you open keep a sign-in across launches.
+        assert_eq!(store_for(PaneKind::User), PaneStore::Persistent);
+    }
+
+    #[test]
+    fn a_runtime_pane_may_not_leave_the_origin_of_the_preview_it_was_opened_on() {
+        let origin = url("http://localhost:18431/")
+            .origin()
+            .ascii_serialization();
+        assert!(runtime_navigation_allowed(
+            &url("http://localhost:18431/settings?tab=2"),
+            &origin
+        ));
+        assert!(runtime_navigation_allowed(&url("about:blank"), &origin));
+        assert!(!runtime_navigation_allowed(
+            &url("http://localhost:18432/"),
+            &origin
+        ));
+        assert!(!runtime_navigation_allowed(
+            &url("http://127.0.0.1:18431/"),
+            &origin
+        ));
+        assert!(!runtime_navigation_allowed(
+            &url("https://github.com/login"),
+            &origin
+        ));
+        assert!(!runtime_navigation_allowed(
+            &url("tauri://localhost/index.html"),
+            &origin
+        ));
     }
 
     #[test]

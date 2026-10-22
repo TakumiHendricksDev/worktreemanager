@@ -1,0 +1,93 @@
+/*
+ * A review's environment: the Start environment and run card a blocked check or a waiting runtime
+ * role puts in the Reviews tab and the inbox, and the screenshots a runtime role kept as evidence.
+ *
+ * A component after `review-findings`, because the card sits among the Reviews tab's blocks on the
+ * `c-work-state` block it extends, and a screenshot is drawn both under a finding and in the
+ * Runtime list. The card's tone is `c-work-state`'s; nothing here adds a colour of its own.
+ */
+
+.c-start-approval__facts {
+  font-size: var(--step--1);
+}
+
+.c-start-approval__argv {
+  max-height: 8lh;
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The Runtime list: every picture the run's runtime roles took, oldest first. */
+.c-review-runtime {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-review-runtime__shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-3);
+}
+
+/* Under a finding: the screenshots its reports cite. */
+.c-finding__shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-3);
+}
+
+.c-shot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+  margin: 0;
+}
+
+/* Expanded, a picture takes the whole row: a UI bug is often a few pixels. */
+.c-shot.is-expanded {
+  grid-column: 1 / -1;
+}
+
+.c-shot__frame {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  cursor: zoom-in;
+}
+
+.c-shot.is-expanded > .c-shot__frame {
+  cursor: zoom-out;
+}
+
+.c-shot__frame--empty {
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  cursor: default;
+}
+
+.c-shot__image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.c-shot__caption {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  overflow-wrap: anywhere;
+}

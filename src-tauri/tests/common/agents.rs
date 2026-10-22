@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use wtm_agent::session::AgentSink;
 use wtm_app_lib::app::{App, FlowRole, SessionScope};
-use wtm_app_lib::flow::host::RoleHost;
+use wtm_app_lib::flow::host::{PaneStore, RoleHost, RuntimePane};
 use wtm_app_lib::flow::{Engine, Notice, Refusal};
 use wtm_app_lib::flow_session::RoleSession;
 use wtm_app_lib::handoff::{Caller, CodeCall};
@@ -67,6 +67,8 @@ pub(crate) enum Act {
     Checkpoint(&'static str),
     /// Call `flow_submit` with a handoff saying this.
     Handoff(&'static str),
+    /// Call `flow_submit` with these findings, as a reviewer that read the worktree does.
+    Findings(Value),
     /// Wait until the flag is set, as a writer still working does.
     WaitFor(Arc<AtomicBool>),
 }
@@ -90,6 +92,18 @@ pub(crate) struct Opened {
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) cwd_existed: bool,
     pub(crate) brief: String,
+    /// The pane its token was scoped to, for a runtime role.
+    pub(crate) browser: Option<String>,
+}
+
+/// A runtime role's pane, as the engine asked the host for it.
+#[derive(Debug, Clone)]
+pub(crate) struct FakePane {
+    pub(crate) id: String,
+    pub(crate) url: String,
+    pub(crate) closed: bool,
+    /// Which roles' sessions were open when it was opened: none, if it came before the session.
+    pub(crate) sessions_open: usize,
 }
 
 pub(crate) struct FakeHost {
@@ -109,6 +123,9 @@ pub(crate) struct FakeHost {
     pub(crate) open_now: AtomicUsize,
     pub(crate) open_most: AtomicUsize,
     pub(crate) next: AtomicU64,
+    /// The store this host says it built runtime panes on. Incognito unless a test says otherwise.
+    pub(crate) pane_store: Mutex<PaneStore>,
+    pub(crate) panes: Mutex<Vec<FakePane>>,
 }
 
 impl FakeHost {
@@ -127,6 +144,8 @@ impl FakeHost {
             open_now: AtomicUsize::new(0),
             open_most: AtomicUsize::new(0),
             next: AtomicU64::new(1),
+            pane_store: Mutex::new(PaneStore::Incognito),
+            panes: Mutex::new(Vec::new()),
         })
     }
 
@@ -317,6 +336,7 @@ impl FakeHost {
                                 }}),
                             );
                         }
+                        Act::Findings(payload) => self.submit(session, &payload),
                         Act::WaitFor(flag) => {
                             for _ in 0..4_000 {
                                 if flag.load(Ordering::SeqCst) {
@@ -362,6 +382,7 @@ impl RoleHost for FakeHost {
             cwd: spec.cwd.clone(),
             cwd_existed: spec.cwd.as_ref().is_some_and(|cwd| cwd.is_dir()),
             brief: spec.brief.clone(),
+            browser: spec.role.browser.clone(),
         });
         let behaviour = (self.script.lock())(&spec.role.role, attempt);
         let id = format!("fake-{}", self.next.fetch_add(1, Ordering::SeqCst));
@@ -422,6 +443,44 @@ impl RoleHost for FakeHost {
         if self.sessions.lock().remove(session.as_str()).is_some() {
             self.open_now.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+
+    fn open_runtime_browser(
+        &self,
+        _project: &str,
+        _worktree: &str,
+        url: &str,
+    ) -> Result<RuntimePane, String> {
+        let id = format!("browser-fake-{}", self.next.fetch_add(1, Ordering::SeqCst));
+        self.panes.lock().push(FakePane {
+            id: id.clone(),
+            url: url.to_owned(),
+            closed: false,
+            sessions_open: self.open_now.load(Ordering::SeqCst),
+        });
+        Ok(RuntimePane {
+            id,
+            url: url.to_owned(),
+            store: *self.pane_store.lock(),
+        })
+    }
+
+    fn close_runtime_browser(&self, pane: &str) {
+        if let Some(found) = self.panes.lock().iter_mut().find(|p| p.id == pane) {
+            found.closed = true;
+        }
+    }
+
+    fn screenshot(&self, pane: &str) -> Result<(Vec<u8>, String), String> {
+        let url = self
+            .panes
+            .lock()
+            .iter()
+            .find(|p| p.id == pane && !p.closed)
+            .map(|p| p.url.clone())
+            .ok_or("that pane is closed")?;
+        // Not a picture anyone looks at here: the engine keeps the bytes it is given.
+        Ok((b"\x89PNG fake".to_vec(), url))
     }
 }
 

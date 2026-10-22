@@ -268,6 +268,9 @@ struct Offer {
     home: bool,
     /// A workflow run's bridge, and the authority of its role.
     flow: Option<wtm_agent::authority::Authority>,
+    /// A runtime role's bridge: its run tools, and the browser tools that drive the one pane wtm
+    /// opened for it. Read only together with `flow`.
+    runtime_browser: bool,
 }
 
 impl Offer {
@@ -283,6 +286,7 @@ impl Offer {
                 .ok()
                 .as_deref()
                 .and_then(crate::flow_tools::authority_from),
+            runtime_browser: on(crate::flow_tools::BROWSER_ENV),
         }
     }
 }
@@ -292,10 +296,15 @@ impl Offer {
 /// A run's bridge lists its run tools and nothing else, whatever else its environment turned on:
 /// a run's authority profile was built without delegation, browsers and prototypes, and a tool
 /// listed is a tool a model will try. It comes first so that no flag a later change adds to every
-/// session's bridge can put something back on a run's.
+/// session's bridge can put something back on a run's. The one addition is a runtime role's, whose
+/// own flag adds the tools that drive its pane — and only those.
 fn listing(offer: Offer, agents: &[(String, String)]) -> Value {
     if let Some(authority) = offer.flow {
-        return json!({ "tools": crate::flow_tools::definitions(authority) });
+        let mut tools = crate::flow_tools::definitions(authority);
+        if offer.runtime_browser {
+            tools.extend(runtime_browser_definitions());
+        }
+        return json!({ "tools": tools });
     }
     if offer.home {
         return json!({ "tools": crate::home_tools::definitions(agents) });
@@ -312,7 +321,7 @@ fn listing(offer: Offer, agents: &[(String, String)]) -> Value {
 /// Route a `tools/call` the way [`listing`] listed it.
 fn dispatch(offer: Offer, params: &Value) -> Value {
     if let Some(authority) = offer.flow {
-        return call_flow(params, authority);
+        return call_flow(params, authority, offer.runtime_browser);
     }
     if offer.home {
         return call_home(params);
@@ -320,10 +329,31 @@ fn dispatch(offer: Offer, params: &Value) -> Value {
     call(params, offer.browser, offer.code, offer.design)
 }
 
+/// The browser tools a runtime role's bridge lists, from the same table every other bridge does.
+fn runtime_browser_definitions() -> Vec<Value> {
+    crate::browser_tools::definitions()
+        .into_iter()
+        .filter(|tool| {
+            tool["name"]
+                .as_str()
+                .is_some_and(|name| crate::browser_tools::RUNTIME_TOOLS.contains(&name))
+        })
+        .collect()
+}
+
 /// Forward one run tool call. A name this role's bridge did not list is refused here, before the
 /// socket — which refuses it again, from the token.
-fn call_flow(params: &Value, authority: wtm_agent::authority::Authority) -> Value {
+fn call_flow(params: &Value, authority: wtm_agent::authority::Authority, browser: bool) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    if browser && crate::browser_tools::RUNTIME_TOOLS.contains(&name) {
+        return call_browser(
+            name,
+            params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        );
+    }
     if !crate::flow_tools::tools_for(authority).contains(&name) {
         return tool_error(&format!("no tool named `{name}`"));
     }
@@ -1087,7 +1117,8 @@ mod tests {
             .collect()
     }
 
-    /// Every flag a bridge can be started with, all on.
+    /// Every flag a bridge can be started with, all on — except a runtime role's own, which is
+    /// what the runtime tests below turn on, and only for a run.
     fn everything() -> Offer {
         Offer {
             awareness: true,
@@ -1096,7 +1127,38 @@ mod tests {
             design: true,
             home: false,
             flow: None,
+            runtime_browser: false,
         }
+    }
+
+    #[test]
+    fn a_runtime_roles_bridge_adds_the_tools_that_drive_its_pane_and_no_others() {
+        let names = listed_names(Offer {
+            flow: Some(wtm_agent::authority::Authority::Reviewer),
+            runtime_browser: true,
+            ..everything()
+        });
+        assert_eq!(names[..7], RUN_TOOLS);
+        assert_eq!(names[7..], crate::browser_tools::RUNTIME_TOOLS);
+        for absent in [
+            "browser_open",
+            "browser_close",
+            "browser_list",
+            "browser_read_comments",
+            TOOL,
+        ] {
+            assert!(!names.iter().any(|n| n == absent), "lists {absent}");
+        }
+        // The flag means nothing on a bridge that is not a run's.
+        let worktree = listed_names(Offer {
+            browser: false,
+            runtime_browser: true,
+            ..everything()
+        });
+        assert!(
+            !worktree.iter().any(|n| n.starts_with("browser_")),
+            "{worktree:?}"
+        );
     }
 
     const RUN_TOOLS: [&str; 7] = [

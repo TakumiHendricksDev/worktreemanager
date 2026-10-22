@@ -88,6 +88,7 @@ pub mod review;
 pub mod route;
 pub mod rule;
 pub mod run;
+pub mod runtime;
 pub mod schema;
 pub mod snapshot;
 pub mod start;
@@ -155,9 +156,9 @@ pub use queue::{
     MirroredQueue, QueueChanges, QueueReading, QueueSection, QueuedIssue, StatusChange, SyncFailure,
 };
 pub use recipe::{
-    CheckSpec, Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleProfile,
-    RoleProvider, RoleSpec, SkillCatalog, SkillError, SkillProblem, StageSpec, WorkflowError,
-    WorkflowSpec, Workspace,
+    CheckSpec, Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleKind, RoleProfile,
+    RoleProvider, RoleSpec, RuntimeDriver, SkillCatalog, SkillError, SkillProblem, StageSpec,
+    StartServices, WorkflowError, WorkflowSpec, Workspace,
 };
 pub use review::{
     BlobRef, Dismissal, Finding, FindingClass, FindingId, Location, Severity, Snapshot,
@@ -178,6 +179,11 @@ pub use run::{
     InvocationId, InvocationStatus, NewCheckRun, NewInvocation, NewReviewRun, NewStep, OnLimit,
     ReviewRun, SnapshotId, Step, StepChange, StepId, StepStatus, after_failure, on_limit,
     resume_at,
+};
+pub use runtime::{
+    GatedService, NewScreenshot, PlannedCheck, PlannedStart, Screenshot, ScreenshotId, ShotTaker,
+    StartRequest, blocked_detail, driver_for, gate_passes, has_playwright, runtime_needs,
+    start_binding,
 };
 pub use schema::SchemaProblem;
 pub use snapshot::{FlowDir, ScratchLabel, TreeCheck};

@@ -113,7 +113,7 @@ const view = () => {
       publications: [],
       routes: [],
     },
-    fixes: [], leases: [], writers: [],
+    fixes: [], leases: [], writers: [], screenshots: [], pendingStart: null,
   };
 };
 window.calls = [];

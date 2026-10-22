@@ -9,16 +9,24 @@
 //! the run's credential scrub, and keeps the exit code and the output as the record. A role can
 //! say a check passed only by citing one of these.
 //!
-//! # A skipped check is not a pass
+//! # Blocked is not a pass, and not a quiet skip
 //!
-//! A check that needs a service wtm does not run yet is recorded as skipped, with the reason, and
-//! never started. Nothing here turns "did not run" into "passed": the store refuses a pass that did
-//! not exit 0, and the Reviews tab draws a check with no record as not run.
+//! A check that needs services runs only once the gate has asked each of them, just now, and every
+//! one answered (`runtime.rs`); its record keeps which services were up and at which address. One
+//! whose services are not answering is recorded **blocked**, with them named, and never started.
+//! Under `start_services = "auto"`, which only your own config can set, wtm starts them and asks
+//! the gate again first; otherwise the run files one approval to start them and run what they
+//! block. Nothing here turns "did not run" into "passed": the store refuses a pass that did not
+//! exit 0, and the Reviews tab draws a check with no record as not run.
 
 use std::fmt::Write as _;
+use std::path::PathBuf;
 
 use wtm_core::error::ExecError;
-use wtm_core::flow::{CheckRun, CheckStatus, NewCheckRun};
+use wtm_core::flow::{
+    CheckRun, CheckSpec, CheckStatus, FlowDir, FlowId, GatedService, InvocationId, NewCheckRun,
+    StartServices, StepId, blocked_detail, gate_passes,
+};
 use wtm_core::ports::RunStore;
 use wtm_core::ports::exec::{CancelToken, Invocation};
 
@@ -33,8 +41,22 @@ const TAIL_BYTES: usize = 6_000;
 /// test of an untrusted change could make say anything.
 const FENCE: &str = "wtm_check_output";
 
+/// Where a check runs and what its record is filed under.
+#[derive(Debug, Clone)]
+pub(super) struct CheckPlace {
+    pub flow: FlowId,
+    pub step: Option<StepId>,
+    pub invocation: Option<InvocationId>,
+    pub role: Option<String>,
+    /// Where it runs: the directory the asking role reads, or the worktree after an approval.
+    pub cwd: PathBuf,
+    /// The tree it runs against, which its staleness is measured from.
+    pub tree_sha: String,
+    pub dir: FlowDir,
+}
+
 impl Engine {
-    /// Run, or skip, the check `name` for the role whose attempt is `live`, and answer the role.
+    /// Run, or block, the check `name` for the role whose attempt is `live`, and answer the role.
     pub(super) fn run_check(
         &self,
         role: &FlowRole,
@@ -55,40 +77,117 @@ impl Engine {
                 )
             });
         };
-        let db = self.db()?;
-        let started = self.now();
-        let mut record = NewCheckRun {
+        let place = CheckPlace {
             flow: role.flow,
-            check: name.to_owned(),
             step: Some(live.step),
             invocation: Some(live.invocation),
             role: Some(role.role.clone()),
-            status: CheckStatus::Skipped,
-            detail: None,
-            exit_code: None,
+            cwd: live.cwd.clone(),
             tree_sha: live.tree_sha.clone(),
-            cwd: live.cwd.to_string_lossy().into_owned(),
-            output: None,
-            started_at: started,
+            dir: live.dir.clone(),
         };
-
-        if !spec.needs.is_empty() {
-            let services: Vec<String> = spec.needs.iter().map(|s| format!("`{s}`")).collect();
-            record.detail = Some(format!(
-                "needs {} running, and wtm does not yet run a check that needs a service",
-                services.join(" and ")
-            ));
-            let saved = db.record_check(&record, self.now()).map_err(text)?;
-            self.notice.changed(role.flow);
-            return Ok(format!(
-                "`{name}` was skipped, not run: it {}. It neither passed nor failed. If your result \
-                 depends on it, say it was not run. Evidence c{}.",
-                saved.detail.as_deref().unwrap_or("could not run"),
-                saved.id
-            ));
+        if spec.needs.is_empty() {
+            let (saved, output) = self.execute_check(name, spec, &place, Vec::new(), None)?;
+            return Ok(answer(&saved, &output));
         }
 
-        let invocation = Invocation::new(spec.run.clone(), &live.cwd, spec.timeout_ms())
+        let mut gated = self.gate(&live.project, &live.worktree, &spec.needs);
+        let auto = spec
+            .start_services
+            .or(live.start_services)
+            .unwrap_or_default()
+            == StartServices::Auto;
+        if !gate_passes(&gated) && auto {
+            gated = self.bring_up(&live.project, &live.worktree, &spec.needs);
+        }
+        let (saved, output) = self.gated_run(name, spec, &place, gated, None)?;
+        if saved.status != CheckStatus::Blocked {
+            return Ok(answer(&saved, &output));
+        }
+        self.file_start(role.flow);
+        Ok(format!(
+            "`{name}` was not run: {}. {}It neither passed nor failed. The user has been asked \
+             whether to start the environment; if they do, it runs then and its result is \
+             recorded with this review. In your result, say it did not run and what it would \
+             have shown. Evidence c{}.",
+            saved
+                .detail
+                .as_deref()
+                .unwrap_or("blocked: environment not started"),
+            if auto {
+                "wtm tried to start its services, and they did not come up. "
+            } else {
+                ""
+            },
+            saved.id
+        ))
+    }
+
+    /// Run `name` if every service in `gated` is up, recording which were and where; otherwise
+    /// record it blocked, naming what was missing. Returns the record and what it printed.
+    ///
+    /// # Errors
+    ///
+    /// When the record cannot be written.
+    pub(super) fn gated_run(
+        &self,
+        name: &str,
+        spec: &CheckSpec,
+        place: &CheckPlace,
+        gated: Vec<GatedService>,
+        note: Option<&str>,
+    ) -> Result<(CheckRun, String), String> {
+        if gate_passes(&gated) {
+            self.execute_check(name, spec, place, gated, note)
+        } else {
+            self.record_blocked(name, place, gated)
+                .map(|run| (run, String::new()))
+        }
+    }
+
+    fn record_blocked(
+        &self,
+        name: &str,
+        place: &CheckPlace,
+        gated: Vec<GatedService>,
+    ) -> Result<CheckRun, String> {
+        let db = self.db()?;
+        let saved = db
+            .record_check(
+                &NewCheckRun {
+                    flow: place.flow,
+                    check: name.to_owned(),
+                    step: place.step,
+                    invocation: place.invocation,
+                    role: place.role.clone(),
+                    status: CheckStatus::Blocked,
+                    detail: Some(blocked_detail(&gated)),
+                    exit_code: None,
+                    tree_sha: place.tree_sha.clone(),
+                    cwd: place.cwd.to_string_lossy().into_owned(),
+                    output: None,
+                    services: gated,
+                    started_at: self.now(),
+                },
+                self.now(),
+            )
+            .map_err(text)?;
+        self.notice.changed(place.flow);
+        Ok(saved)
+    }
+
+    /// Run exactly the check's argv where `place` says, and record how it came out.
+    fn execute_check(
+        &self,
+        name: &str,
+        spec: &CheckSpec,
+        place: &CheckPlace,
+        services: Vec<GatedService>,
+        note: Option<&str>,
+    ) -> Result<(CheckRun, String), String> {
+        let db = self.db()?;
+        let started = self.now();
+        let invocation = Invocation::new(spec.run.clone(), &place.cwd, spec.timeout_ms())
             .with_scrub(crate::run_profile::scrub(&self.app));
         let (output, status, exit_code, detail) = match self
             .app
@@ -108,7 +207,7 @@ impl Engine {
                 } else {
                     CheckStatus::Failed
                 };
-                (printed, status, Some(out.code), None)
+                (printed, status, Some(out.code), note.map(str::to_owned))
             }
             Err(ExecError::Timeout { timeout_ms, .. }) => (
                 String::new(),
@@ -123,25 +222,39 @@ impl Engine {
                 Some(error.to_string()),
             ),
         };
-        record.status = status;
-        record.exit_code = exit_code;
-        record.detail = detail;
-        record.output = self.keep_output(live, name, started, &output);
+        let record = NewCheckRun {
+            flow: place.flow,
+            check: name.to_owned(),
+            step: place.step,
+            invocation: place.invocation,
+            role: place.role.clone(),
+            status,
+            detail,
+            exit_code,
+            tree_sha: place.tree_sha.clone(),
+            cwd: place.cwd.to_string_lossy().into_owned(),
+            output: self.keep_output(place, name, started, &output),
+            services,
+            started_at: started,
+        };
         let saved = db.record_check(&record, self.now()).map_err(text)?;
-        self.notice.changed(role.flow);
-        Ok(answer(&saved, &output))
+        self.notice.changed(place.flow);
+        Ok((saved, output))
     }
 
     /// Write a check's whole output under the flow's directory, for the record.
     fn keep_output(
         &self,
-        live: &Live,
+        place: &CheckPlace,
         name: &str,
         started: u64,
         output: &str,
     ) -> Option<wtm_core::flow::BlobRef> {
-        let relative = format!("checks/{name}-{}-{started}.log", live.invocation);
-        let path = live.dir.resolve(&relative);
+        let relative = format!(
+            "checks/{name}-{}-{started}.log",
+            place.invocation.map_or(0, |i| i.0)
+        );
+        let path = place.dir.resolve(&relative);
         let written = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
@@ -173,11 +286,28 @@ fn answer(run: &CheckRun, output: &str) -> String {
             run.detail.as_deref().unwrap_or("it did not start")
         ),
         CheckStatus::Skipped => "was skipped".to_owned(),
+        CheckStatus::Blocked => format!(
+            "was not run: {}",
+            run.detail
+                .as_deref()
+                .unwrap_or("blocked: environment not started")
+        ),
     };
     let mut out = format!(
         "Check `{}` {outcome}. Evidence c{}: cite it as the verification if your result rests on it.",
         run.check, run.id
     );
+    let up: Vec<String> = run
+        .services
+        .iter()
+        .map(|s| match &s.url {
+            Some(url) => format!("`{}` at {url}", s.service),
+            None => format!("`{}`", s.service),
+        })
+        .collect();
+    if !up.is_empty() {
+        let _ = write!(out, " It ran with {} answering.", up.join(", "));
+    }
     let tail = tail(output);
     if !tail.is_empty() {
         let _ = write!(

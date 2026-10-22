@@ -275,6 +275,34 @@ class ReviewRuns {
     await this.act(worktree, () => commands.resumeReview(flow));
   }
 
+  /** Approve starting the run's environment as `binding` showed it, then run what it blocks. */
+  async startEnvironment(worktree: string, flow: number, binding: string): Promise<void> {
+    await this.act(worktree, () => commands.startReviewEnvironment(flow, binding));
+  }
+
+  async declineEnvironment(worktree: string, flow: number): Promise<void> {
+    await this.act(worktree, () => commands.declineReviewEnvironment(flow));
+  }
+
+  /**
+   * A screenshot as a data URL, by `flow:id`, read once: a kept screenshot never changes. Empty
+   * while it is being read, and `null` once it could not be, which the Reviews tab says rather than
+   * drawing nothing.
+   */
+  shots = $state<Record<string, string | null>>({});
+
+  async screenshot(flow: number, id: number): Promise<void> {
+    const key = `${flow}:${id}`;
+    if (key in this.shots) return;
+    this.shots[key] = '';
+    try {
+      this.shots[key] =
+        `data:image/png;base64,${await commands.reviewScreenshot(flow, id)}`;
+    } catch {
+      this.shots[key] = null;
+    }
+  }
+
   async stop(worktree: string, flow: number): Promise<void> {
     await this.act(worktree, () => commands.cancelReview(flow));
   }

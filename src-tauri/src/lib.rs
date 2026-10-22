@@ -329,6 +329,10 @@ pub fn run() {
                     )
                 };
                 handle.manage(Arc::clone(&supervisor));
+                // The engine gates checks and runtime roles on the services the supervisor runs.
+                engine.attach_environment(
+                    &(Arc::clone(&supervisor) as Arc<dyn flow::runtime::Environment>),
+                );
                 let recovered = std::thread::Builder::new()
                     .name("flow-recovery".to_owned())
                     .spawn(move || {
@@ -590,6 +594,9 @@ pub fn run() {
             flow::commands::pending_environment_command,
             flow::commands::approve_environment_command,
             flow::commands::decline_environment_command,
+            flow::commands::start_review_environment,
+            flow::commands::decline_review_environment,
+            flow::commands::review_screenshot,
             flow::commands::set_idle_stop,
             flow::commands::preview_review_publish,
             flow::commands::approve_review_publish,

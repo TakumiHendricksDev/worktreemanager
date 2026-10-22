@@ -605,9 +605,10 @@ impl Approved {
                     }),
                 )
             }
-            ApprovalSubject::Route(_) | ApprovalSubject::Command(_) | ApprovalSubject::Move(_) => {
-                return None;
-            }
+            ApprovalSubject::Route(_)
+            | ApprovalSubject::Command(_)
+            | ApprovalSubject::Move(_)
+            | ApprovalSubject::Services(_) => return None,
         };
         Some(Publication {
             approval: self.approval,
@@ -629,7 +630,8 @@ impl Approved {
             ApprovalSubject::Review(_)
             | ApprovalSubject::Suggestions(_)
             | ApprovalSubject::Command(_)
-            | ApprovalSubject::Move(_) => None,
+            | ApprovalSubject::Move(_)
+            | ApprovalSubject::Services(_) => None,
         }
     }
 
@@ -641,7 +643,8 @@ impl Approved {
             ApprovalSubject::Review(_)
             | ApprovalSubject::Suggestions(_)
             | ApprovalSubject::Route(_)
-            | ApprovalSubject::Move(_) => None,
+            | ApprovalSubject::Move(_)
+            | ApprovalSubject::Services(_) => None,
         }
     }
 
@@ -657,7 +660,8 @@ impl Approved {
             ApprovalSubject::Review(_)
             | ApprovalSubject::Suggestions(_)
             | ApprovalSubject::Route(_)
-            | ApprovalSubject::Command(_) => None,
+            | ApprovalSubject::Command(_)
+            | ApprovalSubject::Services(_) => None,
         }
     }
 }

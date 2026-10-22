@@ -50,6 +50,10 @@ use crate::handoff::{CodeCall, Response};
 /// nothing else; see [`crate::bridge`].
 pub const ENV: &str = "WTM_FLOW_TOOLS";
 
+/// Set to `on` on a runtime role's bridge, beside [`ENV`]: it then also lists the browser tools
+/// that drive the one pane wtm opened for the role. The token is what limits them to that pane.
+pub const BROWSER_ENV: &str = "WTM_FLOW_BROWSER";
+
 /// What every run tool is called, and what a bridge started without [`ENV`] never forwards.
 pub const PREFIX: &str = "flow_";
 

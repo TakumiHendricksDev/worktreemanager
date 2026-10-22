@@ -1,10 +1,12 @@
 /**
  * Drive the real app's Work view with mocked IPC through every state the Reviews tab draws — the
  * design's nine: not reviewed (with a recipe to pick), running, waiting for usage capacity,
- * interrupted by a quit, a role that failed, stale, clean with a skipped check, can't start over
- * billing, and can't run for want of a skill — and through a review with findings of every class:
- * their grouping, evidence, checks, applied rules and sources, Dismiss, Save as rule and Rerun
- * affected. Plus the run inbox, Run Review's request, and Resume's.
+ * interrupted by a quit, a role that failed, stale, clean with a check blocked on its environment,
+ * can't start over billing, and can't run for want of a skill — and through a review with findings
+ * of every class: their grouping, evidence, checks, applied rules and sources, Dismiss, Save as
+ * rule and Rerun affected. Plus E3's two: a runtime role waiting for its environment, with Start
+ * environment and run, and a runtime role's finding with its screenshot evidence. Plus the run
+ * inbox, Run Review's request, and Resume's.
  *
  * No Tauri, no CLI, no credits. What it proves is the readout's words and wiring against the shapes
  * `review_run` returns; the engine behind them is `src-tauri/tests/review_engine.rs`'s.
@@ -62,6 +64,8 @@ const worktrees = [
   wt('clean', 'fix/clean'),
   wt('billing', 'fix/billing'),
   wt('skill', 'fix/skill'),
+  wt('blocked-role', 'fix/blocked-role'),
+  wt('runtime', 'fix/runtime'),
 ];
 const findings = (n) => ({ kind: 'findings', payload: { findings: Array.from({ length: n }, (_, i) => ({
   title: 'Finding ' + i, severity: 'notable', class: 'suggestion', body: 'x' })) } });
@@ -78,7 +82,7 @@ const run = (flow, worktree, state, steps, invocations = [], inbox = [], running
   snapshot: { headSha: 'a1b2c3d4e5f6', treeSha: '9f00aa', baseSha: 'c0ffee11' },
   steps, invocations, inbox, running,
   findings: [], checks: [], expectedChecks: [], applied: noKnowledge,
-  pullRequest: null, fixes: [], leases: [], writers: [], ...more });
+  pullRequest: null, fixes: [], leases: [], writers: [], screenshots: [], pendingStart: null, ...more });
 const source = (role, provider, invocationId, ordinal = 0) => ({ step: invocationId, invocation: invocationId,
   ordinal, role, provider, model: provider === 'claude' ? 'sonnet' : 'gpt-6', workspace: 'snapshot', treeSha: '9f00aa' });
 const reported = (title, cls, extra = {}) => ({ title, severity: 'notable', class: cls, body: 'Why it matters.', ...extra });
@@ -88,7 +92,15 @@ const record = (findingId, flow, cls, title, rationale, location, evidence, extr
 const at = (path, startLine, endLine = startLine) => ({ path, startLine, endLine });
 const check = (checkId, name, status, extra = {}) => ({ id: checkId, check: name, role: 'correctness', status,
   detail: null, exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null, treeSha: '9f00aa',
-  startedAt: 0, endedAt: 1, ...extra });
+  cwd: '/x/checkout', services: [], startedAt: 0, endedAt: 1, ...extra });
+const web = (state, detail) => ({ service: 'web', state, detail, url: 'http://localhost:18431/healthz' });
+const blockedE2e = (checkId) => check(checkId, 'e2e', 'blocked', {
+  detail: 'blocked: environment not started — \`web\` is stopped', services: [web('stopped', null)] });
+const startView = (flow, worktree, checks, roles) => ({ flow, binding: 'sha256:5a7e',
+  request: { project: '/x/webapp', worktree: id(worktree),
+    services: [{ service: 'web', label: 'web', argv: ['python3', 'server.py', '{{ env.WEB_PORT }}'] }],
+    checks, roles } });
+const e2eStart = [{ check: 'e2e', label: 'browser e2e', argv: ['npx', 'playwright', 'test'], needs: ['web'] }];
 const done2 = [
   step(61, 'conventions', 'claude', 'done', { result: findings(2) }),
   step(62, 'correctness', 'codex', 'done', { result: findings(3) }),
@@ -143,8 +155,8 @@ const runs = {
           { source: source('correctness', 'codex', 62, 2), reported: reported('Prefer f-strings', 'suggestion') },
         ], { severity: 'minor', dismissed: { reason: 'the module predates f-strings on purpose', at: 1 } }),
     ],
-    checks: [check(1, 'lint', 'passed'), check(2, 'unit', 'failed'),
-      check(3, 'e2e', 'skipped', { detail: 'needs \`web\` running, and wtm does not start services yet' })],
+    checks: [check(1, 'lint', 'passed'), check(2, 'unit', 'failed'), blockedE2e(3)],
+    pendingStart: startView(6, 'findings', e2eStart, []),
     expectedChecks: [
       { id: 'lint', label: 'lint', needs: [], roles: ['correctness'] },
       { id: 'unit', label: 'unit tests', needs: [], roles: ['correctness'] },
@@ -164,7 +176,8 @@ const runs = {
       step(81, 'conventions', 'claude', 'done', { result: findings(0) }),
       step(82, 'correctness', 'codex', 'done', { result: findings(0) }),
     ], ended, [], false, {
-    checks: [check(4, 'lint', 'passed'), check(5, 'e2e', 'skipped', { detail: 'needs \`web\` running, and wtm does not start services yet' })],
+    checks: [check(4, 'lint', 'passed'), blockedE2e(5)],
+    pendingStart: startView(8, 'clean', e2eStart, []),
     expectedChecks: [{ id: 'lint', label: 'lint', needs: [], roles: ['correctness'] }, { id: 'e2e', label: 'browser e2e', needs: ['web'], roles: ['correctness'] }],
     applied: { rules: [{ rule: 3, revision: 1, kind: 'guidance', text: 'Prefer querysets', roles: ['conventions'] }], sources: ['CLAUDE.md'], skills: [] },
   }),
@@ -173,7 +186,33 @@ const runs = {
         skillProblem: { kind: 'missing', role: 'conventions', provider: 'claude', skill: 'team-review' } }),
       step(92, 'correctness', 'codex', 'done', { result: findings(0) }),
     ]),
+  // A runtime role waiting for its environment: the run is held, and nothing has run.
+  [id('blocked-role')]: run(10, 'blocked-role', { phase: 'reviewing', hold: { kind: 'blocked', cause: 'env' } }, [
+      step(101, 'conventions', 'claude', 'done', { result: findings(0) }),
+      step(102, 'clickthrough', 'claude', 'pending', { stage: 1, workspace: 'worktree',
+        detail: 'blocked: environment not started — \`web\` is stopped It waits for you to start the environment: Reviews › Start environment and run, or the inbox.' }),
+    ], [], [], true, { pendingStart: startView(10, 'blocked-role', [], ['clickthrough']) }),
+  // A runtime role's finding, with the screenshot it cites, and the check it ran with web up.
+  [id('runtime')]: run(11, 'runtime', { phase: 'consolidated' }, [
+      step(111, 'conventions', 'claude', 'done', { result: findings(0) }),
+      step(112, 'clickthrough', 'claude', 'done', { stage: 1, workspace: 'worktree', result: findings(1) }),
+    ], [invocation(112, 112, 'clickthrough', 'submitted', { endedAt: 90000 })], [], false, {
+    findings: [record(111, 11, { kind: 'confirmed_bug', verification: 'clicked Save on / and nothing happened' },
+      'Save does nothing', 'The Save button has no handler, so a click changes nothing.', null, [
+        { source: { ...source('clickthrough', 'claude', 112), workspace: 'worktree' },
+          reported: reported('Save does nothing', 'confirmed_bug', { verification: 'clicked Save on / and nothing happened', evidence: ['s2'] }) },
+      ], { severity: 'blocking' })],
+    checks: [check(6, 'e2e', 'passed', { role: 'clickthrough', cwd: id('runtime'),
+      services: [web('healthy', 'answered 200 in 3 ms')] })],
+    expectedChecks: [{ id: 'e2e', label: 'browser e2e', needs: ['web'], roles: ['clickthrough'] }],
+    screenshots: [
+      { id: 1, flow: 11, step: 112, invocation: 112, role: 'clickthrough', url: 'http://localhost:18431/', takenBy: 'wtm', takenAt: 1 },
+      { id: 2, flow: 11, step: 112, invocation: 112, role: 'clickthrough', url: 'http://localhost:18431/', takenBy: 'role', takenAt: 2 },
+    ],
+  }),
 };
+/** A real PNG, 16 by 10 and green, so the screenshot draws as an image rather than a broken one. */
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAKCAIAAAAy3EnLAAAAE0lEQVR4nGPQ6w4nCTGMahiaGgCjyKoB4OYs+gAAAABJRU5ErkJggg==';
 const staleness = {
   6: { flow: 6, treeSha: '9f00aa', headSha: 'a1b2c3d4e5f6', changed: false, paths: [], complete: true, staleFindings: [], staleChecks: [], affected: [] },
   7: { flow: 7, treeSha: '4e5f6a', headSha: '4e5f6a7b8c', changed: true, paths: ['export.py', 'ExportModal.vue'], complete: true, staleFindings: [71], staleChecks: [], affected: ['correctness', 'conventions'] },
@@ -226,6 +265,12 @@ mockIPC((cmd, args) => {
       if (a.request.worktree === id('billing'))
         throw { kind: 'billing', message: "Workflow runs won't start until Claude Code is signed in with a claude.ai subscription.", detail: { providers: ['claude'] } };
       return structuredClone({ ...runs[id('running')], review: { ...runs[id('running')].review, worktree: a.request.worktree, recipe: a.request.recipe } });
+    case 'review_screenshot': return PNG;
+    case 'start_review_environment': {
+      const r = Object.values(runs).find((x) => x.flow.id === a.flow);
+      return structuredClone({ ...r, pendingStart: null, running: true,
+        flow: { ...r.flow, state: { ...r.flow.state, hold: null } } });
+    }
     case 'resume_review': return structuredClone({ ...Object.values(runs).find((r) => r.flow.id === a.flow), running: true, flow: { ...Object.values(runs).find((r) => r.flow.id === a.flow).flow, state: { kind: 'review_mine', end: null, hold: null, phase: 'reviewing' } } });
     // Open in Code lands on the Code tab, which reads the file: a small one is enough to draw.
     case 'code_tree': return { files: ['src/exports/ExportModal.vue'], ignored: [], dirs: [], symlinks: [], missing: [], truncated: false };
@@ -489,13 +534,13 @@ try {
         for (const line of [
             'lint · passed',
             'unit tests · failed: exit 1',
-            'browser e2e · skipped: needs web running',
+            'browser e2e · blocked: environment not started — web is stopped',
             'build · not run',
         ])
             assert(checksText.includes(line), `${line} in ${checksText}`);
         assert(
             !/e2e · passed/.test(checksText),
-            'a skipped check is never drawn as passed',
+            'a blocked check is never drawn as passed',
         );
         const applied = await panel(page).locator('.c-review__applied').textContent();
         assert(
@@ -596,17 +641,74 @@ try {
         });
         await readout(page, 'Running', 'Reviewing snapshot');
 
-        // ── Clean, with a check that was skipped: not a runtime pass ────────────────────────
+        // ── Clean, with a check blocked on its environment: not a runtime pass ──────────────
         await pick(page, 'clean');
         text = await readout(page, 'Clean', 'No findings');
         assert(
             text.includes(
-                '2 roles, rules R-3 v1 applied. lint passed. browser e2e was skipped (needs web running',
+                '2 roles, rules R-3 v1 applied. lint passed. browser e2e was blocked (environment not started — web is stopped)',
             ),
             text,
         );
         assert(text.includes('so this is not a runtime pass'), text);
-        await shot(page, join(shots, `clean-skipped-${scheme}.png`));
+        const card = panel(page).locator('.c-start-approval');
+        const cardText = await card.textContent();
+        assert(
+            cardText.includes('Approval needed · start the environment') &&
+                cardText.includes('Blocked: environment not started. Check browser e2e needs') &&
+                cardText.includes('Start web and run what it blocks?') &&
+                cardText.includes('python3 server.py {{ env.WEB_PORT }}') &&
+                cardText.includes('npx playwright test'),
+            cardText,
+        );
+        await shot(page, join(shots, `clean-blocked-${scheme}.png`));
+        await card.getByRole('button', { name: 'Start environment and run' }).click();
+        assert.deepEqual((await calls(page, 'start_review_environment')).at(-1).args, {
+            flow: 8,
+            binding: 'sha256:5a7e',
+        });
+
+        // ── A runtime role waiting for its environment ───────────────────────────────────────
+        await pick(page, 'blocked-role');
+        text = await readout(
+            page,
+            'Blocked: environment not started',
+            'clickthrough waits for web',
+        );
+        assert(text.includes('nothing has run, and nothing reads as passed'), text);
+        assert(
+            (await panel(page).locator('.c-start-approval').textContent()).includes(
+                'Then lets run',
+            ),
+            'the card names the runtime role it lets run',
+        );
+        await shot(page, join(shots, `runtime-blocked-${scheme}.png`));
+
+        // ── A runtime role's finding, with the screenshot it cites ──────────────────────────
+        await pick(page, 'runtime');
+        await readout(page, 'Reviewed', '1 finding from 2 roles');
+        const seen = panel(page).locator('.c-finding', { hasText: 'Save does nothing' });
+        await seen.getByRole('img', { name: 'Screenshot s2 of http://localhost:18431/' }).waitFor();
+        assert(
+            (await seen.textContent()).includes('taken by clickthrough'),
+            'the picture says who took it',
+        );
+        const runtime = panel(page).locator('.c-review-runtime');
+        assert.equal(await runtime.locator('.c-shot').count(), 2);
+        assert(
+            (await runtime.textContent()).includes('taken by wtm as the page first loaded'),
+        );
+        assert(
+            (await panel(page).locator('.c-review-checks').textContent()).includes(
+                'browser e2e · passed, with web at http://localhost:18431/healthz answering',
+            ),
+        );
+        assert.deepEqual(
+            (await calls(page, 'review_screenshot')).map((c) => c.args.id).sort(),
+            [1, 2],
+            'each screenshot is read once',
+        );
+        await shot(page, join(shots, `runtime-finding-${scheme}.png`));
 
         // ── Can't run: a role names a skill its provider does not list ──────────────────────
         await pick(page, 'skill');

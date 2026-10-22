@@ -9,6 +9,11 @@
    * the first are behind a disclosure with their own titles and bodies, because a second model
    * describing the same lines differently is information the merge should not throw away.
    *
+   * # A runtime role's evidence is a picture
+   *
+   * A finding whose report cites a screenshot (`s12`) shows it under the finding, because what a
+   * role saw the running app do is the thing to check before agreeing with it.
+   *
    * # Dismissing asks why
    *
    * The reason is what a later review reads and what stops the same finding being argued twice,
@@ -17,8 +22,9 @@
    */
   import type { FindingRecord, ReviewRunView } from '../ipc/types';
   import { SEVERITY_WORDS } from '../knowledge';
-  import { classLine, findingPlace, findingSources } from '../review-run';
+  import { citedScreenshots, classLine, findingPlace, findingSources } from '../review-run';
   import CodeText from './CodeText.svelte';
+  import WorkShot from './WorkShot.svelte';
   import Button from './ui/Button.svelte';
   import TextInput from './ui/TextInput.svelte';
 
@@ -58,6 +64,8 @@
         ?.kind ?? null
     );
   });
+  /** Screenshots a runtime role cited as `s12`: what it saw, which is the evidence. */
+  const shots = $derived(citedScreenshots(finding, view.screenshots));
   const checkRefs = $derived(
     finding.evidence
       .flatMap((e) => e.reported.evidence ?? [])
@@ -131,6 +139,13 @@
         <li><CodeText text={line} /></li>
       {/each}
     </ul>
+  {/if}
+  {#if shots.length > 0}
+    <div class="c-finding__shots">
+      {#each shots as shot (shot.id)}
+        <WorkShot {shot} />
+      {/each}
+    </div>
   {/if}
 
   {#if others.length > 0}

@@ -1215,7 +1215,10 @@ session it is. Authority is decided in two places. The bridge, started with `WTM
 `flow_propose_rule`, plus `flow_checkpoint` for a writer, and nothing else: no `ask_agent`,
 `spawn_agents`, `close_agents`, browser, code or prototype tools. At the socket,
 `handoff::scope_refusal` refuses a run token every other action and refuses the run tools to every
-other token, and `flow_tools` refuses a tool the token's role lacks. Arguments are typed structs
+other token, and `flow_tools` refuses a tool the token's role lacks. The one exception is a runtime
+role's (§6j): its `FlowRole` names the incognito pane the engine opened for it, its bridge
+(`WTM_FLOW_BROWSER`) also lists the tools that drive a pane, and the socket lets that token reach
+that pane and no other. Arguments are typed structs
 that refuse unknown fields, so a malformed `flow_submit` comes back as an error to fix and retry.
 `flow_request` answers with a request id, never a result.
 
@@ -1347,9 +1350,9 @@ finds it still dismissed.
 `[workflow.check]` — your config, never a repository's, since it runs outside every sandbox at a
 model's request — with exactly its argv, in the directory the asking role reads, under the run's
 credential scrub, and records the exit code and output (`check_runs`). The store refuses a pass
-that did not exit 0. A check that needs a service wtm does not start yet is recorded as skipped,
-with the reason, and never started, and a configured check nobody ran is drawn as not run. None of
-those reads as a pass.
+that did not exit 0. A check that needs a service whose health check does not answer is recorded as
+blocked, with the services named, and never started (§6j), and a configured check nobody ran is
+drawn as not run. None of those reads as a pass.
 
 **Stale is measured, and a rerun is the same review moved forward.** Whether a finding still holds
 is git's answer, asked when the window asks: the worktree's tree now, uncommitted and untracked
@@ -1552,8 +1555,72 @@ removes a worktree.
 real worktree on ports from its `.env`, holds a port first to see the start refused with this test
 named as the holder, reads health through the real `curl`, and plants a stranger under a recorded
 pid to see it left alone. `wtm-exec`'s `service.rs` tests the group, the log and the start-time check
-on their own. What is not covered: E3's checks that start the services they need, and a Docker
-daemon.
+on their own. What is not covered: a Docker daemon.
+
+### Checks that need services, and runtime roles
+
+A browser test against nothing fails for a reason that says nothing about the change, and passing it
+would be worse. So a check's `needs` and a runtime role are gated on the services they name, and
+everything here follows from one rule: **not running is never a pass, and never a quiet skip.**
+
+**The gate asks now.** Before a check that needs services runs, and before a runtime role starts,
+the engine asks the supervisor (`flow::runtime::Environment`, attached to the engine once both
+exist, weakly, since the supervisor holds the engine) to ask each service once, fresh: a row that
+says healthy is what the tab last knew, and a server that died an hour ago still reads healthy until
+someone asks. Only when every one answers does anything run, and the record keeps which services
+answered, at which address, with what (`check_runs.services`, migration 12).
+
+**Blocked is a state, and asking is the default.** A check whose services are not answering is
+recorded `blocked`, with each named and what is wrong with it, and never started; the store refuses
+a blocked record that names nothing, or carries an exit code. What happens next is
+`start_services`: `ask`, the default, files one approval per run, "start the environment and run
+what it blocks", in the inbox and as a card in the Reviews tab; `auto`, on a check or for a
+project's checks, starts the services, waits for their health, and asks the gate again. Both belong
+to your own config — a repository's `wtm.toml` may set neither — because `auto` lets a model's
+request start processes on this machine. The approval shows each service's declared start command
+and pins the hash of the rendered ones, the checks' argvs and the worktree (`start_binding`), so a
+`.env` changed between looking and approving starts nothing. It is recorded under the existing
+`command` intent with a subject of its own (`ApprovalSubject::Services`) rather than a new intent,
+which would rebuild `approvals` again for a word. Approving starts the services, then runs each
+blocked check through the gate again, in the worktree its services run from and against the tree
+it holds then — the snapshot checkout the asking role read is gone with its stage. The first record
+stays: it was blocked, and that is history.
+
+**A runtime role exercises the running app.** `kind = "runtime"` on a role. Validation holds it to
+a stage after every static role, to the reviewer profile, and to the worktree, which is where the
+app runs from. Before it starts, its services go through the same gate: under `ask` the role waits,
+the run held `Blocked(env)`, the way a role waits for capacity, and the same approval wakes it.
+Then one of two drivers:
+
+- **Playwright**, when the worktree's `package.json` declares `@playwright/test` and the role has
+  checks, or its config says `driver = "playwright"`: the role runs its configured end-to-end checks
+  through `flow_run_check`, and has no pane.
+- **A browser pane** otherwise: the engine opens one on the service's preview, verified the way
+  Open preview verifies it (§6j above), and gives the role's token that pane. It is built on an
+  **incognito store** (`browser::store_for`), never the persistent jar user panes share, because a
+  signed-in tab there is a session a model nobody is watching could drive; the host reports the
+  store it built, and the engine closes a pane on any other store rather than drive it. The pane is
+  held to the preview's origin, hands no download to anyone, is never tiled or announced to the
+  window, and renders hidden at a laptop's size — WebKit snapshots a hidden view of a real size,
+  measured before relying on it. The engine takes one screenshot when the page first loads; every
+  `browser_screenshot` the role takes is kept too, under the run's directory, append-only
+  (`screenshots`), and a finding cites one as `s<id>` in its evidence. The Reviews tab shows the
+  pictures under the finding and in a Runtime list. The pane closes when the role hands in.
+
+**The tree is checked again at the end.** A role that read the worktree read it while you could edit
+it, so when it hands in, git compares the worktree with the run's snapshot
+(`Snapshots::check`). Its reports already go stale on any change, since it ran code that may read any
+file; the step also says the worktree changed *while it ran*, which is a different fact from a change
+made since.
+
+**Tested against a real service.** `src-tauri/tests/runtime_checks.rs` runs fake agents against the
+real run tools with the supervisor and a Python service in a real worktree: a stopped service
+blocking a check, the approval then running it with the service's address kept, a start plan that
+changed since it was shown running nothing, `auto` starting and running, a running service that
+does not answer blocking too, a runtime role ordered after the static roles on the worktree, a pane
+on the persistent jar refused before any session, a runtime role waiting for and woken by the
+approval, the end-of-role tree check, and Playwright's driver. What is not covered there: a real
+WebKit pane, which needs a window; that is the click-through's.
 
 ---
 

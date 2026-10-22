@@ -160,6 +160,12 @@ pub struct FlowRole {
     /// The role's name in its recipe.
     pub role: String,
     pub authority: wtm_agent::authority::Authority,
+    /// The one browser pane this role may drive: the incognito pane wtm opened for a runtime role
+    /// on its service's verified preview. `None` for every other role, whose token is refused
+    /// every browser tool at the socket, and that pane is the only one a runtime role's token can
+    /// name — every other pane in the worktree answers as if it did not exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<String>,
 }
 
 impl SessionScope {

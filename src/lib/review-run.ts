@@ -21,6 +21,7 @@ import type {
   ReviewStaleness,
   ReviewStep,
   RoleProvider,
+  Screenshot,
   StepStatus,
 } from './ipc/types';
 import { isWtmError } from './ipc/types';
@@ -164,6 +165,20 @@ export function headline(
       prose: at
         ? `The limit resets at ${at}. ${kept} The paused role runs again by itself then, if wtm is open. Nothing switches provider by itself, and wtm never uses an API key.`
         : `The provider did not say when its limit resets. ${kept} Resume when it has.`,
+      tone: 'warn',
+    };
+  }
+  if (state.hold?.kind === 'blocked' && state.hold.cause === 'env') {
+    const waiting = view.pendingStart?.request.roles ?? [];
+    const services = view.pendingStart?.request.services.map((s) => s.label) ?? [];
+    return {
+      eyebrow: 'Blocked: environment not started',
+      title: `${waiting.length > 0 ? waiting.join(', ') : 'A runtime role'} ${
+        waiting.length > 1 ? 'wait' : 'waits'
+      } for ${services.length > 0 ? services.join(', ') : 'its services'}`,
+      prose: `A runtime role exercises the running app, and ${
+        services.length === 1 ? 'its service is' : 'the services it needs are'
+      } not answering. ${kept} Start environment and run starts them, waits for each to answer its health check, then runs it; nothing has run, and nothing reads as passed.`,
       tone: 'warn',
     };
   }
@@ -486,6 +501,7 @@ export const CHECK_WORDS: Record<CheckState, string> = {
   timed_out: 'timed out',
   skipped: 'skipped',
   error: 'could not run',
+  blocked: 'blocked',
   not_run: 'not run',
 };
 
@@ -496,6 +512,7 @@ export const CHECK_SENTENCE: Record<CheckState, string> = {
   timed_out: 'timed out',
   skipped: 'was skipped',
   error: 'could not run',
+  blocked: 'was blocked',
   not_run: 'was not run',
 };
 
@@ -505,6 +522,7 @@ export const CHECK_TONE: Record<CheckState, RunTone> = {
   timed_out: 'danger',
   skipped: 'warn',
   error: 'danger',
+  blocked: 'warn',
   not_run: 'muted',
 };
 
@@ -532,12 +550,15 @@ export function checkLines(
   const line = (id: string, label: string): CheckLine => {
     const run = latest(id);
     const state: CheckState = run ? run.status : 'not_run';
+    // A blocked record's detail begins "blocked: …", which the line already says.
     const detail =
       run === null
         ? null
         : run.status === 'failed'
           ? `exit ${run.exitCode ?? '?'}`
-          : run.detail;
+          : run.status === 'blocked'
+            ? (run.detail?.replace(/^blocked: /, '') ?? null)
+            : run.detail;
     return {
       id,
       label,
@@ -596,4 +617,32 @@ export function latestRound(view: ReviewRunView): {
     startedAt,
     length: minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`,
   };
+}
+
+// ── the environment a review runs against ──
+
+/**
+ * Which services answered when a check ran, and where: `web at http://localhost:18431/healthz`.
+ * Null for a check that needed none, or for one that did not run.
+ */
+export function servicesLine(run: CheckRun | null): string | null {
+  if (!run || run.services.length === 0 || run.status === 'blocked') return null;
+  const up = run.services.filter((s) => s.state === 'healthy');
+  if (up.length === 0) return null;
+  return `with ${up.map((s) => (s.url ? `${s.service} at ${s.url}` : s.service)).join(', ')} answering`;
+}
+
+/** The screenshots a finding's reports cite as `s<id>`, in the order they are cited. */
+export function citedScreenshots(
+  finding: FindingRecord,
+  shots: Screenshot[],
+): Screenshot[] {
+  const ids = finding.evidence
+    .flatMap((e) => e.reported.evidence ?? [])
+    .map((line) => /^\s*s(\d+)\s*$/.exec(line)?.[1])
+    .filter((id): id is string => id !== undefined)
+    .map(Number);
+  return [...new Set(ids)]
+    .map((id) => shots.find((shot) => shot.id === id))
+    .filter((shot): shot is Screenshot => shot !== undefined);
 }
