@@ -72,6 +72,7 @@ fn project() -> Project {
         actions: vec![],
         agent: std::collections::BTreeMap::new(),
         workflow: None,
+        environment: wtm_core::flow::EnvironmentSpec::default(),
         guards: wtm_core::model::GuardSpec::default(),
     }
 }

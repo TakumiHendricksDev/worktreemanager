@@ -75,7 +75,7 @@ impl Engine {
         if !spec.needs.is_empty() {
             let services: Vec<String> = spec.needs.iter().map(|s| format!("`{s}`")).collect();
             record.detail = Some(format!(
-                "needs {} running, and wtm does not start services yet",
+                "needs {} running, and wtm does not yet run a check that needs a service",
                 services.join(" and ")
             ));
             let saved = db.record_check(&record, self.now()).map_err(text)?;

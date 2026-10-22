@@ -38,6 +38,7 @@ pub mod pipe;
 pub mod progress;
 pub mod pty;
 pub mod rules;
+pub mod service;
 pub mod template;
 pub mod tracker;
 
@@ -47,8 +48,8 @@ pub use database::{DatabaseConnection, DatabaseHost, DatabaseSession};
 pub use dictate::{DictateError, Utterance};
 pub use exec::{CancelToken, CommandRunner, EnvScrub, Invocation, Output};
 pub use flow::{
-    FixStore, FlowStore, FlowStoreError, InboxStore, LeaseStore, OutboxStore, PullReviewStore,
-    RunStore,
+    EnvStore, FixStore, FlowStore, FlowStoreError, InboxStore, LeaseStore, OutboxStore,
+    PullReviewStore, RunStore,
 };
 pub use forge::{
     Forge, ForgeError, PullRequestWriter, RemotePullRequest, ReviewWriter, SentComment,
@@ -59,5 +60,6 @@ pub use pipe::{PipeHost, PipeSession, PipeSink};
 pub use progress::{ProgressEvent, ProgressSink};
 pub use pty::{PtyHost, PtySession, PtySink, Spawned};
 pub use rules::{RuleStore, RuleStoreError};
+pub use service::{OnExit, ServiceHost, Termination};
 pub use template::TemplateEngine;
 pub use tracker::{Tracker, TrackerError, TrackerMirror, TrackerWriter};

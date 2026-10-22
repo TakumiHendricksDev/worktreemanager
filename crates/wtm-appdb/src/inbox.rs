@@ -5,7 +5,8 @@
 //! its own flow's, so two runs' "interrupted" never collide and one run's never repeats.
 //!
 //! The project and worktree an item is about come from its run's `review_runs` row, joined on read,
-//! so they are never a second copy that could disagree with the run.
+//! so they are never a second copy that could disagree with the run; for an environment's item,
+//! from its `environment_flows` row, the same way.
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use wtm_core::flow::ApprovalId;
@@ -21,10 +22,12 @@ use crate::runs::{ensure_flow, query};
 use crate::store::{from_json, is_unique_violation, json, storage, tag, untag};
 
 const ITEM_COLUMNS: &str = "i.id, i.flow_id, i.kind, i.target_kind, i.target_id, i.subject, \
-     i.title, i.body, i.state, i.created_at, i.closed_at, r.project, r.worktree";
+     i.title, i.body, i.state, i.created_at, i.closed_at, COALESCE(r.project, e.project), \
+     COALESCE(r.worktree, e.worktree)";
 
 /// Every item read joins its run, for the place it is about.
-const ITEM_FROM: &str = "inbox_items i LEFT JOIN review_runs r ON r.flow_id = i.flow_id";
+const ITEM_FROM: &str = "inbox_items i LEFT JOIN review_runs r ON r.flow_id = i.flow_id \
+     LEFT JOIN environment_flows e ON e.flow_id = i.flow_id";
 
 const QUESTION_COLUMNS: &str = "id, flow_id, step_id, role, text, why, unblocks, blocks, context, \
      recommendation, options, asked_at, answer_choice, answer_text, answered_at";
@@ -205,7 +208,7 @@ impl InboxStore for AppDb {
                 "SELECT {ITEM_COLUMNS} FROM {ITEM_FROM}
                  WHERE i.state = 'open'
                    AND (?1 IS NULL OR i.flow_id = ?1)
-                   AND (?2 IS NULL OR r.project = ?2)
+                   AND (?2 IS NULL OR COALESCE(r.project, e.project) = ?2)
                  ORDER BY i.id DESC"
             ),
             params![flow.map(|f| f.0), project.map(ProjectId::as_str)],

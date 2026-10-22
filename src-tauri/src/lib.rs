@@ -305,9 +305,35 @@ pub fn run() {
                     flow::Tuning::default(),
                 );
                 handle.manage(Arc::clone(&engine));
+                // The environment supervisor beside it: its approvals and inbox items belong to the
+                // engine's flows, and its services are announced to the window.
+                let supervisor = {
+                    let app = Arc::clone(&*handle.state::<Arc<App>>());
+                    flow::env::Supervisor::new(
+                        Arc::clone(&app),
+                        Arc::clone(&engine),
+                        Arc::clone(&app.launcher) as Arc<dyn wtm_core::ports::ServiceHost>,
+                        Arc::clone(&app.runner),
+                        Arc::clone(&app.clock),
+                        Arc::new(flow::commands::TauriEnvNotice::new(handle.handle().clone())),
+                        flow::env::EnvTuning::default(),
+                    )
+                };
+                handle.manage(Arc::clone(&supervisor));
                 let recovered = std::thread::Builder::new()
                     .name("flow-recovery".to_owned())
                     .spawn(move || {
+                        // What the last run left running: adopted when it is still the same process,
+                        // forgotten when it is not, and never signalled on a guess.
+                        match supervisor.recover() {
+                            Ok(services) if !services.is_empty() => {
+                                tracing::info!(?services, "took back services left running");
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "could not check services at launch");
+                            }
+                        }
                         match engine.recover() {
                             Ok(flows) if !flows.is_empty() => {
                                 tracing::info!(?flows, "marked reviews interrupted at launch");
@@ -354,7 +380,16 @@ pub fn run() {
                 let _ = handle.emit_to(pane_windows::MAIN_WINDOW, id, ());
             }
         })
-        .on_window_event(pane_windows::on_window_event)
+        .on_window_event(|window, event| {
+            pane_windows::on_window_event(window, event);
+            // Idle stop's clock: losing focus starts it, gaining it anywhere stops it.
+            if let tauri::WindowEvent::Focused(focused) = event {
+                use tauri::Manager;
+                if let Some(supervisor) = window.try_state::<Arc<flow::env::Supervisor>>() {
+                    supervisor.focused(*focused);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             native_menu::popup_native_menu,
             commands::dictation_status,
@@ -535,6 +570,18 @@ pub fn run() {
             flow::commands::approve_fix_route,
             flow::commands::retry_fix_route,
             flow::commands::cancel_fix_route,
+            flow::commands::environment,
+            flow::commands::start_services,
+            flow::commands::stop_services,
+            flow::commands::restart_services,
+            flow::commands::check_service,
+            flow::commands::verify_service_preview,
+            flow::commands::service_log,
+            flow::commands::run_environment_command,
+            flow::commands::pending_environment_command,
+            flow::commands::approve_environment_command,
+            flow::commands::decline_environment_command,
+            flow::commands::set_idle_stop,
             flow::commands::preview_review_publish,
             flow::commands::approve_review_publish,
             flow::commands::review_publication,
@@ -580,10 +627,17 @@ pub fn run() {
                 if let Some(engine) = handle.try_state::<Arc<flow::Engine>>() {
                     engine.shutdown();
                 }
+                // The services wtm started, verified as its own, end with everything else under
+                // the one grace period. Detached ones keep running and are listed next launch.
+                let services = handle
+                    .try_state::<Arc<flow::env::Supervisor>>()
+                    .map(|supervisor| supervisor.shutdown())
+                    .unwrap_or_default();
                 if let Some(app) = handle.try_state::<Arc<App>>() {
                     app.close_shell_runs();
                     let mut pids = app.pty.take_running_pids();
                     pids.extend(app.pipe.take_running_pids());
+                    pids.extend(services);
                     let killed = pids.len();
                     wtm_exec::signal::terminate_groups(&pids);
                     if killed > 0 {

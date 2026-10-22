@@ -142,6 +142,12 @@ run = ["sh", "-c", "echo '2 of 3 tests failed'; exit 1"]
 run = ["sh", "-c", "touch ran-e2e"]
 needs = ["web"]
 
+# What `needs` names has to be declared. Never started here: the check is skipped regardless.
+[[defaults.environment.service]]
+id = "web"
+start = ["sh", "-c", "exit 0"]
+health = { command = ["true"] }
+
 [defaults.workflow.role.checker]
 objective = "Run the checks"
 provider = "codex"

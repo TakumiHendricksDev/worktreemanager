@@ -13,6 +13,11 @@ import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 import type { IssueDetailView, SyncReason, SyncedQueue, TrackerQueue } from '../tracker';
 
 import type {
+  CommandRunView,
+  EnvironmentView,
+  PendingCommandView,
+  ServiceLog,
+  VerifiedPreview,
   AccountUsage,
   ApprovedRoute,
   FindingRecord,
@@ -933,6 +938,53 @@ export const commands = {
    * `notifications_not_allowed` at once when macOS will not ask an unsigned build at all.
    */
   requestNotificationPermission: () => invoke<boolean>('request_notification_permission'),
+
+  // ── environments: a worktree's services and commands (Work view) ──
+
+  /** A worktree's environment: its services, resources, commands and recent runs. */
+  environment: (project: string, worktree: string) =>
+    invoke<EnvironmentView>('environment', { project, worktree }),
+
+  /**
+   * Start one service, or every one not running. A port in use refuses the start and names its
+   * owner; nothing is ended to free it.
+   */
+  startServices: (project: string, worktree: string, service: string | null) =>
+    invoke<EnvironmentView>('start_services', { project, worktree, service }),
+
+  stopServices: (project: string, worktree: string, service: string | null) =>
+    invoke<EnvironmentView>('stop_services', { project, worktree, service }),
+
+  restartServices: (project: string, worktree: string, service: string | null) =>
+    invoke<EnvironmentView>('restart_services', { project, worktree, service }),
+
+  /** Ask a running service once whether it is up. */
+  checkService: (project: string, worktree: string, service: string) =>
+    invoke<EnvironmentView>('check_service', { project, worktree, service }),
+
+  /** A healthy service's preview, fetched just now. Open only what this returns. */
+  verifyServicePreview: (project: string, worktree: string, service: string) =>
+    invoke<VerifiedPreview>('verify_service_preview', { project, worktree, service }),
+
+  serviceLog: (project: string, worktree: string, service: string) =>
+    invoke<ServiceLog>('service_log', { project, worktree, service }),
+
+  /** Run a command, or file its approval in the inbox when it is destructive on a shared resource. */
+  runEnvironmentCommand: (project: string, worktree: string, command: string) =>
+    invoke<EnvironmentView>('run_environment_command', { project, worktree, command }),
+
+  pendingEnvironmentCommand: (flow: number) =>
+    invoke<PendingCommandView | null>('pending_environment_command', { flow }),
+
+  approveEnvironmentCommand: (run: number) =>
+    invoke<CommandRunView>('approve_environment_command', { run }),
+
+  declineEnvironmentCommand: (run: number) =>
+    invoke<CommandRunView>('decline_environment_command', { run }),
+
+  /** Stop a project's services after this many minutes with wtm in the background, or never. */
+  setIdleStop: (project: string, minutes: number | null) =>
+    invoke<void>('set_idle_stop', { project, minutes }),
 
   // ── open in ──
   /**

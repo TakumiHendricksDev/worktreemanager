@@ -51,11 +51,11 @@ project's name, ticket key or path may appear in the source.
 wtm-core     domain types + ports (traits) + use-cases. Zero I/O, zero OS, zero framework.
 wtm-config   wtm.toml schema, four-layer merge, validation, trust store.   impl ConfigStore
 wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl Git
-wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl both
+wtm-exec     the ONLY place a process is spawned: CommandRunner, PtyHost, ServiceHost.
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
-wtm-appdb    the app's own SQLite store: work items, flows, rules, the tracker mirror (§9).
-                                                          impl FlowStore, RuleStore, TrackerMirror
+wtm-appdb    the app's own SQLite store: work items, flows, rules, the tracker mirror, environments
+             (§9).                                impl FlowStore, RuleStore, TrackerMirror, EnvStore
 wtm-forge    pull requests through the user's own `gh` (§6a).    impl Forge, ReviewWriter, PullRequestWriter
 wtm-tracker  issues and sprints through the user's own `acli` (§6a).  impl Tracker (reads only)
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
@@ -202,7 +202,8 @@ The last one is the important one: **never infer a branch from a directory name.
 A project may allocate host ports by scanning every worktree's `.env` from inside its own script.
 wtm **reads**
 `.env` for display and never reimplements that allocator — two independent implementations of a
-collision-avoidance algorithm is a bug generator. The cost is that two concurrent setups could race the
+collision-avoidance algorithm is a bug generator. The Environment tab (§6j) holds to the same line:
+a service's ports are templates over that `.env`, checked before a start and never chosen. The cost is that two concurrent setups could race the
 same scan, which is why setup concurrency is configurable and set to exclusive for that project.
 
 ---
@@ -322,6 +323,13 @@ for those two now, and the typed copy is gone, so there is one list to keep curr
 when `[agent.<id>.env]` started reaching the process — it had been parsed and never applied, which is
 the only reason it was not on the list already. An environment runs code as surely as an argument:
 `NODE_OPTIONS` loads a script into any CLI written in Node.
+
+`[environment]` (§6j) added a fourth: a service's `start`, `stop`, `logs` and health `command`,
+none of them spelled `run`, so a `wtm.toml` declaring nothing but a service would otherwise have
+loaded without a prompt and run its `start` at the first click on Start. `collect_environment_processes`
+is that walk. `[[environment.command]]` is spelled `run` on purpose and needs nothing new. A health
+`url` and a `preview` are not commands: wtm fetches and opens only addresses on this machine, so
+they start no process and reach no network.
 
 The Work view's recipes and roles are refused in a repository's `wtm.toml` outright, not
 trust-gated. A role is authority rather than a command: it chooses which of your MCP servers and
@@ -968,6 +976,13 @@ upgraded app open at all, and a second installer would have had to re-implement 
 bypass. Releases are notarized now, so only the first reason is left, and it is enough on its own.
 `wtm-update`'s module docs have the rest, including why the download runs *before* the app quits.
 
+**A service's health and preview are fetched on this machine only.** The Environment tab (§6j) asks
+a service whether it is up with a GET to its health URL, and fetches its preview before a pane
+opens it. Both are templates over a worktree's `.env`, so `wtm_core::flow::env::loopback_url` refuses
+anything but `localhost`, `*.localhost`, `127.0.0.0/8` and `[::1]`, at config load where the host is
+written out and again once rendered, and the request is the user's own `curl` with `--noproxy '*'`
+— the transcription argument below, applied to a request that never leaves the machine.
+
 **Workflow egress goes through the user's own `gh` and `acli`, and only for projects that enable
 it.** The Work view (§1) reads a project's tracker and forge: its issue queue, pull requests, checks
 and reviews. Behind approvals, it also writes to them. Every one of those requests is made by the
@@ -1056,7 +1071,12 @@ for `cargo deny`.)
 interpolated a secret into a command _would_ put it in a debug log; the default filter is
 `info`, but that is a reason to keep it that way.
 
-**No value crosses the IPC boundary.** Not "no secret" — no value. The worktree listing
+**No value crosses the IPC boundary.** Not "no secret" — no value. Two kinds of declared template
+are the exception, rendered by Rust and sent as text because the config chose to make them
+addresses: a `[[display.link]]` or `[browser] home`, and an `[[environment.service]]`'s ports,
+health URL and preview (§6j). A command's argv is never one of them, even where the window shows a
+command to approve: a destructive command's approval shows the declared template and pins the
+rendered argv's hash, because a rendered argv can carry a password. The worktree listing
 carries `EnvKeys`, which is a `Vec<String>` of key _names_, and a separate `reveal_env_value`
 command fetches exactly one on request, read fresh from disk and not cached in the frontend.
 A screenshot, a screen-share, or a rummage through the webview's memory has nothing to find.
@@ -1466,6 +1486,73 @@ to repositories that play the forge. A change to the Work view is
 also clicked through in a dev build that shares nothing with an installed app (`just
 dev-isolated`): its own config, data, handoff socket and WebKit storage, with `gh` pointed back at
 your own sign-in.
+
+## 6j. Environments: the services wtm starts, and only those
+
+A worktree you are testing runs things: a web server, a worker, a database in a container. The
+Work view's Environment tab starts, watches and stops them (`src-tauri/src/flow/env.rs`, rules in
+`wtm_core::flow::env`), and every part of its shape follows from one rule: **wtm signals only what
+it started, and it can prove it.**
+
+**Declared, in any layer, behind the trust prompt.** `[[environment.service]]` (start, stop, ports,
+health, preview, logs, `detached`), `[[environment.resource]]` (`per_worktree` or `shared`) and
+`[[environment.command]]` (`run`, `destructive`, the resources it acts on). Unlike a role, a service
+is a command, which is what the trust prompt is for, so a repository may declare one (§6). Checks'
+`needs` name services, and a name nobody declares is a load error rather than a check skipped
+forever.
+
+**A service is a process group wtm owns, keyed by `(worktree, service)`.** It starts through
+`ServiceHost`, on `wtm-exec`'s one spawn site, in a group of its own, with output appended to a log
+under the data directory rather than piped: a pipe closes with wtm, and a server writing to a closed
+pipe dies of `SIGPIPE`. Its row in `env_services` keeps the pid *and* the process's start time as
+`ps` reports it. A pid alone is not an identity — after a crash or a long sleep it may belong to
+something else — so stopping, quitting and recovery each read what runs under the pid now and act
+only when both match. A stranger under a reused pid is recorded as gone and left alone.
+
+**Ports are read, never allocated (§4).** They render from the worktree's `.env` or a display
+source. Before a start each is probed: a connect to each loopback address, then a bind of the
+wildcard and of loopback, because `std` binds with `SO_REUSEADDR` and a bind alone misses a wildcard
+listener. A port in use refuses the start and is reported with its holder from `lsof -F`, the
+container publishing it from `docker ps` when the project sets `docker = true` or the holder is
+Docker's forwarder, and which of wtm's own services it is when it is one. Nothing is ended to free
+it.
+
+**Health is a bounded question asked after a start.** A loopback URL answering 2xx or 3xx, or a
+command exiting 0, on a schedule that doubles from 250 ms to 4 s and ends at the service's deadline
+(`probe_delays`), on a thread per start. Then it stops asking: §8 bans polling, and an exit is
+heard the moment it happens because wtm is the parent. The states are stopped, starting, healthy,
+unhealthy (running, not answering) and failed (could not start, or exited unasked), and a late
+answer from an earlier start cannot move a later one. Check again asks once more on request.
+
+**Only a verified URL opens.** Open preview asks Rust to render the preview, refuse anything not
+on this machine (§6a), and fetch it; the browser pane is given the address only if it answered.
+
+**A destructive command on a shared resource waits for an approval each time.** It needs a home in
+the inbox and the approvals table, and both belong to a flow, so a worktree whose environment wtm
+operates gets one long-lived flow of kind `Environment` on its work item, in a single `Operating`
+phase. A run is recorded awaiting approval and filed as an approval item; approving re-renders the
+command and compares its hash with the one asked about, so a changed config or `.env` makes it stale
+and nothing runs; a match writes an `Approval(command, payload)` and runs it once. One run waits per
+worktree at a time, because the inbox files one item per target. A destructive command on the
+worktree's own resource is your business and runs at the click.
+
+**Quitting, crashing, idling.** Quit ends the groups wtm holds, verified, under the exit path's one
+grace period, and leaves detached services running, recorded, for the next launch to list. A
+launch takes back an attached service still running under its pid and start time, asks it once,
+and lists it as left running; it records the rest as stopped. Idle stop is per project and off
+until chosen: losing focus starts one sleeping thread per deadline, and any window regaining focus
+cancels it. Removing a worktree stops its services, detached ones by their own `stop`, after
+removal's own checks have passed — so a worktree removal refuses keeps them — and nothing here ever
+removes a worktree.
+
+**Tested against real processes.** `src-tauri/tests/environment.rs` starts a small Python server in a
+real worktree on ports from its `.env`, holds a port first to see the start refused with this test
+named as the holder, reads health through the real `curl`, and plants a stranger under a recorded
+pid to see it left alone. `wtm-exec`'s `service.rs` tests the group, the log and the start-time check
+on their own. What is not covered: E3's checks that start the services they need, and a Docker
+daemon.
+
+---
 
 ## 7. Toolchain policy
 

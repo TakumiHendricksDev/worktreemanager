@@ -24,6 +24,11 @@
 # WTM_DEV_VITE_CONFIG, when set, is passed to Vite as `--config`, for a local config that adds
 # something to the dev page, such as a DOM driver for a session that cannot move the mouse.
 #
+# WTM_DEV_PORT, when set, serves the page on that port instead of 5173, so two isolated runs can be
+# open at once: one per root, each with its own port. The binary loads its page from the port it was
+# built with, so the build gets the port too, through Tauri's TAURI_CONFIG override; changing it
+# rebuilds the app crate.
+#
 # Usage: scripts/dev-isolated.sh [root]   (default ~/.cache/wtm-isolated)
 set -euo pipefail
 
@@ -39,19 +44,23 @@ root="$(cd "$root" && pwd -P)"
 base="$(basename "$root" | tr -c 'A-Za-z0-9_\n-' '-')"
 name="wtm-${base#wtm-}"
 
-if lsof -nP -iTCP:5173 -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "dev-isolated: port 5173 is taken, probably by another dev server; stop it first" >&2
+port="${WTM_DEV_PORT:-5173}"
+if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "dev-isolated: port $port is taken, probably by another dev server; stop it, or set WTM_DEV_PORT" >&2
     exit 1
 fi
 
+if [ "$port" != 5173 ]; then
+    export TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:$port\"}}"
+fi
 cargo build -p wtm-app --bin wtm
 cp target/debug/wtm "target/debug/$name"
 
-bun x --bun vite --strictPort ${WTM_DEV_VITE_CONFIG:+--config "$WTM_DEV_VITE_CONFIG"} &
+bun x --bun vite --strictPort --port "$port" ${WTM_DEV_VITE_CONFIG:+--config "$WTM_DEV_VITE_CONFIG"} &
 vite=$!
 trap 'kill "$vite" 2>/dev/null || true' EXIT
 for _ in $(seq 1 100); do
-    lsof -nP -iTCP:5173 -sTCP:LISTEN >/dev/null 2>&1 && break
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && break
     sleep 0.2
 done
 

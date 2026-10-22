@@ -13,14 +13,20 @@
 //! - stdin is `/dev/null`, so a prompt fails fast instead of blocking,
 //! - and there is a `tracing` span with the argv and the duration.
 //!
-//! # The one spawn with no deadline
+//! # The two spawns with no deadline
 //!
-//! [`Runner::launch_detached`] deliberately breaks the first two guarantees, and it
-//! is the only thing here that does. Launching a desktop application is not a
-//! command whose output we want — it is a hand-off. Every property above that makes
-//! a captured run safe makes a launch *wrong*: a deadline that terminates the
-//! process group would kill the editor a few seconds after opening it. Read its doc
-//! comment before using it; it is not a general-purpose spawn.
+//! [`Runner::launch_detached`] deliberately breaks the first two guarantees.
+//! Launching a desktop application is not a command whose output we want — it is a
+//! hand-off. Every property above that makes a captured run safe makes a launch
+//! *wrong*: a deadline that terminates the process group would kill the editor a few
+//! seconds after opening it. Read its doc comment before using it; it is not a
+//! general-purpose spawn.
+//!
+//! A worktree's service ([`crate::service`]) breaks the first one for the same reason
+//! and keeps the rest: a dev server runs until it is stopped. It goes through
+//! [`Runner::spawn`] like everything else, so it still gets its own process group, the
+//! resolved `PATH` and the sanitized environment, and unlike a launch it stays wtm's
+//! to stop: it is recognised by pid and start time, never by pid alone.
 //!
 //! # Why stdin is null *and* there is a timeout
 //!
@@ -57,25 +63,30 @@ const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
 
 /// What a spawned child does with stdout and stderr.
 ///
-/// Named rather than passed as a bare `bool`, because the two modes have opposite
+/// Named rather than passed as a bare `bool`, because the modes have opposite
 /// obligations: [`Streams::Captured`] pipes *must* be drained by someone or the child
 /// blocks once the 64 KB buffer fills, while [`Streams::Discarded`] deliberately has
 /// nobody listening at all.
-#[derive(Debug, Clone, Copy)]
-enum Streams {
+#[derive(Debug)]
+pub(crate) enum Streams {
     /// Both pipes captured for the caller. Only valid where a reader follows.
     Captured,
     /// Both to `/dev/null`. For a launch nobody will ever read the output of, where
     /// a pipe would be a slow leak waiting for a chatty GUI app to fill it.
     Discarded,
+    /// Both appended to a file. For a service ([`crate::service`]), whose output has
+    /// to outlive the app that started it: a pipe would close with wtm, and a server
+    /// writing to a closed pipe dies of `SIGPIPE` on its next log line.
+    Logged(std::fs::File),
 }
 
 impl Streams {
-    fn stdio(self) -> Stdio {
-        match self {
+    fn stdio(&self) -> std::io::Result<Stdio> {
+        Ok(match self {
             Self::Captured => Stdio::piped(),
             Self::Discarded => Stdio::null(),
-        }
+            Self::Logged(file) => Stdio::from(file.try_clone()?),
+        })
     }
 }
 
@@ -102,7 +113,11 @@ impl Runner {
         &self.path
     }
 
-    fn spawn(&self, inv: &Invocation, streams: Streams) -> Result<std::process::Child, ExecError> {
+    pub(crate) fn spawn(
+        &self,
+        inv: &Invocation,
+        streams: &Streams,
+    ) -> Result<std::process::Child, ExecError> {
         let program = inv.argv.first().ok_or_else(|| ExecError::Spawn {
             argv: String::new(),
             message: "empty argv".to_owned(),
@@ -119,6 +134,13 @@ impl Runner {
                 })?;
 
         let env = self.path.env_for(inv);
+        let output = |streams: &Streams| {
+            streams.stdio().map_err(|e| ExecError::Spawn {
+                argv: inv.display(),
+                message: format!("cannot open its log: {e}"),
+            })
+        };
+        let (stdout, stderr) = (output(streams)?, output(streams)?);
 
         // The single sanctioned spawn site. See the module docs.
         #[allow(clippy::disallowed_methods)]
@@ -137,8 +159,8 @@ impl Runner {
             } else {
                 Stdio::null()
             })
-            .stdout(streams.stdio())
-            .stderr(streams.stdio());
+            .stdout(stdout)
+            .stderr(stderr);
 
         // Put the child in its own process group so the whole tree can be
         // signalled together. Without this, killing `worktree.sh` leaves its
@@ -202,7 +224,7 @@ impl Runner {
         let span = tracing::debug_span!("launch", argv = %inv.display(), cwd = %inv.cwd.display());
         let _guard = span.enter();
 
-        let mut child = self.spawn(inv, Streams::Discarded)?;
+        let mut child = self.spawn(inv, &Streams::Discarded)?;
         let pid = child.id();
 
         // Reap on a thread rather than leaking a zombie for the app's lifetime. The
@@ -226,7 +248,7 @@ impl Runner {
         let _guard = span.enter();
 
         let started = instant_now();
-        let mut child = self.spawn(inv, Streams::Captured)?;
+        let mut child = self.spawn(inv, &Streams::Captured)?;
         let pid = child.id();
 
         // Drain both pipes concurrently. A single-threaded read of stdout would

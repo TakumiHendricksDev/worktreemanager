@@ -25,7 +25,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::flow::WorkflowSpec;
+use crate::flow::{EnvironmentSpec, WorkflowSpec};
 
 /// Highest `schema_version` this build understands.
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
@@ -136,6 +136,14 @@ pub struct Project {
     /// `wtm.toml`, and `WorkflowSpec`'s module docs say why.
     #[serde(default)]
     pub workflow: Option<WorkflowSpec>,
+
+    /// The `[environment]` table: services a worktree runs while you test it, the resources they
+    /// use, and one-off commands against them. See [`EnvironmentSpec`].
+    ///
+    /// Allowed in any layer, unlike the workflow's roles: everything in it that runs is a command
+    /// the trust prompt shows, and declaring a service starts nothing until you press Start.
+    #[serde(default)]
+    pub environment: EnvironmentSpec,
 
     #[serde(default)]
     pub guards: GuardSpec,
@@ -1134,6 +1142,7 @@ mod tests {
             actions: Vec::new(),
             agent: BTreeMap::new(),
             workflow: None,
+            environment: EnvironmentSpec::default(),
             guards: GuardSpec::default(),
         }
     }

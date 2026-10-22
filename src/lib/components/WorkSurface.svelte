@@ -7,11 +7,13 @@
    *
    * # What it draws, and what it does not yet
    *
-   * For a worktree: the workspace header, Overview and Reviews. Overview is the worktree listing's
-   * own facts. Reviews is `WorkReviewRun`: Run Review, then the run's state, its findings, its checks
-   * and what its roles applied. The header's Run Review is the same action as the worktree bar's
-   * (`run-review.ts`), and lands on Reviews. The plan's other tabs — Changes, Sessions, Activity —
-   * come with the items that give them something to show.
+   * For a worktree: the workspace header, Overview and Reviews, and Environment when its project
+   * declares one. Overview is the worktree listing's own facts. Reviews is `WorkReviewRun`: Run
+   * Review, then the run's state, its findings, its checks and what its roles applied. The header's
+   * Run Review is the same action as the worktree bar's (`run-review.ts`), and lands on Reviews.
+   * Environment is `WorkEnvironment`, and the header's environment control (`WorkEnvControl`) is its
+   * Start, Stop, Restart, Open preview and Logs for every service at once. The plan's other tabs —
+   * Changes, Sessions, Activity — come with the items that give them something to show.
    *
    * For a pull request picked in Reviews: `WorkReview`, with what the forge says about it and the
    * worktree a review of it reads.
@@ -28,6 +30,8 @@
    * It draws no session pane, which is why `attention.offScreen` counts every pane as off screen
    * while Work is up.
    */
+  import { untrack } from 'svelte';
+
   import { changesOf, myWorktrees, REVIEW_WORDS, rowTitle, subjectOf } from '../work';
   import { headline } from '../review-run';
   import { runReview } from '../run-review';
@@ -35,9 +39,12 @@
   import { reviews } from '../state/reviews.svelte';
   import { work, type WorkTab } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import { environments } from '../state/environments.svelte';
   import Button from './ui/Button.svelte';
   import { trackerQueue } from '../state/tracker.svelte';
   import WorkBoard from './WorkBoard.svelte';
+  import WorkEnvControl from './WorkEnvControl.svelte';
+  import WorkEnvironment from './WorkEnvironment.svelte';
   import WorkIssue from './WorkIssue.svelte';
   import WorkReview from './WorkReview.svelte';
   import WorkReviewRun from './WorkReviewRun.svelte';
@@ -53,7 +60,7 @@
     onopenworktree: (worktreeId: string) => void;
   } = $props();
 
-  const TABS: { id: WorkTab; label: string }[] = [
+  const BASE_TABS: { id: WorkTab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'reviews', label: 'Reviews' },
   ];
@@ -90,6 +97,22 @@
   const reviewing = $derived(
     worktree?.branch ?? (worktree?.head ? worktree.head.slice(0, 7) : null),
   );
+
+  /** The worktree's environment, once read: the tab and the header control show only when it declares one. */
+  const environment = $derived(worktree ? (environments.views[worktree.id] ?? null) : null);
+  const TABS = $derived(
+    environment?.declared
+      ? [...BASE_TABS, { id: 'environment' as WorkTab, label: 'Environment' }]
+      : BASE_TABS,
+  );
+
+  // Read the picked worktree's environment when it is shown. Later changes arrive as `env:changed`.
+  $effect(() => {
+    const id = worktree?.id;
+    const project = workspace.activeProjectId;
+    if (!visible || !id || !project) return;
+    untrack(() => void environments.load(project, id));
+  });
 
   let tabs = $state<HTMLElement | undefined>();
 
@@ -157,6 +180,17 @@
               <Button size="sm" onclick={() => onopenworktree(worktree.id)}
                 >Open in Worktrees</Button
               >
+              {#if environment?.declared && workspace.activeProjectId}
+                <WorkEnvControl
+                  projectId={workspace.activeProjectId}
+                  worktreeId={worktree.id}
+                  view={environment}
+                  {onopenworktree}
+                  onlogs={() => {
+                    work.tab = 'environment';
+                  }}
+                />
+              {/if}
               {#if workspace.activeProjectId}
                 {@const projectId = workspace.activeProjectId}
                 <Button
@@ -207,7 +241,13 @@
             role="tabpanel"
             aria-labelledby="work-tab-{work.tab}"
           >
-            {#if work.tab === 'reviews' && workspace.activeProjectId}
+            {#if work.tab === 'environment' && environment?.declared && workspace.activeProjectId}
+              <WorkEnvironment
+                projectId={workspace.activeProjectId}
+                {worktree}
+                {onopenworktree}
+              />
+            {:else if work.tab === 'reviews' && workspace.activeProjectId}
               <WorkReviewRun
                 visible={visible && !work.inboxOpen}
                 projectId={workspace.activeProjectId}

@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
 use super::approval::{Approval, ApprovalId, ApprovalSubject, Binding, review_binding};
+use super::env::CommandRequest;
 use super::publish::{PendingReviewPayload, ReviewPayload, SubmitReviewPayload, hash_of, target};
 use super::route::{OpenPullRequestPayload, PushPayload, RoutePlan, SuggestionRoute};
 use super::state::FlowId;
@@ -588,7 +589,7 @@ impl Approved {
                     }),
                 )
             }
-            ApprovalSubject::Route(_) => return None,
+            ApprovalSubject::Route(_) | ApprovalSubject::Command(_) => return None,
         };
         Some(Publication {
             approval: self.approval,
@@ -607,7 +608,20 @@ impl Approved {
                 plan: *plan,
                 operations: self.operations,
             }),
-            ApprovalSubject::Review(_) | ApprovalSubject::Suggestions(_) => None,
+            ApprovalSubject::Review(_)
+            | ApprovalSubject::Suggestions(_)
+            | ApprovalSubject::Command(_) => None,
+        }
+    }
+
+    /// One run of an environment command. `None` for anything sent through the outbox.
+    #[must_use]
+    pub fn into_command(self) -> Option<(Approval, CommandRequest)> {
+        match self.subject {
+            ApprovalSubject::Command(request) => Some((self.approval, *request)),
+            ApprovalSubject::Review(_)
+            | ApprovalSubject::Suggestions(_)
+            | ApprovalSubject::Route(_) => None,
         }
     }
 }

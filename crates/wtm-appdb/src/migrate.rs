@@ -86,6 +86,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "tracker mirror",
         sql: include_str!("../migrations/0009_tracker_mirror.sql"),
     },
+    Migration {
+        version: 10,
+        name: "environments",
+        sql: include_str!("../migrations/0010_environments.sql"),
+    },
 ];
 
 /// Bring the database at `path`, open as `conn`, up to the last of `migrations`.
@@ -423,6 +428,72 @@ mod tests {
             })
             .unwrap();
         assert_eq!(next, 10);
+    }
+
+    #[test]
+    fn a_version_eight_outbox_keeps_every_approval_and_operation_and_its_rules_through_the_rebuild()
+    {
+        // Migration 10 rebuilds `approvals` to add the `command` intent, and `operations` with it,
+        // because foreign keys cannot be turned off inside the migration's transaction. Everything
+        // P2 and P3 wrote has to come through with its ids, its link to its approval, and the
+        // triggers that keep approvals append-only and done operations done.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flow.db");
+        let db = AppDb::open_with(&path, &MIGRATIONS[..8]).unwrap();
+        db.with_connection(|conn| {
+            conn.execute_batch(
+                "INSERT INTO work_items (project, title, created_at) VALUES ('/work/webapp', 'Export', 1);
+                 INSERT INTO flows (work_item_id, kind, phase, last_seq, started_at, updated_at)
+                     VALUES (1, 'review_pr', 'consolidated', 0, 1, 1);
+                 INSERT INTO approvals (id, flow_id, intent, binding, subject, granted_at)
+                     VALUES (4, 1, 'post', '{}', '{}', 2), (5, 1, 'route', '{}', '{}', 3);
+                 INSERT INTO operations (id, flow_id, kind, target, payload_hash, payload, approval_id,
+                                         position, state, result, created_at, updated_at)
+                     VALUES (11, 1, 'pending_review', 'o/r#2', 'h1', '{}', 4, 0, 'done', '{}', 2, 2),
+                            (12, 1, 'push', 'o/r#2', 'h2', '{}', 5, 0, 'pending', NULL, 3, 3);",
+            )
+        })
+        .unwrap();
+        drop(db);
+
+        let db = reopen(&path, MIGRATIONS).unwrap();
+        db.with_connection(|conn| {
+            let ops: Vec<(i64, i64, String)> = conn
+                .prepare("SELECT id, approval_id, state FROM operations ORDER BY id")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<Result<_, _>>()?;
+            assert_eq!(
+                ops,
+                vec![(11, 4, "done".to_owned()), (12, 5, "pending".to_owned())]
+            );
+            let dangling: i64 =
+                conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get(0))?;
+            assert_eq!(dangling, 0);
+
+            conn.execute(
+                "INSERT INTO approvals (flow_id, intent, binding, subject, granted_at)
+                 VALUES (1, 'command', '{}', '{}', 4)",
+                [],
+            )?;
+            assert_eq!(conn.last_insert_rowid(), 6, "a carried-over id is not reused");
+
+            assert!(conn.execute("DELETE FROM approvals WHERE id = 4", []).is_err());
+            assert!(conn
+                .execute("UPDATE operations SET state = 'pending' WHERE id = 11", [])
+                .is_err());
+            assert!(
+                conn.execute(
+                    "INSERT INTO operations (flow_id, kind, target, payload_hash, payload, approval_id,
+                                             position, state, created_at, updated_at)
+                     VALUES (1, 'push', 't', 'h3', '{}', 99, 0, 'pending', 5, 5)",
+                    [],
+                )
+                .is_err(),
+                "an operation still has to belong to an approval that exists"
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

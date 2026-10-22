@@ -23,17 +23,33 @@
    */
   import { untrack } from 'svelte';
 
-  import { KIND_TONE, KIND_WORDS, filedAt, resumeWords, showWords } from '../inbox';
+  import {
+    KIND_TONE,
+    KIND_WORDS,
+    filedAt,
+    isEnvironmentApproval,
+    resumeWords,
+    showWords,
+  } from '../inbox';
   import { commands } from '../ipc/commands';
-  import type { FindingRecord, InboxItem, PublicationView } from '../ipc/types';
+  import type {
+    FindingRecord,
+    InboxItem,
+    PendingCommandView,
+    PublicationView,
+  } from '../ipc/types';
   import { draftOf } from '../publish';
   import { GROUP_WORDS, findingGroups } from '../review-run';
+  import { environments } from '../state/environments.svelte';
   import { inbox } from '../state/inbox.svelte';
   import { reviewRuns } from '../state/review-runs.svelte';
   import { sessions } from '../state/sessions.svelte';
+  import { work } from '../state/work.svelte';
+  import { workspace } from '../state/workspace.svelte';
   import CodeText from './CodeText.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import Button from './ui/Button.svelte';
+  import WorkEnvApproval from './WorkEnvApproval.svelte';
   import WorkPublication from './WorkPublication.svelte';
   import WorkRoute from './WorkRoute.svelte';
 
@@ -59,6 +75,34 @@
     const approval = pane?.approvals[0];
     return pane && approval ? { pane, approval } : null;
   });
+
+  /**
+   * A destructive environment command waiting for approval, by the environment's flow: an approval
+   * item filed against a flow rather than a run's step. Read when it is opened, and answered here
+   * exactly as in the Environment tab.
+   */
+  let pendingCommand = $state<PendingCommandView | null | undefined>(undefined);
+  $effect(() => {
+    const flow = item.kind === 'approval' && item.target.kind === 'flow' ? item.flow : null;
+    untrack(() => {
+      pendingCommand = undefined;
+      if (flow === null) return;
+      void commands
+        .pendingEnvironmentCommand(flow)
+        .then((pending) => {
+          if (item.flow === flow) pendingCommand = pending;
+        })
+        .catch(() => {
+          pendingCommand = null;
+        });
+    });
+  });
+  const commandBusy = $derived(
+    pendingCommand ? (environments.busy[pendingCommand.worktree] ?? false) : false,
+  );
+  const commandError = $derived(
+    pendingCommand ? (environments.errors[pendingCommand.worktree] ?? null) : null,
+  );
 
   /** A ready review's findings, still standing, worst class first. Read when it is opened. */
   let findings = $state<FindingRecord[] | null>(null);
@@ -251,6 +295,25 @@
     />
   {:else if item.kind === 'approval' && item.target.kind === 'approval'}
     <p class="c-inbox-card__note">Reading this publish…</p>
+  {:else if item.kind === 'approval' && item.target.kind === 'flow'}
+    {#if pendingCommand}
+      {@const pending = pendingCommand}
+      <WorkEnvApproval
+        {pending}
+        busy={commandBusy}
+        error={commandError}
+        onapprove={() =>
+          void environments.approve(pending.project, pending.worktree, pending.run.id)}
+        ondecline={() =>
+          void environments.decline(pending.project, pending.worktree, pending.run.id)}
+      />
+    {:else if pendingCommand === null}
+      <p class="c-inbox-card__note">
+        Nothing is waiting any more: the command was approved, declined, or went stale.
+      </p>
+    {:else}
+      <p class="c-inbox-card__note">Reading this command…</p>
+    {/if}
   {:else if item.kind === 'approval'}
     {#if asking}
       <div class="c-inbox-card__approval">
@@ -282,11 +345,23 @@
     <Button
       variant={resume || publication || route ? 'neutral' : 'accent'}
       size="sm"
-      onclick={() =>
+      onclick={() => {
+        // An environment's approval goes to its Environment tab when that worktree is in the
+        // project on screen; anywhere else, the run's own route.
+        if (
+          isEnvironmentApproval(item) &&
+          item.worktree &&
+          item.project === workspace.activeProjectId
+        ) {
+          work.pick(item.worktree);
+          work.tab = 'environment';
+          return;
+        }
         inbox.open(
           item,
           approvalId !== null ? { kind: 'publication', id: approvalId } : undefined,
-        )}>{showWords(item)}</Button
+        );
+      }}>{showWords(item)}</Button
     >
     <span class="c-inbox-card__spacer"></span>
     <Button

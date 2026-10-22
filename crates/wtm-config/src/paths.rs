@@ -56,6 +56,9 @@ pub const RUN_GH_CONFIG_DIRNAME: &str = "run-gh-config";
 /// Where each workflow run session keeps its private files, under the data root.
 pub const RUN_SESSIONS_DIRNAME: &str = "run-sessions";
 
+/// Where the services of each worktree's environment write their logs, under the data root.
+pub const ENV_DIRNAME: &str = "env";
+
 /// Resolved application paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
@@ -99,6 +102,11 @@ pub struct AppPaths {
     /// One root for all of them, so a run's sandbox can deny reads of the whole thing and no run's
     /// commands can read another run's token.
     pub run_sessions_dir: PathBuf,
+    /// Each worktree's services' logs, one directory per worktree. See `src-tauri/src/flow/env.rs`.
+    ///
+    /// In the data root rather than the worktree, because a log inside the worktree would show in
+    /// `git status` and be one `git clean -fdx` from gone while the server still writes to it.
+    pub env_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -142,6 +150,7 @@ impl AppPaths {
             flow_dir: data_dir.join(FLOW_DIRNAME),
             run_gh_config_dir: data_dir.join(RUN_GH_CONFIG_DIRNAME),
             run_sessions_dir: data_dir.join(RUN_SESSIONS_DIRNAME),
+            env_dir: data_dir.join(ENV_DIRNAME),
         }
     }
 

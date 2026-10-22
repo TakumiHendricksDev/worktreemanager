@@ -1430,6 +1430,15 @@ pub(crate) fn remove_now(
     // One `terminate_groups` for all of them: a serial close would pay 400 ms grace per
     // session, and a worktree can hold several shells and agents.
     app.terminate_sessions_in(worktree_id);
+    // The services wtm started for it, for the same reason, and detached ones with their own
+    // `stop`, since nothing would be left to stop them from. After `validate`, so a worktree that
+    // removal refuses (one with uncommitted changes, unless you overrode that) keeps them running.
+    {
+        use tauri::Manager;
+        if let Some(supervisor) = handle.try_state::<Arc<crate::flow::env::Supervisor>>() {
+            supervisor.stop_worktree(worktree_id);
+        }
+    }
     // Browsers too: a pane pointed at a dev server in a directory about to be deleted has
     // nothing left to show, and the frontend learns of it through `browser:closed`.
     crate::browser::close_all_in(handle, app, worktree_id);

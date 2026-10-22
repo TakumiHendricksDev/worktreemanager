@@ -144,6 +144,14 @@ export function notificationWords(
   return { title: plain(heads[item.kind]), detail: plain(detail) };
 }
 
+/**
+ * Whether an item is a destructive environment command waiting for approval: the one approval filed
+ * against a flow rather than a run's step or a publish, because an environment is not a run.
+ */
+export function isEnvironmentApproval(item: InboxItem): boolean {
+  return item.kind === 'approval' && item.target.kind === 'flow';
+}
+
 /** What a run's resume is called from an item about it, or null when the item offers none. */
 export function resumeWords(item: InboxItem): string | null {
   switch (item.kind) {
@@ -161,6 +169,7 @@ export function resumeWords(item: InboxItem): string | null {
 /** What the button that goes to an item's target says. */
 export function showWords(item: InboxItem): string {
   if (item.kind === 'review_ready') return 'Read the review';
+  if (isEnvironmentApproval(item)) return 'Show the environment';
   switch (item.target.kind) {
     case 'step':
       return `Show ${item.target.role}`;

@@ -520,6 +520,56 @@ effort = "ultra"
 # half, and sending one axis without the other left it at whatever `~/.codex/config.toml` said.
 mode   = "auto"
 
+# ═══════════════════════════════════ ENVIRONMENT ═══════════════════════════════════
+#
+# What the Work view's Environment tab starts, watches and stops while you test a worktree.
+#
+# Ports are read, never picked: `{{ env.* }}` is this worktree's own `.env`, which setup wrote, and
+# `port_defaults.*` the compose file's fallbacks, exactly as the port table above reads them. wtm
+# checks they are free before a start and names whoever holds one that is not; it never ends a
+# process it did not start. Every argv here is behind the trust prompt.
+#
+# `web` is detached: `up -d` returns once the container runs, so wtm holds no process for it, stops
+# it with `stop`, leaves it running when wtm quits, and lists it on the next launch. Its log is
+# `logs`, run beside it.
+
+[[environment.service]]
+id = "web"
+label = "Web"
+detached = true
+start = ["docker", "compose", "up", "-d", "web"]
+stop = ["docker", "compose", "stop", "web"]
+logs = ["docker", "compose", "logs", "--follow", "--tail", "200", "web"]
+ports = ["{{ env.HOST_PORT_WEB | default_if_empty(port_defaults.HOST_PORT_WEB) }}"]
+health = { url = "http://127.0.0.1:{{ env.HOST_PORT_WEB | default_if_empty(port_defaults.HOST_PORT_WEB) }}/", timeout_ms = 120000 }
+preview = "http://127.0.0.1:{{ env.HOST_PORT_WEB | default_if_empty(port_defaults.HOST_PORT_WEB) }}"
+
+# Whose things are whose. Setup clones a database volume per worktree; the package cache is one
+# directory every worktree mounts.
+[[environment.resource]]
+id = "db"
+label = "this worktree's database"
+isolation = "per_worktree"
+
+[[environment.resource]]
+id = "cache"
+label = "the shared package cache"
+isolation = "shared"
+
+[[environment.command]]
+id = "migrate"
+label = "Migrate"
+run = ["docker", "compose", "exec", "-T", "web", "python", "manage.py", "migrate"]
+resources = ["db"]
+
+# Destructive, and on something every worktree shares: it waits for an approval every time it runs.
+[[environment.command]]
+id = "prune-cache"
+label = "Prune the package cache"
+run = ["just", "cache-prune"]
+destructive = true
+resources = ["cache"]
+
 # ═══════════════════════════════════ GUARDS ═══════════════════════════════════
 #
 # The one place project-specific hazard knowledge lives, and it lives here as *data*.

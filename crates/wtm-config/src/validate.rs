@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 use wtm_core::error::{ConfigError, ConfigLayer};
 use wtm_core::model::{
     CommandSpec, CwdBase, DatabaseEngine, DatabaseScope, DirBase, OptionsSource, Project,
-    SUPPORTED_SCHEMA_VERSION, TokenScope, shadows_reserved_prefix,
+    SUPPORTED_SCHEMA_VERSION, TokenScope, TokenSet, namespace_of, shadows_reserved_prefix,
 };
 use wtm_core::ports::template::TemplateEngine;
 
@@ -67,6 +67,130 @@ pub fn validate(
     check_templates(project, engine, origin)?;
     check_guards(project, origin)?;
     check_workflow(project, origin)?;
+    check_environment(project, engine, origin)?;
+    Ok(())
+}
+
+/// `[environment]`: its own rules, which live beside its types in `wtm_core::flow::env`; its
+/// templates, in a scope with the worktree and its `.env` but no form fields; its commands against
+/// the guards; and every check's `needs`, which must name a declared service.
+///
+/// `needs` is checked here rather than in either table's own rules because it joins the two, and
+/// the two often come from different files: checks from your own config, services from the
+/// repository's `wtm.toml`. A check that needs a service nobody declares would be skipped on every
+/// run, forever, for a reason that reads like the environment's fault.
+pub fn check_environment(
+    project: &Project,
+    engine: &dyn TemplateEngine,
+    origin: &Origin,
+) -> Result<(), ConfigError> {
+    let environment = &project.environment;
+    environment
+        .validate()
+        .map_err(|error| origin.invalid(&format!("environment.{}", error.key), error.message))?;
+
+    let render_err =
+        |key: &str, err: wtm_core::error::RenderError| origin.invalid(key, err.to_string());
+    let mut templates: Vec<(String, &str)> = Vec::new();
+    let mut argvs: Vec<(String, &[String])> = Vec::new();
+    for service in &environment.services {
+        let key = format!("environment.service.{}", service.id);
+        argvs.push((format!("{key}.start"), &service.start));
+        if let Some(stop) = &service.stop {
+            argvs.push((format!("{key}.stop"), stop));
+        }
+        if let Some(logs) = &service.logs {
+            argvs.push((format!("{key}.logs"), logs));
+        }
+        if let Some(command) = &service.health.command {
+            argvs.push((format!("{key}.health.command"), command));
+        }
+        if let Some(url) = &service.health.url {
+            templates.push((format!("{key}.health.url"), url));
+        }
+        if let Some(preview) = &service.preview {
+            templates.push((format!("{key}.preview"), preview));
+        }
+        for (index, port) in service.ports.iter().enumerate() {
+            templates.push((format!("{key}.ports[{index}]"), port));
+        }
+    }
+    for command in &environment.commands {
+        argvs.push((
+            format!("environment.command.{}.run", command.id),
+            &command.run,
+        ));
+    }
+    for (key, argv) in &argvs {
+        for (index, argument) in argv.iter().enumerate() {
+            templates.push((format!("{key}[{index}]"), argument));
+        }
+    }
+    // A display source's values are `<id>.KEY`, which the template engine files under form fields,
+    // because a bare first segment is how a field is named. So the syntax is checked in the worktree
+    // scope, and then each token: a source's is read from the worktree like `env.*`; a field's, a
+    // lookup's or a computed value's exists only while the New Worktree form is open, and a service
+    // starts long after it closed, where the token would render empty on every start.
+    let sources: BTreeSet<&str> = project
+        .display
+        .sources
+        .iter()
+        .map(|source| source.id.as_str())
+        .collect();
+    for (key, template) in templates {
+        engine
+            .validate(&key, template, &TokenScope::worktree_command(&key))
+            .map_err(|e| render_err(&key, e))?;
+        let tokens = engine
+            .referenced_tokens(&key, template)
+            .map_err(|e| render_err(&key, e))?;
+        for token in tokens {
+            let head = token.split('.').next().unwrap_or(&token);
+            let refused = match namespace_of(&token) {
+                TokenSet::Fields => !sources.contains(head),
+                TokenSet::Lookup | TokenSet::Computed | TokenSet::MatchedBranch => true,
+                _ => false,
+            };
+            if refused {
+                return Err(origin.invalid(
+                    &key,
+                    format!(
+                        "`{token}` exists only while the New Worktree form is open, and a service \
+                         starts long after it closed; read the value from the worktree's .env or \
+                         a `[[display.source]]` instead"
+                    ),
+                ));
+            }
+        }
+    }
+
+    let rules = compile_rules(project, origin)?;
+    for (key, argv) in &argvs {
+        let joined = argv.join(" ");
+        if let Some(rule) = rules.iter().find(|rule| rule.fires_on(&joined)) {
+            return Err(ConfigError::Forbidden {
+                argv: format!("{key}: {joined}"),
+                reason: rule.reason.to_owned(),
+            });
+        }
+    }
+
+    if let Some(workflow) = &project.workflow {
+        for (id, check) in &workflow.check {
+            for service in &check.needs {
+                if environment.service(service).is_none() {
+                    return Err(origin.invalid(
+                        &format!("workflow.check.{id}.needs"),
+                        format!(
+                            "`{service}` is not a declared `[[environment.service]]`. Declare it, \
+                             or take it out of `needs`: a check that needs a service nobody \
+                             declares could never run"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1044,5 +1168,107 @@ mod example_tests {
             check_forbidden(&project, &owned)
                 .unwrap_or_else(|e| panic!("{argv:?} must be allowed, got {e}"));
         }
+    }
+}
+
+/// `[environment]` at load time: the mistakes that would otherwise surface as a service that
+/// renders an empty argument, or a check that is skipped on every run for a reason that names the
+/// wrong thing.
+#[cfg(test)]
+mod environment_tests {
+    use std::path::PathBuf;
+
+    use wtm_render::Engine;
+
+    use super::*;
+
+    fn check(toml_text: &str) -> Result<(), ConfigError> {
+        let merged = crate::layers::merge(
+            crate::layers::document(crate::layers::BUILT_IN_DEFAULTS).unwrap(),
+            crate::layers::document(toml_text).unwrap(),
+        );
+        let mut project: Project = merged.try_into().expect("fragment should deserialize");
+        project.root = PathBuf::from("/repo");
+        validate(
+            &project,
+            &Engine::new(),
+            &Origin {
+                path: PathBuf::from("/repo/wtm.toml"),
+                layer: ConfigLayer::Repo,
+            },
+        )
+    }
+
+    const WEB: &str = "[[display.source]]\nid = 'env'\nkind = 'dotenv'\npath = '{{ worktree.path }}/.env'\n\n\
+         [[environment.service]]\nid = 'web'\n\
+         start = ['python3', '-m', 'http.server', '{{ env.WEB_PORT }}']\n\
+         ports = ['{{ env.WEB_PORT }}']\n\
+         health = { url = 'http://localhost:{{ env.WEB_PORT }}/healthz', timeout_ms = 5000 }\n\
+         preview = 'http://localhost:{{ env.WEB_PORT }}'\n";
+
+    fn key_of(error: ConfigError) -> Option<String> {
+        match error {
+            ConfigError::Invalid { key, .. } => key,
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_service_reading_its_port_from_the_worktrees_env_validates() {
+        check(WEB).unwrap();
+    }
+
+    #[test]
+    fn a_service_cannot_use_a_form_field_that_no_longer_exists_when_it_starts() {
+        let error = check(&WEB.replace("'-m', 'http.server'", "'-m', '{{ name }}'")).unwrap_err();
+        assert_eq!(
+            key_of(error).as_deref(),
+            Some("environment.service.web.start[2]")
+        );
+    }
+
+    #[test]
+    fn a_service_may_read_its_port_from_any_display_source_not_only_the_first() {
+        let config = WEB.replace(
+            "ports = ['{{ env.WEB_PORT }}']",
+            "ports = ['{{ env.WEB_PORT | default_if_empty(port_defaults.WEB_PORT) }}']",
+        ) + "\n[[display.source]]\nid = 'port_defaults'\nkind = 'dotenv'\npath = '{{ repo.root }}/ports.defaults'\n";
+        check(&config).unwrap();
+        let undeclared = WEB.replace("'{{ env.WEB_PORT }}']", "'{{ elsewhere.WEB_PORT }}']");
+        assert!(
+            check(&undeclared).is_err(),
+            "a name that is no source is a form field"
+        );
+    }
+
+    #[test]
+    fn the_environments_own_rules_are_reported_under_its_key() {
+        let error = check(&WEB.replace("url = 'http://", "url = 'ftp://")).unwrap_err();
+        assert_eq!(
+            key_of(error).as_deref(),
+            Some("environment.service.web.health.url")
+        );
+    }
+
+    #[test]
+    fn a_check_that_needs_an_undeclared_service_is_refused_with_its_key() {
+        let config =
+            format!("{WEB}\n[workflow.check.e2e]\nrun = ['just', 'e2e']\nneeds = ['api']\n");
+        let error = check(&config).unwrap_err();
+        assert_eq!(key_of(error).as_deref(), Some("workflow.check.e2e.needs"));
+        let config =
+            format!("{WEB}\n[workflow.check.e2e]\nrun = ['just', 'e2e']\nneeds = ['web']\n");
+        check(&config).unwrap();
+    }
+
+    #[test]
+    fn a_service_a_guard_forbids_is_refused_when_the_config_loads() {
+        let config = format!(
+            "{WEB}\n[[guards.forbid]]\nargv_matches = 'http\\.server'\nreason = 'use the real server'\n"
+        );
+        assert!(matches!(
+            check(&config),
+            Err(ConfigError::Forbidden { argv, .. }) if argv.starts_with("environment.service.web.start")
+        ));
     }
 }

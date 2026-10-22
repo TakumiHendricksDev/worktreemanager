@@ -159,10 +159,11 @@ pub struct CheckSpec {
     pub run: Vec<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
-    /// Services the check needs running, such as `web`. wtm starts no services yet, so a check
-    /// that names any is recorded as skipped with that reason and never run: a browser test against
-    /// nothing would fail for a reason that says nothing about the change, and passing it would be
-    /// worse.
+    /// Services the check needs running, such as `web`: ids of `[[environment.service]]`, which
+    /// config loading holds it to. A check that names any is recorded as skipped with that reason
+    /// and never run, until a check can be given its services (the plan's E3): a browser test
+    /// against nothing would fail for a reason that says nothing about the change, and passing it
+    /// would be worse.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needs: Vec<String>,
 }

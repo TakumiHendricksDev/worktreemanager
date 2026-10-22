@@ -100,6 +100,17 @@ Worth stating because it narrows the surface considerably:
   into your repository and check the review worktree out with git hooks off: any hook would run
   inside the author's tree, and once that tree is checked out the hooks directory may be the
   author's too.
+  The Work view's **Environment** tab runs the services and commands a config declares in
+  `[environment]`, as you, and only after the trust prompt has shown each argv. It signals only
+  processes it started, recognised by pid and start time together, so a pid that now belongs to
+  something else is never touched; a port someone else holds is reported, with its holder from
+  `lsof` (and `docker ps` when the project asks), and never freed by wtm. It fetches a service's
+  health URL and preview with your own `curl`, only on this machine (`localhost` and loopback
+  addresses), and opens a preview only after it answered. A destructive command on a resource
+  every worktree shares waits for an approval of exactly what it runs, each time; the approval
+  shows the declared command and pins a hash of the rendered one, so no value from `.env` reaches
+  the window and a changed value runs nothing. Quitting stops what wtm holds and leaves detached
+  services running, listed on the next launch.
 
   What is unchanged, and is the reason the exceptions are narrow enough to describe in a bullet:
 
