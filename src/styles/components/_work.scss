@@ -52,14 +52,17 @@
   min-width: 0;
 }
 
-/* The run's badge and the header's two actions, kept together: wrapping one button under the title
-   on its own read as a second heading. */
+/* The run's badge and the header's actions, kept together: wrapping one button under the title on
+   its own read as a second heading. Allowed to shrink to the column, so that once the environment's
+   controls joined them they wrap inside this box at the window's default width, rather than running
+   on under the inbox beside it. */
 .c-work__actions {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
+  max-width: 100%;
 }
 
 .c-work__title {

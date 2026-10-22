@@ -54,6 +54,7 @@
   import { attention, RUN_TARGET } from './lib/state/attention.svelte';
   import { inbox } from './lib/state/inbox.svelte';
   import { reviewRuns } from './lib/state/review-runs.svelte';
+  import { environments } from './lib/state/environments.svelte';
   import { reviews } from './lib/state/reviews.svelte';
   import { trackerQueue } from './lib/state/tracker.svelte';
   import { work } from './lib/state/work.svelte';
@@ -406,6 +407,7 @@
      * can fail while Work is closed, and that has to reach you anyway.
      */
     const unlistenRuns = reviewRuns.init();
+    const unlistenEnvironments = environments.init();
     /*
      * The inbox: what runs need you for, every project's, read at launch — items outlive the app —
      * and the one route by which a run notifies. Not in the boot chain for the reason the runs are
@@ -538,6 +540,7 @@
       void unlistenWork.then((off) => off());
       void unlistenUsage.then((off) => off());
       void unlistenRuns.then((off) => off());
+      void unlistenEnvironments.then((off) => off());
       void unlistenInbox.then((off) => off());
       void unlistenTracker.then((off) => off());
       void unlistenClicks.then((off) => off());

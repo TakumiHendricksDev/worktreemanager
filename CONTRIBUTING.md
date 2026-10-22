@@ -48,9 +48,10 @@ code that trips them.
 
 **`std::process::Command::new` is banned** outside `wtm-exec`. Every subprocess in the app
 funnels through one place so that it gets a deadline, a sanitized environment, a resolved
-`PATH` and a tracing span. There is one exception with no deadline —
-`Runner::launch_detached`, for handing a directory to a GUI application — and its doc comment
-explains why at length. Read that before adding a second one.
+`PATH` and a tracing span. There are two exceptions with no deadline —
+`Runner::launch_detached`, for handing a directory to a GUI application, and a worktree's
+services through `ServiceHost`, which run until stopped — and their doc comments explain why at
+length. Read those before adding a third.
 
 **`SystemTime::now` and `Instant::now` are banned** outside the clock adapter. Use-cases take
 a `Clock` port so they are testable at a fixed instant.

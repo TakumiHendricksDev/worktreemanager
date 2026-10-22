@@ -32,6 +32,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+mod env;
 mod findings;
 mod fixes;
 mod inbox;

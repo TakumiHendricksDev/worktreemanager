@@ -54,6 +54,7 @@
 pub mod brief;
 pub mod checks;
 pub mod commands;
+pub mod env;
 pub mod findings;
 pub mod fix;
 pub mod host;

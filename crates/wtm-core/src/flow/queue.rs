@@ -167,7 +167,11 @@ impl QueueSection {
         match state.phase {
             Phase::ReadyToTest | Phase::FixReady => Self::ReadyToTest,
             // Settled phases: the run is not doing anything until someone acts on it.
-            Phase::Consolidated | Phase::Following | Phase::InReview => Self::NotStarted,
+            // An environment's flow stays Operating for as long as its worktree is in use: running
+            // services are not work under way. Its approvals reach Needs you as inbox items, above.
+            Phase::Consolidated | Phase::Following | Phase::InReview | Phase::Operating => {
+                Self::NotStarted
+            }
             Phase::Resolving
             | Phase::Preparing
             | Phase::Investigating

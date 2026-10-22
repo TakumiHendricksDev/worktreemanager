@@ -39,9 +39,11 @@
 //! what posts ([`publish`], [`outbox`], [`approval`]), and local fixes: the writer lease, the scope a
 //! fix is held to ([`fix`]), and the routes a fix leaves by ([`route`]). Then the read side of a
 //! tracker: issues, sprints and a project's status mapping ([`tracker`]), and the sprint queue a
-//! sync mirrors, with the sections its issues sit in by their runs ([`queue`]). The engine and the
-//! outbox's executor are in the app (`src-tauri/src/flow/`), because one opens sessions and the
-//! other reaches the forge.
+//! sync mirrors, with the sections its issues sit in by their runs ([`queue`]). And a worktree's
+//! environment: the services it runs, the rules they are supervised by, and the approval a
+//! destructive command on a shared resource waits for ([`env`]). The engine, the outbox's executor
+//! and the environment's supervisor are in the app (`src-tauri/src/flow/`), because one opens
+//! sessions, one reaches the forge, and one starts processes.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -64,6 +66,7 @@ macro_rules! id {
 
 pub mod approval;
 pub mod consolidate;
+pub mod env;
 pub mod event;
 pub mod fix;
 pub mod forge;
@@ -96,6 +99,14 @@ pub use approval::{
 pub use consolidate::{
     Evidence, EvidenceKey, FindingRecord, Merged, NewFinding, Reconciled, Source, consolidate,
     finding_is_stale, reconcile, role_is_affected,
+};
+pub use env::{
+    CommandRequest, CommandRun, CommandRunChange, CommandRunId, CommandRunRefused, CommandRunState,
+    EnvCommandSpec, EnvironmentError, EnvironmentSpec, HealthSpec, Isolation, LoopbackUrl,
+    NewCommandRun, OwnedService, PortConflict, PortOwner, ProcessIdentity, Recovery, ResourceSpec,
+    ServiceEvent, ServiceRecord, ServiceSpec, ServiceState, ServiceTransitionError, UrlRefusal,
+    command_binding, containers_on, healthy_status, is_docker_forwarder, loopback_url,
+    needs_approval, parse_lsof, port_number, probe_delays,
 };
 pub use event::{FlowEvent, RecordedEvent};
 pub use fix::{

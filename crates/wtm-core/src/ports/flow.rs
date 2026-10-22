@@ -30,6 +30,9 @@ use crate::flow::{
     OutboxError, Publication, RouteSend,
 };
 use crate::flow::{CheckRun, FindingId, FindingRecord, NewCheckRun, Reconciled};
+use crate::flow::{
+    CommandRun, CommandRunChange, CommandRunId, CommandRunRefused, NewCommandRun, ServiceRecord,
+};
 use crate::flow::{Fix, FixChange, FixId, Lease, LeaseId, LeaseRelease, NewFix, NewLease};
 use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
@@ -115,6 +118,22 @@ pub enum FlowStoreError {
     /// stopped: whether it reached the remote is not known yet. Nothing was written.
     #[error("operation {operation} is still being sent; wait for it to finish or be checked")]
     StillSending { operation: OperationId },
+
+    /// A command of this worktree's environment is already waiting for your approval. Approve or
+    /// decline it first: its inbox item is the one place it is asked, and a second would hide it.
+    #[error("command run {existing} is already waiting for your approval")]
+    CommandWaiting { existing: CommandRunId },
+
+    #[error("no command run {0}")]
+    UnknownCommandRun(CommandRunId),
+
+    /// The run's rules refused the change. Nothing was written. A field, for the reason
+    /// [`Self::Unanswerable`] gives.
+    #[error("{reason}")]
+    CommandRun {
+        #[from]
+        reason: CommandRunRefused,
+    },
 
     /// The store itself failed. Carries the driver's message, which holds no secrets: nothing in
     /// this store is one.
@@ -503,4 +522,66 @@ pub trait FixStore: Send + Sync {
 
     /// A run's fixes, oldest first.
     fn fixes(&self, flow: FlowId) -> Result<Vec<Fix>, FlowStoreError>;
+}
+
+/// Worktree environments: the services wtm started, the flow each environment's approvals belong
+/// to, the commands run against it, and the idle stop you opted into.
+pub trait EnvStore: Send + Sync {
+    /// Record a service as it is now, replacing what was recorded for that service of that worktree.
+    fn save_service(&self, record: &ServiceRecord) -> Result<(), FlowStoreError>;
+
+    /// The services recorded for one worktree, or for every worktree, by worktree then service.
+    fn services(&self, worktree: Option<&str>) -> Result<Vec<ServiceRecord>, FlowStoreError>;
+
+    /// The environment flow recorded for `worktree`, if it is still open.
+    fn environment_flow(&self, worktree: &str) -> Result<Option<FlowId>, FlowStoreError>;
+
+    /// The project and worktree an environment flow belongs to.
+    fn environment_place(
+        &self,
+        flow: FlowId,
+    ) -> Result<Option<(ProjectId, String)>, FlowStoreError>;
+
+    /// Record that `flow` is `worktree`'s environment, replacing an earlier flow for that path.
+    fn bind_environment_flow(
+        &self,
+        flow: FlowId,
+        project: &ProjectId,
+        worktree: &str,
+    ) -> Result<(), FlowStoreError>;
+
+    /// Record a command run.
+    ///
+    /// # Errors
+    ///
+    /// [`FlowStoreError::CommandWaiting`] when one of the flow's runs is waiting for approval
+    /// already and this one would wait too.
+    fn record_command_run(
+        &self,
+        run: &NewCommandRun,
+        at: UnixMs,
+    ) -> Result<CommandRun, FlowStoreError>;
+
+    /// Change a run, checked against [`CommandRunState::can_move`](crate::flow::CommandRunState::can_move).
+    fn change_command_run(
+        &self,
+        id: CommandRunId,
+        change: &CommandRunChange,
+        at: UnixMs,
+    ) -> Result<CommandRun, FlowStoreError>;
+
+    fn command_run(&self, id: CommandRunId) -> Result<Option<CommandRun>, FlowStoreError>;
+
+    /// A flow's runs, newest first, at most `limit`.
+    fn command_runs(&self, flow: FlowId, limit: usize) -> Result<Vec<CommandRun>, FlowStoreError>;
+
+    /// How many minutes in the background before a project's services are stopped, if you opted in.
+    fn idle_stop(&self, project: &ProjectId) -> Result<Option<u32>, FlowStoreError>;
+
+    /// Opt a project into idle stop, or out of it with `None`.
+    fn set_idle_stop(
+        &self,
+        project: &ProjectId,
+        minutes: Option<u32>,
+    ) -> Result<(), FlowStoreError>;
 }

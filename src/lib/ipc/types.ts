@@ -1433,7 +1433,8 @@ export type FlowPhase =
   | 'consolidated'
   | 'fix_ready'
   | 'submitting'
-  | 'following';
+  | 'following'
+  | 'operating';
 
 export type FlowHold =
   | { kind: 'awaiting_answer' }
@@ -1447,7 +1448,7 @@ export type FlowEnd =
   { kind: 'done' } | { kind: 'failed'; reason: string } | { kind: 'cancelled' };
 
 export interface FlowState {
-  kind: 'implement' | 'review_mine' | 'review_pr' | 'revise';
+  kind: 'implement' | 'review_mine' | 'review_pr' | 'revise' | 'environment';
   phase: FlowPhase;
   hold: FlowHold | null;
   end: FlowEnd | null;
@@ -2147,4 +2148,125 @@ export interface RecipeChoice {
   id: string;
   label: string;
   roles: { id: string; provider: RoleProvider; model: string | null; skills: string[] }[];
+}
+
+// ── environments: a worktree's services, resources and commands ──
+
+/** `wtm_core::flow::ServiceState`. */
+export type ServiceState = 'stopped' | 'starting' | 'healthy' | 'unhealthy' | 'failed';
+
+/** `wtm_core::flow::Isolation`. */
+export type ResourceIsolation = 'per_worktree' | 'shared';
+
+/** `wtm_core::flow::CommandRunState`. */
+export type CommandRunState =
+  'awaiting_approval' | 'declined' | 'stale' | 'running' | 'succeeded' | 'failed';
+
+/** Something listening on a port a service needs. `wtm_core::flow::PortOwner`. */
+export interface PortOwner {
+  pid: number | null;
+  command: string;
+  container: string | null;
+  /** A service wtm itself started, in this worktree or another. */
+  service: { worktree: string; service: string } | null;
+}
+
+/** A port a service needs that something else holds. Reported, never freed by wtm. */
+export interface PortConflict {
+  port: number;
+  owners: PortOwner[];
+}
+
+export interface PortView {
+  port: number | null;
+  problem: string | null;
+}
+
+/** `src-tauri/src/flow/env.rs` `ServiceView`. */
+export interface ServiceView {
+  id: string;
+  label: string;
+  state: ServiceState;
+  detail: string | null;
+  ports: PortView[];
+  /** What its health check asks, rendered. */
+  health: string;
+  /** Its preview, rendered, when it is an address on this machine. */
+  preview: string | null;
+  detached: boolean;
+  pid: number | null;
+  /** Left running when wtm last closed, and still running. */
+  leftRunning: boolean;
+  conflicts: PortConflict[];
+  startedAt: number | null;
+  updatedAt: number | null;
+  hasLog: boolean;
+}
+
+export interface ResourceView {
+  id: string;
+  label: string;
+  isolation: ResourceIsolation;
+}
+
+export interface CommandView {
+  id: string;
+  label: string;
+  /** As declared, templates and all. */
+  argv: string[];
+  destructive: boolean;
+  resources: string[];
+  needsApproval: boolean;
+}
+
+export interface CommandRunView {
+  id: number;
+  flow: number;
+  command: string;
+  label: string;
+  argv: string[];
+  state: CommandRunState;
+  exitCode: number | null;
+  output: string | null;
+  requestedAt: number;
+  finishedAt: number | null;
+}
+
+/** `src-tauri/src/flow/env.rs` `EnvironmentView`. */
+export interface EnvironmentView {
+  project: string;
+  worktree: string;
+  /** Whether the project declares anything under `[environment]`. */
+  declared: boolean;
+  services: ServiceView[];
+  resources: ResourceView[];
+  commands: CommandView[];
+  /** Newest first. */
+  runs: CommandRunView[];
+  idleStopMinutes: number | null;
+  /** Why the config could not be read: untrusted, or invalid. */
+  problem: string | null;
+}
+
+/** A command waiting for your approval, as the inbox and the Environment tab show it. */
+export interface PendingCommandView {
+  run: CommandRunView;
+  project: string;
+  worktree: string;
+  worktreeName: string;
+  /** The shared resources that make it wait, by label. */
+  shared: string[];
+}
+
+/** A preview address that answered just now. Only this is ever opened. */
+export interface VerifiedPreview {
+  url: string;
+  status: number;
+  ms: number;
+}
+
+export interface ServiceLog {
+  path: string;
+  text: string;
+  truncated: boolean;
 }

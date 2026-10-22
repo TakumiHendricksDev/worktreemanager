@@ -14,6 +14,9 @@
 //! - [`runner`] — [`Runner`], the captured-output [`CommandRunner`].
 //! - [`pty`] — [`PtyHostImpl`], interactive sessions for anything that prompts or
 //!   whose progress the user should watch.
+//! - [`service`] — [`ServiceHost`](wtm_core::ports::ServiceHost) on [`Runner`]: a worktree's
+//!   services, which run until stopped, log to a file, and are recognised again by pid and start
+//!   time before anything signals them.
 //! - [`pipe`] — [`PipeHostImpl`], long-lived sessions for a child that speaks a
 //!   newline-delimited protocol rather than talking to a human. Its port's docs
 //!   explain why a pty cannot serve that case: it echoes, it rewrites newlines, and
@@ -38,6 +41,7 @@ pub mod path;
 pub mod pipe;
 pub mod pty;
 pub mod runner;
+pub mod service;
 pub mod shell;
 pub mod shell_frames;
 pub mod shell_integration;

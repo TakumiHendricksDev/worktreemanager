@@ -1,0 +1,326 @@
+/*
+ * A worktree's environment in the Work view: the Environment tab (`WorkEnvironment.svelte`), the
+ * header's control (`WorkEnvControl.svelte`), and the approval a destructive command on a shared
+ * resource waits for (`WorkEnvApproval.svelte`, whose frame is `.c-work-state`'s).
+ *
+ * A service's state is a `.c-dot` and a word, never a colour alone (`_dot.scss` says why): the
+ * state modifiers here colour only the word beside the dot, and their names are `DotTone` in
+ * `environment.ts`. A run's tone names are `RUN_TONE`'s, the same five the inbox uses.
+ */
+
+.c-env {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 880px;
+}
+
+.c-env__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-env__title {
+  font-size: var(--step-1);
+  font-weight: 600;
+}
+
+.c-env__where {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  font-weight: 400;
+}
+
+.c-env__isolation,
+.c-env__notice,
+.c-env__idle-note {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-env__notice {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-md);
+  background: var(--info-soft);
+  color: var(--fg);
+}
+
+.c-env__services,
+.c-env__list,
+.c-env__runs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.c-env__subtitle {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-env__commands {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-env__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.c-env__idle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+  font-size: var(--step--1);
+}
+
+/* `.c-select` fills its row in a form; here it sits in a sentence. */
+.c-env__idle > .c-select {
+  width: auto;
+}
+
+/* ── one service ── */
+
+.c-env-service {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+}
+
+.c-env-service__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-env-service__name {
+  font-weight: 600;
+}
+
+.c-env-service__state {
+  font-size: var(--step--1);
+}
+
+.c-env-service__state--done {
+  color: var(--ok);
+}
+
+.c-env-service__state--attention {
+  color: var(--warn);
+}
+
+.c-env-service__state--failed {
+  color: var(--danger);
+}
+
+.c-env-service__state--idle,
+.c-env-service__state--starting {
+  color: var(--fg-muted);
+}
+
+.c-env-service__address {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-env-service__tag {
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-env-service__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+.c-env-service__detail,
+.c-env-service__health {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.c-env-service__health {
+  font-size: var(--step--2);
+}
+
+.c-env-service__when {
+  margin-left: 0.4ch;
+  color: var(--fg-subtle);
+}
+
+.c-env-service__conflict {
+  padding: var(--sp-2);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+  font-size: var(--step--1);
+}
+
+/* ── the log ── */
+
+.c-env-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-env-log__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-env-log__note {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 400;
+}
+
+/* Bounded and its own scroller, like `.c-transcript__out`: a server's log can be thousands of
+   lines, and the tab is where you look at the end of it, not read it all. */
+.c-env-log__text,
+.c-env-run__output,
+.c-env-approval__argv {
+  max-height: 18lh;
+  margin: 0;
+  padding: var(--sp-2);
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-env-run__output {
+  max-height: 8lh;
+}
+
+/* ── commands and their runs ── */
+
+.c-env-command {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.c-env-command__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.c-env-command__name {
+  font-weight: 600;
+}
+
+.c-env-command__argv {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.c-env-command__policy {
+  color: var(--danger);
+  font-size: var(--step--2);
+}
+
+.c-env-command__policy--quiet {
+  color: var(--fg-muted);
+}
+
+.c-env-run {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  font-size: var(--step--1);
+}
+
+.c-env-run__state {
+  font-weight: 600;
+}
+
+.c-env-run__state--ok {
+  color: var(--ok);
+}
+
+.c-env-run__state--danger {
+  color: var(--danger);
+}
+
+.c-env-run__state--warn {
+  color: var(--warn);
+}
+
+.c-env-run__state--accent {
+  color: var(--accent);
+}
+
+.c-env-run__state--info {
+  color: var(--fg-muted);
+}
+
+.c-env-run__when {
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+}
+
+.c-env-run__output {
+  flex-basis: 100%;
+}
+
+/* ── the header control ── */
+
+.c-env-control {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-left: var(--sp-2);
+  border-left: 1px solid var(--border);
+}
+
+.c-env-control__state {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  margin-right: var(--sp-1);
+  font-size: var(--step--1);
+  white-space: nowrap;
+}

@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
+use super::env::CommandRequest;
 use super::publish::ReviewPayload;
 use super::route::{RoutePlan, SuggestionRoute};
 use super::state::FlowId;
@@ -45,6 +46,8 @@ pub enum ApprovalIntent {
     Route,
     /// Merge this head. Only the merge sheet asks for this, and no agent tool can.
     Merge,
+    /// Run this environment command once: a destructive one on a resource every worktree shares.
+    Command,
 }
 
 impl ApprovalIntent {
@@ -55,7 +58,8 @@ impl ApprovalIntent {
             Self::Plan => &[Pinned::PlanRevision],
             Self::Design => &[Pinned::DesignRevision],
             Self::Publish | Self::Merge => &[Pinned::Head],
-            Self::Post => &[Pinned::Payload],
+            // A command pins the hash of exactly what runs, as a post pins exactly what is sent.
+            Self::Post | Self::Command => &[Pinned::Payload],
             Self::Route => &[Pinned::Remote, Pinned::Ref, Pinned::Diff],
         }
     }
@@ -199,6 +203,9 @@ pub enum ApprovalSubject {
     Suggestions(Box<SuggestionRoute>),
     /// A local fix pushed somewhere: a follow-up pull request, or their branch.
     Route(Box<RoutePlan>),
+    /// One run of an environment command. See [`CommandRequest`] for why it holds the declared
+    /// argv and not the rendered one.
+    Command(Box<CommandRequest>),
 }
 
 /// An approval to record, not yet numbered.
@@ -293,6 +300,37 @@ impl NewApproval {
             intent: ApprovalIntent::Route,
             binding,
             subject,
+        })
+    }
+
+    /// Approval to run one environment command, covering the hash of exactly what runs
+    /// ([`super::env::command_binding`]).
+    ///
+    /// # Errors
+    ///
+    /// When `binding` does not pin the command's payload.
+    pub fn command(
+        flow: FlowId,
+        request: &CommandRequest,
+        binding: Binding,
+    ) -> Result<Self, ApprovalError> {
+        let missing: Vec<Pinned> = ApprovalIntent::Command
+            .requires()
+            .iter()
+            .filter(|pin| !binding.0.contains_key(pin))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            return Err(ApprovalError::Unpinned {
+                intent: ApprovalIntent::Command,
+                missing,
+            });
+        }
+        Ok(Self {
+            flow,
+            intent: ApprovalIntent::Command,
+            binding,
+            subject: ApprovalSubject::Command(Box::new(request.clone())),
         })
     }
 }

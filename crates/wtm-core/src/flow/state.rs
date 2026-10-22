@@ -46,14 +46,23 @@ pub enum FlowKind {
     /// Implement path without the planning front, ending once the revision is published: the
     /// Implement flow that published the pull request is still the one following it.
     Revise,
+    /// Operate a worktree's environment: its services, and its commands.
+    ///
+    /// Not an execution with an end like the others, and that is deliberate. An approval and an
+    /// inbox item each belong to a flow, and a destructive command on a shared database needs both,
+    /// so a worktree whose environment wtm operates has one open flow of this kind for them to
+    /// belong to. Its only phase is [`Phase::Operating`]; the services' own states are the
+    /// supervisor's, not the flow's.
+    Environment,
 }
 
 impl FlowKind {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Implement,
         Self::ReviewMine,
         Self::ReviewPr,
         Self::Revise,
+        Self::Environment,
     ];
 
     /// Whether a flow of this kind has a step from `from` to `to`.
@@ -73,6 +82,7 @@ impl FlowKind {
             Self::Implement => &IMPLEMENT,
             Self::ReviewMine | Self::ReviewPr => &REVIEW,
             Self::Revise => &REVISE,
+            Self::Environment => &ENVIRONMENT,
         }
     }
 }
@@ -113,6 +123,8 @@ pub enum Phase {
     Submitting,
     /// Watching the pull request for new revisions.
     Following,
+    /// A worktree's environment, operated for as long as the worktree is in use.
+    Operating,
 }
 
 struct Lifecycle {
@@ -191,6 +203,12 @@ const REVISE: Lifecycle = Lifecycle {
         (Phase::Revising, Phase::ReadyToTest),
     ],
     finishes_from: &[Phase::Publishing],
+};
+
+// Environment: Resolving → Operating, which it stays in.
+const ENVIRONMENT: Lifecycle = Lifecycle {
+    steps: &[(Phase::Resolving, Phase::Operating)],
+    finishes_from: &[Phase::Operating],
 };
 
 /// Why a flow is not moving.

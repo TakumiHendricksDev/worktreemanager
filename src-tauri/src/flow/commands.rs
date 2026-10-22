@@ -558,3 +558,253 @@ pub async fn cancel_fix_route(
     let engine = Arc::clone(&engine);
     blocking(move || engine.cancel_route(ApprovalId(approval))).await
 }
+
+// ═══════════════════════════════ environments ═══════════════════════════════
+
+/// A worktree's environment changed: a service started, answered, stopped or exited, or a command
+/// ran. Carries the place only; the window asks for the rest.
+pub const ENV_CHANGED_EVENT: &str = "env:changed";
+
+pub type SupervisorState<'a> = State<'a, Arc<super::env::Supervisor>>;
+
+/// The window's half of [`super::env::EnvNotice`].
+pub struct TauriEnvNotice {
+    handle: AppHandle,
+}
+
+impl std::fmt::Debug for TauriEnvNotice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TauriEnvNotice").finish_non_exhaustive()
+    }
+}
+
+impl TauriEnvNotice {
+    #[must_use]
+    pub fn new(handle: AppHandle) -> Self {
+        Self { handle }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvChanged<'a> {
+    project: &'a str,
+    worktree: &'a str,
+}
+
+impl super::env::EnvNotice for TauriEnvNotice {
+    fn changed(&self, project: &str, worktree: &str) {
+        let _ = self
+            .handle
+            .emit(ENV_CHANGED_EVENT, EnvChanged { project, worktree });
+    }
+}
+
+fn environment_off() -> ErrorView {
+    refused("the Environment tab is part of the Work view, which is turned off".to_owned())
+}
+
+/// A worktree's environment: its services, resources, commands and recent runs.
+#[tauri::command]
+pub async fn environment(
+    app: AppState<'_>,
+    supervisor: SupervisorState<'_>,
+    project: String,
+    worktree: String,
+) -> Reply<super::env::EnvironmentView> {
+    if !app.work_view_enabled() {
+        return Err(environment_off());
+    }
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || supervisor.view(&project, &worktree).map_err(refused)).await
+}
+
+/// Start one service, or every one that is not running. A port in use refuses the start and names
+/// its owner; nothing is ended to free it.
+#[tauri::command]
+pub async fn start_services(
+    app: AppState<'_>,
+    supervisor: SupervisorState<'_>,
+    project: String,
+    worktree: String,
+    service: Option<String>,
+) -> Reply<super::env::EnvironmentView> {
+    if !app.work_view_enabled() {
+        return Err(environment_off());
+    }
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .start(&project, &worktree, service.as_deref())
+            .map_err(refused)
+    })
+    .await
+}
+
+/// Stop one service, or every running one.
+#[tauri::command]
+pub async fn stop_services(
+    supervisor: SupervisorState<'_>,
+    project: String,
+    worktree: String,
+    service: Option<String>,
+) -> Reply<super::env::EnvironmentView> {
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .stop(&project, &worktree, service.as_deref())
+            .map_err(refused)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn restart_services(
+    app: AppState<'_>,
+    supervisor: SupervisorState<'_>,
+    project: String,
+    worktree: String,
+    service: Option<String>,
+) -> Reply<super::env::EnvironmentView> {
+    if !app.work_view_enabled() {
+        return Err(environment_off());
+    }
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .restart(&project, &worktree, service.as_deref())
+            .map_err(refused)
+    })
+    .await
+}
+
+/// Ask a running service once whether it is up.
+#[tauri::command]
+pub async fn check_service(
+    supervisor: SupervisorState<'_>,
+    project: String,
+    worktree: String,
+    service: String,
+) -> Reply<super::env::EnvironmentView> {
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .check(&project, &worktree, &service)
+            .map_err(refused)
+    })
+    .await
+}
+
+/// A healthy service's preview, fetched just now. The window opens only what this returns.
+#[tauri::command]
+pub async fn verify_service_preview(
+    app: AppState<'_>,
+    supervisor: SupervisorState<'_>,
+    project: String,
+    worktree: String,
+    service: String,
+) -> Reply<super::env::VerifiedPreview> {
+    if !app.work_view_enabled() {
+        return Err(environment_off());
+    }
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .preview(&project, &worktree, &service)
+            .map_err(refused)
+    })
+    .await
+}
+
+/// The end of a service's log.
+#[tauri::command]
+pub async fn service_log(
+    supervisor: SupervisorState<'_>,
+    project: String,
+    worktree: String,
+    service: String,
+) -> Reply<super::env::ServiceLog> {
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .log(&project, &worktree, &service)
+            .map_err(refused)
+    })
+    .await
+}
+
+/// Run one of a worktree's commands, or ask for approval in the inbox when it is destructive and
+/// reaches a shared resource.
+#[tauri::command]
+pub async fn run_environment_command(
+    app: AppState<'_>,
+    supervisor: SupervisorState<'_>,
+    project: String,
+    worktree: String,
+    command: String,
+) -> Reply<super::env::EnvironmentView> {
+    if !app.work_view_enabled() {
+        return Err(environment_off());
+    }
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .run_command(&project, &worktree, &command)
+            .map_err(refused)
+    })
+    .await
+}
+
+/// The command waiting for your approval in an environment's flow, if one is.
+#[tauri::command]
+pub async fn pending_environment_command(
+    supervisor: SupervisorState<'_>,
+    flow: i64,
+) -> Reply<Option<super::env::PendingCommandView>> {
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || supervisor.pending(FlowId(flow)).map_err(refused)).await
+}
+
+/// Approve one run of a waiting command. Only the window calls this; no agent tool reaches it.
+#[tauri::command]
+pub async fn approve_environment_command(
+    app: AppState<'_>,
+    supervisor: SupervisorState<'_>,
+    run: i64,
+) -> Reply<super::env::CommandRunView> {
+    if !app.work_view_enabled() {
+        return Err(environment_off());
+    }
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .approve(wtm_core::flow::CommandRunId(run))
+            .map_err(refused)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn decline_environment_command(
+    supervisor: SupervisorState<'_>,
+    run: i64,
+) -> Reply<super::env::CommandRunView> {
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || {
+        supervisor
+            .decline(wtm_core::flow::CommandRunId(run))
+            .map_err(refused)
+    })
+    .await
+}
+
+/// Stop a project's services after this many minutes with wtm in the background, or never.
+#[tauri::command]
+pub async fn set_idle_stop(
+    supervisor: SupervisorState<'_>,
+    project: String,
+    minutes: Option<u32>,
+) -> Reply<()> {
+    let supervisor = Arc::clone(&supervisor);
+    blocking(move || supervisor.set_idle_stop(&project, minutes).map_err(refused)).await
+}

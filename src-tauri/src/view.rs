@@ -957,6 +957,7 @@ mod tests {
             actions: vec![],
             agent: std::collections::BTreeMap::new(),
             workflow: None,
+            environment: wtm_core::flow::EnvironmentSpec::default(),
             guards: wtm_core::model::GuardSpec::default(),
             browser: wtm_core::model::BrowserSpec::default(),
         };
