@@ -1,6 +1,6 @@
 //! The app's own database: work items, flows and their history, review rules and runs, the inbox,
 //! approvals with the outbox's operations, local fixes with the leases that hold their worktrees,
-//! and the mirror of what a project's tracker last said, in SQLite.
+//! the mirror of what a project's tracker last said, and Start Work's jobs, in SQLite.
 //!
 //! # Why this name
 //!
@@ -41,6 +41,7 @@ mod outbox;
 mod pull_reviews;
 mod rules;
 mod runs;
+mod starts;
 mod store;
 mod tracker;
 
@@ -86,7 +87,8 @@ pub enum AppDbError {
 /// [`RuleStore`](wtm_core::ports::RuleStore), [`RunStore`](wtm_core::ports::RunStore),
 /// [`PullReviewStore`](wtm_core::ports::PullReviewStore), [`InboxStore`](wtm_core::ports::InboxStore),
 /// [`OutboxStore`](wtm_core::ports::OutboxStore), [`LeaseStore`](wtm_core::ports::LeaseStore),
-/// [`FixStore`](wtm_core::ports::FixStore) and [`TrackerMirror`](wtm_core::ports::TrackerMirror).
+/// [`FixStore`](wtm_core::ports::FixStore), [`TrackerMirror`](wtm_core::ports::TrackerMirror) and
+/// [`StartStore`](wtm_core::ports::StartStore).
 #[derive(Debug)]
 pub struct AppDb {
     conn: Mutex<Connection>,

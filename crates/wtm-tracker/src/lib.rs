@@ -8,14 +8,15 @@
 //! client. The cost is a process per question, and a narrower window onto the tracker than its API
 //! gives, recorded below because it decides what the Work view can show.
 //!
-//! # Reads only
+//! # Reads, and one write
 //!
 //! Every argv this crate builds is one of `acli --version`, `acli jira auth status`,
 //! `acli jira workitem search`, `acli jira workitem view`, `acli jira board list-sprints`,
-//! `acli jira sprint view` and `acli jira sprint list-workitems`; `tests/acli.rs` holds the adapter
-//! to that list. [`TrackerWriter`](wtm_core::ports::TrackerWriter), the port that would move an
-//! issue or comment on one, is not implemented here, so no code in this build can write to a
-//! tracker.
+//! `acli jira sprint view` and `acli jira sprint list-workitems`, which read, and
+//! `acli jira workitem transition` for exactly one issue by key, which moves it
+//! ([`TrackerWriter`](wtm_core::ports::TrackerWriter)); `tests/acli.rs` holds the adapter to that
+//! list. Nothing comments, edits, assigns or creates. A move is sent only by the app's outbox, which
+//! reads the issue first and reads it again after (`wtm_core::flow::moves`).
 //!
 //! # What acli 1.3.18 can and cannot read (measured 2026-10-21 against a Jira Cloud site)
 //!
@@ -44,7 +45,7 @@
 //!
 //! # Version and sign-in
 //!
-//! [`AcliTracker`]'s `check` runs before the first read of an action. It refuses an `acli` older
+//! [`AcliTracker`]'s `check` runs before the first read of an action, and before a move. It refuses an `acli` older
 //! than [`MINIMUM_VERSION`], the release these replies were recorded from, so "upgrade acli" is the
 //! message rather than an unknown-flag error from a CLI that predates a command; and it refuses a
 //! CLI that is not signed in, so "sign in" is the message rather than a parse error.

@@ -18,6 +18,7 @@ pub mod code_comments;
 pub mod code_tools;
 pub mod commands;
 pub mod design_evidence;
+pub mod dev_tracker;
 pub mod dictate;
 pub mod display;
 pub mod flow;
@@ -249,7 +250,15 @@ pub fn application_context() -> tauri::Context<tauri::Wry> {
 pub fn run() {
     init_tracing();
 
-    let app = Arc::new(App::new().expect("initialize the application"));
+    let mut app = App::new().expect("initialize the application");
+    // A debug build's click-through keeps issue moves on this machine (`dev_tracker`).
+    if let Some(fake) =
+        dev_tracker::DevTracker::from_env(Arc::clone(&app.tracker), &app.config.paths().flow_db)
+    {
+        app.tracker = Arc::clone(&fake) as Arc<dyn wtm_core::ports::Tracker>;
+        app.tracker_writer = fake;
+    }
+    let app = Arc::new(app);
 
     tauri::Builder::default()
         .manage(app)
@@ -590,6 +599,15 @@ pub fn run() {
             flow::commands::cancel_publication,
             flow::commands::dismiss_finding,
             flow::commands::review_base,
+            flow::start_commands::start_work_preview,
+            flow::start_commands::start_work,
+            flow::start_commands::issue_start,
+            flow::start_commands::resume_start,
+            flow::start_commands::cancel_issue_run,
+            flow::start_commands::move_issue,
+            flow::start_commands::settle_move,
+            flow::start_commands::pause_run,
+            flow::start_commands::unpause_run,
         ])
         // `build` then `run`, rather than `Builder::run`. The shorthand is exactly
         // `build(context)?.run(|_, _| {})` — an empty event callback — and this app now needs

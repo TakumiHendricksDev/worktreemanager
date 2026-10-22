@@ -58,10 +58,13 @@ pub mod env;
 pub mod findings;
 pub mod fix;
 pub mod host;
+pub mod moves;
 pub mod outbox;
 pub mod publish;
 pub mod pull_request;
 pub mod routes;
+pub mod start;
+pub mod start_commands;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -372,6 +375,8 @@ pub struct Engine {
     fault: Option<outbox::Fault>,
     /// Whether a once-only fault has happened in this process.
     fired: AtomicBool,
+    /// Start Work's lock and the worktrees being made now (`start.rs`).
+    starts: start::Starts,
 }
 
 impl std::fmt::Debug for Engine {
@@ -411,6 +416,7 @@ impl Engine {
             publishing: Mutex::new(BTreeMap::new()),
             fault: outbox::Fault::from_env(),
             fired: AtomicBool::new(false),
+            starts: start::Starts::default(),
         })
     }
 
@@ -1829,6 +1835,11 @@ impl Engine {
     /// When the review has ended, is waiting on something a resume does not answer, or has nothing
     /// left to run.
     pub fn resume(self: &Arc<Self>, flow: FlowId) -> Result<(), Refusal> {
+        // An issue's run, interrupted while its worktree was made: the inbox's Resume is Start
+        // Work's (`start.rs`), and a review's machinery has nothing to run for it.
+        if self.is_start(flow) {
+            return self.resume_start(flow, false);
+        }
         if let Some(run) = self.runs.lock().get(&flow) {
             // Still working: whatever waits for capacity runs now rather than at the reset.
             run.wake.store(true, Ordering::SeqCst);
@@ -1924,6 +1935,9 @@ impl Engine {
     ///
     /// When the review has already ended.
     pub fn cancel(&self, flow: FlowId) -> Result<(), String> {
+        if self.is_start(flow) {
+            return self.cancel_start(flow);
+        }
         if let Some(run) = self.runs.lock().get(&flow) {
             run.cancel.store(true, Ordering::SeqCst);
         }
@@ -1962,6 +1976,7 @@ impl Engine {
         for flow in flows {
             self.interrupt(flow, InterruptCause::Quit);
         }
+        self.shutdown_starts();
     }
 
     /// At launch: every open review whose processes are gone becomes Interrupted, keeping what
@@ -2001,6 +2016,13 @@ impl Engine {
             }
         }
         self.reconcile_leases();
+        // An issue's worktree cut off while it was being made or set up (`start.rs`). Its own
+        // failure is logged rather than returned: the reviews above were recovered either way,
+        // and saying they were not would send someone looking in the wrong place.
+        match self.recover_starts() {
+            Ok(held) => interrupted.extend(held),
+            Err(error) => tracing::warn!(%error, "could not check started issues at launch"),
+        }
         Ok(interrupted)
     }
 

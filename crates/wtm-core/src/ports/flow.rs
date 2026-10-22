@@ -43,6 +43,7 @@ use crate::flow::{
     Snapshot, SnapshotId, Step, StepChange, StepId,
 };
 use crate::flow::{MirroredPr, NewOutcome, NewReviewedHead, Outcome, ReviewClaim, ReviewedHead};
+use crate::flow::{MoveSend, NewStartJob, StartJob, StartJobChange, StartJobError};
 use crate::model::ProjectId;
 
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -113,6 +114,21 @@ pub enum FlowStoreError {
     /// A fix of the run is still being written.
     #[error("fix {existing} of this run is still being written")]
     FixWriting { existing: FixId },
+
+    /// The work item already has a start job whose run is still open.
+    #[error("work item {item} is already being started, by run {flow}")]
+    StartUnderway { item: WorkItemId, flow: FlowId },
+
+    #[error("no start job for work item {0}")]
+    UnknownStartJob(WorkItemId),
+
+    /// The start job's rules refused the change. Nothing was written. A field, for the reason
+    /// [`Self::Unanswerable`] gives.
+    #[error("{reason}")]
+    StartJob {
+        #[from]
+        reason: StartJobError,
+    },
 
     /// An approval would take over an operation that is being sent, or was being sent when wtm
     /// stopped: whether it reached the remote is not known yet. Nothing was written.
@@ -464,6 +480,20 @@ pub trait OutboxStore: Send + Sync {
             .collect())
     }
 
+    /// One approval of an issue's move.
+    fn issue_move(&self, approval: ApprovalId) -> Result<Option<MoveSend>, FlowStoreError> {
+        Ok(self.approved(approval)?.and_then(Approved::into_move))
+    }
+
+    /// A flow's issue moves, oldest first.
+    fn issue_moves(&self, flow: FlowId) -> Result<Vec<MoveSend>, FlowStoreError> {
+        Ok(self
+            .approvals(flow)?
+            .into_iter()
+            .filter_map(Approved::into_move)
+            .collect())
+    }
+
     fn operation(&self, id: OperationId) -> Result<Option<Operation>, FlowStoreError>;
 
     /// Change an operation, checked against the outbox's rules. What stopped it is cleared whenever
@@ -584,4 +614,38 @@ pub trait EnvStore: Send + Sync {
         project: &ProjectId,
         minutes: Option<u32>,
     ) -> Result<(), FlowStoreError>;
+}
+
+/// Start Work's jobs: the worktree an Implement run is being given, one job per work item.
+///
+/// A port of its own for [`RunStore`]'s reason: a review run's records and an issue's start are
+/// kept by different kinds of flow. Keyed by the work item rather than numbered, because "is this
+/// issue being started already?" is the question every Start asks first, and the answer has to be
+/// the store's (see `flow::start`).
+pub trait StartStore: Send + Sync {
+    /// Record the job that prepares `job.flow`.
+    ///
+    /// # Errors
+    ///
+    /// [`FlowStoreError::StartUnderway`] when the work item has a job whose run is still open. A
+    /// job whose run has ended is replaced: starting the issue again is a new run, and the old
+    /// one's worktree is still in the work item's links.
+    fn record_start_job(&self, job: &NewStartJob, at: UnixMs) -> Result<StartJob, FlowStoreError>;
+
+    fn start_job(&self, item: WorkItemId) -> Result<Option<StartJob>, FlowStoreError>;
+
+    /// The job that prepares `flow`, when it is an Implement run's.
+    fn start_job_of(&self, flow: FlowId) -> Result<Option<StartJob>, FlowStoreError>;
+
+    /// Change a job, checked against [`StartJobState::can_move_to`](crate::flow::StartJobState)
+    /// when its state moves. Returns it as it now is.
+    fn change_start_job(
+        &self,
+        item: WorkItemId,
+        change: &StartJobChange,
+        at: UnixMs,
+    ) -> Result<StartJob, FlowStoreError>;
+
+    /// A project's jobs, or every project's, oldest first.
+    fn start_jobs(&self, project: Option<&ProjectId>) -> Result<Vec<StartJob>, FlowStoreError>;
 }

@@ -107,9 +107,10 @@
           <span class="c-publication__what">{operationTitle(op, checking)}</span>
           <span class="c-publication__detail">
             <CodeText text={operationDetail(op, view.review.number)} />
-            {#if op.state === 'done' && op.result?.url}
+            {#if op.state === 'done' && op.result && 'url' in op.result && op.result.url}
+              {@const url = op.result.url}
               ·
-              <Button variant="link" size="sm" onclick={() => onopen(op.result?.url ?? '')}
+              <Button variant="link" size="sm" onclick={() => onopen(url)}
                 >View on GitHub</Button
               >
             {/if}

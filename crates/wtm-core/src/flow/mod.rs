@@ -39,11 +39,13 @@
 //! what posts ([`publish`], [`outbox`], [`approval`]), and local fixes: the writer lease, the scope a
 //! fix is held to ([`fix`]), and the routes a fix leaves by ([`route`]). Then the read side of a
 //! tracker: issues, sprints and a project's status mapping ([`tracker`]), and the sprint queue a
-//! sync mirrors, with the sections its issues sit in by their runs ([`queue`]). And a worktree's
-//! environment: the services it runs, the rules they are supervised by, and the approval a
-//! destructive command on a shared resource waits for ([`env`]). The engine, the outbox's executor
+//! sync mirrors, with the sections its issues sit in by their runs ([`queue`]). Then Start Work:
+//! where an issue's work happens, the job that makes its worktree, and what a drop on the board
+//! means ([`start`]), and the one tracker write, moving an issue, read first ([`moves`]). And a
+//! worktree's environment: the services it runs, the rules they are supervised by, and the approval
+//! a destructive command on a shared resource waits for ([`env`]). The engine, the outbox's executor
 //! and the environment's supervisor are in the app (`src-tauri/src/flow/`), because one opens
-//! sessions, one reaches the forge, and one starts processes.
+//! sessions, one reaches the forge and the tracker, and one starts processes.
 
 /// Declares an integer id assigned by the store.
 macro_rules! id {
@@ -74,6 +76,7 @@ pub mod glob;
 pub mod inbox;
 pub mod instructions;
 pub mod knowledge;
+pub mod moves;
 pub mod outbox;
 pub mod plan;
 pub mod publish;
@@ -87,6 +90,7 @@ pub mod rule;
 pub mod run;
 pub mod schema;
 pub mod snapshot;
+pub mod start;
 pub mod state;
 pub mod submission;
 pub mod tracker;
@@ -128,8 +132,9 @@ pub use knowledge::{
     DEFAULT_MAX_RULES, MatchReason, RecordedApplication, ReviewInvocation, RuleQuery,
     RuleSelection, RuleUsage, SelectedRule,
 };
+pub use moves::{MoveCause, MoveIssuePayload, MoveRequest, MoveStep, MovedElsewhere};
 pub use outbox::{
-    Activity, Approved, Attention, NewOperation, Operation, OperationChange, OperationId,
+    Activity, Approved, Attention, MoveSend, NewOperation, Operation, OperationChange, OperationId,
     OperationKey, OperationKind, OperationPayload, OperationResult, OperationState, OutboxError,
     Publication, PublicationState, Resolution, RouteSend, SuggestedFix, progress,
 };
@@ -176,6 +181,11 @@ pub use run::{
 };
 pub use schema::SchemaProblem;
 pub use snapshot::{FlowDir, ScratchLabel, TreeCheck};
+pub use start::{
+    BranchOffer, Candidate, DropMeaning, NewStartJob, NewWorktree, Place, PullRequestHeadRef,
+    ResolutionInput, Resolved, StartJob, StartJobChange, StartJobError, StartJobState, StartMove,
+    StartSpec, StayReason, drop_meaning, resolve, start_move, start_status,
+};
 pub use state::{
     BlockCause, End, Flow, FlowId, FlowKind, FlowState, Hold, HoldKind, InterruptCause, Phase,
     Status, TransitionError,

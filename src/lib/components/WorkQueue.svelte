@@ -24,6 +24,10 @@
    * Opening Work on a project syncs it, and so does coming back to the window (`App.svelte`) and
    * the Sync button. Nothing here reads the tracker on a timer.
    *
+   * ⌘↵ on an issue's row is Start Work, the workspace's Start button by keyboard. The Start sheet
+   * it may open is mounted here, because the queue is up whenever Work is, and the button and the
+   * board ask through the same store (`state/start-work.svelte.ts`).
+   *
    * Rows are buttons in a list rather than a `role="tree"` like the sidebar's. There is nothing to
    * fold and no second level, so a tree's keyboard model would be ceremony with nothing behind it.
    */
@@ -39,6 +43,7 @@
   } from '../work';
   import { reviewRuns } from '../state/review-runs.svelte';
   import { reviews } from '../state/reviews.svelte';
+  import { startWork } from '../state/start-work.svelte';
   import { trackerQueue } from '../state/tracker.svelte';
   import { work } from '../state/work.svelte';
   import {
@@ -57,6 +62,7 @@
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
   import TextInput from './ui/TextInput.svelte';
+  import WorkStartSheet from './WorkStartSheet.svelte';
 
   const {
     visible,
@@ -301,8 +307,15 @@
       class="c-work-row"
       class:is-selected={work.issue === row.issue.key}
       aria-current={work.issue === row.issue.key ? 'true' : undefined}
-      title={row.issue.summary}
+      title="{row.issue.summary} — ⌘↵ starts work"
       onclick={() => work.pickIssue(row.issue.key)}
+      onkeydown={(event) => {
+        // ⌘↵: Start Work on the focused row, or show the run it has.
+        if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return;
+        event.preventDefault();
+        const projectId = workspace.activeProjectId;
+        if (projectId) void startWork.start(projectId, row.issue.key);
+      }}
     >
       <span
         class="c-dot c-dot--{SECTION_DOT[row.section]} c-work-row__mark"
@@ -445,3 +458,7 @@
     </Button>
   </div>
 </nav>
+
+{#if visible}
+  <WorkStartSheet />
+{/if}

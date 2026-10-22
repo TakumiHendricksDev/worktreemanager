@@ -1004,9 +1004,11 @@ pub struct App {
     /// held only by the outbox's executor, for a route you approved (`flow/routes.rs`).
     pub pr_writer: Arc<dyn wtm_core::ports::PullRequestWriter>,
     /// Issues, sprints and the queue, read through the user's own `acli`. Only the Work view asks,
-    /// and only for a project whose workflow names a tracker — see `tracker.rs`. A reader only:
-    /// nothing in the app holds a `TrackerWriter`.
+    /// and only for a project whose workflow names a tracker — see `tracker.rs`.
     pub tracker: Arc<dyn wtm_core::ports::Tracker>,
+    /// Moving an issue through the same `acli`. Like the forge's writers, held only by the
+    /// outbox's executor, which reads the issue before every move (`flow/moves.rs`).
+    pub tracker_writer: Arc<dyn wtm_core::ports::TrackerWriter>,
     /// The app's own database: flows and review rules, one connection for both. Opened on first
     /// use; see `appdb.rs` and [`Self::flow_store`].
     pub appdb: crate::appdb::Handle,
@@ -1136,6 +1138,7 @@ impl App {
             review_writer: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
             pr_writer: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
             tracker: Arc::new(wtm_tracker::AcliTracker::new(Arc::clone(&forge_runner))),
+            tracker_writer: Arc::new(wtm_tracker::AcliTracker::new(Arc::clone(&forge_runner))),
         })
     }
 

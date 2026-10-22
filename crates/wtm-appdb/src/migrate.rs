@@ -91,6 +91,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "environments",
         sql: include_str!("../migrations/0010_environments.sql"),
     },
+    Migration {
+        version: 11,
+        name: "start work",
+        sql: include_str!("../migrations/0011_start_work.sql"),
+    },
 ];
 
 /// Bring the database at `path`, open as `conn`, up to the last of `migrations`.
@@ -540,5 +545,102 @@ mod tests {
         reopen(&path, &[MIGRATIONS[0], ADD_NOTES]).unwrap();
 
         assert_eq!(work_items_in(&backup_path(&path, 1)), 2);
+    }
+
+    #[test]
+    fn migration_eleven_keeps_every_approval_operation_and_command_run_and_accepts_a_move() {
+        // The approvals table is rebuilt to widen its intents, and the two tables that refer to it
+        // with it. A rebuild that dropped a row, an id or a trigger would lose a write's record or
+        // let it be sent twice, and one that left an approved environment command referring to the
+        // old table would fail to drop it on any database that has one. So a version-10 database
+        // with one of each is migrated and read back.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flow.db");
+        let db = AppDb::open_with(&path, &MIGRATIONS[..10]).unwrap();
+        db.with_connection(|conn| {
+            conn.execute_batch(
+                "INSERT INTO work_items (id, project, title, created_at)
+                     VALUES (1, '/work/webapp', 'Export', 1);
+                 INSERT INTO flows (id, work_item_id, kind, phase, last_seq, started_at, updated_at)
+                     VALUES (7, 1, 'review_pr', 'consolidated', 1, 1, 1);
+                 INSERT INTO approvals (id, flow_id, intent, binding, subject, granted_at)
+                     VALUES (3, 7, 'post', '{}', '{}', 2);
+                 INSERT INTO approvals (id, flow_id, intent, binding, subject, granted_at)
+                     VALUES (4, 7, 'command', '{}', '{}', 2);
+                 INSERT INTO operations
+                     (id, flow_id, kind, target, payload_hash, payload, approval_id, position,
+                      state, attempts, result, created_at, updated_at)
+                     VALUES (5, 7, 'submit_review', 'acme/webapp#40', 'h', '{}', 3, 0, 'done', 1,
+                             '{}', 2, 3);
+                 INSERT INTO env_command_runs
+                     (id, flow_id, command, label, argv, binding, state, approval_id, exit_code,
+                      requested_at, finished_at)
+                     VALUES (9, 7, 'reset', 'Reset the database', '[]', '{}', 'succeeded', 4, 0,
+                             2, 3);",
+            )
+        })
+        .unwrap();
+        drop(db);
+
+        let db = AppDb::open(&path).unwrap();
+        db.with_connection(|conn| {
+            let kept: (i64, String, i64, String) = conn.query_row(
+                "SELECT a.id, a.intent, o.id, o.state FROM approvals a
+                 JOIN operations o ON o.approval_id = a.id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+            assert_eq!(kept, (3, "post".to_owned(), 5, "done".to_owned()));
+            let command: (i64, String) = conn.query_row(
+                "SELECT r.id, a.intent FROM env_command_runs r JOIN approvals a ON a.id = r.approval_id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(command, (9, "command".to_owned()));
+            conn.execute(
+                "INSERT INTO approvals (flow_id, intent, binding, subject, granted_at)
+                 VALUES (7, 'move', '{}', '{}', 4)",
+                [],
+            )?;
+            assert!(
+                conn.execute("UPDATE approvals SET granted_at = 9 WHERE id = 3", [])
+                    .is_err(),
+                "approvals stayed append-only"
+            );
+            assert!(
+                conn.execute("UPDATE operations SET state = 'pending' WHERE id = 5", [])
+                    .is_err(),
+                "a done operation stayed done"
+            );
+            assert!(
+                conn.execute(
+                    "INSERT INTO operations
+                         (flow_id, kind, target, payload_hash, payload, approval_id, position,
+                          state, created_at, updated_at)
+                     VALUES (7, 'move_issue', 'jira:ACME-1', 'm', '{}', 404, 0, 'pending', 5, 5)",
+                    [],
+                )
+                .is_err(),
+                "operations still refer to approvals"
+            );
+            assert!(
+                conn.execute(
+                    "UPDATE env_command_runs SET approval_id = 404 WHERE id = 9",
+                    [],
+                )
+                .is_err(),
+                "command runs still refer to approvals"
+            );
+            let waiting = "INSERT INTO env_command_runs
+                     (flow_id, command, label, argv, binding, state, requested_at)
+                 VALUES (7, 'reset', 'Reset', '[]', '{}', 'awaiting_approval', 5)";
+            conn.execute(waiting, [])?;
+            assert!(
+                conn.execute(waiting, []).is_err(),
+                "still one command waiting per worktree"
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 }

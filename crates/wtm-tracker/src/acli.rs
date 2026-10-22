@@ -9,7 +9,7 @@ use wtm_core::flow::{
     Issue, IssueDetail, IssueQuery, Sprint, SprintState, TrackerAccount, Transition,
 };
 use wtm_core::ports::exec::{CancelToken, CommandRunner, Invocation};
-use wtm_core::ports::tracker::{Tracker, TrackerError};
+use wtm_core::ports::tracker::{Tracker, TrackerError, TrackerWriter};
 
 use crate::parse;
 
@@ -28,6 +28,10 @@ const AUTH_TIMEOUT_MS: u64 = 20_000;
 /// One read, which with `--paginate` is a request per page inside one process: a sprint of a few
 /// hundred issues is several pages, so this allows more than a single round trip.
 const READ_TIMEOUT_MS: u64 = 60_000;
+
+/// One transition. Jira finds it by the status's name and runs the workflow's validators and post
+/// functions, which on a busy site take seconds, not milliseconds.
+const MOVE_TIMEOUT_MS: u64 = 60_000;
 
 /// What a queue row needs. `workitem search` accepts no more than its own short list (see the crate
 /// docs), and every one of these is on it.
@@ -48,7 +52,7 @@ const DETAIL_FIELDS: [&str; 11] = [
     "updated",
 ];
 
-/// [`Tracker`] over `acli`.
+/// [`Tracker`] and [`TrackerWriter`] over `acli`.
 pub struct AcliTracker {
     runner: Arc<dyn CommandRunner>,
 }
@@ -358,6 +362,49 @@ impl Tracker for AcliTracker {
     }
 }
 
+impl TrackerWriter for AcliTracker {
+    /// `acli jira workitem transition --key=KEY --status=STATUS --yes`.
+    ///
+    /// - **One issue, checked.** `--key` takes a comma-separated list, and `--jql` and `--filter`
+    ///   select issues by query; only `--key` is used, with a key that has passed
+    ///   [`is_issue_key`], which no list or flag can.
+    /// - **`--yes`**, because the CLI otherwise asks on stdin, and a prompt nobody can answer would
+    ///   hold the command until its deadline.
+    /// - **Nothing parsed on success.** Whether the issue moved is read back by the executor, from
+    ///   the issue's status, which is the tracker's own answer and does not depend on what the CLI
+    ///   prints. That is also why this reply has no recorded fixture: recording one means moving a
+    ///   real issue.
+    fn move_to(&self, cwd: &Path, key: &str, status: &str) -> Result<(), TrackerError> {
+        let what = format!("issue {key}");
+        if !is_issue_key(key) {
+            return Err(TrackerError::NotFound { what });
+        }
+        if status.trim().is_empty() {
+            return Err(TrackerError::Unsupported {
+                what: format!("moving {key}"),
+                reason: "no status was named to move it to".to_owned(),
+            });
+        }
+        let key_arg = format!("--key={key}");
+        // `--flag=value`, as everywhere here: a status that begins with `-` is still the status.
+        let status_arg = format!("--status={status}");
+        self.acli(
+            cwd,
+            &[
+                "jira",
+                "workitem",
+                "transition",
+                &key_arg,
+                &status_arg,
+                "--yes",
+            ],
+            MOVE_TIMEOUT_MS,
+            &what,
+        )
+        .map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,5 +417,6 @@ mod tests {
         assert!(!is_issue_key("acme-12"));
         assert!(!is_issue_key("ACME-"));
         assert!(!is_issue_key("ACME-1 --web"));
+        assert!(!is_issue_key("ACME-1,ACME-2"), "a list is not one key");
     }
 }

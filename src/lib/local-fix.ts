@@ -184,6 +184,9 @@ export function routeAttentionWords(attention: Attention, branch: string): strin
       return attention.message;
     case 'pending_review':
       return 'A pending review is in the way.';
+    case 'status_moved':
+      // An issue's move, never a route's: said in case one is ever shown here.
+      return `The issue is in ${attention.current}, not ${attention.expected}.`;
   }
 }
 

@@ -6,7 +6,7 @@
 //!
 //! The project and worktree an item is about come from its run's `review_runs` row, joined on read,
 //! so they are never a second copy that could disagree with the run; for an environment's item,
-//! from its `environment_flows` row, the same way.
+//! from its `environment_flows` row, and for an issue's run, from its `start_jobs` row, the same way.
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use wtm_core::flow::ApprovalId;
@@ -22,12 +22,15 @@ use crate::runs::{ensure_flow, query};
 use crate::store::{from_json, is_unique_violation, json, storage, tag, untag};
 
 const ITEM_COLUMNS: &str = "i.id, i.flow_id, i.kind, i.target_kind, i.target_id, i.subject, \
-     i.title, i.body, i.state, i.created_at, i.closed_at, COALESCE(r.project, e.project), \
-     COALESCE(r.worktree, e.worktree)";
+     i.title, i.body, i.state, i.created_at, i.closed_at, \
+     COALESCE(r.project, e.project, s.project), COALESCE(r.worktree, e.worktree, s.worktree), \
+     s.issue_key";
 
-/// Every item read joins its run, for the place it is about.
+/// Every item read joins its run, for the place it is about: a review's, an environment's, or an
+/// issue's start.
 const ITEM_FROM: &str = "inbox_items i LEFT JOIN review_runs r ON r.flow_id = i.flow_id \
-     LEFT JOIN environment_flows e ON e.flow_id = i.flow_id";
+     LEFT JOIN environment_flows e ON e.flow_id = i.flow_id \
+     LEFT JOIN start_jobs s ON s.flow_id = i.flow_id";
 
 const QUESTION_COLUMNS: &str = "id, flow_id, step_id, role, text, why, unblocks, blocks, context, \
      recommendation, options, asked_at, answer_choice, answer_text, answered_at";
@@ -208,7 +211,7 @@ impl InboxStore for AppDb {
                 "SELECT {ITEM_COLUMNS} FROM {ITEM_FROM}
                  WHERE i.state = 'open'
                    AND (?1 IS NULL OR i.flow_id = ?1)
-                   AND (?2 IS NULL OR COALESCE(r.project, e.project) = ?2)
+                   AND (?2 IS NULL OR COALESCE(r.project, e.project, s.project) = ?2)
                  ORDER BY i.id DESC"
             ),
             params![flow.map(|f| f.0), project.map(ProjectId::as_str)],
@@ -332,6 +335,7 @@ struct ItemRow {
     closed_at: Option<UnixMs>,
     project: Option<String>,
     worktree: Option<String>,
+    issue: Option<String>,
 }
 
 impl ItemRow {
@@ -350,6 +354,7 @@ impl ItemRow {
             closed_at: row.get(10)?,
             project: row.get(11)?,
             worktree: row.get(12)?,
+            issue: row.get(13)?,
         })
     }
 
@@ -373,6 +378,7 @@ impl ItemRow {
                 .project
                 .map(|p| ProjectId::from_root(std::path::Path::new(&p))),
             worktree: self.worktree,
+            issue: self.issue,
             question,
         })
     }

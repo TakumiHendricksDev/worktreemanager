@@ -120,9 +120,13 @@ pub struct InboxItem {
     /// When it was resolved or dismissed.
     pub closed_at: Option<UnixMs>,
     /// The project and worktree the run is of, so a click can arrive there without reading the run
-    /// first. `None` for a flow that is not a review run, of which there are none yet.
+    /// first: a review's, or the worktree an issue's start is giving it. `None` for any other flow.
     pub project: Option<ProjectId>,
     pub worktree: Option<String>,
+    /// The issue's key, when the run is an issue's own (Start Work's): a click on an item about
+    /// it lands on the issue rather than on a worktree's Reviews tab.
+    #[serde(default)]
+    pub issue: Option<String>,
     /// The question itself, for an item about one, so its card is drawn from one read.
     pub question: Option<Question>,
 }

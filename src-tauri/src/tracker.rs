@@ -20,27 +20,31 @@
 //! # An issue is a work item by its key
 //!
 //! A queue row is identified as a work item is, by `(tracker, key)`. The row carries the work
-//! item's id when one exists, and the worktrees whose branch or directory carries the key
-//! (`view::extract_issue_key`), whose newest runs decide the row's section. Nothing here creates
-//! a work item or records a link: that is Start Work's, which resolves a worktree for the issue and
-//! keeps the choice (plan §4.4). Recording links from a listing here would let a sync, or merely
-//! looking, decide which worktree an issue's history belongs to.
+//! item's id when one exists, the worktree Start Work bound it to, and the worktrees whose branch
+//! or directory carries the key (`view::extract_issue_key`). Its run is the most urgent of the
+//! issue's own run (Start Work's Implement run) and those worktrees' newest reviews, and decides
+//! the row's section. Nothing here creates a work item or records a link: that is Start Work's,
+//! which resolves a worktree for the issue and keeps the choice (plan §4.4, `flow/start.rs`).
+//! Recording links from a listing here would let a sync, or merely looking, decide which worktree
+//! an issue's history belongs to.
 //!
 //! # No writes
 //!
-//! Every tracker call here is a read through [`Tracker`](wtm_core::ports::Tracker). The app holds
-//! no [`TrackerWriter`](wtm_core::ports::TrackerWriter).
+//! Every tracker call here is a read through [`Tracker`](wtm_core::ports::Tracker). Moving an
+//! issue is the outbox's, through the app's [`TrackerWriter`](wtm_core::ports::TrackerWriter),
+//! and only from Start or a drop on the board (`flow/moves.rs`).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Serialize;
 use wtm_core::flow::{
-    FlowId, FlowState, Issue, IssueDetail, MirroredQueue, QueueSection, Sprint, StatusColumn,
-    StatusRole, SyncFailure, TrackerAccount, TrackerKind, UnixMs, WorkItemId,
+    FlowId, FlowState, Issue, IssueDetail, MirroredQueue, QueueSection, Sprint, StartJob,
+    StartJobState, StatusColumn, StatusRole, SyncFailure, TrackerAccount, TrackerKind, UnixMs,
+    WorkItemId,
 };
 use wtm_core::model::{Project, Worktree};
-use wtm_core::ports::{FlowStore, InboxStore, RunStore, TrackerMirror};
+use wtm_core::ports::{FlowStore, InboxStore, RunStore, StartStore, TrackerMirror};
 use wtm_core::usecase::{SyncError, SyncReason, SyncReport, SyncRequest, read_issue, sync_queue};
 
 use crate::app::App;
@@ -114,6 +118,8 @@ pub struct IssueRunView {
     pub state: FlowState,
     /// Inbox items the run has open: what puts an issue in Needs you after its run has settled.
     pub open_items: usize,
+    /// For the issue's own run, how far Start Work has got with its worktree. `None` for a review.
+    pub start: Option<StartJobState>,
 }
 
 /// A sync's report and the queue it left.
@@ -201,7 +207,7 @@ fn view(
         _ => false,
     };
 
-    let linked = linked_worktrees(app, project);
+    let (linked, listed) = linked_worktrees(app, project);
     let items: BTreeMap<String, WorkItemId> = db
         .work_items(&project.id)
         .map_err(|err| store_error(&err))?
@@ -212,15 +218,30 @@ fn view(
         })
         .collect();
 
+    let jobs: BTreeMap<String, StartJob> = db
+        .start_jobs(Some(&project.id))
+        .map_err(|err| store_error(&err))?
+        .into_iter()
+        .map(|job| (job.key.clone(), job))
+        .collect();
+
     let mut issues = Vec::new();
     let (sprints, read_at) = match reading {
         Some(reading) => {
             for queued in reading.issues {
-                let worktrees: Vec<String> = linked
+                let job = jobs.get(&queued.issue.key);
+                let mut worktrees: Vec<String> = linked
                     .get(&queued.issue.key)
                     .map(|found| found.iter().map(|w| w.id.as_str().to_owned()).collect())
                     .unwrap_or_default();
-                let run = newest_urgent_run(db, project, &worktrees)?;
+                // The worktree Start Work bound it to comes first, carrying the key or not.
+                if let Some(job) = job
+                    && listed.contains(&job.worktree)
+                {
+                    worktrees.retain(|w| *w != job.worktree);
+                    worktrees.insert(0, job.worktree.clone());
+                }
+                let run = newest_urgent_run(db, project, &worktrees, job)?;
                 let section = run
                     .as_ref()
                     .map_or(QueueSection::NotStarted, |(_, section)| *section);
@@ -254,37 +275,62 @@ fn view(
     })
 }
 
-/// The project's worktrees by the issue key their branch or directory carries. Bare and prunable
-/// entries are left out, as the queue leaves them out of My worktrees.
-fn linked_worktrees(app: &App, project: &Project) -> BTreeMap<String, Vec<Worktree>> {
+/// The project's worktrees by the issue key their branch or directory carries, and the ids of all
+/// of them. Bare and prunable entries are left out, as the queue leaves them out of My worktrees.
+fn linked_worktrees(
+    app: &App,
+    project: &Project,
+) -> (BTreeMap<String, Vec<Worktree>>, Vec<String>) {
     let worktrees = match app.git.list_worktrees(&project.root) {
         Ok(worktrees) => worktrees,
         Err(error) => {
             // The queue is still worth showing without its links; the worktree list says why it
             // failed where it is drawn.
             tracing::warn!(%error, "could not list worktrees for the sprint queue");
-            return BTreeMap::new();
+            return (BTreeMap::new(), Vec::new());
         }
     };
     let mut linked: BTreeMap<String, Vec<Worktree>> = BTreeMap::new();
+    let mut listed = Vec::new();
     for worktree in worktrees {
         if worktree.is_bare || worktree.prunable.is_some() {
             continue;
         }
+        listed.push(worktree.id.as_str().to_owned());
         if let Some(key) = extract_issue_key(&worktree) {
             linked.entry(key).or_default().push(worktree);
         }
     }
-    linked
+    (linked, listed)
 }
 
-/// The newest run of each worktree, and the most urgent of those by section.
+/// The issue's own run and the newest review of each of its worktrees, and the most urgent of
+/// those by section. The issue's own run wins a tie: it is the one about the issue.
 fn newest_urgent_run(
     db: &wtm_appdb::AppDb,
     project: &Project,
     worktrees: &[String],
+    job: Option<&StartJob>,
 ) -> Result<Option<(IssueRunView, QueueSection)>, ErrorView> {
     let mut best: Option<(IssueRunView, QueueSection)> = None;
+    if let Some(job) = job
+        && let Some(flow) = db.flow(job.flow).map_err(|err| store_error(&err))?
+    {
+        let open_items = db
+            .inbox(Some(flow.id), None)
+            .map_err(|err| store_error(&err))?
+            .len();
+        best = Some((
+            IssueRunView {
+                flow: flow.id,
+                worktree: job.worktree.clone(),
+                state: flow.state.clone(),
+                open_items,
+                start: Some(job.state),
+            },
+            QueueSection::of(Some(&flow.state), open_items),
+        ));
+    }
     for worktree in worktrees {
         let Some(review) = db
             .reviews_of(&project.id, worktree)
@@ -309,6 +355,7 @@ fn newest_urgent_run(
                     worktree: worktree.clone(),
                     state: flow.state.clone(),
                     open_items,
+                    start: None,
                 },
                 section,
             ));

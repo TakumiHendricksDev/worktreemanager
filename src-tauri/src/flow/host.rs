@@ -23,6 +23,7 @@ use std::sync::Arc;
 use tauri::Manager;
 use wtm_agent::session::AgentSink;
 use wtm_core::model::{AgentEvent, ExitOutcome, SessionId};
+use wtm_core::ports::PtySink;
 
 use super::Refusal;
 use crate::app::App;
@@ -65,6 +66,20 @@ pub trait RoleHost: Send + Sync {
 
     /// End the session and its process. Idempotent.
     fn close(&self, session: &SessionId);
+
+    /// Where the setup of a worktree Start Work makes sends its terminal: kept for a window to
+    /// attach to, by the real host. A test's host, which has no window, drops it.
+    fn setup_sink(&self) -> Arc<dyn PtySink> {
+        Arc::new(Unseen)
+    }
+}
+
+/// A terminal nobody is shown.
+struct Unseen;
+
+impl PtySink for Unseen {
+    fn on_output(&self, _session: &SessionId, _chunk: &[u8]) {}
+    fn on_exit(&self, _session: &SessionId, _outcome: &ExitOutcome) {}
 }
 
 /// The real host: [`crate::flow_session::open`], headless behind the run's rail.
@@ -111,6 +126,15 @@ impl RoleHost for TauriHost {
         if let Ok(app) = self.app() {
             app.close_agent(session.as_str());
             crate::agent_bridge::announce_released(&self.handle, &[session.as_str().to_owned()]);
+        }
+    }
+
+    /// Recorded, as a Home job's setup is, so the issue workspace can attach to the terminal
+    /// after the setup started and still show what it printed first.
+    fn setup_sink(&self) -> Arc<dyn PtySink> {
+        match self.app() {
+            Ok(app) => crate::pty_bridge::EventSink::recording(self.handle.clone(), app),
+            Err(_) => Arc::new(Unseen),
         }
     }
 }
