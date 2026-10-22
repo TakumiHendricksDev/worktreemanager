@@ -1,6 +1,6 @@
 //! The app's own database: work items, flows and their history, review rules and runs, the inbox,
-//! approvals with the outbox's operations, and local fixes with the leases that hold their
-//! worktrees, in SQLite.
+//! approvals with the outbox's operations, local fixes with the leases that hold their worktrees,
+//! and the mirror of what a project's tracker last said, in SQLite.
 //!
 //! # Why this name
 //!
@@ -41,6 +41,7 @@ mod pull_reviews;
 mod rules;
 mod runs;
 mod store;
+mod tracker;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -83,8 +84,8 @@ pub enum AppDbError {
 /// The open database. Implements [`FlowStore`](wtm_core::ports::FlowStore),
 /// [`RuleStore`](wtm_core::ports::RuleStore), [`RunStore`](wtm_core::ports::RunStore),
 /// [`PullReviewStore`](wtm_core::ports::PullReviewStore), [`InboxStore`](wtm_core::ports::InboxStore),
-/// [`OutboxStore`](wtm_core::ports::OutboxStore), [`LeaseStore`](wtm_core::ports::LeaseStore) and
-/// [`FixStore`](wtm_core::ports::FixStore).
+/// [`OutboxStore`](wtm_core::ports::OutboxStore), [`LeaseStore`](wtm_core::ports::LeaseStore),
+/// [`FixStore`](wtm_core::ports::FixStore) and [`TrackerMirror`](wtm_core::ports::TrackerMirror).
 #[derive(Debug)]
 pub struct AppDb {
     conn: Mutex<Connection>,

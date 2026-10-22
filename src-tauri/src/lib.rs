@@ -45,6 +45,7 @@ pub mod shell_commands;
 pub mod shell_control;
 pub mod shell_output;
 pub mod shell_runs;
+pub mod tracker;
 pub mod turns;
 pub mod update;
 pub mod usage;
@@ -397,6 +398,9 @@ pub fn run() {
             reviews::set_reviewing_pull_request,
             reviews::preview_review_worktree,
             reviews::create_review_worktree,
+            tracker::tracker_queue,
+            tracker::sync_tracker,
+            tracker::tracker_issue,
             commands::remove_preflight,
             commands::remove_worktree,
             commands::run_setup,

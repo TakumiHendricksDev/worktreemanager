@@ -54,8 +54,10 @@ wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl 
 wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl both
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
-wtm-appdb    the app's own SQLite store: work items, flows, rules (§9).   impl FlowStore, RuleStore
+wtm-appdb    the app's own SQLite store: work items, flows, rules, the tracker mirror (§9).
+                                                          impl FlowStore, RuleStore, TrackerMirror
 wtm-forge    pull requests through the user's own `gh` (§6a).    impl Forge, ReviewWriter, PullRequestWriter
+wtm-tracker  issues and sprints through the user's own `acli` (§6a).  impl Tracker (reads only)
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
 ```
@@ -1000,8 +1002,22 @@ and only the outbox's executor holds the writers (§6i). It is handed a `Command
 that could reach the network another way, which `network_boundary.rs` pins.
 It is called only while the Work view is on and only for a project whose *own* config names a
 forge (`[workflow] forge = "github"`); a repository's committed `wtm.toml` may not name one,
-because that is the consent this paragraph is about. `wtm-tracker` does not exist yet. This is the
-boundary it will be held to.
+because that is the consent this paragraph is about.
+
+`wtm-tracker` is the second, and it only reads: a project's queue (its query's issues, narrowed to a
+board's active sprint when the queue names a board, with that sprint's name and goal) and one issue
+whole when it is opened, through `acli … --json`; `tests/acli.rs` holds it to that list of commands.
+Its write port, `TrackerWriter`, is declared and implemented by nothing, so this build cannot move an
+issue or comment on one. It is called only while the Work view is on and only for a project whose own
+config names a tracker (`[workflow] tracker = "jira"`). A committed `wtm.toml` may carry the status
+mapping, the field names and the queue's query, which grant nothing, but not the tracker. A sync
+writes the mirror tables and nothing else, and the use-case that does it is handed nothing that could
+start a run (`wtm_core::usecase::tracker_sync` makes that argument); it runs when Work opens on a
+project, when the window comes back into focus, on Sync, and after the app's own actions, never on a
+timer. What `acli` cannot read, such as custom fields in a search or the list of an issue's
+transitions, is recorded in the crate's docs with what another route would cost: Jira's REST API with
+an API token that wtm would have to store, which is a decision for this section rather than for a
+diff.
 
 **The egress is in Rust, and that placement is the whole design.** A `fetch` from the webview
 would have been fewer lines and would have widened `connect-src` — after which "the frontend

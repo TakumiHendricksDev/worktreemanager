@@ -1,0 +1,35 @@
+{
+  "isLast": true,
+  "maxResults": 50,
+  "sprints": [
+    {
+      "endDate": "2026-10-23T22:00:00.000Z",
+      "goal": "Ship the bulk export",
+      "id": 1123,
+      "link": "https://acme.atlassian.net/rest/agile/1.0/sprint/1123",
+      "name": "Sprint 41",
+      "startDate": "2026-10-12T14:34:57.161Z",
+      "state": "active"
+    },
+    {
+      "endDate": "2026-12-11T22:00:00.000Z",
+      "goal": "",
+      "id": 1124,
+      "link": "https://acme.atlassian.net/rest/agile/1.0/sprint/1124",
+      "name": "Sprint 42",
+      "startDate": "2026-10-26T13:00:00.000Z",
+      "state": "future"
+    },
+    {
+      "endDate": "2027-01-08T22:00:00.000Z",
+      "goal": "",
+      "id": 1125,
+      "link": "https://acme.atlassian.net/rest/agile/1.0/sprint/1125",
+      "name": "Sprint 43",
+      "startDate": "2026-12-14T13:00:00.000Z",
+      "state": "future"
+    }
+  ],
+  "startAt": 0,
+  "total": 3
+}

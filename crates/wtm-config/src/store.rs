@@ -358,9 +358,11 @@ fn most_specific(loaded: &[LoadedLayer], declares: impl Fn(&Value) -> bool) -> O
 /// a command, so approving one would be a click on something the prompt never showed. Your own
 /// config and the untracked local layer are yours, so both may declare them.
 ///
-/// `forge` is refused for the same reason in different words: naming one is the opt-in that lets
-/// the Work view call that forge through your own CLI and credentials (ARCHITECTURE §6a), and that
-/// consent is not the repository's to give.
+/// `forge` and `tracker` are refused for the same reason in different words: naming one is the
+/// opt-in that lets the Work view call that service through your own CLI and credentials
+/// (ARCHITECTURE §6a), and that consent is not the repository's to give. The tracker's status
+/// mapping, fields and queue query are allowed: they are read only once you have named a tracker,
+/// and none of them can write anything.
 fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
     for layer in loaded
         .iter()
@@ -392,6 +394,14 @@ fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
                 "forge",
                 "the forge belongs in your own config (~/.config/wtm/config.toml), not in a \
                  repository's wtm.toml: naming it lets wtm use your gh sign-in for this \
+                 project, and that is your decision",
+            ));
+        }
+        if workflow.get("tracker").is_some() {
+            return Err(refuse(
+                "tracker",
+                "the tracker belongs in your own config (~/.config/wtm/config.toml), not in a \
+                 repository's wtm.toml: naming it lets wtm use your acli sign-in for this \
                  project, and that is your decision",
             ));
         }
@@ -1412,6 +1422,86 @@ roles = ["conventions", "correctness"]
         let workflow = h.store.load(&h.repo).unwrap().workflow.unwrap();
         assert_eq!(workflow.forge, Some(wtm_core::flow::ForgeKind::Github));
         assert!(workflow.is_integration_branch("release/4.2"));
+    }
+
+    #[test]
+    fn a_repository_cannot_name_the_tracker_that_spends_your_sign_in() {
+        let h = Harness::new();
+        h.write_repo_config("[workflow]\ntracker = \"jira\"\n");
+
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid { layer, key, .. } => {
+                assert_eq!(layer, ConfigLayer::Repo);
+                assert_eq!(key.as_deref(), Some("workflow.tracker"));
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn your_config_names_the_tracker_and_maps_statuses_fields_and_the_queue() {
+        let h = Harness::new();
+        let project_key = h.repo.to_string_lossy().into_owned();
+        h.write_user_config(&format!(
+            "[projects.\"{project_key}\".config.workflow]\n\
+             tracker = \"jira\"\n\
+             [projects.\"{project_key}\".config.workflow.statuses]\n\
+             todo = [\"Backlog\", \"Ready\"]\n\
+             started = \"In Progress\"\n\
+             needs_review = \"In Review\"\n\
+             done = [\"Done\", \"Accepted\"]\n\
+             [projects.\"{project_key}\".config.workflow.fields]\n\
+             sprint = \"customfield_10020\"\n\
+             owner = \"customfield_10050\"\n\
+             [projects.\"{project_key}\".config.workflow.queue]\n\
+             query = \"assignee = currentUser()\"\n\
+             board = 3\n"
+        ));
+
+        let workflow = h.store.load(&h.repo).unwrap().workflow.unwrap();
+        assert_eq!(workflow.tracker, Some(wtm_core::flow::TrackerKind::Jira));
+        assert_eq!(workflow.statuses.todo, ["Backlog", "Ready"]);
+        assert_eq!(workflow.statuses.started, ["In Progress"]);
+        assert_eq!(workflow.statuses.columns().len(), 6);
+        assert_eq!(workflow.fields["owner"], "customfield_10050");
+        let queue = workflow.queue.unwrap();
+        assert_eq!(queue.query, "assignee = currentUser()");
+        assert_eq!(queue.board, Some(3));
+    }
+
+    #[test]
+    fn a_repository_may_share_the_status_mapping_while_you_name_the_tracker() {
+        // The mapping is the team's words and grants nothing until your own config names a
+        // tracker, so a repository may carry it for everyone who clones it.
+        let h = Harness::new();
+        h.write_repo_config(
+            "[workflow.statuses]\nstarted = \"In Progress\"\n[workflow.queue]\nquery = \"project = ACME\"\n",
+        );
+        let project_key = h.repo.to_string_lossy().into_owned();
+        h.write_user_config(&format!(
+            "[projects.\"{project_key}\".config.workflow]\ntracker = \"jira\"\n"
+        ));
+
+        let workflow = h.store.load(&h.repo).unwrap().workflow.unwrap();
+        assert_eq!(workflow.tracker, Some(wtm_core::flow::TrackerKind::Jira));
+        assert_eq!(workflow.statuses.started, ["In Progress"]);
+        assert_eq!(workflow.queue.unwrap().query, "project = ACME");
+    }
+
+    #[test]
+    fn a_status_mapped_to_two_roles_is_a_config_error_naming_the_key() {
+        let h = Harness::new();
+        let project_key = h.repo.to_string_lossy().into_owned();
+        h.write_user_config(&format!(
+            "[projects.\"{project_key}\".config.workflow.statuses]\n\
+             started = \"Doing\"\ndone = \"Doing\"\n"
+        ));
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid { key, message, .. } => {
+                assert_eq!(key.as_deref(), Some("workflow.statuses.done"), "{message}");
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
     }
 
     #[test]

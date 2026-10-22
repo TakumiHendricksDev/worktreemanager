@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use super::ForgeKind;
 use super::glob;
 use super::instructions::DEFAULT_INSTRUCTION_SOURCES;
+use super::tracker::{self, QueueSpec, StatusMap, TrackerKind};
 use crate::model::AgentSkill;
 
 /// How long a role may run when its config does not say. A review with a skill that fans out to
@@ -50,13 +51,28 @@ pub const MAX_RETRIES: u32 = 3;
 
 /// The `[workflow]` table.
 ///
-/// Recipes, roles, the forge, the integration branches and the repository's instruction sources so
-/// far. The tracker and status mapping the plan puts here arrive with the items that first read
-/// them, and until then a key this build does not know is an error rather than something silently
-/// ignored.
+/// Recipes, roles, the forge, the integration branches, the repository's instruction sources, and
+/// the tracker with its status mapping, mapped fields and queue. A key this build does not know is
+/// an error rather than something silently ignored.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowSpec {
+    /// Where issues are read from. Absent, nothing is. Your own config and the local layer only,
+    /// for the reason `forge` is: naming it lets the Work view use your tracker CLI's sign-in for
+    /// this project (ARCHITECTURE §6a).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracker: Option<TrackerKind>,
+    /// The project's status names, by the role each plays. The board's columns.
+    #[serde(default, skip_serializing_if = "StatusMap::is_empty")]
+    pub statuses: StatusMap,
+    /// The project's names for tracker fields, such as `owner = "customfield_12345"`, shown on an
+    /// issue. [`SPRINT_FIELD`](super::SPRINT_FIELD) names the one holding its sprints.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
+    /// What fills the queue. A repository may declare this, the statuses and the fields: they are
+    /// only read once you have named a tracker, and none of them can write anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<QueueSpec>,
     /// Where pull requests are read from. Absent, nothing is: see [`ForgeKind`] for why a workflow
     /// does not assume one. Accepted from your own config and the local layer only, because naming
     /// it is what lets the Work view call a forge on your behalf (ARCHITECTURE §6a), and a
@@ -399,7 +415,7 @@ pub struct WorkflowError {
 }
 
 impl WorkflowError {
-    fn new(key: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(key: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             key: key.into(),
             message: message.into(),
@@ -473,6 +489,11 @@ impl WorkflowSpec {
             glob::check(pattern).map_err(|message| {
                 WorkflowError::new("instruction_sources", format!("`{pattern}`: {message}"))
             })?;
+        }
+        self.statuses.validate()?;
+        tracker::validate_fields(&self.fields)?;
+        if let Some(queue) = &self.queue {
+            tracker::validate_queue(queue)?;
         }
         Ok(())
     }

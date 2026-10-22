@@ -9,9 +9,10 @@
  *
  * The queue could have driven `workspace.select`, and two things are wrong with that. Selecting a worktree is what the session surface hangs its refreshes
  * on — resumable sessions, briefs, the background roster — so browsing the queue would spend them on
- * worktrees nobody opened. And the queue's rows are worktrees only for now: the plan's queue holds
- * work items, of which a worktree is one resource, and a work item has no sidebar row to select.
- * So Work keeps its own pick, and arrives at the sidebar's selection only when you ask to open one.
+ * worktrees nobody opened. And the queue's rows are not all worktrees: a pull request in Reviews
+ * and an issue in the sprint are work items, of which a worktree is one resource, and a work item
+ * has no sidebar row to select. So Work keeps its own pick, and arrives at the sidebar's selection
+ * only when you ask to open one.
  *
  * Not remembered across a relaunch. The pick falls back to the sidebar's selection, which is.
  *
@@ -27,6 +28,9 @@ import type { ReviewFocus } from '../inbox';
 
 export type WorkTab = 'overview' | 'reviews';
 
+/** The queue as a list beside the picked item's workspace, or the team's board in its place. */
+export type WorkLayout = 'list' | 'board';
+
 /** Something in the Reviews tab to bring into view, once per `seq`. */
 export interface WorkFocus extends ReviewFocus {
   seq: number;
@@ -41,6 +45,16 @@ class Work {
    * outlives a review pick: closing a pull request's panel lands back on the worktree you had.
    */
   review = $state<number | null>(null);
+  /**
+   * The sprint issue picked, by its tracker key. Like `review`, it outranks the worktree pick while
+   * set, and picking anything else clears it.
+   */
+  issue = $state<string | null>(null);
+  /**
+   * What the main column shows: the workspace of what is picked, or the board. Picking anything
+   * returns to the list, so a card clicked on the board opens its issue.
+   */
+  layout = $state<WorkLayout>('list');
   /** Reviews first: the review slice is what this view is for. */
   tab = $state<WorkTab>('reviews');
   /**
@@ -55,6 +69,20 @@ class Work {
   pick(worktreeId: string): void {
     this.picked = worktreeId;
     this.review = null;
+    this.issue = null;
+    this.layout = 'list';
+    this.inboxOpen = false;
+  }
+
+  /**
+   * Show a sprint issue's workspace, on Overview: what the issue asks for comes first, and its
+   * header already says what its run is doing.
+   */
+  pickIssue(key: string): void {
+    this.issue = key;
+    this.review = null;
+    this.layout = 'list';
+    this.tab = 'overview';
     this.inboxOpen = false;
   }
 
@@ -72,6 +100,8 @@ class Work {
    */
   pickReview(itemId: number, tab?: WorkTab): void {
     this.review = itemId;
+    this.issue = null;
+    this.layout = 'list';
     if (tab) this.tab = tab;
     this.inboxOpen = false;
   }

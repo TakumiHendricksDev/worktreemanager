@@ -75,6 +75,7 @@ wtm-update = { workspace = true }
 wtm-db      = { workspace = true }
 wtm-appdb   = { workspace = true }
 wtm-forge   = { workspace = true }
+wtm-tracker = { workspace = true }
 wtm-code    = { workspace = true }
 wtm-git    = { workspace = true }
 wtm-render = { workspace = true }
@@ -94,3 +95,6 @@ tempfile    = { workspace = true }
 # Only to assert things about our own manifests — see `the_release_profile_does_not_abort_on_panic`
 # and `the_forge_is_reached_only_through_the_users_own_gh`.
 toml        = { workspace = true }
+# Only to count every table a sync must not write to, which no port can list — see
+# `an_issue_moved_in_jira_moves_on_the_board_and_starts_nothing`.
+rusqlite    = { workspace = true }

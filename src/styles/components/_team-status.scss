@@ -1,0 +1,44 @@
+/*
+ * An issue's team status, as the tracker names it: a chip, so it reads as the tracker's word and
+ * not as one of wtm's run states, which are dots and plain text.
+ *
+ * Tinted by the tracker's own status category (`CATEGORY_TONE` in `lib/tracker.ts`), the one
+ * vocabulary every project on a site shares; the team's name for the status is always the text,
+ * so the tint is never the only thing that says it. `other` is a category this build does not
+ * know, drawn as an outline so it does not borrow a meaning.
+ */
+
+.c-team-status {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: var(--step--2);
+  font-weight: 500;
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.c-team-status--todo {
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+}
+
+.c-team-status--doing {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.c-team-status--done {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.c-team-status--other {
+  border-color: var(--border-strong);
+  color: var(--fg-muted);
+}

@@ -319,6 +319,42 @@ This is the view's first slice. Review runs are not in it yet, so every worktree
 reviewed*, Run Review is disabled, and Reviews and the inbox are empty. Sessions' own approvals stay
 in Home and on their panes, and their notifications and toasts reach you in Work as anywhere else.
 
+### The sprint queue
+
+A project whose workflow names a tracker gains its sprint in the queue, read through your own
+`acli` and never written to. In your own config (a repository's `wtm.toml` may carry everything
+but `tracker`):
+
+```toml
+[projects."/path/to/repo".config.workflow]
+tracker = "jira"
+
+[projects."/path/to/repo".config.workflow.statuses]   # the team's names, by the role each plays
+todo = ["Backlog", "Ready"]
+started = "In Progress"
+needs_review = "In Review"
+done = ["Done", "Accepted"]
+
+[projects."/path/to/repo".config.workflow.fields]     # shown on an issue; `sprint` names the sprint field
+owner = "customfield_10050"
+
+[projects."/path/to/repo".config.workflow.queue]
+query = "assignee = currentUser() ORDER BY rank"      # passed to Jira as written
+board = 12                                            # optional: scope to this board's active sprint
+```
+
+- **The queue** gains **Needs you**, **Running**, **Ready to test**, **Reviews** and **Sprint, not
+  started**, by what the runs of each issue's worktrees are doing. A worktree belongs to an issue
+  when its branch or folder carries the key. Each row shows the team status as a chip beside the
+  run's own words. The sprint's name and goal sit above, with when it was synced and **Sync**.
+- **List | Board** gives the main column to the team's board: one column per mapped status, and a
+  last column for any status you have not mapped. The board is display only.
+- **Sync** runs when Work opens on the project, when the window comes back into focus, when you
+  press Sync, and after you press Run Review on an issue; never on a timer. A failed sync keeps the
+  last good reading and says why.
+- **An issue** opens on its Overview, read whole from Jira: description, parent, links and your
+  mapped fields, beside the worktrees that carry its key.
+
 ## Agent sessions
 
 wtm drives the agent CLIs you already have. It does not ship a model or proxy one, and each agent
@@ -1042,7 +1078,7 @@ Everything from here on is about building it yourself.
 | bun | 1.x | `curl -fsSL https://bun.sh/install \| bash` |
 | `claude`, `codex`, `cursor-agent` *(optional)* | any | whichever agents you want sessions with |
 | `just` *(optional)* | 1.50+ | only needed by projects whose config calls it |
-| `acli` *(optional)* | any | Atlassian CLI — only for Jira-backed form fields |
+| `acli` *(optional)* | any; 1.3.18+ for the Work view | Atlassian CLI — Jira-backed form fields, and the Work view's sprint queue |
 | `gh`, `docker` *(optional)* | any | only if a project's config uses them |
 | `sox` *(optional)* | any | dictation only — `brew install sox` |
 | `curl` | any | the update check and dictation — already present on macOS |
