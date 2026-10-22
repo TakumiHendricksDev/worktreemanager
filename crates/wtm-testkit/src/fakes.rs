@@ -1476,3 +1476,264 @@ impl wtm_core::ports::forge::Forge for FakeForge {
         Ok(wtm_core::flow::ChangedLines::default())
     }
 }
+
+// ─────────────────────────────── Tracker ───────────────────────────────
+
+/// A tracker that knows the issues and sprints it was given, records every question, and lets a
+/// test move an issue "in the tracker" between two syncs.
+///
+/// Its call log is the point, as [`FakeForge`]'s is: a project without a tracker must cause no
+/// tracker call, and a sync must ask only what it needs.
+#[derive(Debug, Default)]
+pub struct FakeTracker {
+    issues: Mutex<Vec<(wtm_core::flow::Issue, Vec<u64>)>>,
+    sprints: Mutex<Vec<wtm_core::flow::Sprint>>,
+    failure: Mutex<Option<wtm_core::error::TrackerError>>,
+    calls: Mutex<Vec<String>>,
+}
+
+impl FakeTracker {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// An issue in the given sprints, in the tracker's order.
+    #[must_use]
+    pub fn with_issue(self, issue: wtm_core::flow::Issue, sprints: &[u64]) -> Self {
+        self.issues.lock().push((issue, sprints.to_vec()));
+        self
+    }
+
+    #[must_use]
+    pub fn with_sprint(self, sprint: wtm_core::flow::Sprint) -> Self {
+        self.sprints.lock().push(sprint);
+        self
+    }
+
+    /// Someone moved `key` in the tracker. Nothing in wtm is told: the next sync finds out.
+    pub fn move_issue(&self, key: &str, status: &str, category: wtm_core::flow::StatusCategory) {
+        for (issue, _) in self.issues.lock().iter_mut() {
+            if issue.key == key {
+                issue.status = wtm_core::flow::IssueStatus {
+                    name: status.to_owned(),
+                    category,
+                };
+            }
+        }
+    }
+
+    /// The next call fails with `error`, once.
+    pub fn fail_next(&self, error: wtm_core::error::TrackerError) {
+        *self.failure.lock() = Some(error);
+    }
+
+    /// Each question asked, as `method target`, in order.
+    #[must_use]
+    pub fn calls(&self) -> Vec<String> {
+        self.calls.lock().clone()
+    }
+
+    fn note(&self, call: String) -> Result<(), wtm_core::error::TrackerError> {
+        self.calls.lock().push(call);
+        self.failure.lock().take().map_or(Ok(()), Err)
+    }
+}
+
+impl wtm_core::ports::Tracker for FakeTracker {
+    fn check(
+        &self,
+        _cwd: &Path,
+    ) -> Result<wtm_core::flow::TrackerAccount, wtm_core::error::TrackerError> {
+        self.note("check".to_owned())?;
+        Ok(wtm_core::flow::TrackerAccount {
+            site: "acme.example.net".to_owned(),
+            login: Some("you@example.com".to_owned()),
+            version: Some("1.3.18-stable".to_owned()),
+        })
+    }
+
+    fn search(
+        &self,
+        _cwd: &Path,
+        query: &wtm_core::flow::IssueQuery,
+    ) -> Result<Vec<wtm_core::flow::Issue>, wtm_core::error::TrackerError> {
+        let scope = query
+            .sprint
+            .map_or_else(String::new, |s| format!(" sprint {}", s.sprint));
+        self.note(format!("search {}{scope}", query.query))?;
+        Ok(self
+            .issues
+            .lock()
+            .iter()
+            .filter(|(_, sprints)| query.sprint.is_none_or(|s| sprints.contains(&s.sprint)))
+            .map(|(issue, _)| issue.clone())
+            .take(query.limit as usize)
+            .collect())
+    }
+
+    fn issue(
+        &self,
+        _cwd: &Path,
+        key: &str,
+        fields: &BTreeMap<String, String>,
+    ) -> Result<wtm_core::flow::IssueDetail, wtm_core::error::TrackerError> {
+        self.note(format!("issue {key}"))?;
+        let (issue, sprint_ids) = self
+            .issues
+            .lock()
+            .iter()
+            .find(|(issue, _)| issue.key == key)
+            .cloned()
+            .ok_or_else(|| wtm_core::error::TrackerError::NotFound {
+                what: format!("issue {key}"),
+            })?;
+        let sprints = self
+            .sprints
+            .lock()
+            .iter()
+            .filter(|sprint| sprint_ids.contains(&sprint.id))
+            .cloned()
+            .collect();
+        Ok(wtm_core::flow::IssueDetail {
+            issue,
+            description: Some("What the issue asks for.".to_owned()),
+            parent: None,
+            links: Vec::new(),
+            updated: None,
+            fields: fields
+                .iter()
+                .filter(|(name, _)| name.as_str() != wtm_core::flow::SPRINT_FIELD)
+                .map(|(name, id)| wtm_core::flow::IssueField {
+                    name: name.clone(),
+                    id: id.clone(),
+                    value: None,
+                })
+                .collect(),
+            sprints,
+        })
+    }
+
+    fn sprints(
+        &self,
+        _cwd: &Path,
+        board: u64,
+        states: &[wtm_core::flow::SprintState],
+    ) -> Result<Vec<wtm_core::flow::Sprint>, wtm_core::error::TrackerError> {
+        self.note(format!("sprints {board}"))?;
+        Ok(self
+            .sprints
+            .lock()
+            .iter()
+            .filter(|s| s.board == Some(board) && states.contains(&s.state))
+            .cloned()
+            .collect())
+    }
+
+    fn sprint(
+        &self,
+        _cwd: &Path,
+        id: u64,
+    ) -> Result<wtm_core::flow::Sprint, wtm_core::error::TrackerError> {
+        self.note(format!("sprint {id}"))?;
+        self.sprints
+            .lock()
+            .iter()
+            .find(|s| s.id == id)
+            .cloned()
+            .ok_or_else(|| wtm_core::error::TrackerError::NotFound {
+                what: format!("sprint {id}"),
+            })
+    }
+
+    fn transitions(
+        &self,
+        _cwd: &Path,
+        key: &str,
+    ) -> Result<Vec<wtm_core::flow::Transition>, wtm_core::error::TrackerError> {
+        self.note(format!("transitions {key}"))?;
+        Ok(Vec::new())
+    }
+}
+
+/// The mirror tables in memory, for use-case tests that are not about SQLite.
+#[derive(Debug, Default)]
+pub struct MemoryTrackerMirror {
+    queues: Mutex<BTreeMap<String, wtm_core::flow::MirroredQueue>>,
+    issues: Mutex<BTreeMap<String, (wtm_core::flow::IssueDetail, wtm_core::flow::UnixMs)>>,
+}
+
+impl MemoryTrackerMirror {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl wtm_core::ports::TrackerMirror for MemoryTrackerMirror {
+    fn mirror_queue(
+        &self,
+        reading: &wtm_core::flow::QueueReading,
+    ) -> Result<(), wtm_core::ports::FlowStoreError> {
+        self.queues.lock().insert(
+            reading.project.as_str().to_owned(),
+            wtm_core::flow::MirroredQueue {
+                reading: Some(reading.clone()),
+                failure: None,
+            },
+        );
+        Ok(())
+    }
+
+    fn record_sync_failure(
+        &self,
+        project: &wtm_core::model::ProjectId,
+        _tracker: wtm_core::flow::TrackerKind,
+        failure: &wtm_core::flow::SyncFailure,
+    ) -> Result<(), wtm_core::ports::FlowStoreError> {
+        self.queues
+            .lock()
+            .entry(project.as_str().to_owned())
+            .or_insert(wtm_core::flow::MirroredQueue {
+                reading: None,
+                failure: None,
+            })
+            .failure = Some(failure.clone());
+        Ok(())
+    }
+
+    fn mirrored_queue(
+        &self,
+        project: &wtm_core::model::ProjectId,
+    ) -> Result<Option<wtm_core::flow::MirroredQueue>, wtm_core::ports::FlowStoreError> {
+        Ok(self.queues.lock().get(project.as_str()).cloned())
+    }
+
+    fn mirror_issue(
+        &self,
+        tracker: wtm_core::flow::TrackerKind,
+        detail: &wtm_core::flow::IssueDetail,
+        at: wtm_core::flow::UnixMs,
+    ) -> Result<(), wtm_core::ports::FlowStoreError> {
+        self.issues.lock().insert(
+            format!("{}:{}", tracker.as_str(), detail.issue.key),
+            (detail.clone(), at),
+        );
+        Ok(())
+    }
+
+    fn mirrored_issue(
+        &self,
+        tracker: wtm_core::flow::TrackerKind,
+        key: &str,
+    ) -> Result<
+        Option<(wtm_core::flow::IssueDetail, wtm_core::flow::UnixMs)>,
+        wtm_core::ports::FlowStoreError,
+    > {
+        Ok(self
+            .issues
+            .lock()
+            .get(&format!("{}:{key}", tracker.as_str()))
+            .cloned())
+    }
+}

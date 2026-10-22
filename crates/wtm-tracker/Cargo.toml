@@ -1,0 +1,25 @@
+[package]
+name        = "wtm-tracker"
+description = "The Tracker port over the user's own `acli`: a project's sprint queue and its issues, read only."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# No `wtm-exec` and no HTTP client, for the reason `wtm-forge` gives: this crate is handed an
+# `Arc<dyn CommandRunner>`, so every request is the user's own `acli` spawned by the one runner that
+# times, traces and kills it, and this list is the proof that nothing here reaches the network any
+# other way (ARCHITECTURE §6a).
+[dependencies]
+wtm-core   = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wtm-testkit       = { workspace = true }
+pretty_assertions = { workspace = true }

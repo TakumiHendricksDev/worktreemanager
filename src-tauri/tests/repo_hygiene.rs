@@ -33,6 +33,9 @@ const FORBIDDEN: &[(&str, bool)] = &[
     (concat!("pe", "ars"), true),
     (concat!("can", "opy"), true),
     (concat!("canopy", "team"), false),
+    // The tracker site's name: the word rule above lets it through, and recorded tracker replies
+    // are exactly where it would appear.
+    (concat!("canopy", "llc"), false),
     (concat!("/Users/", "takumi"), false),
     (concat!("Sites/", "Canopy"), false),
 ];

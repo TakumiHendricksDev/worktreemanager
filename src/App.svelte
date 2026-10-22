@@ -55,6 +55,7 @@
   import { inbox } from './lib/state/inbox.svelte';
   import { reviewRuns } from './lib/state/review-runs.svelte';
   import { reviews } from './lib/state/reviews.svelte';
+  import { trackerQueue } from './lib/state/tracker.svelte';
   import { work } from './lib/state/work.svelte';
   import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
@@ -356,6 +357,10 @@
       // review. One pull request, the one on screen: see `reviews.svelte.ts`.
       if (booted && view.work && work.review !== null)
         void reviews.refreshShown(work.review);
+      // The sprint queue is read from the tracker again, so a status someone changed in it while
+      // you were elsewhere is on the board when you look. Spaced out by the store; never a timer.
+      if (booted && view.work && workspace.activeProjectId)
+        void trackerQueue.sync(workspace.activeProjectId, 'focus');
       /*
        * Coming back to the window is looking at what is on screen.
        *
@@ -407,6 +412,11 @@
      * not: the badge and Needs you fill in when it answers, and nothing waits on it.
      */
     const unlistenInbox = inbox.init();
+    /*
+     * The sprint queue moves an issue between sections when one of its worktrees' runs changes.
+     * That is a read of the mirror, never of the tracker.
+     */
+    const unlistenTracker = trackerQueue.init();
 
     /*
      * A macOS notification was clicked. The payload is the pane's address, attached by
@@ -529,6 +539,7 @@
       void unlistenUsage.then((off) => off());
       void unlistenRuns.then((off) => off());
       void unlistenInbox.then((off) => off());
+      void unlistenTracker.then((off) => off());
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
       offFleet?.();

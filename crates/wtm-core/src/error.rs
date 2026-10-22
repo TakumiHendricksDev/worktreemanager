@@ -40,6 +40,9 @@ pub enum WtmError {
     #[error(transparent)]
     Forge(#[from] ForgeError),
 
+    #[error(transparent)]
+    Tracker(#[from] TrackerError),
+
     /// The submitted form is not valid. Carries every field's problem at once so
     /// the UI can show all of them inline rather than one per round-trip.
     #[error("{} field(s) need attention", .0.len())]
@@ -347,6 +350,54 @@ impl ForgeError {
             Self::Timeout { .. } | Self::Failed { .. } | Self::Unreadable { .. }
         )
     }
+}
+
+/// A tracker read that did not produce an answer, or a request this build will not make.
+///
+/// Split by what the person can do about it, as [`ForgeError`] is, and for the same reason
+/// `message` carries the CLI's own words: they name the field or the query clause that was wrong,
+/// and no CLI this wraps prints a token unless asked to.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TrackerError {
+    #[error("`{program}` is not installed, or is not on the PATH wtm uses")]
+    NotInstalled { program: String },
+
+    #[error("{program} {found} is too old: wtm needs {required} or later ({reason})")]
+    TooOld {
+        program: String,
+        found: String,
+        required: String,
+        reason: String,
+    },
+
+    #[error("{program} is not signed in. Run `{program} jira auth login` in a terminal. {message}")]
+    SignedOut { program: String, message: String },
+
+    /// The issue or sprint does not exist, or this account cannot see it. A tracker answers both
+    /// the same way, so this cannot tell them apart either.
+    #[error("{what} was not found, or this account cannot see it")]
+    NotFound { what: String },
+
+    /// The tracker refused the queue's query as written. The message is the tracker's, naming the
+    /// clause it could not read, which is the fix.
+    #[error("the tracker refused the query: {message}")]
+    BadQuery { message: String },
+
+    /// Something this build needs that the installed CLI cannot do. Not retryable: a newer CLI, or
+    /// another route to the tracker, is the remedy, and `reason` says which.
+    #[error("{what} is not available: {reason}")]
+    Unsupported { what: String, reason: String },
+
+    #[error("`{argv}` failed: {message}")]
+    Failed { argv: String, message: String },
+
+    #[error("`{argv}` did not answer within {timeout_ms}ms")]
+    Timeout { argv: String, timeout_ms: u64 },
+
+    /// The CLI answered, in a shape this build cannot read.
+    #[error("could not read {what}: {message}")]
+    Unreadable { what: String, message: String },
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]

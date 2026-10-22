@@ -5828,6 +5828,7 @@ version = "4.1.1"
 dependencies = [
  "parking_lot",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",
@@ -5852,6 +5853,7 @@ dependencies = [
  "wtm-notify",
  "wtm-render",
  "wtm-testkit",
+ "wtm-tracker",
  "wtm-update",
  "wtm-webview",
 ]
@@ -5869,6 +5871,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "wtm-core",
+ "wtm-testkit",
 ]
 
 [[package]]
@@ -6027,6 +6030,16 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "wtm-core",
+]
+
+[[package]]
+name = "wtm-tracker"
+version = "4.1.1"
+dependencies = [
+ "pretty_assertions",
+ "serde_json",
+ "wtm-core",
+ "wtm-testkit",
 ]
 
 [[package]]

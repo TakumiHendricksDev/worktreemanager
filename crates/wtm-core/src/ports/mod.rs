@@ -39,6 +39,7 @@ pub mod progress;
 pub mod pty;
 pub mod rules;
 pub mod template;
+pub mod tracker;
 
 pub use clock::Clock;
 pub use config::{ConfigStore, TrustDecision};
@@ -59,3 +60,4 @@ pub use progress::{ProgressEvent, ProgressSink};
 pub use pty::{PtyHost, PtySession, PtySink, Spawned};
 pub use rules::{RuleStore, RuleStoreError};
 pub use template::TemplateEngine;
+pub use tracker::{Tracker, TrackerError, TrackerMirror, TrackerWriter};

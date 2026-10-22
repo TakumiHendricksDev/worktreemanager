@@ -3,8 +3,9 @@
 //! The webview has no direct network access. Rust may reach the fixed transcription host when the
 //! user dictates, a database target that an approved config declared and the user explicitly
 //! connected, the fixed GitHub releases endpoint to see whether a newer wtm exists, or, for a
-//! project whose own config names a forge, that forge through the user's own `gh`. The parts of
-//! that boundary that can be mechanical belong here rather than in prose.
+//! project whose own config names a forge or a tracker, that forge through the user's own `gh` and
+//! that tracker through the user's own `acli`. The parts of that boundary that can be mechanical
+//! belong here rather than in prose.
 //!
 //! Three properties, each with a different way of going wrong:
 //!
@@ -200,4 +201,23 @@ fn the_forge_is_reached_only_through_the_users_own_gh() {
     dependencies.sort_unstable();
     assert_eq!(dependencies, ["serde_json", "wtm-core"]);
     assert_eq!(wtm_forge::PROGRAM, "gh");
+}
+
+#[test]
+fn the_tracker_is_reached_only_through_the_users_own_acli() {
+    // The same boundary as the forge's, for issues: `wtm-tracker` is handed a runner, and a
+    // dependency added to it is a second route to the tracker, which would also be the first place
+    // an Atlassian token could end up stored. ARCHITECTURE §6a decides that, not a diff.
+    let manifest = std::fs::read_to_string(repo_root().join("crates/wtm-tracker/Cargo.toml"))
+        .expect("wtm-tracker manifest");
+    let manifest: toml::Value = toml::from_str(&manifest).expect("valid TOML");
+    let mut dependencies: Vec<&str> = manifest["dependencies"]
+        .as_table()
+        .expect("a dependency table")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    dependencies.sort_unstable();
+    assert_eq!(dependencies, ["serde_json", "wtm-core"]);
+    assert_eq!(wtm_tracker::PROGRAM, "acli");
 }

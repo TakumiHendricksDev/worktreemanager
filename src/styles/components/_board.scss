@@ -1,0 +1,170 @@
+/*
+ * The team's board, in the Work view's main column while the queue's Board is picked.
+ *
+ * Columns side by side, each scrolling on its own, the row of them scrolling sideways when a
+ * project maps more statuses than fit: a board is read across, and wrapping its columns onto a
+ * second row would break the left-to-right order the workflow's roles give it.
+ */
+
+.c-board {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--sp-4) var(--sp-5) var(--sp-4);
+}
+
+.c-board__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.c-board__heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.c-board__title {
+  font-size: var(--step-2);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.c-board__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-board__note,
+.c-board__empty {
+  max-width: 46ch;
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+  line-height: 1.45;
+}
+
+.c-board__columns {
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--sp-3);
+  min-height: 0;
+  overflow-x: auto;
+}
+
+.c-board__column {
+  display: flex;
+  flex: 0 0 236px;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 0;
+  padding: var(--sp-2);
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+.c-board__column-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px var(--sp-1) 0;
+}
+
+.c-board__column-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-board__count {
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+/* The status's role in the workflow, or for the unmapped column the statuses found in it. */
+.c-board__role {
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+  overflow-wrap: anywhere;
+}
+
+.c-board__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.c-board__none {
+  padding: 0 var(--sp-1);
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+}
+
+/* One issue. A button: it opens the issue, and nothing about it drags. */
+.c-board-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  width: 100%;
+  padding: var(--sp-2);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+
+  &:hover {
+    border-color: var(--border-strong);
+  }
+
+  &.is-selected {
+    background: var(--bg-active);
+    border-color: var(--border-strong);
+  }
+}
+
+.c-board-card__key {
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-board-card__summary {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--step--1);
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.c-board-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-board-card__who {
+  color: var(--fg-subtle);
+}

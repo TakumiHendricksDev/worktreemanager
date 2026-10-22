@@ -1,0 +1,38 @@
+/*
+ * A sprint issue's workspace: the pieces `WorkIssue` adds to the Work view's header, tabs and
+ * facts, which it shares with a worktree's.
+ */
+
+.c-issue__error {
+  margin-bottom: var(--sp-3);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+/* Where the team status came from and when, after it, quieter than the status itself. */
+.c-issue__source {
+  margin-left: var(--sp-2);
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+}
+
+.c-issue__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-issue__heading {
+  margin: var(--sp-5) 0 var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+/* The tracker's rich text, flattened to lines in Rust: kept as written, one block per line. */
+.c-issue__description {
+  max-width: 72ch;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

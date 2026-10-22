@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { DesignDiscovery, PrototypeState } from '../open-design';
 import type { InstructionSources, RuleChange, RuleDraft, RuleView } from '../knowledge';
 import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
+import type { IssueDetailView, SyncReason, SyncedQueue, TrackerQueue } from '../tracker';
 
 import type {
   AccountUsage,
@@ -185,6 +186,19 @@ export const commands = {
     rows: number;
     cols: number;
   }) => invoke<CreateOutcome>('create_worktree', args),
+
+  // ── tracker: the sprint queue in the Work view ──
+  /** The project's sprint queue as the last sync mirrored it. Reads no tracker. */
+  trackerQueue: (projectId: string) => invoke<TrackerQueue>('tracker_queue', { projectId }),
+  /**
+   * Read the project's queue from its tracker into the mirror, and return it. A tracker that fails
+   * is not a rejection: the queue comes back with its `failure` set beside the last good reading.
+   */
+  syncTracker: (projectId: string, reason: SyncReason) =>
+    invoke<SyncedQueue>('sync_tracker', { projectId, reason }),
+  /** One issue read whole: from the mirror, or from the tracker now when `fresh`. */
+  trackerIssue: (projectId: string, key: string, fresh: boolean) =>
+    invoke<IssueDetailView | null>('tracker_issue', { projectId, key, fresh }),
 
   // ── reviews: pull requests in the Work view ──
   /** The project's Reviews queue, from the local store. Reads no forge. */

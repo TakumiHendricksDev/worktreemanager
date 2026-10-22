@@ -91,6 +91,11 @@ Worth stating because it narrows the surface considerably:
   author did not allow maintainer edits, and re-read before pushing so a branch that moved stops it.
   No agent tool can publish, push or approve; run sessions have no `gh` credentials either
   (ARCHITECTURE §6h). wtm stores no GitHub token.
+  For a project whose own config names a tracker, the Work view also reads its issues and sprint
+  through your own `acli`, signed in as `acli` already is, and keeps the last reading in its own
+  database; a repository's `wtm.toml` cannot name the tracker for you. It writes nothing to the
+  tracker: no build of wtm implements the port that would move an issue or comment on one, and a
+  sync cannot start an agent. wtm stores no Atlassian token.
   Preparing a review worktree, and following its pull request to a new head, fetch the pull request
   into your repository and check the review worktree out with git hooks off: any hook would run
   inside the author's tree, and once that tree is checked out the hooks directory may be the

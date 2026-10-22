@@ -16,6 +16,10 @@
    * For a pull request picked in Reviews: `WorkReview`, with what the forge says about it and the
    * worktree a review of it reads.
    *
+   * For a sprint issue picked in the queue: `WorkIssue`, its team status beside its run status, and
+   * the worktrees that carry its key. With the queue's Board picked, the main column is the team's
+   * board (`WorkBoard`) instead, whatever is picked; picking a card or a row returns to the list.
+   *
    * The inbox column is workflow runs' (`WorkRunInbox`), and the title bar's Inbox gives it the main
    * column as the focused Inbox (`WorkInbox`), with filters and room to answer a question. Approvals
    * from ordinary sessions stay where they are, in Home and on the panes; Home's Needs you lists the
@@ -32,6 +36,9 @@
   import { work, type WorkTab } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
+  import { trackerQueue } from '../state/tracker.svelte';
+  import WorkBoard from './WorkBoard.svelte';
+  import WorkIssue from './WorkIssue.svelte';
   import WorkReview from './WorkReview.svelte';
   import WorkReviewRun from './WorkReviewRun.svelte';
   import WorkInbox from './WorkInbox.svelte';
@@ -55,6 +62,18 @@
   const reviewItem = $derived(
     work.review !== null && reviews.projectId === workspace.activeProjectId
       ? (reviews.queue?.items.find((item) => item.id === work.review) ?? null)
+      : null,
+  );
+  /** The project's sprint queue, while it names a tracker. */
+  const tracked = $derived(
+    trackerQueue.projectId === workspace.activeProjectId && trackerQueue.queue?.tracker
+      ? trackerQueue.queue
+      : null,
+  );
+  /** The issue picked, with its queue row while the queue holds it. */
+  const issueRow = $derived(
+    work.issue && tracked
+      ? (tracked.issues.find((row) => row.issue.key === work.issue) ?? null)
       : null,
   );
   const rows = $derived(myWorktrees(workspace.worktrees));
@@ -100,7 +119,16 @@
   {:else}
     <div class="c-work__columns">
       <div class="c-work__main">
-        {#if reviewItem}
+        {#if tracked && work.layout === 'board'}
+          <WorkBoard queue={tracked} />
+        {:else if tracked && work.issue}
+          <WorkIssue
+            issueKey={work.issue}
+            row={issueRow}
+            visible={visible && !work.inboxOpen}
+            {onopenworktree}
+          />
+        {:else if reviewItem}
           <WorkReview
             item={reviewItem}
             visible={visible && !work.inboxOpen}

@@ -37,7 +37,9 @@
 //! ([`pull_review`]), and the inbox that is the one thing about a run that tells you anything, with
 //! the questions it carries, publishing a review through the outbox under an approval of exactly
 //! what posts ([`publish`], [`outbox`], [`approval`]), and local fixes: the writer lease, the scope a
-//! fix is held to ([`fix`]), and the routes a fix leaves by ([`route`]). The engine and the
+//! fix is held to ([`fix`]), and the routes a fix leaves by ([`route`]). Then the read side of a
+//! tracker: issues, sprints and a project's status mapping ([`tracker`]), and the sprint queue a
+//! sync mirrors, with the sections its issues sit in by their runs ([`queue`]). The engine and the
 //! outbox's executor are in the app (`src-tauri/src/flow/`), because one opens sessions and the
 //! other reaches the forge.
 
@@ -74,6 +76,7 @@ pub mod plan;
 pub mod publish;
 pub mod pull_review;
 pub mod question;
+pub mod queue;
 pub mod recipe;
 pub mod review;
 pub mod route;
@@ -83,6 +86,7 @@ pub mod schema;
 pub mod snapshot;
 pub mod state;
 pub mod submission;
+pub mod tracker;
 pub mod work;
 
 pub use approval::{
@@ -131,6 +135,9 @@ pub use pull_review::{
     PushToBranch, ReviewClaim, ReviewedHead, base_ref, fate, push_to_branch,
 };
 pub use question::{Answer, ContextLink, NewQuestion, Question, QuestionError, QuestionId};
+pub use queue::{
+    MirroredQueue, QueueChanges, QueueReading, QueueSection, QueuedIssue, StatusChange, SyncFailure,
+};
 pub use recipe::{
     CheckSpec, Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleProfile,
     RoleProvider, RoleSpec, SkillCatalog, SkillError, SkillProblem, StageSpec, WorkflowError,
@@ -164,6 +171,11 @@ pub use state::{
 };
 pub use submission::{
     FindingsReport, Handoff, PlanReport, ReportedClass, ReportedFinding, RuleCitation, Submission,
+};
+pub use tracker::{
+    DEFAULT_QUEUE_LIMIT, Issue, IssueDetail, IssueField, IssueLink, IssueParent, IssueQuery,
+    IssueStatus, MAX_QUEUE_LIMIT, QueueSpec, SPRINT_FIELD, Sprint, SprintRef, SprintState,
+    StatusCategory, StatusColumn, StatusMap, StatusRole, TrackerAccount, TrackerKind, Transition,
 };
 pub use work::{
     Backing, IssueRef, NewWorkItem, PullRequestRef, RecordedLink, WorkItem, WorkItemId, WorkKey,

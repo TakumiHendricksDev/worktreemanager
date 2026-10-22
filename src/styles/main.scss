@@ -139,6 +139,9 @@
 @use 'components/work-review';
 @use 'components/work-run';
 @use 'components/work-inbox';
+@use 'components/board';
+@use 'components/issue';
+@use 'components/team-status';
 @use 'components/review-findings';
 @use 'components/worktree-bar';
 @use 'components/worktree-tab';

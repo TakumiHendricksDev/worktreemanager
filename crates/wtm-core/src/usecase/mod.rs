@@ -9,11 +9,13 @@
 //!   mutate nothing, with two inputs: the New Worktree form, and a pull request to review.
 //! - [`remove`] — teardown, then `git worktree remove`, then optionally the branch.
 //! - [`snapshot`] — what a review read: a tree, a patch, and a detached checkout of it.
+//! - [`tracker_sync`] — a project's queue from its tracker into the mirror, and never further.
 
 pub mod create;
 pub mod remove;
 pub mod slug;
 pub mod snapshot;
+pub mod tracker_sync;
 
 pub use create::{
     AdvanceOutcome, AdvanceRequest, CreatePipeline, CreateRequest, ReuseReason, ReviewCheckout,
@@ -23,3 +25,4 @@ pub use create::{
 pub use remove::{RemoveOutcome, RemovePipeline, RemoveRequest, TeardownStep};
 pub use slug::slugify;
 pub use snapshot::{SnapshotCheckout, SnapshotError, Snapshots};
+pub use tracker_sync::{SyncError, SyncReason, SyncReport, SyncRequest, read_issue, sync_queue};
