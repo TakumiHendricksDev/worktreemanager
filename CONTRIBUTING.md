@@ -70,8 +70,8 @@ why. A third such crate is an open-an-issue-first change.
 compiled-in host through `curl`, the database viewer connects to a target shown by the config
 trust prompt after the user clicks Connect, the update check asks a compiled-in GitHub endpoint
 for the latest release, also through `curl`, and the Work view reads pull requests through the
-user's own `gh`, only for a project whose own config names that forge, and posts a review there only
-after the user approved exactly what posts.
+user's own `gh`, only for a project whose own config names that forge, and posts a review or opens a
+fix's follow-up pull request there only after the user approved exactly what is sent.
 `src-tauri/tests/network_boundary.rs` pins the CSP, both fixed hosts, `wtm-forge`'s dependency list,
 and the absence of a linked HTTP client. A new kind of egress, or reaching
 for `reqwest`, is an open-an-issue-first change — ARCHITECTURE §6a records the boundary. Browser

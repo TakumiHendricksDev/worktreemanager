@@ -89,6 +89,55 @@ pub struct PublicationView {
     pub url: Option<String>,
 }
 
+/// `review` exactly as it would post from `flow`: every body with its marker, in the order sent.
+/// What the preview of a review and of a fix's suggestions shows.
+pub(super) fn preview_of(
+    review: ReviewPayload,
+    flow: FlowId,
+    account: Option<String>,
+    own_pull_request: bool,
+    head: &str,
+    url: &str,
+) -> PublishPreview {
+    let operations = review.operations(flow);
+    let mut comments = Vec::new();
+    let mut pending_body = String::new();
+    let mut body = String::new();
+    for op in &operations {
+        let marker = Marker::of(&op.key);
+        match &op.payload {
+            OperationPayload::PendingReview(p) => {
+                pending_body = marker.tag();
+                comments = p
+                    .comments
+                    .iter()
+                    .zip(sent_comments(p, &marker))
+                    .map(|(comment, sent)| PostedComment {
+                        finding: comment.finding,
+                        path: sent.path,
+                        start_line: sent.start_line,
+                        line: sent.line,
+                        body: sent.body,
+                    })
+                    .collect();
+            }
+            OperationPayload::SubmitReview(p) => body = submit_body(p, &marker),
+            OperationPayload::PushBranch(_) | OperationPayload::OpenPullRequest(_) => {}
+        }
+    }
+    PublishPreview {
+        hash: review.hash(),
+        own_pull_request,
+        account,
+        head: head.to_owned(),
+        url: url.to_owned(),
+        review,
+        comments,
+        pending_body,
+        body,
+    }
+}
+
 /// Everything a review is built against, read fresh.
 struct Facts {
     read: ReadNow,
@@ -207,42 +256,14 @@ impl Engine {
     ) -> Result<PublishPreview, ErrorView> {
         let facts = self.facts(flow)?;
         let review = facts.build(draft)?;
-        let operations = review.operations(flow);
-        let mut comments = Vec::new();
-        let mut pending_body = String::new();
-        let mut body = String::new();
-        for op in &operations {
-            let marker = Marker::of(&op.key);
-            match &op.payload {
-                OperationPayload::PendingReview(p) => {
-                    pending_body = marker.tag();
-                    comments = p
-                        .comments
-                        .iter()
-                        .zip(sent_comments(p, &marker))
-                        .map(|(comment, sent)| PostedComment {
-                            finding: comment.finding,
-                            path: sent.path,
-                            start_line: sent.start_line,
-                            line: sent.line,
-                            body: sent.body,
-                        })
-                        .collect();
-                }
-                OperationPayload::SubmitReview(p) => body = submit_body(p, &marker),
-            }
-        }
-        Ok(PublishPreview {
-            hash: review.hash(),
-            own_pull_request: facts.own_pull_request(),
-            account: facts.read.account.login.clone(),
-            head: facts.read.pull_request.head.sha.as_str().to_owned(),
-            url: facts.read.pull_request.url.clone(),
+        Ok(preview_of(
             review,
-            comments,
-            pending_body,
-            body,
-        })
+            flow,
+            facts.read.account.login.clone(),
+            facts.own_pull_request(),
+            facts.read.pull_request.head.sha.as_str(),
+            &facts.read.pull_request.url,
+        ))
     }
 
     /// Approve exactly what the preview showed and start sending it.
@@ -295,7 +316,7 @@ impl Engine {
                 ),
                 other => store_error(&other),
             })?;
-        tracing::info!(%flow, approval = %published.approval.id, hash = %published.review.hash(),
+        tracing::info!(%flow, approval = %published.approval.id, hash = %review.hash(),
             "approved publishing a review");
         self.notice.changed(flow);
         self.send(published.approval.id);
@@ -386,7 +407,7 @@ impl Engine {
 
     /// Cancel what is left of `publication` and settle its items. An operation whose send is
     /// unsettled is left alone: whether it happened is not known yet.
-    fn replace(&self, publication: &Publication) {
+    pub(super) fn replace(&self, publication: &Publication) {
         for op in &publication.operations {
             if matches!(
                 op.state,

@@ -13,7 +13,14 @@ import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 
 import type {
   AccountUsage,
+  ApprovedRoute,
   FindingRecord,
+  FixDiffView,
+  RouteOptions,
+  RoutePreview,
+  RouteRequest,
+  RouteSendView,
+  StartFix,
   RecipeChoice,
   RerunScope,
   PublicationView,
@@ -858,6 +865,27 @@ export const commands = {
   /** Stop a publish where it is. What was posted stays posted. */
   cancelPublication: (approval: number) =>
     invoke<PublicationView>('cancel_publication', { approval }),
+  /** Start a local fix of a finished review's findings by a writer role. Takes the writer lease. */
+  startLocalFix: (flow: number, request: StartFix) =>
+    invoke<ReviewRunView>('start_local_fix', { flow, request }),
+  /** Stop the local fix being written. What it committed stays in the review worktree. */
+  cancelLocalFix: (flow: number) => invoke<ReviewRunView>('cancel_local_fix', { flow }),
+  /** The current local fix's diff, to read before choosing where it goes. */
+  localFixDiff: (flow: number) => invoke<FixDiffView>('local_fix_diff', { flow }),
+  /** Every route for the run's fix, open or not, from a fresh read. Sends nothing. */
+  fixRoutes: (flow: number) => invoke<RouteOptions>('fix_routes', { flow }),
+  /** Exactly what a route would send, and the hash approving it takes. Sends nothing. */
+  previewFixRoute: (flow: number, request: RouteRequest) =>
+    invoke<RoutePreview>('preview_fix_route', { flow, request }),
+  /** Approve exactly what the preview showed, by its hash, and start sending it. */
+  approveFixRoute: (flow: number, request: RouteRequest, hash: string) =>
+    invoke<ApprovedRoute>('approve_fix_route', { flow, request, hash }),
+  /** Send what is left of a route that failed or stopped, after reading the remote for it. */
+  retryFixRoute: (approval: number) =>
+    invoke<RouteSendView>('retry_fix_route', { approval }),
+  /** Stop a route where it is. What was pushed stays pushed. */
+  cancelFixRoute: (approval: number) =>
+    invoke<RouteSendView>('cancel_fix_route', { approval }),
   /** Open inbox items, newest first, for one project or every one. */
   workInbox: (project: string | null) => invoke<InboxItem[]>('work_inbox', { project }),
 

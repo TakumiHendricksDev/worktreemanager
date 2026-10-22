@@ -76,9 +76,29 @@ export function reviewStatus(
   // should say is that it is paused, not that it is working.
   if (state.hold?.kind === 'waiting_capacity')
     return say('waiting', 'Paused for usage capacity');
-  if (state.hold?.kind === 'interrupted') return say('waiting', 'Review interrupted');
+  if (state.hold?.kind === 'interrupted')
+    return say(
+      'waiting',
+      state.phase === 'fixing' ? 'Local fix interrupted' : 'Review interrupted',
+    );
   if (state.hold !== null) return say('waiting');
+  // A local fix is the row's news while it is written and until it is sent somewhere.
+  if (state.end === null && state.phase === 'fixing')
+    return say('running', 'Fixing locally');
   if (run.running) return say('running');
+  if (state.end === null && state.phase === 'fix_ready') {
+    const fix = run.fixes.at(-1);
+    const sent =
+      (run.pullRequest?.routes.some((r) => r.state === 'published') ?? false) ||
+      (run.pullRequest?.publications.some(
+        (p) => p.suggestions && p.state === 'published',
+      ) ??
+        false);
+    if (sent) return say('findings', 'Local fix sent');
+    return fix?.state === 'ready' && fix.headSha !== fix.baseSha
+      ? say('waiting', 'Local fix ready to send')
+      : say('waiting', 'Local fix did not finish');
+  }
   if (state.phase !== 'consolidated' && state.end === null) return say('waiting');
   const open = run.findings.filter((f) => f.dismissed === null).length;
   const counted = `${open} finding${open === 1 ? '' : 's'}`;

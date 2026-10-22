@@ -26,10 +26,11 @@ use crate::flow::{
     QuestionError, QuestionId,
 };
 use crate::flow::{
-    ApprovalId, NewApproval, NewOperation, Operation, OperationChange, OperationId, OutboxError,
-    Publication,
+    ApprovalId, Approved, NewApproval, NewOperation, Operation, OperationChange, OperationId,
+    OutboxError, Publication, RouteSend,
 };
 use crate::flow::{CheckRun, FindingId, FindingRecord, NewCheckRun, Reconciled};
+use crate::flow::{Fix, FixChange, FixId, Lease, LeaseId, LeaseRelease, NewFix, NewLease};
 use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
     UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink,
@@ -94,6 +95,21 @@ pub enum FlowStoreError {
         #[from]
         reason: OutboxError,
     },
+
+    /// The worktree is leased, by a writer or, for a writer, by a review: the lease in the way.
+    /// Nothing was written.
+    #[error("the worktree is held by {} of run {}", .lease.holder, .lease.flow)]
+    Leased { lease: Box<Lease> },
+
+    #[error("no lease {0}")]
+    UnknownLease(LeaseId),
+
+    #[error("no fix {0}")]
+    UnknownFix(FixId),
+
+    /// A fix of the run is still being written.
+    #[error("fix {existing} of this run is still being written")]
+    FixWriting { existing: FixId },
 
     /// An approval would take over an operation that is being sent, or was being sent when wtm
     /// stopped: whether it reached the remote is not known yet. Nothing was written.
@@ -373,9 +389,9 @@ pub trait InboxStore: Send + Sync {
 
 /// Approvals and the outbox: what you allowed to be sent, and each write's progress.
 ///
-/// A port of its own, because every kind of flow will write through it — a review now; a push, a
-/// pull request and an issue move later — and because its rules are the outbox's: one operation per
-/// key, an approval never changed once given, and an operation's state moving only as
+/// A port of its own, because every kind of flow writes through it — a review and a fix's routes
+/// now; a draft pull request and an issue move later — and because its rules are the outbox's: one
+/// operation per key, an approval never changed once given, and an operation's state moving only as
 /// [`OperationState::can_move_to`](crate::flow::OperationState::can_move_to) allows. The same
 /// database implements it.
 pub trait OutboxStore: Send + Sync {
@@ -390,14 +406,44 @@ pub trait OutboxStore: Send + Sync {
         approval: &NewApproval,
         operations: &[NewOperation],
         at: UnixMs,
-    ) -> Result<Publication, FlowStoreError>;
+    ) -> Result<Approved, FlowStoreError>;
 
     /// One approval, with what it was of and its operations in order.
-    fn publication(&self, approval: ApprovalId) -> Result<Option<Publication>, FlowStoreError>;
+    fn approved(&self, approval: ApprovalId) -> Result<Option<Approved>, FlowStoreError>;
 
-    /// A flow's publications, oldest first. An operation belongs to the latest approval that
-    /// covered it, so an earlier approval of the same payload has none left.
-    fn publications(&self, flow: FlowId) -> Result<Vec<Publication>, FlowStoreError>;
+    /// A flow's approvals, oldest first. An operation belongs to the latest approval that covered
+    /// it, so an earlier approval of the same payload has none left.
+    fn approvals(&self, flow: FlowId) -> Result<Vec<Approved>, FlowStoreError>;
+
+    /// One approval of something posted as a review: a review, or a fix's suggestions.
+    fn publication(&self, approval: ApprovalId) -> Result<Option<Publication>, FlowStoreError> {
+        Ok(self
+            .approved(approval)?
+            .and_then(Approved::into_publication))
+    }
+
+    /// A flow's publications, oldest first.
+    fn publications(&self, flow: FlowId) -> Result<Vec<Publication>, FlowStoreError> {
+        Ok(self
+            .approvals(flow)?
+            .into_iter()
+            .filter_map(Approved::into_publication)
+            .collect())
+    }
+
+    /// One approval of a push route.
+    fn route(&self, approval: ApprovalId) -> Result<Option<RouteSend>, FlowStoreError> {
+        Ok(self.approved(approval)?.and_then(Approved::into_route))
+    }
+
+    /// A flow's push routes, oldest first.
+    fn routes(&self, flow: FlowId) -> Result<Vec<RouteSend>, FlowStoreError> {
+        Ok(self
+            .approvals(flow)?
+            .into_iter()
+            .filter_map(Approved::into_route)
+            .collect())
+    }
 
     fn operation(&self, id: OperationId) -> Result<Option<Operation>, FlowStoreError>;
 
@@ -412,4 +458,49 @@ pub trait OutboxStore: Send + Sync {
 
     /// Every operation left executing: at launch, the ones a crash cut off mid-write.
     fn executing_operations(&self) -> Result<Vec<Operation>, FlowStoreError>;
+}
+
+/// Who holds a worktree: the writer lease, and the reviews reading it.
+///
+/// The rule — one writer, never beside a review — is checked and the lease granted in one
+/// transaction, so it holds between two clicks as well as between two threads.
+pub trait LeaseStore: Send + Sync {
+    /// Take a lease.
+    ///
+    /// # Errors
+    ///
+    /// [`FlowStoreError::Leased`], naming the lease in the way, when
+    /// [`lease_conflict`](crate::flow::lease_conflict) says one is.
+    fn acquire_lease(&self, lease: &NewLease, at: UnixMs) -> Result<Lease, FlowStoreError>;
+
+    /// Let a lease go, once. `None` when it was released already: the first release's reason is
+    /// the one kept.
+    fn release_lease(
+        &self,
+        id: LeaseId,
+        why: LeaseRelease,
+        at: UnixMs,
+    ) -> Result<Option<Lease>, FlowStoreError>;
+
+    /// Every open lease, on one worktree or on all of them, oldest first.
+    fn open_leases(&self, worktree: Option<&str>) -> Result<Vec<Lease>, FlowStoreError>;
+}
+
+/// Local fixes: what a writer was asked to fix, what held it, and what it left.
+pub trait FixStore: Send + Sync {
+    /// Record a fix being started.
+    ///
+    /// # Errors
+    ///
+    /// [`FlowStoreError::FixWriting`] when another fix of the run is still being written.
+    fn start_fix(&self, fix: &NewFix, at: UnixMs) -> Result<Fix, FlowStoreError>;
+
+    /// Change a fix. A fix that is over keeps its state; its head, diff and allowed files may still
+    /// change, as when you let an outlier in and the rest is committed.
+    fn change_fix(&self, id: FixId, change: &FixChange, at: UnixMs) -> Result<Fix, FlowStoreError>;
+
+    fn fix(&self, id: FixId) -> Result<Option<Fix>, FlowStoreError>;
+
+    /// A run's fixes, oldest first.
+    fn fixes(&self, flow: FlowId) -> Result<Vec<Fix>, FlowStoreError>;
 }

@@ -7,8 +7,8 @@
 
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use wtm_core::flow::{
-    Approval, ApprovalId, ApprovalSubject, FlowId, NewApproval, NewOperation, Operation,
-    OperationChange, OperationId, OperationKey, OperationState, Publication, UnixMs,
+    Approval, ApprovalId, Approved, FlowId, NewApproval, NewOperation, Operation, OperationChange,
+    OperationId, OperationKey, OperationState, UnixMs,
 };
 use wtm_core::ports::{FlowStoreError, OutboxStore};
 
@@ -133,7 +133,7 @@ fn operations_of(
     .collect()
 }
 
-fn publication_from(conn: &Connection, row: ApprovalRow) -> Result<Publication, FlowStoreError> {
+fn approved_from(conn: &Connection, row: ApprovalRow) -> Result<Approved, FlowStoreError> {
     let approval = Approval {
         id: ApprovalId(row.id),
         flow: FlowId(row.flow),
@@ -141,18 +141,14 @@ fn publication_from(conn: &Connection, row: ApprovalRow) -> Result<Publication, 
         binding: from_json(&row.binding)?,
         granted_at: row.granted_at,
     };
-    let ApprovalSubject::Review(review) = from_json(&row.subject)?;
-    Ok(Publication {
+    Ok(Approved {
         operations: operations_of(conn, approval.id)?,
+        subject: from_json(&row.subject)?,
         approval,
-        review: *review,
     })
 }
 
-fn publication(
-    conn: &Connection,
-    approval: ApprovalId,
-) -> Result<Option<Publication>, FlowStoreError> {
+fn approved(conn: &Connection, approval: ApprovalId) -> Result<Option<Approved>, FlowStoreError> {
     let row = conn
         .query_row(
             &format!("SELECT {APPROVAL_COLUMNS} FROM approvals WHERE id = ?1"),
@@ -161,7 +157,7 @@ fn publication(
         )
         .optional()
         .map_err(storage)?;
-    row.map(|row| publication_from(conn, row)).transpose()
+    row.map(|row| approved_from(conn, row)).transpose()
 }
 
 fn operation(conn: &Connection, id: OperationId) -> Result<Option<Operation>, FlowStoreError> {
@@ -200,7 +196,7 @@ impl OutboxStore for AppDb {
         approval: &NewApproval,
         operations: &[NewOperation],
         at: UnixMs,
-    ) -> Result<Publication, FlowStoreError> {
+    ) -> Result<Approved, FlowStoreError> {
         let mut conn = self.conn.lock();
         ensure_flow(&conn, approval.flow)?;
         let tx = conn.transaction().map_err(storage)?;
@@ -267,14 +263,14 @@ impl OutboxStore for AppDb {
             }
         }
         tx.commit().map_err(storage)?;
-        publication(&conn, id)?.ok_or(FlowStoreError::UnknownApproval(id))
+        approved(&conn, id)?.ok_or(FlowStoreError::UnknownApproval(id))
     }
 
-    fn publication(&self, approval: ApprovalId) -> Result<Option<Publication>, FlowStoreError> {
-        publication(&self.conn.lock(), approval)
+    fn approved(&self, approval: ApprovalId) -> Result<Option<Approved>, FlowStoreError> {
+        approved(&self.conn.lock(), approval)
     }
 
-    fn publications(&self, flow: FlowId) -> Result<Vec<Publication>, FlowStoreError> {
+    fn approvals(&self, flow: FlowId) -> Result<Vec<Approved>, FlowStoreError> {
         let conn = self.conn.lock();
         query(
             &conn,
@@ -283,7 +279,7 @@ impl OutboxStore for AppDb {
             ApprovalRow::read,
         )?
         .into_iter()
-        .map(|row| publication_from(&conn, row))
+        .map(|row| approved_from(&conn, row))
         .collect()
     }
 

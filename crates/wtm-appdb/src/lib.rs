@@ -1,5 +1,6 @@
 //! The app's own database: work items, flows and their history, review rules and runs, the inbox,
-//! and approvals with the outbox's operations, in SQLite.
+//! approvals with the outbox's operations, and local fixes with the leases that hold their
+//! worktrees, in SQLite.
 //!
 //! # Why this name
 //!
@@ -32,6 +33,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod findings;
+mod fixes;
 mod inbox;
 mod migrate;
 mod outbox;
@@ -80,8 +82,9 @@ pub enum AppDbError {
 
 /// The open database. Implements [`FlowStore`](wtm_core::ports::FlowStore),
 /// [`RuleStore`](wtm_core::ports::RuleStore), [`RunStore`](wtm_core::ports::RunStore),
-/// [`PullReviewStore`](wtm_core::ports::PullReviewStore), [`InboxStore`](wtm_core::ports::InboxStore)
-/// and [`OutboxStore`](wtm_core::ports::OutboxStore).
+/// [`PullReviewStore`](wtm_core::ports::PullReviewStore), [`InboxStore`](wtm_core::ports::InboxStore),
+/// [`OutboxStore`](wtm_core::ports::OutboxStore), [`LeaseStore`](wtm_core::ports::LeaseStore) and
+/// [`FixStore`](wtm_core::ports::FixStore).
 #[derive(Debug)]
 pub struct AppDb {
     conn: Mutex<Connection>,

@@ -77,7 +77,8 @@ const run = (flow, worktree, state, steps, invocations = [], inbox = [], running
   review: { flow, project: '/x/webapp', worktree: id(worktree), worktreePath: id(worktree), recipe: 'standard', base: 'origin/main', snapshot: 1 },
   snapshot: { headSha: 'a1b2c3d4e5f6', treeSha: '9f00aa', baseSha: 'c0ffee11' },
   steps, invocations, inbox, running,
-  findings: [], checks: [], expectedChecks: [], applied: noKnowledge, ...more });
+  findings: [], checks: [], expectedChecks: [], applied: noKnowledge,
+  pullRequest: null, fixes: [], leases: [], writers: [], ...more });
 const source = (role, provider, invocationId, ordinal = 0) => ({ step: invocationId, invocation: invocationId,
   ordinal, role, provider, model: provider === 'claude' ? 'sonnet' : 'gpt-6', workspace: 'snapshot', treeSha: '9f00aa' });
 const reported = (title, cls, extra = {}) => ({ title, severity: 'notable', class: cls, body: 'Why it matters.', ...extra });

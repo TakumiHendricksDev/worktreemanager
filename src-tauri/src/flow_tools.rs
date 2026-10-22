@@ -430,6 +430,11 @@ impl Ledger {
             .unwrap_or_default()
     }
 
+    /// Keep a commit the engine made for `role`'s `flow_checkpoint`, as the ledger's own does.
+    pub fn note_checkpoint(&self, role: &FlowRole, commit: &str) {
+        self.with(role, |record| record.checkpoints.push(commit.to_owned()));
+    }
+
     fn with<T>(&self, role: &FlowRole, f: impl FnOnce(&mut RoleRecord) -> T) -> T {
         let mut roles = self.roles.lock();
         f(roles.entry((role.flow, role.role.clone())).or_default())

@@ -181,9 +181,11 @@
             >Re-review the changes</Button
           >
         {/if}
-        <Button size="sm" disabled={busy} onclick={() => (confirming = true)}
-          >Publish against {short(view.review.commitId)} anyway…</Button
-        >
+        {#if actions.against}
+          <Button size="sm" disabled={busy} onclick={() => (confirming = true)}
+            >Publish against {short(view.review.commitId)} anyway…</Button
+          >
+        {/if}
         <Button variant="quiet" size="sm" disabled={busy} onclick={onleave}>Cancel</Button>
       {/if}
     </div>

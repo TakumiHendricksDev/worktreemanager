@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
 use super::publish::ReviewPayload;
+use super::route::{RoutePlan, SuggestionRoute};
 use super::state::FlowId;
 
 id! {
@@ -194,6 +195,10 @@ impl Approval {
 pub enum ApprovalSubject {
     /// A review to publish on a pull request.
     Review(Box<ReviewPayload>),
+    /// A local fix as suggestion comments, posted the way a review is.
+    Suggestions(Box<SuggestionRoute>),
+    /// A local fix pushed somewhere: a follow-up pull request, or their branch.
+    Route(Box<RoutePlan>),
 }
 
 /// An approval to record, not yet numbered.
@@ -234,6 +239,60 @@ impl NewApproval {
             intent: ApprovalIntent::Post,
             binding,
             subject: ApprovalSubject::Review(Box::new(review.clone())),
+        })
+    }
+}
+
+impl NewApproval {
+    /// Approval to send a local fix by `plan`: its exact destination, the diff it carries, and
+    /// their head as you saw it.
+    ///
+    /// # Errors
+    ///
+    /// When a pin a route needs is missing, which a plan cannot leave out.
+    pub fn route(flow: FlowId, plan: &RoutePlan) -> Result<Self, ApprovalError> {
+        Self::checked(
+            flow,
+            plan.binding(),
+            ApprovalSubject::Route(Box::new(plan.clone())),
+        )
+    }
+
+    /// Approval to post a local fix as exactly these suggestions.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::route`].
+    pub fn suggestions(flow: FlowId, route: &SuggestionRoute) -> Result<Self, ApprovalError> {
+        Self::checked(
+            flow,
+            route.binding(),
+            ApprovalSubject::Suggestions(Box::new(route.clone())),
+        )
+    }
+
+    fn checked(
+        flow: FlowId,
+        binding: Binding,
+        subject: ApprovalSubject,
+    ) -> Result<Self, ApprovalError> {
+        let missing: Vec<Pinned> = ApprovalIntent::Route
+            .requires()
+            .iter()
+            .filter(|pin| !binding.0.contains_key(pin))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            return Err(ApprovalError::Unpinned {
+                intent: ApprovalIntent::Route,
+                missing,
+            });
+        }
+        Ok(Self {
+            flow,
+            intent: ApprovalIntent::Route,
+            binding,
+            subject,
         })
     }
 }

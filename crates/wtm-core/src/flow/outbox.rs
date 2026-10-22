@@ -34,8 +34,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
-use super::approval::{Approval, ApprovalId};
+use super::approval::{Approval, ApprovalId, ApprovalSubject, Binding, review_binding};
 use super::publish::{PendingReviewPayload, ReviewPayload, SubmitReviewPayload, hash_of, target};
+use super::route::{OpenPullRequestPayload, PushPayload, RoutePlan, SuggestionRoute};
 use super::state::FlowId;
 
 id! {
@@ -57,6 +58,8 @@ pub enum OperationKind {
     PostComment,
     MoveIssue,
     Merge,
+    /// A pull request that is not a draft: a follow-up of local fixes, into someone's branch.
+    OpenPullRequest,
 }
 
 impl OperationKind {
@@ -73,6 +76,7 @@ impl OperationKind {
             Self::PostComment => "post_comment",
             Self::MoveIssue => "move_issue",
             Self::Merge => "merge",
+            Self::OpenPullRequest => "open_pull_request",
         }
     }
 }
@@ -95,6 +99,10 @@ pub struct OperationKey {
 pub enum OperationPayload {
     PendingReview(PendingReviewPayload),
     SubmitReview(SubmitReviewPayload),
+    /// A commit pushed to a branch, for a route of local fixes.
+    PushBranch(PushPayload),
+    /// The follow-up pull request of local fixes.
+    OpenPullRequest(OpenPullRequestPayload),
 }
 
 impl OperationPayload {
@@ -103,14 +111,25 @@ impl OperationPayload {
         match self {
             Self::PendingReview(_) => OperationKind::PendingReview,
             Self::SubmitReview(_) => OperationKind::SubmitReview,
+            Self::PushBranch(_) => OperationKind::PushBranch,
+            Self::OpenPullRequest(_) => OperationKind::OpenPullRequest,
         }
     }
 
+    /// What it writes to: `owner/name#40` for a review, the remote's URL and ref for a push, and
+    /// the repository with both branches for a pull request.
     #[must_use]
     pub fn target(&self) -> String {
         match self {
             Self::PendingReview(p) => target(&p.repo, p.number),
             Self::SubmitReview(p) => target(&p.repo, p.number),
+            Self::PushBranch(p) => format!("{} {}", p.destination.url, p.destination.reference),
+            Self::OpenPullRequest(p) => format!(
+                "{} {} <- {}",
+                p.pull_request.repo.full_name(),
+                p.pull_request.base,
+                p.pull_request.head
+            ),
         }
     }
 
@@ -219,15 +238,44 @@ pub enum OperationResult {
         /// Found on the remote by its marker rather than sent this time: it had happened already.
         adopted: bool,
     },
+    /// A branch now at the commit.
+    #[serde(rename_all = "camelCase")]
+    Pushed {
+        url: String,
+        reference: String,
+        commit: String,
+        /// The branch was at the commit before anything was sent.
+        adopted: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    PullRequest {
+        number: u64,
+        url: String,
+        /// Found open with this head and base, or by its marker, rather than opened this time.
+        adopted: bool,
+    },
 }
 
 impl OperationResult {
+    /// The review it left, for a review's writes.
     #[must_use]
-    pub fn review(&self) -> (u64, &str) {
+    pub fn review(&self) -> Option<(u64, &str)> {
         match self {
             Self::Review {
                 review, node_id, ..
-            } => (*review, node_id),
+            } => Some((*review, node_id)),
+            Self::Pushed { .. } | Self::PullRequest { .. } => None,
+        }
+    }
+
+    /// Where it can be seen on the forge, when it has a page.
+    #[must_use]
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Self::Review { url, .. } | Self::PullRequest { url, .. } if !url.is_empty() => {
+                Some(url)
+            }
+            _ => None,
         }
     }
 }
@@ -385,52 +433,69 @@ pub enum PublicationState {
     Cancelled,
 }
 
+/// The route a publication of suggestions also pins, beside the review: their branch and the fix.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestedFix {
+    pub their: super::route::TheirBranch,
+    pub fix: super::route::FixRef,
+}
+
 /// One approval of a review, with exactly what it covered and the operations that post it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Publication {
     pub approval: Approval,
     pub review: ReviewPayload,
+    /// Set when the review is a local fix as suggestions, which its approval pins as a route too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<SuggestedFix>,
     /// In order.
     pub operations: Vec<Operation>,
 }
 
+/// What a sequence of operations adds up to, given what this process is doing with them. A
+/// review's publish and a fix's route read the same way.
+///
+/// Posting wins while this process is sending it, even once every write is recorded done: the
+/// sender still has the sequence's inbox items to settle, and reading "published" before it has
+/// would show an item about a publish that has finished. CI caught that gap as a test seeing a
+/// published review with its failure item still open.
+#[must_use]
+pub fn progress(ops: &[Operation], activity: Option<Activity>) -> PublicationState {
+    let any = |state: OperationState| ops.iter().any(|op| op.state == state);
+    if activity == Some(Activity::Posting) {
+        return PublicationState::Posting;
+    }
+    if !ops.is_empty() && ops.iter().all(|op| op.state == OperationState::Done) {
+        return PublicationState::Published;
+    }
+    if any(OperationState::Executing) {
+        return PublicationState::Checking;
+    }
+    let stopped = ops
+        .iter()
+        .find(|op| op.state == OperationState::NeedsAttention);
+    if let Some(op) = stopped {
+        return match op.attention {
+            Some(Attention::HeadMoved { .. }) => PublicationState::Stale,
+            _ => PublicationState::NeedsYou,
+        };
+    }
+    if any(OperationState::Failed) {
+        PublicationState::Failed
+    } else if any(OperationState::Cancelled) {
+        PublicationState::Cancelled
+    } else {
+        PublicationState::Waiting
+    }
+}
+
 impl Publication {
-    /// The state to show, given what this process is doing with it.
-    ///
-    /// Posting wins while this process is sending it, even once every write is recorded done: the
-    /// sender still has the publication's inbox items to settle, and reading "published" before
-    /// it has would show an item about a publish that has finished. CI caught that gap as a test
-    /// seeing a published review with its failure item still open.
+    /// The state to show, given what this process is doing with it. See [`progress`].
     #[must_use]
     pub fn state(&self, activity: Option<Activity>) -> PublicationState {
-        let ops = &self.operations;
-        let any = |state: OperationState| ops.iter().any(|op| op.state == state);
-        if activity == Some(Activity::Posting) {
-            return PublicationState::Posting;
-        }
-        if !ops.is_empty() && ops.iter().all(|op| op.state == OperationState::Done) {
-            return PublicationState::Published;
-        }
-        if any(OperationState::Executing) {
-            return PublicationState::Checking;
-        }
-        let stopped = ops
-            .iter()
-            .find(|op| op.state == OperationState::NeedsAttention);
-        if let Some(op) = stopped {
-            return match op.attention {
-                Some(Attention::HeadMoved { .. }) => PublicationState::Stale,
-                _ => PublicationState::NeedsYou,
-            };
-        }
-        if any(OperationState::Failed) {
-            PublicationState::Failed
-        } else if any(OperationState::Cancelled) {
-            PublicationState::Cancelled
-        } else {
-            PublicationState::Waiting
-        }
+        progress(&self.operations, activity)
     }
 
     /// The operation to run next: the first that is not done.
@@ -447,6 +512,103 @@ impl Publication {
             .iter()
             .filter(|op| op.state == OperationState::Done)
             .count()
+    }
+
+    /// What the approval would have to cover for this to be sent now, with the pull request at
+    /// `head` and, for suggestions, the fix's diff at `diff_now` (the approved one when `None`).
+    #[must_use]
+    pub fn binding_now(&self, head: &str, diff_now: Option<&str>) -> Binding {
+        match &self.suggestions {
+            None => review_binding(&self.review, head),
+            Some(suggested) => SuggestionRoute {
+                review: self.review.clone(),
+                their: suggested.their.clone(),
+                fix: suggested.fix.clone(),
+            }
+            .binding_now(head, diff_now.unwrap_or(&suggested.fix.diff_hash)),
+        }
+    }
+}
+
+/// One approval of a push route, with exactly what it covered and the operations that send it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteSend {
+    pub approval: Approval,
+    pub plan: RoutePlan,
+    /// In order: the push, then the pull request for a follow-up.
+    pub operations: Vec<Operation>,
+}
+
+impl RouteSend {
+    #[must_use]
+    pub fn state(&self, activity: Option<Activity>) -> PublicationState {
+        progress(&self.operations, activity)
+    }
+
+    #[must_use]
+    pub fn next(&self) -> Option<&Operation> {
+        self.operations
+            .iter()
+            .find(|op| op.state != OperationState::Done)
+    }
+
+    #[must_use]
+    pub fn done(&self) -> usize {
+        self.operations
+            .iter()
+            .filter(|op| op.state == OperationState::Done)
+            .count()
+    }
+}
+
+/// An approval as the store keeps it: what it was of, and the operations it covers now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Approved {
+    pub approval: Approval,
+    pub subject: ApprovalSubject,
+    /// In order.
+    pub operations: Vec<Operation>,
+}
+
+impl Approved {
+    /// A review, or suggestions, posted the way a review is. `None` for a push route.
+    #[must_use]
+    pub fn into_publication(self) -> Option<Publication> {
+        let (review, suggestions) = match self.subject {
+            ApprovalSubject::Review(review) => (*review, None),
+            ApprovalSubject::Suggestions(route) => {
+                let route = *route;
+                (
+                    route.review,
+                    Some(SuggestedFix {
+                        their: route.their,
+                        fix: route.fix,
+                    }),
+                )
+            }
+            ApprovalSubject::Route(_) => return None,
+        };
+        Some(Publication {
+            approval: self.approval,
+            review,
+            suggestions,
+            operations: self.operations,
+        })
+    }
+
+    /// A push route. `None` for anything posted as a review.
+    #[must_use]
+    pub fn into_route(self) -> Option<RouteSend> {
+        match self.subject {
+            ApprovalSubject::Route(plan) => Some(RouteSend {
+                approval: self.approval,
+                plan: *plan,
+                operations: self.operations,
+            }),
+            ApprovalSubject::Review(_) | ApprovalSubject::Suggestions(_) => None,
+        }
     }
 }
 
@@ -593,6 +755,7 @@ mod tests {
                 granted_at: 0,
             },
             review,
+            suggestions: None,
             operations,
         }
     }

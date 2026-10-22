@@ -35,7 +35,7 @@ use wtm_core::flow::{
     Activity, ApprovalId, Attention, InboxKind, Marker, Operation, OperationChange,
     OperationPayload, OperationResult, OperationState, PendingFound, PendingReviewPayload,
     Publication, RemoteReview, RemoteReviewState, Resolution, SubmitFound, SubmitReviewPayload,
-    carries_marker, find_pending, find_submitted, missing_comments, review_binding, signed,
+    carries_marker, find_pending, find_submitted, missing_comments, signed,
 };
 use wtm_core::ports::{FlowStore, ForgeError, OutboxStore, RunStore, SentComment};
 
@@ -54,6 +54,10 @@ pub enum Fault {
     /// `stall-after-comments`: once the pending review is created, wait ten minutes before
     /// recording it, which is long enough to kill the app mid-publish.
     StallAfterComments,
+    /// `stall-before-push`: once a route's push has read the pull request, wait a minute before
+    /// it reads the remote branch, which is long enough for "the author" to push in between and
+    /// show the read before the push stopping it.
+    StallBeforePush,
 }
 
 impl Fault {
@@ -67,6 +71,7 @@ impl Fault {
             "fail-submit-once" => Some(Self::FailSubmitOnce),
             "lose-comments-reply" => Some(Self::LoseCommentsReply),
             "stall-after-comments" => Some(Self::StallAfterComments),
+            "stall-before-push" => Some(Self::StallBeforePush),
             other => {
                 tracing::warn!(
                     value = other,
@@ -80,6 +85,9 @@ impl Fault {
 
 /// How long `stall-after-comments` holds a publish, in half-second steps so a quit is not held.
 const STALL_STEPS: u32 = 1_200;
+
+/// How long `stall-before-push` holds a push, in half-second steps.
+pub(super) const PUSH_STALL_STEPS: u32 = 120;
 
 /// The comments of a pending review as they are sent: each body ends with its marker.
 pub(super) fn sent_comments(payload: &PendingReviewPayload, marker: &Marker) -> Vec<SentComment> {
@@ -145,7 +153,7 @@ impl Engine {
         })
     }
 
-    fn claim(&self, approval: ApprovalId, activity: Activity) -> bool {
+    pub(super) fn claim(&self, approval: ApprovalId, activity: Activity) -> bool {
         let mut busy = self.publishing.lock();
         if busy.contains_key(&approval) {
             return false;
@@ -154,7 +162,7 @@ impl Engine {
         true
     }
 
-    fn release(&self, approval: ApprovalId) {
+    pub(super) fn release(&self, approval: ApprovalId) {
         self.publishing.lock().remove(&approval);
     }
 
@@ -273,9 +281,10 @@ impl Engine {
                 return Then::Stop;
             }
         };
+        let diff_now = self.fix_diff_now(publication.approval.flow);
         if let Err(stale) = publication
             .approval
-            .check(&review_binding(&publication.review, &target.head))
+            .check(&publication.binding_now(&target.head, diff_now.as_deref()))
         {
             tracing::info!(approval = %publication.approval.id, changes = stale.changes.len(),
                 "a publish stopped: the pull request moved after it was approved");
@@ -314,6 +323,10 @@ impl Engine {
             },
             OperationPayload::SubmitReview(payload) => {
                 self.submit(&target, publication, op, payload)
+            }
+            OperationPayload::PushBranch(_) | OperationPayload::OpenPullRequest(_) => {
+                self.failed(publication, op, "this is a route's write, not a review's");
+                Then::Stop
             }
         }
     }
@@ -530,7 +543,7 @@ impl Engine {
             .operations
             .iter()
             .filter(|earlier| earlier.position < op.position)
-            .find_map(|earlier| earlier.result.as_ref().map(OperationResult::review));
+            .find_map(|earlier| earlier.result.as_ref().and_then(OperationResult::review));
         let Some((review, _)) = pending else {
             self.failed(
                 publication,
@@ -735,7 +748,9 @@ impl Engine {
                 continue;
             }
             self.notice.changed(op.key.flow);
-            if let Ok(Some(publication)) = db.publication(op.approval) {
+            if self.recover_route(op.approval, &op) {
+                // A fix's route, checked by its own executor's rules (`routes.rs`).
+            } else if let Ok(Some(publication)) = db.publication(op.approval) {
                 self.settle_unsent(&publication, &op);
                 // Whatever the check found, a publish that is not finished waits for you, so it is
                 // news: the comments may be on GitHub and the submission never sent.
@@ -834,7 +849,8 @@ impl Engine {
                     .operations
                     .iter()
                     .filter(|earlier| earlier.position < op.position)
-                    .find_map(|earlier| earlier.result.as_ref().map(|r| r.review().0));
+                    .find_map(|earlier| earlier.result.as_ref().and_then(OperationResult::review))
+                    .map(|(review, _)| review);
                 match (
                     review,
                     writer.reviews(&target.root, &payload.repo, payload.number),
@@ -861,6 +877,9 @@ impl Engine {
                     )),
                     (None, Ok(_)) => OperationChange::failed(gone),
                 }
+            }
+            OperationPayload::PushBranch(_) | OperationPayload::OpenPullRequest(_) => {
+                OperationChange::failed("this is a route's write, not a review's")
             }
         };
         tracing::info!(op = %op.id, to = ?change.state, "settled an operation a crash left mid-write");

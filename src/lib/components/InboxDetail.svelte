@@ -15,7 +15,8 @@
    * - **A publish** — an approval gone stale because the pull request moved, or one that failed or
    *   stopped partway — is the publication's own card (`WorkPublication`), with what settles it:
    *   Retry, the pending-review choices, or re-review and publish anyway. It reads the run the
-   *   Reviews tab reads, so a retry here updates both.
+   *   Reviews tab reads, so a retry here updates both. A local fix's route that stopped — their
+   *   branch moved, or a push failed — is the route's own card (`WorkRoute`) the same way.
    * - **A ready review** names the worst of what it found; each finding is a link to that finding
    *   in the Reviews tab, which is the exact place the item is about. Reading the review settles
    *   it.
@@ -34,6 +35,7 @@
   import ApprovalCard from './ApprovalCard.svelte';
   import Button from './ui/Button.svelte';
   import WorkPublication from './WorkPublication.svelte';
+  import WorkRoute from './WorkRoute.svelte';
 
   const { item }: { item: InboxItem } = $props();
 
@@ -109,6 +111,21 @@
       : undefined;
     return live ?? fetched;
   });
+  /** A local fix's route the item is about, live from the worktree's run. */
+  const route = $derived.by(() => {
+    if (approvalId === null || !item.worktree) return null;
+    return (
+      reviewRuns.latest[item.worktree]?.pullRequest?.routes.find(
+        (r) => r.approval.id === approvalId,
+      ) ?? null
+    );
+  });
+  const routing = $derived(
+    item.worktree ? (reviewRuns.busy[`route:${item.worktree}`] ?? false) : false,
+  );
+  const routeError = $derived(
+    item.worktree ? (reviewRuns.errors[`route:${item.worktree}`] ?? null) : null,
+  );
   const publishing = $derived(
     item.worktree ? (reviewRuns.busy[`publication:${item.worktree}`] ?? false) : false,
   );
@@ -216,6 +233,22 @@
       }}
       onopen={(url) => void commands.openUrl(url)}
     />
+  {:else if route}
+    {@const worktree = item.worktree ?? ''}
+    <WorkRoute
+      view={route}
+      busy={routing}
+      error={routeError}
+      onretry={() =>
+        void reviewRuns.route(worktree, item.flow, () =>
+          commands.retryFixRoute(route.approval.id),
+        )}
+      onleave={() =>
+        void reviewRuns.route(worktree, item.flow, () =>
+          commands.cancelFixRoute(route.approval.id),
+        )}
+      onopen={(url) => void commands.openUrl(url)}
+    />
   {:else if item.kind === 'approval' && item.target.kind === 'approval'}
     <p class="c-inbox-card__note">Reading this publish…</p>
   {:else if item.kind === 'approval'}
@@ -247,7 +280,7 @@
       >
     {/if}
     <Button
-      variant={resume || publication ? 'neutral' : 'accent'}
+      variant={resume || publication || route ? 'neutral' : 'accent'}
       size="sm"
       onclick={() =>
         inbox.open(

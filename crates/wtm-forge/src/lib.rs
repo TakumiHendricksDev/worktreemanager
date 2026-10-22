@@ -8,14 +8,15 @@
 //! stores no token and links no HTTP client. The cost is a process per question and a JSON shape
 //! that is `gh`'s rather than the API's, which is what [`parse`] is for.
 //!
-//! # Reads, and the writes of one approved review, each in its own file
+//! # Reads, and the writes of an approved review or route, each in its own file
 //!
 //! [`Forge`](wtm_core::ports::Forge) is in `gh.rs`, and every argv there is `gh --version`,
 //! `gh auth status`, `gh pr view`, `gh pr list`, `gh repo view` or `gh api --method GET`;
 //! `tests/gh.rs` asserts that of every call the read side makes. The writes are
 //! [`ReviewWriter`](wtm_core::ports::ReviewWriter) in `write.rs`: three `gh api` requests that post
-//! a review, held by `tests/gh_write.rs` to exactly that list. Only the outbox's executor is given
-//! the writer, and only for an operation you approved (ARCHITECTURE §6a).
+//! a review, and [`PullRequestWriter`](wtm_core::ports::PullRequestWriter), one more that opens a
+//! fix's follow-up pull request, held by `tests/gh_write.rs` to exactly that list. Only the outbox's
+//! executor is given the writers, and only for an operation you approved (ARCHITECTURE §6a).
 //!
 //! # Tolerant parsing
 //!

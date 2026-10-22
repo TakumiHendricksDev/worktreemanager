@@ -55,7 +55,7 @@ wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl 
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
 wtm-appdb    the app's own SQLite store: work items, flows, rules (§9).   impl FlowStore, RuleStore
-wtm-forge    pull requests through the user's own `gh` (§6a). Reads only.  impl Forge
+wtm-forge    pull requests through the user's own `gh` (§6a).    impl Forge, ReviewWriter, PullRequestWriter
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
 ```
@@ -983,14 +983,20 @@ It is a category of its own rather than a variation on the routes above, for thr
 - **Some writes are not a click either, and they are narrow.** A flow you started pushes its own
   task branch and keeps its own draft pull request current without asking each time. Publishing a
   review, posting a comment, marking a pull request ready, moving an issue and merging each wait for
-  an approval bound to the exact head or text, and merging has no agent tool at all.
+  an approval bound to the exact head or text, and merging has no agent tool at all. A local fix of
+  someone else's pull request goes nowhere until you approve its route: the exact remote and ref,
+  and the hash of its diff (§6i).
+- **A push is git's, not the forge's.** A route that pushes runs your own `git push`, with your
+  remotes and your credentials, as `<commit>:refs/heads/<branch>` and never with force
+  (`wtm_git::push`); `gh` only opens the follow-up pull request.
 
 `wtm-forge` is the first of them. It reads a pull request by URL, number or head branch, your
-permission on the repository, branch protection, and the forge's own diff of a commit; and it posts
+permission on the repository, branch protection, and the forge's own diff of a commit; it posts
 one approved review, as three `gh api` requests that its tests hold it to: start a pending review
-with the inline comments, add a comment to a pending review, submit one. Reading and writing are two
-ports (`Forge`, `ReviewWriter`), so code that reads is never handed the ability to write, and only
-the outbox's executor holds the writer (§6i). It is handed a `CommandRunner` and depends on nothing
+with the inline comments, add a comment to a pending review, submit one; and it opens one approved
+follow-up pull request of a local fix, a fourth. Reading and writing are separate ports (`Forge`;
+`ReviewWriter` and `PullRequestWriter`), so code that reads is never handed the ability to write,
+and only the outbox's executor holds the writers (§6i). It is handed a `CommandRunner` and depends on nothing
 that could reach the network another way, which `network_boundary.rs` pins.
 It is called only while the Work view is on and only for a project whose *own* config names a
 forge (`[workflow] forge = "github"`); a repository's committed `wtm.toml` may not name one,
@@ -1346,10 +1352,8 @@ every push.
 
 **Private writes nothing; publishing writes only what you approved.** Keep private notes records the
 notes and the findings beside them, pinned to the head reviewed (`review_outcomes`, append-only: a
-later decision is a later row), and writes nothing outside wtm. Local fixes are drawn in the outcome
-sheet and disabled until the writer lease exists; whether one could be pushed to the pull request's
-own branch is shown already, from the forge's facts: never to a fork whose author did not allow
-maintainer edits, whatever your access.
+later decision is a later row), and writes nothing outside wtm. A local fix writes only to the
+review worktree, and leaves it only by a route you approve (below).
 
 **What posts is a value, and the approval pins its hash.** Publishing starts from your picks, your
 words and a review state, and the preview is the app building exactly what would post from a fresh
@@ -1384,6 +1388,55 @@ meanwhile, and nothing is sent, not even the operation after it: carrying on is 
 first again. A failed or stopped publish is one inbox item about its approval, settled when the
 publish finishes, is stopped, or is replaced by a newer approval of the same review.
 
+**One writer per worktree, never beside a review.** A local fix is written by a writer role (§6h's
+writer profile) in the pull request's review worktree, and the worktree is held by a lease for as
+long as it writes (`wtm_core::flow::fix`, migration 8, `worktree_leases`). A review drive holds a
+reviewer lease on the worktree it reads; a writer is refused beside any open lease, and a review
+beside an open writer, in the store's own transaction and again by a trigger, so two clicks cannot
+both win. The lease is a row, not a lock in memory: a fix interrupted by a quit or a crash still
+holds its worktree after the relaunch, because the worktree may hold the writer's uncommitted edits
+and a review reading them would describe something nobody finished. Resume carries on under the same
+lease; the fix's own end — ready, failed, stopped — lets it go; and recovery at launch lets go only
+what nothing can come back for: a lease whose run has ended or is no longer fixing, and every
+reviewer lease, since no review thread outlives its process. The run moves Consolidated → Fixing →
+FixReady, which the review lifecycle already had for this, and a rerun or a re-review is refused
+from FixReady: the worktree now holds your commits on top of their head.
+
+**The app commits, and only the fix's files.** The writer cannot commit (§6h); `flow_checkpoint`
+asks the app to, and the engine answers it for a fix's writer. The scope is the files the picked
+findings name, so a finding about the whole change cannot be fixed this way. Before every commit the
+changed paths are checked against that scope plus anything you allowed: an outlier refuses the
+commit, and the writer is told to put it back or explain it, and you are asked once in the inbox
+whether to let it in. Allowing it adds it to the fix, and a fix that is already done commits it then.
+The commit itself is §6h's — your git config and signing, `-c core.hooksPath=/dev/null` and
+`--no-verify`, agent and hook config refused. When the writer hands in, whatever it left within scope
+is committed, the diff from the head the review read to the fix's last commit is hashed
+(`git diff --binary`), and the lease is let go.
+
+**A route is approved by where it goes and what it carries.** Fixing locally is not permission to
+push anywhere. A fix leaves by one of three routes (`wtm_core::flow::route`), each planned from a
+fresh read of the pull request and shown exactly before it is approved: a follow-up pull request,
+the default — the fix on a branch of its own, pushed to the base repository when their branch is
+there and you can push to it, otherwise to your fork, with a pull request whose base is their
+branch; suggestion comments, which post as a review does and fold any hunk that cannot sit on the
+pull request's diff into the summary as a diff; or a push to their branch, only with write access
+and never to a fork whose author did not allow maintainer edits. The approval pins the remote, the
+ref, the diff's hash, the fix's commit and their branch's head (`Approval(route, remote, ref,
+diff_hash)`), so a new fix or a push of theirs makes it stale. Every refspec is
+`<commit>:refs/heads/<branch>`: a commit id, never a ref that could have moved, no `+`, no pattern,
+and never an integration branch — the configured ones, the pull request's own base, and `main` and
+`master` whatever the config says.
+
+**A push reads the remote first.** The executor (`src-tauri/src/flow/routes.rs`) keeps the outbox's
+order. It reads the destination ref with `git ls-remote` and adopts a branch already at the fix — a
+push whose answer was lost — before anything else; then it checks the approval against their head
+now and the fix's diff now; then it pushes only from where the approval expected the ref to be: a
+new branch where there is none, or a fast-forward from the head you saw. Anywhere else it stops,
+pushes nothing, and files an approval item. The push is never a force, so a branch that moves between
+the read and the push is refused by the remote, and read again. The follow-up's pull request is found
+by its marker or its two branches before it is opened. At launch an operation left executing is
+settled by the same reads and never re-sent.
+
 **Tested twice, at two depths.** `review_engine.rs` drives the engine with fake agents that call the
 real run tools with real tokens, against a real repository and database and a fake clock.
 `review_real_cli.rs` runs one recipe with a Claude role and a Codex role on the real CLIs; its skill
@@ -1391,7 +1444,9 @@ lists need no model turn and always run, and the review itself spends turns, so 
 `pull_request_reviews.rs` does the same for a teammate's pull request, with `GhForge` parsing `gh`'s
 own JSON from a fake runner and a second repository playing the forge, and `publish_review.rs`
 publishes that review into an in-memory GitHub that can lose a reply, refuse a second pending review
-or die mid-write, to show nothing is ever posted twice. A change to the Work view is
+or die mid-write, to show nothing is ever posted twice. `local_fixes.rs` runs a writer that edits
+the real review worktree and calls the real run tools, commits through the app, and sends each route
+to repositories that play the forge. A change to the Work view is
 also clicked through in a dev build that shares nothing with an installed app (`just
 dev-isolated`): its own config, data, handoff socket and WebKit storage, with `gh` pointed back at
 your own sign-in.

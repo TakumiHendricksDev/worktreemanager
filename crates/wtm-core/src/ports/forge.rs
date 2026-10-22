@@ -1,4 +1,4 @@
-//! Reading a forge, and the narrow set of writes a published review needs.
+//! Reading a forge, and the narrow set of writes a published review and a fix's follow-up need.
 //!
 //! # Reading and writing are two capabilities
 //!
@@ -26,8 +26,8 @@ use std::path::Path;
 
 pub use crate::error::ForgeError;
 use crate::flow::{
-    BranchProtection, ChangedLines, ForgeAccount, Permission, PrTarget, PullRequest, RemoteComment,
-    RemoteReview, RepoSlug, ReviewEvent,
+    BranchProtection, ChangedLines, ForgeAccount, Permission, PrState, PrTarget, PullRequest,
+    RemoteComment, RemoteReview, RepoSlug, ReviewEvent,
 };
 
 /// What the Work view reads from a forge.
@@ -143,4 +143,47 @@ pub trait ReviewWriter: Send + Sync {
         event: ReviewEvent,
         body: &str,
     ) -> Result<RemoteReview, ForgeError>;
+}
+
+/// A pull request as a write reads it back: enough to know whether one already exists and where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePullRequest {
+    pub number: u64,
+    pub url: String,
+    pub state: PrState,
+    /// `owner:branch`.
+    pub head: String,
+    /// The branch it merges into.
+    pub base: String,
+    pub body: String,
+}
+
+/// Opening the follow-up pull request of a local fix, and finding one an earlier attempt opened.
+///
+/// Only the outbox's executor holds one, for a route you approved.
+pub trait PullRequestWriter: Send + Sync {
+    /// Every pull request in `repo` from `head` (`owner:branch`), open or not, newest first.
+    fn pull_requests_from(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        head: &str,
+    ) -> Result<Vec<RemotePullRequest>, ForgeError>;
+
+    /// Open a pull request in `repo` from `head` (`branch`, or `owner:branch` from another fork)
+    /// into `base`, letting maintainers edit it.
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeError::Rejected`] when the forge refuses it as asked, such as when one from that head
+    /// into that base exists already.
+    fn open_pull_request(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        base: &str,
+        head: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<RemotePullRequest, ForgeError>;
 }

@@ -53,6 +53,8 @@ impl Store {
         self.db
             .approve(&approval, &review.operations(self.flow), at)
             .unwrap()
+            .into_publication()
+            .unwrap()
     }
 
     fn raw(&self) -> Connection {
