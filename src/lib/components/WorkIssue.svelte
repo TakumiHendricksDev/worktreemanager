@@ -23,7 +23,9 @@
    * is followed and decided on (`WorkPlan`): its questions, its plan, your approval, and what it was
    * given. The Run section says where planning stands and leads there. A plan that needs a design
    * goes on to the Design tab (`WorkDesign`): the designer's revisions, your comments, your
-   * approval, and the gate in front of implementing.
+   * approval, and the gate in front of implementing. The approval that opens the gate starts the
+   * writer, and the Implement tab (`WorkImplement`) follows it: its rounds and commits, the checks
+   * and the review, and what the fix loop left when it handed over.
    *
    * # Read on opening
    *
@@ -70,6 +72,7 @@
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
   import WorkDesign from './WorkDesign.svelte';
+  import WorkImplement from './WorkImplement.svelte';
   import WorkPlan from './WorkPlan.svelte';
   import WorkReviewRun from './WorkReviewRun.svelte';
 
@@ -90,6 +93,7 @@
     { id: 'overview', label: 'Overview' },
     { id: 'plan', label: 'Plan' },
     { id: 'design', label: 'Design' },
+    { id: 'implement', label: 'Implement' },
     { id: 'reviews', label: 'Reviews' },
   ];
 
@@ -317,6 +321,10 @@
         {visible}
         {onopenworktree}
       />
+    {/if}
+  {:else if work.tab === 'implement'}
+    {#if workspace.activeProjectId}
+      <WorkImplement projectId={workspace.activeProjectId} {issueKey} {visible} />
     {/if}
   {:else if work.tab === 'reviews'}
     {#if reviewed && workspace.activeProjectId}

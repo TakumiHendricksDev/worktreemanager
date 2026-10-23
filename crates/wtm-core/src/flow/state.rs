@@ -152,6 +152,8 @@ const IMPLEMENT: Lifecycle = Lifecycle {
         (Phase::Reviewing, Phase::Fixing),
         (Phase::Reviewing, Phase::ReadyToTest),
         (Phase::Fixing, Phase::Reviewing),
+        // A fix round's changes run the checks they affect before they are reviewed again.
+        (Phase::Fixing, Phase::Verifying),
         // The fix loop is bounded, and its last round hands over without another review.
         (Phase::Fixing, Phase::ReadyToTest),
         (Phase::ReadyToTest, Phase::Revising),
@@ -160,6 +162,13 @@ const IMPLEMENT: Lifecycle = Lifecycle {
         (Phase::ReadyToTest, Phase::Publishing),
         (Phase::Revising, Phase::ReadyToTest),
         (Phase::Publishing, Phase::InReview),
+        // Work the plan does not cover, which you agreed should be in it: the plan revision that
+        // covers it goes back to you, and implementing waits for that approval as it did for the
+        // first. From wherever the implementation's thread stops to let it.
+        (Phase::Implementing, Phase::Planned),
+        (Phase::Reviewing, Phase::Planned),
+        (Phase::Fixing, Phase::Planned),
+        (Phase::ReadyToTest, Phase::Planned),
     ],
     finishes_from: &[Phase::InReview],
 };
@@ -567,6 +576,32 @@ mod tests {
             ],
         );
         assert_eq!(state.finish().unwrap().end, Some(End::Done));
+    }
+
+    #[test]
+    fn an_implementation_whose_plan_grows_goes_back_for_approval_and_on_again() {
+        let state = walk(
+            FlowKind::Implement,
+            &[
+                Phase::Preparing,
+                Phase::Investigating,
+                Phase::Planned,
+                Phase::Implementing,
+                Phase::Verifying,
+                Phase::Reviewing,
+                Phase::Fixing,
+                Phase::Verifying,
+                Phase::Reviewing,
+                Phase::Fixing,
+                Phase::Planned,
+                Phase::Implementing,
+                Phase::Verifying,
+                Phase::Reviewing,
+                Phase::ReadyToTest,
+                Phase::Planned,
+            ],
+        );
+        assert_eq!(state.phase, Phase::Planned);
     }
 
     #[test]

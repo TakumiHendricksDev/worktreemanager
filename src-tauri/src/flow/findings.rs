@@ -14,7 +14,8 @@
 //! Whether a finding still describes the code is a question for git, asked when the Work view asks:
 //! the worktree's tree now, uncommitted and untracked work included, against the tree each report
 //! was found on. A check ran against a whole tree, and a test can depend on any file in it, so a
-//! check is stale after any change. Nothing here watches the worktree: the window asks again when
+//! check is stale after any change — unless its config names the files that can change its result
+//! (`paths`), when only a change to one of those does. Nothing here watches the worktree: the window asks again when
 //! the worktree's listing changes, which it learns on focus, never on a timer (ARCHITECTURE §8).
 //!
 //! # A rerun is the same review, moved forward
@@ -528,11 +529,19 @@ impl Engine {
             .filter(|record| finding_is_stale(record, |tree| Some(compare(tree))))
             .map(|record| record.finding.id)
             .collect();
+        let check_paths = |check: &str| -> Vec<String> {
+            project
+                .workflow
+                .as_ref()
+                .and_then(|w| w.check.get(check))
+                .map(|spec| spec.paths.clone())
+                .unwrap_or_default()
+        };
         let stale_checks = db
             .checks(flow)
             .map_err(text)?
             .iter()
-            .filter(|run| compare(&run.tree_sha).is_stale())
+            .filter(|run| compare(&run.tree_sha).makes_check_stale(&check_paths(&run.check)))
             .map(|run| run.id)
             .collect();
         let affected = Self::affected_roles(&db, flow, &project, &snapshot, &mut compare)?;

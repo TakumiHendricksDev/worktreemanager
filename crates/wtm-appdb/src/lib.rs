@@ -1,7 +1,7 @@
 //! The app's own database: work items, flows and their history, review rules and runs, the inbox,
 //! approvals with the outbox's operations, local fixes with the leases that hold their worktrees,
-//! the mirror of what a project's tracker last said, Start Work's jobs, and an issue's planning and
-//! design, in SQLite.
+//! the mirror of what a project's tracker last said, Start Work's jobs, and an issue's planning,
+//! design and implementation, in SQLite.
 //!
 //! # Why this name
 //!
@@ -37,6 +37,7 @@ mod designs;
 mod env;
 mod findings;
 mod fixes;
+mod implementations;
 mod inbox;
 mod migrate;
 mod outbox;

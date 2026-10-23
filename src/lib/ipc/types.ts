@@ -2774,6 +2774,115 @@ export interface DesignView {
   canImplement: boolean;
 }
 
+/** The files an implementation may change: the approved plan's areas and the files it names. */
+export interface ImplementScope {
+  areas: string[];
+  files: string[];
+}
+
+/** Why a finding was left for you. `wtm_core::flow::LeftBecause`. */
+export type LeftBecause =
+  | { kind: 'outside_plan'; paths: string[] }
+  | { kind: 'attempts_spent'; attempts: number }
+  | { kind: 'rounds_spent' }
+  | { kind: 'conflict' }
+  | { kind: 'suggestion' };
+
+/** A finding left standing when the fix loop stopped. */
+export interface ImplementRemaining {
+  finding: number;
+  title: string;
+  location: { path: string; startLine: number; endLine: number } | null;
+  because: LeftBecause;
+}
+
+/** Why the fix loop stopped. */
+export type ImplementStop =
+  { kind: 'clean' } | { kind: 'nothing_fixable' } | { kind: 'bounded'; rounds: number };
+
+/** One Implement run's implementation. `wtm_core::flow::Implementation`. */
+export interface Implementation {
+  flow: number;
+  project: string;
+  worktree: string;
+  key: string;
+  /** The writer role. */
+  role: string;
+  recipe: string;
+  baseSha: string;
+  planRevision: number;
+  scope: ImplementScope;
+  bounds: { rounds: number; attempts: number };
+  reviewFlow: number | null;
+  outcome: 'ready' | 'cancelled' | null;
+  remaining: ImplementRemaining[];
+  stopped: ImplementStop | null;
+  startedAt: number;
+  updatedAt: number;
+}
+
+/** One round of writing: the plan, or a fix. */
+export interface ImplementRound {
+  flow: number;
+  round: number;
+  kind: 'implement' | 'fix';
+  planRevision: number;
+  findings: { finding: number; title: string; location: unknown }[];
+  checks: string[];
+  headSha: string | null;
+  changed: string[];
+  startedAt: number;
+  endedAt: number | null;
+}
+
+/** A commit the app made for an implementation. */
+export interface ImplementCheckpoint {
+  flow: number;
+  round: number;
+  commit: string;
+  message: string;
+  paths: string[];
+  by: 'writer' | 'app';
+  madeAt: number;
+}
+
+/** A question an implementation asked, and what it is about. */
+export interface ImplementQuestionView {
+  link: {
+    question: number;
+    flow: number;
+    kind: 'outliers' | 'findings' | 'writer';
+    paths: string[];
+    findings: number[];
+    planRevision: number;
+  };
+  question: Question;
+}
+
+/** Everything the issue's Implement tab shows: `issue_implementation`. */
+export interface ImplementView {
+  flow: { id: number; state: FlowState; startedAt: number; updatedAt: number };
+  key: string | null;
+  /** The writer `[workflow.implement]` names now; `null` when the project names none. */
+  implementer: string | null;
+  implementation: Implementation | null;
+  rounds: ImplementRound[];
+  checkpoints: ImplementCheckpoint[];
+  /** What Verifying ran, oldest first. */
+  checks: CheckRun[];
+  /** The checks Verifying runs, by id. */
+  verifying: string[];
+  review: { flow: number; phase: FlowPhase; running: boolean; standing: number } | null;
+  findings: FindingRecord[];
+  questions: ImplementQuestionView[];
+  sessions: PlanSession[];
+  step: ReviewStep | null;
+  lease: WorktreeLease | null;
+  running: boolean;
+  canStart: boolean;
+  canResume: boolean;
+}
+
 /** Everything the issue's Plan tab shows: `issue_plan`. */
 export interface PlanView {
   flow: { id: number; state: FlowState; startedAt: number; updatedAt: number };

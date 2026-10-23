@@ -1,0 +1,108 @@
+/*
+ * An issue's Implement tab (`WorkImplement`): the writer, its rounds and commits, the checks the
+ * app ran, the questions about work outside the plan, and what the fix loop left. The Design tab's
+ * shapes (`_design.scss`); a round is a quiet card, because the newest one is the one being read.
+ */
+
+.c-implement {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-width: 900px;
+}
+
+.c-implement__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.c-implement__title {
+  flex: 1 1 auto;
+  font-size: var(--step-0);
+  font-weight: 600;
+}
+
+.c-implement__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-implement__note,
+.c-implement__progress {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-implement__error {
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.c-implement__label {
+  margin-bottom: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* What the loop handed over with. Never only a colour: the heading says it. */
+.c-implement__handover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--ok-line);
+  border-radius: var(--r-md);
+  background: var(--ok-soft);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-implement__left,
+.c-implement__scope,
+.c-implement__commits,
+.c-implement__checks,
+.c-implement__questions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--step--1);
+}
+
+.c-implement__rounds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-implement__round {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.c-implement__round-head {
+  font-size: var(--step--1);
+}
+
+.c-implement__check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.c-implement__why,
+.c-implement__place {
+  color: var(--fg-muted);
+}

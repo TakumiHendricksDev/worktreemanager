@@ -169,7 +169,7 @@
     >
       {#if view.flow.state.phase === 'implementing'}
         Implementing. The plan{view.required ? ' and the design' : ''} it needed were approved;
-        the implementer arrives with a later version of wtm, and nothing writes yet.
+        the Implement tab follows the writer.
       {:else if view.gate.ready}
         Implementing may start: the plan is approved{view.required
           ? `, and so is design revision ${view.standing.kind === 'approved' ? view.standing.revision : ''}`

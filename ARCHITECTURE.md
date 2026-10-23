@@ -1367,7 +1367,7 @@ drawn as not run. None of those reads as a pass.
 is git's answer, asked when the window asks: the worktree's tree now, uncommitted and untracked
 work included, against the tree each report was found on. A report goes stale when its file
 changed, and a finding when all its reports have; a check ran against the whole tree, so any change
-makes it stale. Rerun records a new snapshot on the same run and runs again only the roles whose
+makes it stale, unless its config names the files that can change its result (`paths`, §6n). Rerun records a new snapshot on the same run and runs again only the roles whose
 paths changed, whose own reports went stale, or that failed; the rest keep their results, still
 measured against the trees they read. The first real run found the middle case: a role scoped to
 one directory reported a bug in another, and its paths alone would have left that report stale with
@@ -1854,8 +1854,8 @@ for a design (and you did not skip it) or a design was started anyway, a design 
 covers the newest revision. So no caller can reach Implementing around it, Start implementing in the
 Design tab included, which says why when it refuses. The approved revision and its reuse notes are
 what a role taking `design` is given (`brief::design_section`), which is how a UI consistency
-reviewer, and the implementer once it exists, works against the design you approved and no other.
-The run stops at Implementing for now: driving an implementer is the next item.
+reviewer, and the implementer, works against the design you approved and no other. The approval
+that opens the gate also starts the implementer (§6n), and Start implementing does the same by hand.
 
 **Tested, and clicked through on a fixture.** `design.rs` drives the engine with fake agents: the
 gate before and after approval, a skipped design, no designer, a design you asked for, a newer
@@ -1865,6 +1865,84 @@ a UI reviewer given the approved revision and nothing before it, a designer queu
 and recording nothing while it waits, and a quit mid-design resumed in the same conversation. The listing and the socket are tested on
 their own (`bridge.rs`, `handoff.rs`, `flow_session.rs`), and the store's append-only rules against a
 real SQLite file (`design_store.rs`).
+
+## 6n. Implementing: the plan's scope, the app's commits, and a loop that stops
+
+Once the gate opens — a plan approved that needs no design, or the design one needs — the
+project's implementer starts by itself (`[workflow.implement]` in your own config; a repository's
+`wtm.toml` may not name it, for the planner's reason, and more so: it edits the worktree). Its run
+goes Implementing → Verifying → Reviewing ⇄ Fixing → Ready to test
+(`src-tauri/src/flow/implement.rs`, rules in `wtm_core::flow::implement`).
+
+**The worktree is the run's until it hands over.** Before anything is recorded the run takes the
+writer lease on the issue's worktree (§6i's, migration 8), and refuses to start, naming the holder,
+when anything else has it. The lease is kept through every phase, through a quit, a crash and a plan
+change, because the worktree holds the implementation's work, committed or not, and a review or a
+fix reading it then would describe something nobody finished; recovery at launch keeps it for an
+open implementation as it does for a fix. It goes at Ready to test, or when you stop the run.
+
+**A writer, under the writer profile, held to the plan.** One role, §6h's writer profile, in the
+issue's worktree, given the approved plan with its acceptance criteria and areas, the approved design
+and its reuse notes when there is one, the repository's instructions and your rules. Its scope is the
+plan's: the `areas` it declared, and the files its steps, criteria and verification name in words
+(`named_files`, deliberately narrow — no URL, no absolute path, no version number). It cannot commit;
+`flow_checkpoint` asks the app, which checks every changed path against that scope first and commits
+as §6h says — your identity and signing, hooks off. A file outside the plan refuses the commit and is a
+question, and handing in with one left uncommitted holds the run until it is answered. The question
+has two answers and neither is "let it in this once": **change the plan**, which records the next plan
+revision, covering those files and saying why in its risks, and sends the run back to Planned, where
+it waits for your approval as the first revision did; or **keep to the plan**, which tells the writer,
+in its same conversation, to put them back. What the writer leaves inside the plan when it hands in
+is committed by the app, and every commit is kept (migration 16) with who asked for it.
+
+**Checks are the app's, against a snapshot of the new tree.** Verifying records a snapshot on the
+implementation's review run (below) and runs the configured checks through the machinery
+`flow_run_check` uses, E3's gate included: a check whose services are not answering is recorded
+blocked and asked about, never passed. Their records are the evidence the hand-over cites.
+
+**The review is the issue's own, and R5/R6 do it.** The recipe reads that snapshot as a review run of
+the issue's work item, `review_mine` like Run Review's, so its findings, consolidation, staleness,
+dismissals and Reviews tab are the review engine's, unchanged. It is driven from the implementation's
+thread and reads under the implementation's writer lease rather than taking a reviewer lease of its
+own: the writer is not writing while its review reads, and a review someone else started would be
+refused, as it is beside any writer. Its own "review ready" item is not filed, because the
+implementation says when the work is ready. A role that takes `plan` is given the approved plan, so a
+review of an implementation is measured against its acceptance criteria as well as the code.
+
+**Fixing is bounded twice, and stops rather than loops.** What the review found inside the plan —
+confirmed bugs and rule violations, never suggestions or conflicts — and the checks that ran and
+failed go back to the same writer, in the same conversation, as a fix round. Then only the checks
+whose `paths` the round's changes touched run again (a check with none is touched by anything), and
+only the review roles whose files changed, whose reports went stale, or that failed read again — §6i's
+Rerun affected, on the same review run. `next_round` decides what follows and is the only way into a
+round: at most `fix_rounds` rounds per plan revision (2 by default, 5 at most) and `fix_attempts`
+rounds per problem (1 by default, 3 at most). A problem is known across rounds by the reviewer's own
+`repeats` first, then by the key consolidation already uses to carry a dismissal across reruns, never
+by the finding's id, which a rerun renews. A finding in a file the plan does not cover is asked about
+once and left, not fixed. When a bound is spent, or nothing left is the loop's, the run hands over:
+Ready to test, the lease let go, and one inbox item saying how many commits and fix rounds, what the
+checks said, and what was left and why. Reading the Implement tab settles it, as reading a review
+does.
+
+**Picked up where it stopped.** The phase says what comes next and the rounds say how far the writer
+got: a round with no end is the writer's, part-way, and its step says whether its turn was sent. A
+quit or a crash holds the run Interrupted with its lease kept; Resume carries the writer on in its
+conversation and is told it was cut off, or starts the checks or the review again from the snapshot.
+A writer that handed in before the cut is not asked again: its handoff is finished. A writer's
+`flow_ask` holds the run as a planner's does, and the answer resumes the same conversation.
+Discuss stays the planner's, offered only for its own questions while it plans: an implementation's
+question is answered, not talked over with the planner.
+
+**Tested with real git and fake agents.** `implement.rs` drives the engine through Start Work, the
+planner and the designer to the hand-over: no writer, lease or record before the plan is approved, or
+before the design is when the plan needs one; checks, review, a fix round in the same conversation and
+the commits; only the touched checks and review roles run again; a commit outside the plan refused,
+the run held, "change the plan" sending revision 2 back for approval and carrying on after it; "keep to
+the plan" telling the writer to put it back; a finding outside the plan asked about, left, and fixed
+after a later plan change reopens the hand-over; a problem left after its one attempt; the round bound;
+a crash mid-turn keeping the lease, refusing a review, and resuming in the same conversation; and
+stopping the run letting the worktree go. `implement_store.rs` holds the record's rules against a real
+SQLite file: a round's task never rewritten, a stopped implementation never reopened.
 
 ## 7. Toolchain policy
 

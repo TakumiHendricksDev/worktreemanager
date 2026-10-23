@@ -33,6 +33,10 @@ use crate::flow::{
     CheckRun, FindingId, FindingRecord, NewCheckRun, NewScreenshot, Reconciled, Screenshot,
 };
 use crate::flow::{
+    CheckpointBy, ImplementChange, ImplementCheckpoint, ImplementQuestion, Implementation,
+    NewImplementation, NewRound, Round,
+};
+use crate::flow::{
     CommandRun, CommandRunChange, CommandRunId, CommandRunRefused, NewCommandRun, ServiceRecord,
 };
 use crate::flow::{
@@ -137,6 +141,13 @@ pub enum FlowStoreError {
 
     #[error("run {0} has no design")]
     UnknownDesign(FlowId),
+
+    #[error("run {0} has not started implementing")]
+    UnknownImplementation(FlowId),
+
+    /// A stopped implementation stays stopped. Nothing was written.
+    #[error("run {0}'s implementation was stopped")]
+    ImplementationEnded(FlowId),
 
     #[error("no design revision {0}")]
     UnknownDesignRevision(DesignRevisionId),
@@ -845,4 +856,85 @@ pub trait DesignStore: Send + Sync {
 
     /// A run's decisions, oldest first.
     fn design_decisions(&self, flow: FlowId) -> Result<Vec<DesignDecision>, FlowStoreError>;
+}
+
+/// An Implement run's implementation (migration 16): who writes, the scope its plan holds it to,
+/// where its review is, each round of writing, the commits the app made for it, and what the
+/// questions it asked are about.
+///
+/// Rounds and checkpoints are append-only but for a round's end, which is written once: what a
+/// round set out to fix is what the bounds count, and a count that could be rewritten would not
+/// bound anything.
+pub trait ImplementStore: Send + Sync {
+    /// Record `implementation`, or return the record the run already has: a resume, or implementing
+    /// again after a plan change, is the same implementation, by the same writer, in the same
+    /// conversation.
+    fn begin_implementation(
+        &self,
+        implementation: &NewImplementation,
+        at: UnixMs,
+    ) -> Result<Implementation, FlowStoreError>;
+
+    fn implementation(&self, flow: FlowId) -> Result<Option<Implementation>, FlowStoreError>;
+
+    /// Every run's implementation, oldest first: what recovery at launch looks through.
+    fn implementations(&self) -> Result<Vec<Implementation>, FlowStoreError>;
+
+    /// The implementation whose review run is `review`, if one is.
+    fn implementation_reviewed_by(
+        &self,
+        review: FlowId,
+    ) -> Result<Option<Implementation>, FlowStoreError>;
+
+    /// # Errors
+    ///
+    /// [`FlowStoreError::ImplementationEnded`] for any change to one you stopped; nothing is written
+    /// then.
+    fn change_implementation(
+        &self,
+        flow: FlowId,
+        change: &ImplementChange,
+        at: UnixMs,
+    ) -> Result<Implementation, FlowStoreError>;
+
+    /// Record the run's next round: 1 for the first.
+    fn start_round(&self, round: &NewRound, at: UnixMs) -> Result<Round, FlowStoreError>;
+
+    /// End round `round`, with where it left the worktree and what it changed. Once.
+    fn end_round(
+        &self,
+        flow: FlowId,
+        round: u32,
+        head_sha: Option<&str>,
+        changed: &[String],
+        at: UnixMs,
+    ) -> Result<Round, FlowStoreError>;
+
+    /// A run's rounds, oldest first.
+    fn rounds(&self, flow: FlowId) -> Result<Vec<Round>, FlowStoreError>;
+
+    /// Keep a commit the app made for round `round`.
+    #[allow(clippy::too_many_arguments)]
+    fn record_implement_checkpoint(
+        &self,
+        flow: FlowId,
+        round: u32,
+        commit: &str,
+        message: &str,
+        paths: &[String],
+        by: CheckpointBy,
+        at: UnixMs,
+    ) -> Result<ImplementCheckpoint, FlowStoreError>;
+
+    /// A run's commits, oldest first.
+    fn implement_checkpoints(
+        &self,
+        flow: FlowId,
+    ) -> Result<Vec<ImplementCheckpoint>, FlowStoreError>;
+
+    /// Keep what a question the implementation asked is about.
+    fn link_implement_question(&self, link: &ImplementQuestion) -> Result<(), FlowStoreError>;
+
+    /// What the run's questions are about, oldest first.
+    fn implement_questions(&self, flow: FlowId) -> Result<Vec<ImplementQuestion>, FlowStoreError>;
 }

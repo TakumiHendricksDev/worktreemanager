@@ -361,8 +361,9 @@ fn most_specific(loaded: &[LoadedLayer], declares: impl Fn(&Value) -> bool) -> O
 /// config and the untracked local layer are yours, so both may declare them.
 ///
 /// `planner` names one of those roles and has it run by itself once a started issue's worktree is
-/// ready, and `designer` one that runs by itself once you approve a plan that asks for a design, so
-/// both are refused with them.
+/// ready, `designer` one that runs by itself once you approve a plan that asks for a design, and
+/// `implement` the writer that edits the worktree once you approve a plan, so all three are refused
+/// with them.
 ///
 /// `forge` and `tracker` are refused for the same reason in different words: naming one is the
 /// opt-in that lets the Work view call that service through your own CLI and credentials
@@ -385,7 +386,7 @@ fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
             key: Some(format!("workflow.{key}")),
             message: message.to_owned(),
         };
-        for table in ["role", "recipe", "planner", "designer"] {
+        for table in ["role", "recipe", "planner", "designer", "implement"] {
             if workflow.get(table).is_some() {
                 return Err(refuse(
                     table,
@@ -1532,6 +1533,20 @@ roles = ["conventions", "correctness"]
             ConfigError::Invalid { layer, key, .. } => {
                 assert_eq!(layer, ConfigLayer::Repo);
                 assert_eq!(key.as_deref(), Some("workflow.designer"));
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_repository_cannot_choose_the_writer_that_implements_an_approved_plan() {
+        // Approving a plan starts this writer by itself, in the worktree, on your account.
+        let h = Harness::new();
+        h.write_repo_config("[workflow.implement]\nwriter = 'conventions'\nrecipe = 'review'\n");
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid { layer, key, .. } => {
+                assert_eq!(layer, ConfigLayer::Repo);
+                assert_eq!(key.as_deref(), Some("workflow.implement"));
             }
             other => panic!("expected Invalid, got {other:?}"),
         }

@@ -94,6 +94,11 @@ Worth stating because it narrows the surface considerably:
   author did not allow maintainer edits, and re-read before pushing so a branch that moved stops it.
   No agent tool can publish, push or approve; run sessions have no `gh` credentials either
   (ARCHITECTURE §6h). wtm stores no GitHub token.
+  Implementing an issue works the same way (ARCHITECTURE §6n): the writer starts only once you have
+  approved the plan, and the design when the plan needs one; it edits only the issue's worktree and
+  cannot commit or push; wtm commits for it, with git hooks off, only files the approved plan covers,
+  and a file outside that is a question to you, never a commit. Covering more takes a new plan
+  revision you approve. Nothing it writes leaves your machine.
   For a project whose own config names a tracker, the Work view also reads its issues and sprint
   through your own `acli`, signed in as `acli` already is, and keeps the last reading in its own
   database; a repository's `wtm.toml` cannot name the tracker for you. It writes two things to the

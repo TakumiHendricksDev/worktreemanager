@@ -122,6 +122,29 @@ impl TreeCheck {
         matches!(self, Self::Changed { .. })
     }
 
+    /// Whether a check run on the snapshot's tree no longer stands for the tree now, given the
+    /// globs of the files that can change its result (`CheckSpec::paths`).
+    ///
+    /// A check with none can depend on any file, so any change makes it stale. One whose config says
+    /// which files can change its result is stale only when one of those did, or when git could not
+    /// list every change and so could not say. That is the rule a fix round already reruns checks by
+    /// (`implement::affected_checks`); a check left alone there must not read stale here.
+    #[must_use]
+    pub fn makes_check_stale(&self, globs: &[String]) -> bool {
+        match self {
+            Self::Unchanged => false,
+            Self::Changed {
+                paths, complete, ..
+            } => {
+                globs.is_empty()
+                    || !complete
+                    || paths
+                        .iter()
+                        .any(|path| globs.iter().any(|glob| super::glob::matches(glob, path)))
+            }
+        }
+    }
+
     /// The paths that differ from the snapshot. Empty when nothing does.
     #[must_use]
     pub fn changed_paths(&self) -> Vec<&str> {
@@ -263,5 +286,26 @@ mod tests {
             check.stale_findings(Workspace::Snapshot, &findings),
             vec![FindingId(1), FindingId(2)]
         );
+    }
+    #[test]
+    fn a_check_whose_paths_no_change_touched_still_stands() {
+        let changed = TreeCheck::Changed {
+            tree_sha: "t".to_owned(),
+            paths: BTreeSet::from(["src/export.rs".to_owned()]),
+            complete: true,
+        };
+        assert!(!changed.makes_check_stale(&["docs/**".to_owned()]));
+        assert!(changed.makes_check_stale(&["src/**".to_owned()]));
+        assert!(
+            changed.makes_check_stale(&[]),
+            "no paths: any change counts"
+        );
+        let unlisted = TreeCheck::Changed {
+            tree_sha: "t".to_owned(),
+            paths: BTreeSet::new(),
+            complete: false,
+        };
+        assert!(unlisted.makes_check_stale(&["docs/**".to_owned()]));
+        assert!(!TreeCheck::Unchanged.makes_check_stale(&[]));
     }
 }

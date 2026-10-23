@@ -367,6 +367,7 @@ mod tests {
                 timeout_ms: None,
                 needs: vec!["web".to_owned(), "api".to_owned()],
                 start_services: None,
+                paths: Vec::new(),
             },
         );
         let role = runtime_role(&["e2e"], Some("web"));

@@ -47,7 +47,9 @@
 //! planner read, the plans it handed in, your decisions about them and when an approval goes stale
 //! ([`planning`]), and a question's answer sent to the tracker only when you send it ([`comment`]).
 //! Then designing it: the revisions a designer publishes, your comments and decisions, when a design
-//! approval goes stale, and the gate in front of Implementing ([`design`]).
+//! approval goes stale, and the gate in front of Implementing ([`design`]). Then implementing it:
+//! the scope the plan holds a writer to, and the bounded loop of checks, review and fixes that
+//! follows ([`implement`]).
 //! The engine, the outbox's executor
 //! and the environment's supervisor are in the app (`src-tauri/src/flow/`), because one opens
 //! sessions, one reaches the forge and the tracker, and one starts processes.
@@ -81,6 +83,7 @@ pub mod event;
 pub mod fix;
 pub mod forge;
 pub mod glob;
+pub mod implement;
 pub mod inbox;
 pub mod instructions;
 pub mod knowledge;
@@ -146,6 +149,13 @@ pub use forge::{
     PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug, Reviewer,
     default_host, host_for, remote_for,
 };
+pub use implement::{
+    AttemptedFinding, CHANGE_THE_PLAN, CheckpointBy, FailingCheck, FixBounds, ImplementAsk,
+    ImplementChange, ImplementCheckpoint, ImplementOutcome, ImplementQuestion, ImplementScope,
+    Implementation, LeftBecause, LoopFacts, NewImplementation, NewRound, NextRound, Remaining,
+    Round, RoundKind, StopReason, affected_checks, attempts_at, named_files, next_round,
+    scope_options, widened,
+};
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxState, InboxTarget, NewInboxItem, review_ready,
 };
@@ -187,9 +197,9 @@ pub use queue::{
     MirroredQueue, QueueChanges, QueueReading, QueueSection, QueuedIssue, StatusChange, SyncFailure,
 };
 pub use recipe::{
-    CheckSpec, Fallback, KnowledgeScope, OutputKind, RecipeSpec, RoleInput, RoleKind, RoleProfile,
-    RoleProvider, RoleSpec, RuntimeDriver, SkillCatalog, SkillError, SkillProblem, StageSpec,
-    StartServices, WorkflowError, WorkflowSpec, Workspace,
+    CheckSpec, Fallback, ImplementSpec, KnowledgeScope, OutputKind, RecipeSpec, RoleInput,
+    RoleKind, RoleProfile, RoleProvider, RoleSpec, RuntimeDriver, SkillCatalog, SkillError,
+    SkillProblem, StageSpec, StartServices, WorkflowError, WorkflowSpec, Workspace,
 };
 pub use review::{
     BlobRef, Dismissal, Finding, FindingClass, FindingId, Location, Severity, Snapshot,
