@@ -518,13 +518,16 @@ pub struct RoleSpec {
     /// Named here rather than inherited from wherever the provider would find them, because a run
     /// session does not see your usual setup. Codex runs get a home of their own so that your MCP
     /// servers and plugins stay out, and that also leaves your personal skills behind. The engine
-    /// supplies exactly these.
+    /// supplies exactly these, copied from the repository, your own skill folders or a Claude plugin
+    /// you installed, for either provider — the skill alone, never the rest of its plugin.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
     /// MCP servers the session may load, by name. Empty means none beyond the run's own bridge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp: Vec<String>,
-    /// Plugins the session may load, by name. Empty means none.
+    /// Plugins the session may load, by name. Empty means none, and for now so does anything else:
+    /// no run loads a whole plugin. A role uses a plugin by naming one of its skills in
+    /// [`Self::skills`]; ARCHITECTURE §6h says why.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<String>,
     #[serde(default, skip_serializing_if = "KnowledgeScope::is_default")]

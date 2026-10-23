@@ -494,8 +494,9 @@ fn toml_array<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
 /// `features.apps = false` removes the one Codex adds by itself, its 105-tool `codex_apps`.
 ///
 /// The cost is that the user's skills and settings are not there either, so the recipe supplies a
-/// role's skills explicitly; and thread history lives here, which `thread/resume` needs, so the home
-/// is per role of a run rather than per process.
+/// role's skills explicitly, copied into this home's `skills/` (see [`crate::run_skills`]); and
+/// thread history lives here, which `thread/resume` needs, so the home is per role of a run rather
+/// than per process.
 ///
 /// # Why the repository is marked untrusted
 ///
@@ -518,7 +519,11 @@ fn codex_config(authority: Authority, places: &RunPlaces, bridge: &RunBridge) ->
         "approval_policy = {}",
         toml_string(run.approval_policy)
     );
-    out.push_str("\n[features]\napps = false\n");
+    // `skill_mcp_dependency_install` is on by default in 0.160.1. It lets a skill's
+    // `agents/openai.yaml` name an MCP server Codex then offers to install, and an MCP server runs
+    // outside the sandbox — so a skill the role names, or one the repository ships, would be a
+    // route to a server nobody allowlisted.
+    out.push_str("\n[features]\napps = false\nskill_mcp_dependency_install = false\n");
     out.push_str("\n[sandbox_workspace_write]\nnetwork_access = false\n");
     let _ = writeln!(
         out,
@@ -644,6 +649,15 @@ pub const RUN_SKILL_PLUGIN: &str = "wtm";
 /// them can do. The directory is also an `--add-dir`, because under `dontAsk` a Read outside the
 /// working directories is refused, and a skill that ships a checklist beside its `SKILL.md` would
 /// otherwise be unreadable to the role it was copied for.
+///
+/// # Why there is no allow rule for a skill
+///
+/// Measured on Claude Code 2.1.296: a skill whose frontmatter is instructions alone runs without
+/// one, under `dontAsk` and `acceptEdits` alike, while a skill whose frontmatter carries `hooks` or
+/// `allowed-tools` asks first — which `dontAsk` refuses and `acceptEdits` turns into a prompt. The
+/// copies wtm writes drop both keys (see [`crate::run_skills`]), so a role's skills run. A
+/// `Skill(wtm:<name>)` rule would admit them just the same, and would also admit a copy that still
+/// carried hooks, so leaving it out keeps the CLI's own refusal as a second wall behind the copy.
 pub fn with_skills(run: &mut ClaudeRun, plugin_dir: &Path) {
     if !run.tools.contains(&"Skill") {
         run.tools.push("Skill");
@@ -897,6 +911,11 @@ mod tests {
         assert_eq!(parsed["approval_policy"].as_str(), Some("never"));
         assert_eq!(parsed["features"]["apps"].as_bool(), Some(false));
         assert_eq!(
+            parsed["features"]["skill_mcp_dependency_install"].as_bool(),
+            Some(false),
+            "a skill cannot bring an MCP server of its own"
+        );
+        assert_eq!(
             parsed["sandbox_workspace_write"]["network_access"].as_bool(),
             Some(false)
         );
@@ -1056,6 +1075,27 @@ mod tests {
         assert_eq!(
             run.settings["permissions"]["allow"],
             json!(["mcp__wtm__flow_context", "mcp__wtm__flow_submit"])
+        );
+    }
+
+    #[test]
+    fn a_claude_run_with_skills_allows_no_skill_by_rule_so_one_still_carrying_hooks_would_ask() {
+        let mut run = claude_run(
+            Authority::Reviewer,
+            &places(),
+            &bridge(&["flow_submit"]),
+            None,
+        );
+        let before = run.settings.clone();
+        with_skills(&mut run, Path::new("/data/flow/7/skills/conventions"));
+        // Twice, as a resumed role's profile is rebuilt.
+        with_skills(&mut run, Path::new("/data/flow/7/skills/conventions"));
+
+        assert_eq!(run.tools.iter().filter(|t| **t == "Skill").count(), 1);
+        assert_eq!(run.settings, before);
+        assert_eq!(
+            run.skills.as_deref(),
+            Some("/data/flow/7/skills/conventions")
         );
     }
 

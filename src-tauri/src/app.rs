@@ -1023,6 +1023,11 @@ pub struct App {
     /// Moving an issue through the same `acli`. Like the forge's writers, held only by the
     /// outbox's executor, which reads the issue before every move (`flow/moves.rs`).
     pub tracker_writer: Arc<dyn wtm_core::ports::TrackerWriter>,
+    /// Where a run role's named skills are copied from: your home, Claude Code's config directory
+    /// and Codex's home. `None`, as the app has it, finds them from the environment each time a
+    /// role starts — see `flow_session::skill_homes`. A test sets its own, because the real ones
+    /// are your installed plugins and the CLIs it drives still need your real sign-ins.
+    pub skill_homes: Option<wtm_agent::run_skills::SkillHomes>,
     /// The app's own database: flows and review rules, one connection for both. Opened on first
     /// use; see `appdb.rs` and [`Self::flow_store`].
     pub appdb: crate::appdb::Handle,
@@ -1154,6 +1159,7 @@ impl App {
             own_pulls: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
             tracker: Arc::new(wtm_tracker::AcliTracker::new(Arc::clone(&forge_runner))),
             tracker_writer: Arc::new(wtm_tracker::AcliTracker::new(Arc::clone(&forge_runner))),
+            skill_homes: None,
         })
     }
 

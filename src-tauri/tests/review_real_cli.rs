@@ -4,7 +4,7 @@
 //! The engine's logic is covered by `review_engine.rs` with fake agents. What only the real CLIs can
 //! show is that the pieces meet: that a run session's locked-down profile still finds the skill its
 //! role names (Claude's settings sources are off, so wtm hands it the skill through a plugin of its
-//! own; Codex finds a repository skill under the run's own home by itself), that the bridge the CLI
+//! own; Codex gets a copy in the run's own home, beside the repository's own), that the bridge the CLI
 //! starts reaches the engine, and that what each model hands back passes `flow_submit`'s schema.
 //!
 //! Two tests, for the same reason `flow_session.rs` splits its canaries:

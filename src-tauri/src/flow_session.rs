@@ -32,6 +32,7 @@ use parking_lot::Mutex;
 use wtm_agent::authority::{
     self, ClaudeRun, CodexRun, RunAuthority, RunBridge, RunPlaces, RunProfile,
 };
+use wtm_agent::run_skills::{self, SkillHomes};
 use wtm_core::model::{AgentEvent, ExitOutcome, SessionId};
 use wtm_core::ports::exec::{CancelToken, Invocation};
 
@@ -60,9 +61,10 @@ pub struct RoleSession {
     /// worktree; this way the session is the worktree's, and only its working directory and the
     /// directories its sandbox protects are the checkout's.
     pub cwd: Option<PathBuf>,
-    /// The skills the role names, without a leading `/`. A Claude role gets them from a plugin
-    /// directory wtm writes; see [`install_claude_skills`]. Codex finds a repository's skills on its
-    /// own, under the run's own home.
+    /// The skills the role names, without a leading `/`, copied for its session from wherever you
+    /// keep them, installed Claude plugins included: into a plugin directory wtm writes for a Claude
+    /// role ([`install_claude_skills`]), and into the run's own home for a Codex one
+    /// ([`install_codex_skills`]).
     pub skills: Vec<String>,
 }
 
@@ -309,15 +311,32 @@ pub fn prepare_with(
     )
     .and_then(|mut profile| {
         write_private(&places, &profile)?;
-        if let RunAuthority::Claude(run) = &mut profile.run
-            && !spec.skills.is_empty()
-        {
-            let dir = wtm_core::flow::FlowDir::new(&app.config.paths().flow_dir, spec.role.flow)
-                .path()
-                .join("skills")
-                .join(segment(&spec.role.role)?);
-            install_claude_skills(&dir, &spec.skills, &[&cwd, &places.home])?;
-            authority::with_skills(run, &dir);
+        let sources = if spec.skills.is_empty() {
+            Vec::new()
+        } else {
+            skill_sources(
+                &skill_homes(app, &places.home),
+                entry.id,
+                &cwd,
+                &[&cwd, &worktree.path, &project.root],
+            )
+        };
+        match &mut profile.run {
+            RunAuthority::Claude(run) if !spec.skills.is_empty() => {
+                let dir =
+                    wtm_core::flow::FlowDir::new(&app.config.paths().flow_dir, spec.role.flow)
+                        .path()
+                        .join("skills")
+                        .join(segment(&spec.role.role)?);
+                install_claude_skills(&dir, &spec.skills, &sources)?;
+                authority::with_skills(run, &dir);
+            }
+            RunAuthority::Claude(_) => {}
+            // Even with none named: the home outlives one start, and Codex lists whatever is in
+            // its `skills/`, so a skill the role named last time must not still be there.
+            RunAuthority::Codex(_) => {
+                install_codex_skills(&places.codex_home(), &spec.skills, &sources)?;
+            }
         }
         Ok(profile)
     });
@@ -361,17 +380,57 @@ pub fn prepare_with(
     })
 }
 
-/// Copy each skill `names` lists into `dir` as a Claude plugin, from the first of `roots` that has
-/// it under `.claude/skills/<name>`, and say which were found.
+/// Where your own agent configuration is: the app's [`App::skill_homes`] if it has one, else
+/// `CLAUDE_CONFIG_DIR` and `CODEX_HOME` as a CLI you start would read them, else their defaults
+/// under `home`.
+#[must_use]
+pub fn skill_homes(app: &App, home: &Path) -> SkillHomes {
+    if let Some(homes) = &app.skill_homes {
+        return homes.clone();
+    }
+    let env = app.pipe.path().child_env();
+    let dir = |var: &str, default: &str| {
+        env.get(var)
+            .filter(|value| !value.is_empty())
+            .map_or_else(|| home.join(default), PathBuf::from)
+    };
+    SkillHomes {
+        home: home.to_path_buf(),
+        claude: dir("CLAUDE_CONFIG_DIR", ".claude"),
+        codex: dir("CODEX_HOME", ".codex"),
+    }
+}
+
+/// The folders a `provider` role's named skills are looked for in, first match first, for a
+/// session working in `cwd` whose project paths are `projects`.
 ///
-/// `roots` is the session's working directory, then the user's home: a repository's own skill
-/// first, as the review checkout has it, then a personal one. Only the named skills are copied,
-/// which is the whole point — the run's profile keeps everything else in those directories out.
-/// A skill found nowhere is not an error here: the provider's own list will lack it, and the
-/// skill check names the role and the provider, which is the sentence someone can act on.
+/// Reads Claude Code's record of installed plugins and its blocklist; a file that is missing or
+/// unreadable contributes nothing, which leaves a plugin skill unfound and the skill check to say
+/// so. See [`wtm_agent::run_skills`] for the order and the scopes.
+#[must_use]
+pub fn skill_sources(
+    homes: &SkillHomes,
+    provider: &str,
+    cwd: &Path,
+    projects: &[&Path],
+) -> Vec<PathBuf> {
+    let read = |path: PathBuf| std::fs::read_to_string(path).unwrap_or_default();
+    let installs = run_skills::plugin_installs(&read(homes.installed_plugins()));
+    let blocked = run_skills::blocked_plugins(&read(homes.plugin_blocklist()));
+    // Resolved on both sides: the CLI records the directory it was run in, and the same folder can
+    // be reached through a link — on macOS a temporary one is `/var/…` and `/private/var/…`.
+    let resolve = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let ours: Vec<PathBuf> = projects.iter().map(|path| resolve(path)).collect();
+    let plugins =
+        run_skills::plugin_skill_dirs(&installs, &blocked, |path| ours.contains(&resolve(path)));
+    homes.skill_dirs(provider, cwd, &plugins)
+}
+
+/// Copy each skill `names` lists into `dir` as a Claude plugin, from the first of `sources` that
+/// has it, and say which were found.
 ///
-/// Files and folders only. A link inside a skill is skipped rather than followed, because what it
-/// points at was not part of what the role was configured with.
+/// The plugin is named [`authority::RUN_SKILL_PLUGIN`], so a role's `review` skill is `wtm:review`
+/// in its session, wherever it came from. See [`copy_skills`] for what is copied.
 ///
 /// # Errors
 ///
@@ -379,46 +438,102 @@ pub fn prepare_with(
 pub fn install_claude_skills(
     dir: &Path,
     names: &[String],
-    roots: &[&Path],
+    sources: &[PathBuf],
 ) -> Result<Vec<String>, String> {
-    let fail = |what: &str, path: &Path, e: &dyn std::fmt::Display| {
-        format!("wtm could not {what} {}: {e}", path.display())
-    };
     // Rewritten whole each time, so a skill the role no longer names is gone.
-    match std::fs::remove_dir_all(dir) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(fail("clear", dir, &e)),
-    }
+    clear(dir)?;
     let manifest = dir.join(".claude-plugin");
-    std::fs::create_dir_all(&manifest).map_err(|e| fail("create", &manifest, &e))?;
+    std::fs::create_dir_all(&manifest).map_err(|e| failed("create", &manifest, &e))?;
     let plugin = serde_json::json!({
         "name": authority::RUN_SKILL_PLUGIN,
         "version": "0.0.0",
         "description": "The skills one workflow run role names, copied by Worktree Manager.",
     });
     let path = manifest.join("plugin.json");
-    std::fs::write(&path, plugin.to_string()).map_err(|e| fail("write", &path, &e))?;
+    std::fs::write(&path, plugin.to_string()).map_err(|e| failed("write", &path, &e))?;
+    copy_skills(&dir.join("skills"), names, sources)
+}
 
+/// Copy each skill `names` lists into the `skills/` of a run's Codex `home`, from the first of
+/// `sources` that has it, and say which were found.
+///
+/// That folder is where `skills/list` looks in a home, and Codex lists what it finds there as the
+/// user's own (measured on 0.160.1), so the copies are listed under their own names. The folder is
+/// emptied first, its `.system` skills with it: Codex puts those back each time it starts.
+///
+/// # Errors
+///
+/// When the folder cannot be written.
+pub fn install_codex_skills(
+    home: &Path,
+    names: &[String],
+    sources: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    let dir = home.join("skills");
+    clear(&dir)?;
+    copy_skills(&dir, names, sources)
+}
+
+/// Copy each named skill folder from the first of `sources` that has a `<name>/SKILL.md`, into
+/// `dir`, its `SKILL.md` rewritten by [`run_skills::run_skill_file`] and
+/// [`run_skills::DROPPED_FILES`] left out.
+///
+/// Only the named skills are copied, which is the whole point: the run's profile keeps everything
+/// else in those folders out, and for a plugin that means its hooks, servers, agents and every
+/// skill the role did not name. A skill found nowhere is not an error here: the provider's own list
+/// will lack it, and the skill check names the role and the provider, which is the sentence someone
+/// can act on.
+///
+/// Files and folders only. A link inside a skill is skipped rather than followed, because what it
+/// points at was not part of what the role was configured with.
+fn copy_skills(dir: &Path, names: &[String], sources: &[PathBuf]) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
     for name in names {
         let name = name.trim_start_matches('/');
         // A name becomes a path segment below; `../x` would copy from somewhere else entirely.
-        if segment(name).is_err() {
+        if segment(name).is_err() || found.iter().any(|done| done == name) {
             continue;
         }
-        let Some(source) = roots
+        let Some(source) = sources
             .iter()
-            .map(|root| root.join(".claude/skills").join(name))
+            .map(|root| root.join(name))
             .find(|candidate| candidate.join("SKILL.md").is_file())
         else {
             continue;
         };
-        copy_tree(&source, &dir.join("skills").join(name))
-            .map_err(|e| fail("copy", &source, &e))?;
+        let target = dir.join(name);
+        copy_tree(&source, &target).map_err(|e| failed("copy", &source, &e))?;
+        for file in run_skills::DROPPED_FILES {
+            let path = target.join(file);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(failed("leave out", &path, &e)),
+            }
+        }
+        // Removed and written afresh rather than written over: a plugin's cached files can be
+        // read-only, and the copy kept their mode.
+        let skill = target.join("SKILL.md");
+        let text = std::fs::read_to_string(&skill).map_err(|e| failed("read", &skill, &e))?;
+        std::fs::remove_file(&skill).map_err(|e| failed("replace", &skill, &e))?;
+        std::fs::write(&skill, run_skills::run_skill_file(&text, name))
+            .map_err(|e| failed("write", &skill, &e))?;
         found.push(name.to_owned());
     }
     Ok(found)
+}
+
+fn failed(what: &str, path: &Path, e: &dyn std::fmt::Display) -> String {
+    format!("wtm could not {what} {}: {e}", path.display())
+}
+
+/// Remove `dir` and everything in it, if it is there. A link in its place is removed, not followed.
+fn clear(dir: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(failed("clear", dir, &e)),
+    }
 }
 
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {

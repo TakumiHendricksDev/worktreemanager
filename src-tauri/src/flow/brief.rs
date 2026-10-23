@@ -137,7 +137,8 @@ const LISTED_FILES: usize = 60;
 /// The name a role invokes `skill` by, in its provider's spelling.
 ///
 /// A Claude run session gets its skills from the plugin `flow_session` writes, so they are listed
-/// and invoked under the plugin's name. Codex lists a repository's skills under their own names.
+/// and invoked under the plugin's name. Codex lists the copies in the run's own home, as it lists
+/// a repository's skills, under their own names.
 #[must_use]
 pub fn invocable(provider: RoleProvider, skill: &str) -> String {
     let skill = skill.trim_start_matches('/');
