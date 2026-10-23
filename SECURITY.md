@@ -52,8 +52,8 @@ than a networked service. The things worth reporting:
   the second in the cask itself. A release that is *not* signed by the wtm team is in scope.
 - **Anything requiring an attacker who already has local code execution as your user.** At
   that point they can edit the config, the binary, or your shell profile directly.
-- Dependency advisories with no reachable path from wtm's own code. `cargo deny` runs in CI
-  and those are handled as ordinary maintenance.
+- Dependency advisories with no reachable path from wtm's own code. `cargo deny` and `bun audit`
+  run in CI and those are handled as ordinary maintenance.
 
 ## What wtm does not do
 
