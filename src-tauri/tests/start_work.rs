@@ -5,7 +5,8 @@
 //! What is protected is the plan's I2 scenario and what it rests on:
 //!
 //! - **Once.** Start twice, or Start and then drop the card on the start column, gives exactly one
-//!   worktree and one run, and the second focuses the first.
+//!   worktree and one run, and the second focuses the first. So does a Start still resolving or
+//!   planning when another made the worktree, rather than refusing to make it again.
 //! - **The resolution order.** The bound worktree, then a worktree carrying the key, then the
 //!   project's offered branches, then a new worktree, with a preview whenever there is a choice and
 //!   nothing recorded before one is picked.
@@ -369,6 +370,97 @@ fn two_starts_arriving_together_record_one_run_between_them() {
     assert_eq!(started, 1, "{outcomes:?}");
     assert_eq!(h.worktrees().len(), 1);
     assert_eq!(h.count("flows"), 1);
+}
+
+/// A `[[lookup]]` standing in for a slow tracker. Each call takes the next number with `mkdir`,
+/// which only one caller can win, and call `nth` waits until `go` appears beside the numbers. The
+/// form runs its lookups before it reads the repository, so a Start let go plans from whatever is
+/// there by then.
+fn held_lookup(gate: &Path, nth: u32) -> String {
+    let script = concat!(
+        r#"n=0; until mkdir "$1/call-$n" 2>/dev/null; do n=$((n+1)); done; "#,
+        r#"if [ "$n" = "$2" ]; then until [ -e "$1/go" ]; do sleep 0.01; done; fi; "#,
+        "echo ok",
+    );
+    format!(
+        r#"
+[[lookup]]
+id = "gate"
+run = ["sh", "-c", '{script}', "gate", '{gate}', "{nth}"]
+format = "text"
+on_error = "fail"
+timeout_ms = 30000
+"#,
+        gate = gate.display(),
+    )
+}
+
+/// Start ACME-1 on a thread the gate holds at the lookup's call `nth`, start it again meanwhile,
+/// and let the first go once the second's worktree is made. The four threads above get this
+/// interleaving only when the scheduler happens to give it; this gets it every time.
+fn held_while_another_starts(nth: u32) -> (Harness, Result<StartOutcome, Refusal>, FlowId) {
+    let gate = tempfile::tempdir().unwrap();
+    let h = Harness::with(|fixture| {
+        let config = format!("{CONFIG}{}", held_lookup(gate.path(), nth));
+        fixture.commit("wtm.toml", &config, "hold the form's lookup");
+    });
+    let (held, winner) = std::thread::scope(|scope| {
+        let held = scope.spawn(|| h.engine.start_work(&h.request("ACME-1")));
+        let holding = gate.path().join(format!("call-{nth}"));
+        for _ in 0..2_000 {
+            if holding.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(holding.exists(), "the first Start never reached call {nth}");
+        let winner = started(&h.start("ACME-1"));
+        h.settled("ACME-1");
+        std::fs::write(gate.path().join("go"), "").unwrap();
+        (held.join().unwrap(), winner)
+    });
+    (h, held, winner)
+}
+
+#[test]
+fn a_start_held_up_resolving_while_another_start_makes_the_worktree_focuses_that_run() {
+    let (h, held, winner) = held_while_another_starts(0);
+
+    assert!(
+        matches!(held, Ok(StartOutcome::Focused { flow }) if flow == winner),
+        "{held:?}"
+    );
+    assert_eq!(h.worktrees().len(), 1);
+    assert_eq!(h.count("flows"), 1);
+    assert_eq!(h.count("start_jobs"), 1);
+}
+
+#[test]
+fn a_start_held_up_planning_while_another_start_makes_the_worktree_focuses_that_run() {
+    let (h, held, winner) = held_while_another_starts(1);
+
+    assert!(
+        matches!(held, Ok(StartOutcome::Focused { flow }) if flow == winner),
+        "{held:?}"
+    );
+    assert_eq!(h.worktrees().len(), 1);
+    assert_eq!(h.count("flows"), 1);
+    assert_eq!(h.count("start_jobs"), 1);
+}
+
+#[test]
+fn a_directory_in_the_way_that_no_start_made_is_still_refused_with_nothing_recorded() {
+    let h = Harness::new();
+    // Where the form would put ACME-1's worktree, made by hand rather than by a Start.
+    std::fs::create_dir(h.sibling("ACME-1")).unwrap();
+    std::fs::write(h.sibling("ACME-1").join("notes"), "mine").unwrap();
+
+    let refusal = h.engine.start_work(&h.request("ACME-1")).unwrap_err();
+
+    assert!(refusal.message.contains("already exists"), "{refusal}");
+    assert_eq!(h.count("work_items"), 0);
+    assert_eq!(h.count("flows"), 0);
+    assert_eq!(h.count("start_jobs"), 0);
 }
 
 #[test]

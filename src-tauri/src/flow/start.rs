@@ -11,7 +11,9 @@
 //! 2. **Record**, under one lock and the store's uniqueness rules: the work item (one per issue),
 //!    the Implement flow (one open per work item), the approval and operation for the move, and the
 //!    job (one per work item) with the place it makes, before anything is made. A second Start
-//!    that arrives meanwhile finds the first's job and focuses its run.
+//!    that arrives meanwhile finds the first's job and focuses its run. So does one that resolved
+//!    alongside the first and found the first's worktree in the way: a refusal looks for a run
+//!    under way, under the same lock, before it is given.
 //! 3. **Make** (a thread of its own). An existing worktree is bound as it is. Anything else goes
 //!    through `CreatePipeline::execute`, exactly as the New Worktree form's Create does, with the
 //!    key in the form field `[workflow.start] issue_field` names, and the setup's terminal kept for
@@ -71,9 +73,11 @@ const SETUP_COLS: u16 = 100;
 /// Start Work's own state in the engine.
 #[derive(Debug, Default)]
 pub(super) struct Starts {
-    /// Held across recording a start, so two Starts of one issue record one between them. Not the
-    /// review engine's `starting` lock: resolving reads the form's lookups, which may ask a
-    /// tracker, and a review should not wait on that.
+    /// Held across recording a start, so two Starts of one issue record one between them, and by a
+    /// refused Start while it looks for the run another recorded. Not the review engine's
+    /// `starting` lock: resolving reads the form's lookups, which may ask a tracker, and a review
+    /// should not wait on that. Nor held across resolving, for the same reason: one slow lookup
+    /// would hold up every other issue's Start.
     recording: Mutex<()>,
     /// Work items whose job a thread of this process is working on now.
     busy: Mutex<BTreeSet<WorkItemId>>,
@@ -300,6 +304,19 @@ impl Engine {
             .find(|f| f.state.kind == FlowKind::Implement))
     }
 
+    /// The issue's run when one is under way: open, with the job a Start records. A run open
+    /// without one is a Start that stopped between the two, and the next one carries it on.
+    fn underway(&self, tracker: TrackerKind, key: &str) -> Result<Option<Flow>, String> {
+        let Some(item) = self.work_item_of(tracker, key)? else {
+            return Ok(None);
+        };
+        let Some(flow) = self.open_implement(item.id)? else {
+            return Ok(None);
+        };
+        let job = self.db()?.start_job_of(flow.id).map_err(text)?;
+        Ok(job.is_some().then_some(flow))
+    }
+
     /// The form's plan for the issue, adopting `adopt` when given. Runs the form's lookups, as its
     /// own preview does; changes nothing.
     fn plan_for(
@@ -483,93 +500,34 @@ impl Engine {
         );
 
         // A run under way is the answer whatever else is true, and costs no resolution.
-        if let Some(item) = self.work_item_of(tracker, &req.key)?
-            && let Some(flow) = self.open_implement(item.id)?
-            && self.db()?.start_job_of(flow.id).map_err(text)?.is_some()
-        {
+        if let Some(flow) = self.underway(tracker, &req.key)? {
             return self.focus(&project, tracker, &req.key, &flow, &wanted, req);
         }
 
-        let item = self.work_item_of(tracker, &req.key)?;
-        let (resolved, problems) = self.resolve_issue(&project, &req.key, item.as_ref())?;
-        let candidate = match (&resolved, req.choice.as_deref()) {
-            (_, Some(id)) => resolved.find(id).cloned().ok_or_else(|| {
-                Refusal::from(
-                    "what you picked is no longer one of the places this issue's work could \
-                     happen; look again",
-                )
-            })?,
-            (Resolved::One { candidate }, None) => candidate.clone(),
-            (Resolved::Choose { .. }, None) => {
-                let open = item
-                    .as_ref()
-                    .map(|i| self.open_implement(i.id))
-                    .transpose()?
-                    .flatten()
-                    .map(|f| f.id);
-                return Ok(StartOutcome::Choose {
-                    preview: StartPreview {
-                        key: req.key.clone(),
-                        status: known.status,
-                        resolved,
-                        problems,
-                        start_move: wanted,
-                        open,
-                    },
-                });
-            }
-            (Resolved::Nothing, None) => {
-                return Err(format!(
-                    "no worktree carries {} and the New Worktree form cannot plan one from the \
-                     issue alone: {}",
-                    req.key,
-                    problems.join("; ")
-                )
-                .into());
-            }
-        };
-        if let StartMove::Move {
-            from,
-            to,
-            leaving_review: true,
-        } = &wanted
-            && !req.confirmed
+        let (candidate, creation) = match self
+            .prepare_start(&project, tracker, &known, &wanted, req)
         {
-            return Ok(StartOutcome::Confirm {
-                from: from.clone(),
-                to: to.clone(),
-            });
-        }
-
-        // What making it would run, planned before anything is recorded, so a plan the form
-        // refuses leaves nothing behind.
-        let creation = if candidate.worktree().is_some() {
-            None
-        } else {
-            let one_at_a_time = project
-                .setup
-                .as_ref()
-                .is_some_and(|s| s.concurrency == wtm_core::model::Concurrency::OneGlobally);
-            if one_at_a_time && self.app.creating_in(project.id.as_str()) > 0 {
-                return Err(format!(
-                    "another worktree is being created in {}, whose setup allows one at a time; \
-                     start this when it has finished",
-                    project.display_name()
-                )
-                .into());
+            Ok(Prepared::Record {
+                candidate,
+                creation,
+            }) => (candidate, creation),
+            Ok(Prepared::Answer(outcome)) => return Ok(outcome),
+            // Resolving and planning hold no lock, and the form's lookups between the check above
+            // and here can take seconds, so a Start of this issue that arrived alongside may have
+            // recorded its run and made its worktree meanwhile: the very directory the form now
+            // refuses to make again. Its run is the answer then, as above. Under the lock, a Start
+            // halfway through recording has finished.
+            Err(refusal) => {
+                let won = {
+                    let _one = self.starts.recording.lock();
+                    self.underway(tracker, &req.key)
+                };
+                return match won {
+                    Ok(Some(flow)) => self.focus(&project, tracker, &req.key, &flow, &wanted, req),
+                    // Nobody won, or there is no telling: the refusal is what this Start found.
+                    Ok(None) | Err(_) => Err(refusal),
+                };
             }
-            let (req, preview) = self
-                .plan_for(&project, &req.key, candidate.adopts())
-                .map_err(|p| Refusal::from(p.join("; ")))?;
-            let refused = blockers(&preview);
-            if !refused.is_empty() {
-                return Err(format!(
-                    "the New Worktree form would not make it: {}",
-                    refused.join("; ")
-                )
-                .into());
-            }
-            Some((req, preview))
         };
 
         let recorded = {
@@ -580,7 +538,7 @@ impl Engine {
                 &req.key,
                 &known,
                 &candidate,
-                creation.as_ref(),
+                creation.as_deref(),
             )?
         };
         let (item, flow) = match recorded {
@@ -613,10 +571,107 @@ impl Engine {
             tracing::warn!(%flow, %error, "could not queue Start's move");
         }
         self.notice.changed(flow);
-        if let Some((create, _)) = creation {
+        if let Some((create, _)) = creation.map(|c| *c) {
             self.spawn_create(item, flow, create);
         }
         Ok(StartOutcome::Started { flow, candidate })
+    }
+
+    /// Where a Start of an issue with no run under way would work, and the form's plan for its
+    /// worktree when one is to be made, or the answer it gives instead. Records nothing.
+    fn prepare_start(
+        &self,
+        project: &Project,
+        tracker: TrackerKind,
+        known: &Known,
+        wanted: &StartMove,
+        req: &StartWork,
+    ) -> Result<Prepared, Refusal> {
+        let item = self.work_item_of(tracker, &req.key)?;
+        let (resolved, problems) = self.resolve_issue(project, &req.key, item.as_ref())?;
+        let candidate = match (&resolved, req.choice.as_deref()) {
+            (_, Some(id)) => resolved.find(id).cloned().ok_or_else(|| {
+                Refusal::from(
+                    "what you picked is no longer one of the places this issue's work could \
+                     happen; look again",
+                )
+            })?,
+            (Resolved::One { candidate }, None) => candidate.clone(),
+            (Resolved::Choose { .. }, None) => {
+                let open = item
+                    .as_ref()
+                    .map(|i| self.open_implement(i.id))
+                    .transpose()?
+                    .flatten()
+                    .map(|f| f.id);
+                return Ok(Prepared::Answer(StartOutcome::Choose {
+                    preview: StartPreview {
+                        key: req.key.clone(),
+                        status: known.status.clone(),
+                        resolved,
+                        problems,
+                        start_move: wanted.clone(),
+                        open,
+                    },
+                }));
+            }
+            (Resolved::Nothing, None) => {
+                return Err(format!(
+                    "no worktree carries {} and the New Worktree form cannot plan one from the \
+                     issue alone: {}",
+                    req.key,
+                    problems.join("; ")
+                )
+                .into());
+            }
+        };
+        if let StartMove::Move {
+            from,
+            to,
+            leaving_review: true,
+        } = wanted
+            && !req.confirmed
+        {
+            return Ok(Prepared::Answer(StartOutcome::Confirm {
+                from: from.clone(),
+                to: to.clone(),
+            }));
+        }
+
+        // What making it would run, planned before anything is recorded, so a plan the form
+        // refuses leaves nothing behind.
+        let creation = if candidate.worktree().is_some() {
+            None
+        } else {
+            let one_at_a_time = project
+                .setup
+                .as_ref()
+                .is_some_and(|s| s.concurrency == wtm_core::model::Concurrency::OneGlobally);
+            if one_at_a_time && self.app.creating_in(project.id.as_str()) > 0 {
+                return Err(format!(
+                    "another worktree is being created in {}, whose setup allows one at a time; \
+                     start this when it has finished",
+                    project.display_name()
+                )
+                .into());
+            }
+            let (req, preview) = self
+                .plan_for(project, &req.key, candidate.adopts())
+                .map_err(|p| Refusal::from(p.join("; ")))?;
+            let refused = blockers(&preview);
+            if !refused.is_empty() {
+                return Err(format!(
+                    "the New Worktree form would not make it: {}",
+                    refused.join("; ")
+                )
+                .into());
+            }
+            Some(Box::new((req, preview)))
+        };
+        Ok(Prepared::Record {
+            candidate,
+            creation,
+        })
     }
 
     /// A Start of an issue whose run is under way: show that run, and do what a drop on the start
@@ -1398,6 +1453,17 @@ impl Engine {
         });
         self.notice.changed(job.flow);
     }
+}
+
+/// What a Start decided before recording anything.
+enum Prepared {
+    /// Record a run for this place, and make its worktree from this plan when there is one.
+    Record {
+        candidate: Candidate,
+        creation: Option<Box<(wtm_core::usecase::CreateRequest, PlanPreview)>>,
+    },
+    /// A preview to pick from, or a move to confirm: nothing to record yet.
+    Answer(StartOutcome),
 }
 
 /// What recording a start came to.
