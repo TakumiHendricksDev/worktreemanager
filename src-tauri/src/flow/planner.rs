@@ -867,6 +867,13 @@ impl Engine {
             .map_or(0, |all| all.iter().filter(|i| i.step == step.id).count())
             + 1;
         let attempt = u32::try_from(attempt).unwrap_or(u32::MAX);
+        // A planner session counts against the run-session caps like any role's, and waits for a
+        // place before its invocation is recorded (`capacity.rs`).
+        let _seat = match self.take_seat(ctx.flow, run, step) {
+            Ok(seat) => seat,
+            Err(super::AttemptEnd::Cancelled) => return TurnEnd::Cancelled,
+            Err(_) => return TurnEnd::Quitting,
+        };
         let invocation = match db.start_invocation(
             &NewInvocation {
                 flow: ctx.flow,

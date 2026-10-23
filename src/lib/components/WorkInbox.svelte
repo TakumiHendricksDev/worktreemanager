@@ -30,6 +30,7 @@
   import InboxQuestion from './InboxQuestion.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
+  import WorkSeatQueue from './WorkSeatQueue.svelte';
 
   const listed = $derived(inbox.items.filter((item) => inFilter(item, inbox.filter)));
   const open = $derived(
@@ -78,6 +79,7 @@
         </button>
       {/each}
     </div>
+    <WorkSeatQueue />
     {#if listed.length === 0}
       <p class="c-work__hint">
         {inbox.items.length === 0 ? 'Nothing needs you.' : 'Nothing under this filter.'}

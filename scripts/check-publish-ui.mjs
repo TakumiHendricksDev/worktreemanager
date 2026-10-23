@@ -104,6 +104,7 @@ const view = () => ({
     routes: [],
   },
   fixes: [], leases: [], writers: [], screenshots: [], pendingStart: null,
+  queued: [], holding: [], switches: [], capacity: null,
 });
 const MARK1 = '<!-- wtm:3f9a1c2b4d5e6f70 -->';
 const MARK2 = '<!-- wtm:0a1b2c3d4e5f6a7b -->';

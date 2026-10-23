@@ -1292,17 +1292,21 @@ indistinguishable from "wrote something we could not read".
 **Failures, limits and interruptions mean different things.** A timeout, a dead session or no
 submission is the role's failure and spends a retry; after the last, its configured fallback runs
 from a written handover, or you are told. A usage limit is the account's: it spends nothing, and the
-role either hands over to a fallback configured on another provider or waits, holding the flow
-`WaitingCapacity(provider, resets_at)` until the reset the provider named, then runs again by itself
-if the app is open. An unknown reset is never guessed. A quit records `Interrupted(quit)` before the
-processes go; a launch that finds a run mid-phase with no process records `Interrupted(crash)`. Either
-way finished roles keep their results and nothing is re-sent, because a turn sent twice can do its
-work twice. Resume is a person's.
+role either hands over to a fallback configured for it or waits, holding the flow
+`WaitingCapacity(provider, resets_at)` (capacity, below). A quit records `Interrupted(quit)` before
+the processes go; a launch that finds a run mid-phase with no process records `Interrupted(crash)`.
+Either way finished roles keep their results and nothing is re-sent, because a turn sent twice can do
+its work twice. Resume is a person's. The one held run a quit leaves as it is, and a launch picks up
+by itself, is one whose only unfinished work waits at a limit: no turn was in flight.
 
 **Waiting polls a clock, and the window polls nothing.** A role thread waits on its session's
 events with a short timeout and checks the `Clock` port between them, which is what lets every
 timeout and reset in the tests be a fake clock moving. The window is told by `flow:changed` and asks
-for the run again; §8's ban on polling in the frontend stands.
+for the run again; §8's ban on polling in the frontend stands. A burst of changes is a burst of
+reads answered from Rust's thread pool, so the window numbers each read as it starts and keeps a
+reading of the run it shows only when it is newer than the one drawn; only a load or an action
+changes which run a worktree shows. The capacity click-through found a run drawn as running after
+its hold was recorded, and a stale queue, before that rule.
 
 **One notification owner.** A run session's pane is behind its run's rail and announces nothing
 (`announces` in `sessions.svelte.ts`), and it is left out of the worktree dots, the dock badge's
@@ -1481,9 +1485,74 @@ the read and the push is refused by the remote, and read again. The follow-up's 
 by its marker or its two branches before it is opened. At launch an operation left executing is
 settled by the same reads and never re-sent.
 
+**A limit walks the role's own chain, and never back to a provider that ran out.** `fallback` is
+`"ask"`, one role id (followed through that role's own `fallback`, as chains were first written), or a
+list of up to three (`wtm_core::flow::capacity::MAX_FALLBACKS`) tried in order. The chain is always
+the role whose work it is: when its first alternative also runs out, the next comes from the same
+list, so each step's `stands_in_for` names that role rather than the alternative before it. An
+alternative on a provider that has reported a limit in this round of the run is passed over, since
+it would only report it again; so is one that already ran. With nothing left, the role waits and
+you are asked, in the inbox and in the Reviews tab: wait (what happens anyway), run it once on
+another provider and model, or finish the review without it. Running it once keeps the role's own
+step with the provider and model you chose, its effort left to that provider's default because the
+role spells effort for its own; a rerun puts it back on its configured provider. Finishing without
+it marks the step skipped with the reason, which the Reviews tab tells from a role the plan left out
+by the attempt the limit ended.
+
+**Switching hands over the run's record, never a session.** A conversation on one provider cannot be
+resumed on another, and a transcript pasted into the next would carry the first model's guesses as
+facts. So the new runner's brief opens with a `Handover` built from the flow's own tables: who
+stopped and why, the role's objective and stage, its attempts and progress lines, the approved plan
+when the run carries one (a review has none), the snapshot's three shas, the diff stat
+(`git diff --numstat` from the base to the snapshot tree), the findings already standing with who
+reported them, and the answers you gave the role. Every switch is kept, append-only
+(`provider_switches`, migration 14), with its reason (limit, failure, once), who chose it (your
+config's chain, or you) and that handover, which the Reviews tab opens under the role's row. A
+fallback is always another role's step; running once elsewhere is the only switch that keeps the
+step, and the table's checks hold both.
+
+**Resuming at a reset is for an awake Mac and an open wtm.** A waiting role looks at the clock every
+tick. The monotonic clock (`CLOCK_UPTIME_RAW` behind `Instant` on macOS) does not advance while the
+Mac sleeps and the wall clock does, so a wall clock that moved half a minute further than the
+monotonic one between two looks is a sleep (`capacity::slept`). A reset that passes with wtm awake
+throughout runs the role by itself. After a sleep, or when a launch picks a wait up again, the role
+first asks its provider (`RoleHost::limits`, the same `get_usage` / `account/rateLimits/read` ask the
+usage view makes, folded into the same record): room runs it, a still-spent window waits for the
+reset it names now, and a provider that says nothing applicable after the old reset has passed
+leaves the role waiting for you. Nothing is estimated: the card's usage line is the provider's last
+report with its time, or "unknown".
+
+**Models that bill usage credits need the role's own opt-in.** Claude Code's model docs say that in
+non-interactive mode, which is how every run session runs, a Fable request that would bill usage
+credits is billed without asking. A role naming a model that does (`capacity::bills_credits`: Fable,
+and the `best` alias that resolves to it) is refused unless its config says
+`allow_credit_billing = true`: the whole recipe at start, its fallbacks included, before anything is
+recorded ("can't start: usage credits"); a run-once choice when you make it; and, as a backstop for a
+role that named no model, the session whose `init` reports one, which is closed and its role failed.
+The backstop sees the model only once the CLI reports it, at the start of the first turn, so a first
+request may already be on its way; naming the model in the role is what prevents it.
+
+**Caps count sessions, across every run.** `[run_sessions]` in your own config caps how many run
+sessions are open at once, in total (6 by default) and per provider (3 each). The engine counts them
+(`capacity::Ledger`, in memory, since places do not outlive the process whose sessions hold them):
+every attempt asks for a place before its invocation is recorded, so a role over a cap waits as
+itself — its step pending, its line saying "queued: Codex at 3/3 · next in line" — and the place is
+held exactly as long as the session. Places go to the oldest waiter that fits, which cannot starve
+anyone: a newer Claude session takes a free Claude place a Codex waiter does not want, and when the
+total is what is full every waiter wants the same thing. A run and its children — a fallback, a
+role run once elsewhere, a fix's writer, a planner — are sessions alike and draw from the same
+places; a native subagent runs inside its parent's session and takes none. Nothing that waits holds
+a place: a role at a limit, or waiting for its environment, has no session, which is also why a
+parent and its child cannot deadlock under a cap of one. A lowered cap ends nothing mid-turn. The
+recipe's `concurrency` still caps a stage within one run, inside these. The window learns the line
+from `flow:seats` and shows it above the inbox; a queue is routine and files no item.
+
 **Tested twice, at two depths.** `review_engine.rs` drives the engine with fake agents that call the
 real run tools with real tokens, against a real repository and database and a fake clock.
-`review_real_cli.rs` runs one recipe with a Claude role and a Codex role on the real CLIs; its skill
+`capacity.rs` drives the same engine through limits, fallback chains, handovers, credit refusals,
+caps and their queues, sleeps and relaunches, with the provider's limit readings scripted and a fake
+clock that can sleep. `review_real_cli.rs` runs one recipe with a Claude role and a Codex role on the
+real CLIs; its skill
 lists need no model turn and always run, and the review itself spends turns, so it runs on request.
 `pull_request_reviews.rs` does the same for a teammate's pull request, with `GhForge` parsing `gh`'s
 own JSON from a fake runner and a second repository playing the forge, and `publish_review.rs`

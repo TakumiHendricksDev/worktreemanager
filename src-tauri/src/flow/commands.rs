@@ -21,6 +21,7 @@ use wtm_core::flow::{
     QuestionId, ReviewDraft, RoleProvider, WorkItemId,
 };
 
+use super::capacity::SeatsView;
 use super::findings::{Rerun, Staleness};
 use super::publish::{PublicationView, PublishPreview};
 use super::pull_request;
@@ -33,6 +34,9 @@ pub const FLOW_CHANGED_EVENT: &str = "flow:changed";
 
 /// An inbox item was filed for the first time.
 pub const FLOW_INBOX_EVENT: &str = "flow:inbox";
+
+/// Who holds run-session places and who waits changed. Payload: the whole [`SeatsView`].
+pub const FLOW_SEATS_EVENT: &str = "flow:seats";
 
 pub type EngineState<'a> = State<'a, Arc<Engine>>;
 
@@ -69,6 +73,10 @@ impl Notice for TauriNotice {
     fn filed(&self, item: &InboxItem) {
         let _ = self.handle.emit(FLOW_INBOX_EVENT, item);
     }
+
+    fn seats(&self, view: &SeatsView) {
+        let _ = self.handle.emit(FLOW_SEATS_EVENT, view);
+    }
 }
 
 fn refused(message: String) -> ErrorView {
@@ -78,11 +86,16 @@ fn refused(message: String) -> ErrorView {
 /// A start, rerun or resume refused. A refusal over billing has its own kind and names the
 /// providers, because the Reviews tab draws it as its own state rather than as a line of red text.
 fn refused_start(refusal: Refusal) -> ErrorView {
-    if refusal.billing.is_empty() {
-        ErrorView::new("flow", refusal.message)
-    } else {
+    if !refusal.billing.is_empty() {
         ErrorView::new("billing", refusal.message)
             .with_detail(serde_json::json!({ "providers": refusal.billing }))
+    } else if !refusal.credits.is_empty() {
+        // Its own kind for the billing kind's reason: the Reviews tab draws "can't start: usage
+        // credits" with the roles named, rather than a line of red text.
+        ErrorView::new("credits", refusal.message)
+            .with_detail(serde_json::json!({ "roles": refusal.credits }))
+    } else {
+        ErrorView::new("flow", refusal.message)
     }
 }
 
@@ -187,6 +200,31 @@ pub async fn resume_review(engine: EngineState<'_>, flow: i64) -> Reply<FlowView
         engine.view(FlowId(flow)).map_err(refused)
     })
     .await
+}
+
+/// What you chose for a role waiting at its provider's usage limit: keep waiting, run it once on
+/// another provider from a handover, or finish the review without it.
+#[tauri::command]
+pub async fn choose_capacity(
+    engine: EngineState<'_>,
+    flow: i64,
+    step: i64,
+    choice: wtm_core::flow::CapacityChoice,
+) -> Reply<FlowView> {
+    let engine = Arc::clone(&engine);
+    blocking(move || {
+        engine
+            .choose_capacity(FlowId(flow), wtm_core::flow::StepId(step), &choice)
+            .map_err(refused_start)?;
+        engine.view(FlowId(flow)).map_err(refused)
+    })
+    .await
+}
+
+/// Who holds run-session places now and who waits for one, across every run.
+#[tauri::command]
+pub async fn run_sessions(engine: EngineState<'_>) -> Reply<SeatsView> {
+    Ok(engine.seats_view())
 }
 
 /// Stop a review wherever it is.

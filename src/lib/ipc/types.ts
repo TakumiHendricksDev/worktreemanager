@@ -1510,6 +1510,8 @@ export interface ReviewStep {
   failures: number;
   retries: number;
   standsInFor: string | null;
+  /** The written summary the step's session started from, when it took over another's work. */
+  handover: string | null;
   detail: string | null;
   resetsAt: number | null;
   /** Set when the role cannot run at all for want of a skill: the recipe has to change. */
@@ -1765,6 +1767,134 @@ export interface ReviewRunView {
   screenshots: Screenshot[];
   /** What Start environment and run would do now; null when nothing is blocked. */
   pendingStart: StartView | null;
+  /** The run's roles waiting for a run-session place, with the cap each waits for. */
+  queued: QueuedSeat[];
+  /** The places the run's sessions hold now. */
+  holding: Seat[];
+  /** Each time a role's work moved to another role or provider, oldest first. */
+  switches: ProviderSwitch[];
+  /** The role waiting at its provider's limit, when one is. */
+  capacity: CapacityView | null;
+}
+
+// ── usage capacity and run-session caps: `wtm_core::flow::capacity` ──
+
+/** `[run_sessions]` in your config: places for run sessions, in total and per provider. */
+export interface SessionCaps {
+  total: number;
+  claude: number;
+  codex: number;
+}
+
+/** One session's place, held (`admittedAt` set) or asked for. */
+export interface Seat {
+  id: number;
+  flow: number;
+  step: number | null;
+  role: string;
+  provider: RoleProvider;
+  askedAt: number;
+  admittedAt: number | null;
+}
+
+export type QueueReason =
+  | { kind: 'provider'; provider: RoleProvider; open: number; cap: number }
+  | { kind: 'total'; open: number; cap: number };
+
+/** A session waiting for a place: "queued: Codex at 3/3", and where it is in that line. */
+export interface QueuedSeat {
+  seat: Seat;
+  reason: QueueReason;
+  position: number;
+  words: string;
+}
+
+/** Who holds places and who waits, everywhere, with each run named. */
+export interface SeatsView {
+  /** Higher for a later view of the line; the window keeps the highest it has heard. */
+  seq: number;
+  caps: SessionCaps;
+  holding: Seat[];
+  queued: QueuedSeat[];
+  labels: Record<string, string>;
+}
+
+export type SwitchReason = 'limit' | 'failure' | 'once';
+export type SwitchedBy = 'config' | 'you';
+
+export interface Runner {
+  role: string;
+  provider: RoleProvider;
+  model: string | null;
+}
+
+/** What a role taking over was handed: the run's own record, never a conversation. */
+export interface Handover {
+  from: Runner;
+  to: Runner;
+  reason: SwitchReason;
+  why: string;
+  objective: string;
+  stage: number;
+  attempts: number;
+  progress: string[];
+  plan: string | null;
+  snapshot: { head: string; tree: string; base: string } | null;
+  diff: { path: string; added: number | null; removed: number | null }[] | null;
+  findings: {
+    title: string;
+    place: string | null;
+    class: string;
+    severity: string;
+    by: string[];
+  }[];
+  answers: { question: string; answer: string }[];
+}
+
+export interface ProviderSwitch {
+  id: number;
+  flow: number;
+  fromStep: number;
+  toStep: number;
+  reason: SwitchReason;
+  by: SwitchedBy;
+  handover: Handover;
+  at: number;
+}
+
+/** One configured alternative for a waiting role, and why it did not take over. */
+export interface FallbackState {
+  role: string;
+  provider: RoleProvider;
+  model: string | null;
+  passedOver: string | null;
+}
+
+/** What the capacity card shows about a role waiting at its provider's limit. */
+export interface CapacityView {
+  step: number;
+  role: string;
+  provider: RoleProvider;
+  model: string | null;
+  /** Unix seconds, when the provider said. */
+  resetsAt: number | null;
+  fallbacks: FallbackState[];
+  allowCreditBilling: boolean;
+  /** What the last look at the provider's own figures said, after a sleep or at launch. */
+  recheck: string | null;
+}
+
+/** What you chose for a role waiting at its provider's limit. */
+export type CapacityChoice =
+  | { kind: 'wait' }
+  | { kind: 'run_once'; provider: RoleProvider; model: string | null }
+  | { kind: 'skip' };
+
+/** A role that would bill usage credits without having opted in. */
+export interface CreditProblem {
+  role: string;
+  provider: RoleProvider;
+  model: string;
 }
 
 // ── local fixes: `wtm_core::flow::{fix, route}` ──

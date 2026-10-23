@@ -8,8 +8,9 @@
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use wtm_core::flow::{
     BlobRef, CheckRun, FindingId, FindingRecord, FlowId, Invocation, InvocationChange,
-    InvocationId, NewCheckRun, NewInvocation, NewReviewRun, NewScreenshot, NewStep, Reconciled,
-    ReviewRun, Screenshot, Snapshot, SnapshotId, Step, StepChange, StepId, UnixMs, WorkItemId,
+    InvocationId, NewCheckRun, NewInvocation, NewProviderSwitch, NewReviewRun, NewScreenshot,
+    NewStep, ProviderSwitch, Reconciled, ReviewRun, Screenshot, Snapshot, SnapshotId, Step,
+    StepChange, StepId, SwitchId, UnixMs, WorkItemId,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStoreError, RunStore};
@@ -271,12 +272,18 @@ impl RunStore for AppDb {
         if let Some(result) = &change.result {
             current.result = Some(result.clone());
         }
+        if let Some(provider) = change.provider {
+            current.provider = provider;
+        }
+        change.model.apply(&mut current.model);
+        change.handover.apply(&mut current.handover);
         let result = current.result.as_ref().map(json).transpose()?;
         let skill_problem = current.skill_problem.as_ref().map(json).transpose()?;
         tx.execute(
             "UPDATE steps SET status = ?1, failures = ?2, detail = ?3, resets_at = ?4, result = ?5,
-                              updated_at = ?6, skill_problem = ?7
-             WHERE id = ?8",
+                              updated_at = ?6, skill_problem = ?7, provider = ?8, model = ?9,
+                              handover = ?10
+             WHERE id = ?11",
             params![
                 tag(&current.status)?,
                 current.failures,
@@ -285,6 +292,9 @@ impl RunStore for AppDb {
                 result,
                 at,
                 skill_problem,
+                tag(&current.provider)?,
+                current.model,
+                current.handover,
                 step.0
             ],
         )
@@ -434,6 +444,75 @@ impl RunStore for AppDb {
 
     fn screenshots(&self, flow: FlowId) -> Result<Vec<Screenshot>, FlowStoreError> {
         findings::screenshots(&self.conn.lock(), flow)
+    }
+
+    fn record_switch(
+        &self,
+        switch: &NewProviderSwitch,
+        at: UnixMs,
+    ) -> Result<ProviderSwitch, FlowStoreError> {
+        let conn = self.conn.lock();
+        ensure_flow(&conn, switch.flow)?;
+        conn.execute(
+            "INSERT INTO provider_switches
+                 (flow_id, from_step, to_step, reason, switched_by, handover, at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                switch.flow.0,
+                switch.from_step.0,
+                switch.to_step.0,
+                tag(&switch.reason)?,
+                tag(&switch.by)?,
+                json(&switch.handover)?,
+                at
+            ],
+        )
+        .map_err(storage)?;
+        Ok(ProviderSwitch {
+            id: SwitchId(conn.last_insert_rowid()),
+            flow: switch.flow,
+            from_step: switch.from_step,
+            to_step: switch.to_step,
+            reason: switch.reason,
+            by: switch.by,
+            handover: switch.handover.clone(),
+            at,
+        })
+    }
+
+    fn switches(&self, flow: FlowId) -> Result<Vec<ProviderSwitch>, FlowStoreError> {
+        let conn = self.conn.lock();
+        let rows = query(
+            &conn,
+            "SELECT id, from_step, to_step, reason, switched_by, handover, at
+             FROM provider_switches WHERE flow_id = ?1 ORDER BY id",
+            params![flow.0],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, UnixMs>(6)?,
+                ))
+            },
+        )?;
+        rows.into_iter()
+            .map(|(id, from, to, reason, by, handover, at)| {
+                Ok(ProviderSwitch {
+                    id: SwitchId(id),
+                    flow,
+                    from_step: StepId(from),
+                    to_step: StepId(to),
+                    reason: untag(reason)?,
+                    by: untag(by)?,
+                    handover: from_json(&handover)?,
+                    at,
+                })
+            })
+            .collect()
     }
 }
 

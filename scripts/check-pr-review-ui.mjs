@@ -114,6 +114,7 @@ const view = () => {
       routes: [],
     },
     fixes: [], leases: [], writers: [], screenshots: [], pendingStart: null,
+  queued: [], holding: [], switches: [], capacity: null,
   };
 };
 window.calls = [];

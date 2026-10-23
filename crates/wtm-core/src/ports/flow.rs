@@ -331,6 +331,17 @@ pub trait RunStore: Send + Sync {
 
     /// A run's screenshots, oldest first.
     fn screenshots(&self, flow: FlowId) -> Result<Vec<Screenshot>, FlowStoreError>;
+
+    /// Keep a switch of a role's work to another role or provider, with the handover the new
+    /// runner was given. Never changed afterwards.
+    fn record_switch(
+        &self,
+        switch: &crate::flow::NewProviderSwitch,
+        at: UnixMs,
+    ) -> Result<crate::flow::ProviderSwitch, FlowStoreError>;
+
+    /// A run's switches, oldest first.
+    fn switches(&self, flow: FlowId) -> Result<Vec<crate::flow::ProviderSwitch>, FlowStoreError>;
 }
 
 /// What wtm keeps about a teammate's pull request beyond its review runs: what the forge last

@@ -1,0 +1,94 @@
+/*
+ * Usage capacity in the Work view: the card a role waiting at its provider's limit puts in the
+ * Reviews tab and the inbox, the handover a role that took over another's work was given, and the
+ * strip of roles queued for a run-session place.
+ *
+ * A component after `work-runtime`, because the card extends the `c-work-state` block the same
+ * way the Start environment card does, and takes its tone from it: nothing here adds a colour of
+ * its own beyond the warning role for a refusal said ahead of time.
+ */
+
+.c-capacity__facts {
+  font-size: var(--step--1);
+}
+
+.c-capacity__chain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-capacity__once {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.c-capacity__warning {
+  flex: 1 1 100%;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+  color: var(--fg);
+  font-size: var(--step--2);
+}
+
+/* Under a role's row: where its work came from, and exactly what it was handed. */
+.c-handover {
+  flex: 1 1 100%;
+  margin: 0 0 var(--sp-1) var(--sp-4);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-handover__summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.c-handover__text {
+  max-height: 18lh;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2);
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Above the inbox: roles waiting for a run-session place, which is routine and never an item. */
+.c-seat-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  font-size: var(--step--2);
+}
+
+.c-seat-queue__heading {
+  color: var(--fg-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-seat-queue__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-seat-queue__caps {
+  color: var(--fg-muted);
+}

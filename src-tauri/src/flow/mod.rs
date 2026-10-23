@@ -26,9 +26,12 @@
 //!
 //! # Holds
 //!
-//! - **`WaitingCapacity`** when a provider reports its usage limit and the role has no configured
-//!   fallback on another provider. The role waits for the reset the provider named and runs again
-//!   by itself if the app is open; an unknown reset waits for you. Other roles keep running.
+//! - **`WaitingCapacity`** when a provider reports its usage limit and none of the role's configured
+//!   fallbacks can take over. The role waits for the reset the provider named and runs again by
+//!   itself while the app is open and the Mac awake; after a sleep or a relaunch it asks the
+//!   provider first, and an unknown reset waits for you. Meanwhile you can run it once elsewhere or
+//!   finish without it (`capacity.rs`). Other roles keep running, and a quit leaves the wait to be
+//!   picked up at the next launch, since no turn was cut off.
 //! - **`Interrupted`** when the app quits mid-run ([`Engine::shutdown`]) or is found at launch to
 //!   have stopped without doing so ([`Engine::recover`]). Completed roles keep their results and
 //!   nothing is re-sent: a turn sent twice can do its work twice. [`Engine::resume`] runs what is
@@ -52,6 +55,7 @@
 //! port, so a test drives every timeout, retry and reset by moving a fake clock.
 
 pub mod brief;
+pub mod capacity;
 pub mod checks;
 pub mod commands;
 pub mod comments;
@@ -82,13 +86,14 @@ use serde::Serialize;
 use wtm_agent::session::AgentSink;
 use wtm_appdb::AppDb;
 use wtm_core::flow::{
-    AfterFailure, Answer, CheckRun, CheckSpec, ContextLink, Field, FindingRecord, Flow, FlowDir,
-    FlowEvent, FlowId, FlowKind, Hold, HoldKind, InboxItem, InboxItemId, InboxKind, InboxTarget,
-    InterruptCause, Invocation, InvocationChange, InvocationStatus, NewInboxItem, NewInvocation,
-    NewQuestion, NewReviewRun, NewStep, NewWorkItem, OnLimit, OutputKind, Phase, Question,
-    QuestionId, ReviewRun, RoleKind, RoleProvider, RoleSpec, ScratchLabel, SkillProblem, Snapshot,
-    SnapshotId, Status, Step, StepChange, StepId, StepStatus, Submission, WorkLink, WorkflowSpec,
-    Workspace, after_failure, on_limit, resume_at,
+    AfterFailure, Answer, CapacityChoice, CheckRun, CheckSpec, ContextLink, CreditProblem, Field,
+    FindingRecord, Flow, FlowDir, FlowEvent, FlowId, FlowKind, Hold, HoldKind, InboxItem,
+    InboxItemId, InboxKind, InboxTarget, InterruptCause, Invocation, InvocationChange,
+    InvocationStatus, NewInboxItem, NewInvocation, NewProviderSwitch, NewQuestion, NewReviewRun,
+    NewStep, NewWorkItem, OnLimit, OutputKind, Phase, Question, QuestionId, ReviewRun, RoleKind,
+    RoleProvider, RoleSpec, Runner, ScratchLabel, SkillProblem, Snapshot, SnapshotId, Status, Step,
+    StepChange, StepId, StepStatus, Submission, SwitchReason, SwitchedBy, WorkLink, WorkflowSpec,
+    Workspace, after_failure, credit_problem, on_limit,
 };
 use wtm_core::model::{AgentEvent, AgentSkill, ApprovalRequest, ExitOutcome, ProjectId, SessionId};
 use wtm_core::ports::clock::Clock;
@@ -134,6 +139,11 @@ pub trait Notice: Send + Sync {
     fn changed(&self, flow: FlowId);
     /// An inbox item was filed for the first time. Never called for one that was already open.
     fn filed(&self, item: &InboxItem);
+    /// Who holds run-session places and who waits changed. Not an inbox item: a queue is routine,
+    /// and says so where it is shown without notifying anyone.
+    fn seats(&self, view: &capacity::SeatsView) {
+        let _ = view;
+    }
 }
 
 /// What the Run Review button asks for.
@@ -157,6 +167,9 @@ pub struct Refusal {
     /// Providers that would not bill a subscription, when that is the reason. The Reviews tab says
     /// "can't start: billing" and names them; for every other reason this is empty.
     pub billing: Vec<String>,
+    /// Roles that would run a model billing usage credits without having opted in, when that is
+    /// the reason.
+    pub credits: Vec<CreditProblem>,
 }
 
 impl From<String> for Refusal {
@@ -164,6 +177,7 @@ impl From<String> for Refusal {
         Self {
             message,
             billing: Vec::new(),
+            credits: Vec::new(),
         }
     }
 }
@@ -217,6 +231,15 @@ pub struct FlowView {
     /// What Start environment and run would start and run now, while a check is blocked or a
     /// runtime role waits for its services. `None` when nothing is.
     pub pending_start: Option<runtime::StartView>,
+    /// The run's roles waiting for a run-session place, with the cap each waits for.
+    pub queued: Vec<wtm_core::flow::QueuedSeat>,
+    /// The places the run's sessions hold now.
+    pub holding: Vec<wtm_core::flow::Seat>,
+    /// Every time a role's work moved to another role or provider, oldest first, with what the
+    /// new runner was handed.
+    pub switches: Vec<wtm_core::flow::ProviderSwitch>,
+    /// The role waiting at its provider's limit, when one is, and what can be done about it.
+    pub capacity: Option<capacity::CapacityView>,
 }
 
 /// One run's controls, shared by its thread and its roles.
@@ -230,6 +253,8 @@ struct Run {
     lease: Mutex<Option<wtm_core::flow::LeaseId>>,
     /// Set when you decline starting the environment a runtime role waits for (`runtime.rs`).
     declined: AtomicBool,
+    /// What you chose for roles waiting at a usage limit, taken by each role's own thread.
+    choices: Mutex<BTreeMap<StepId, CapacityChoice>>,
 }
 
 /// What a session told the role thread waiting on it.
@@ -411,6 +436,12 @@ pub struct Engine {
     starts: start::Starts,
     /// The environment supervisor, attached once it exists. Weak, because it holds this engine.
     environment: Mutex<Option<std::sync::Weak<dyn runtime::Environment>>>,
+    /// Places for run sessions, across every run (`capacity.rs`).
+    seats: capacity::Seats,
+    /// A debug build's `WTM_DEV_LIMIT`, for click-throughs. `None` in a release build.
+    limit_fault: Option<capacity::LimitFault>,
+    /// What the last recheck of a waiting role's provider said, by step, until it stops waiting.
+    rechecks: Mutex<BTreeMap<StepId, String>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -453,6 +484,9 @@ impl Engine {
             fired: AtomicBool::new(false),
             starts: start::Starts::default(),
             environment: Mutex::new(None),
+            seats: capacity::Seats::default(),
+            limit_fault: capacity::LimitFault::from_env(),
+            rechecks: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -496,6 +530,7 @@ impl Engine {
             )
         })?;
         let plan = wtm_core::flow::plan(workflow, &req.recipe, None).map_err(text)?;
+        refuse_credits(workflow, &req.recipe)?;
         let providers: Vec<&str> = plan
             .providers(workflow)
             .into_iter()
@@ -1013,12 +1048,38 @@ impl Engine {
         {
             step = reset;
         }
+        // A wait picked up again: at launch, or by a run driven again while one of its roles still
+        // waited. Whatever the reset said before, the provider is asked before anything runs.
+        if step.status == StepStatus::WaitingCapacity {
+            let message = step
+                .detail
+                .clone()
+                .unwrap_or_else(|| format!("{} had reached its usage limit", step.provider));
+            match self.wait_for_capacity(ctx, run, &step, step.resets_at, &message, true) {
+                capacity::Waited::Resume => match self.fresh(&step) {
+                    Some(current) => step = current,
+                    None => return,
+                },
+                capacity::Waited::Skipped | capacity::Waited::Stopped => return,
+            }
+        }
         loop {
             match self.attempts(ctx, run, snapshots, checkout, &mut step) {
                 RoleEnd::Done | RoleEnd::Stopped => return,
                 RoleEnd::Failed(reason, problem) => {
                     let already = self.roles_run(ctx.flow);
-                    let chain = ctx.workflow.fallback_chain(&step.role);
+                    let spent = self.spent_providers(ctx);
+                    let chain: Vec<String> = ctx
+                        .workflow
+                        .fallback_chain(origin(&step))
+                        .into_iter()
+                        .filter(|id| {
+                            ctx.workflow
+                                .role
+                                .get(id)
+                                .is_some_and(|spec| !spent.contains(&spec.provider))
+                        })
+                        .collect();
                     match after_failure(
                         step.failures.max(step.retries + 1),
                         step.retries,
@@ -1026,7 +1087,13 @@ impl Engine {
                         &already,
                     ) {
                         AfterFailure::Fallback(alternative) => {
-                            match self.hand_over(ctx, &step, &alternative, &reason) {
+                            match self.hand_over(
+                                ctx,
+                                &step,
+                                &alternative,
+                                SwitchReason::Failure,
+                                &reason,
+                            ) {
                                 Some(next) => step = next,
                                 None => return,
                             }
@@ -1039,53 +1106,101 @@ impl Engine {
                 }
                 RoleEnd::Limit { resets_at, message } => {
                     let already = self.roles_run(ctx.flow);
+                    let spent = self.spent_providers(ctx);
+                    // The chain is the role's own, whoever is running it now: when its first
+                    // alternative also runs out, the next comes from the same list. An
+                    // alternative on a provider that has reached a limit in this round would
+                    // only reach it again.
                     let chain: Vec<(String, RoleProvider)> = ctx
                         .workflow
-                        .fallback_chain(&step.role)
+                        .fallback_chain(origin(&step))
                         .into_iter()
                         .filter_map(|id| {
                             let provider = ctx.workflow.role.get(&id)?.provider;
                             Some((id, provider))
                         })
+                        .filter(|(_, provider)| !spent.contains(provider))
                         .collect();
                     match on_limit(step.provider, &chain, &already) {
                         OnLimit::SwitchTo(alternative) => {
+                            let to = ctx.workflow.role.get(&alternative).map_or_else(
+                                || "another provider".to_owned(),
+                                |spec| spec.provider.to_string(),
+                            );
                             self.file(&NewInboxItem {
                                 flow: ctx.flow,
                                 kind: InboxKind::Capacity,
                                 target: on(&step),
                                 title: format!(
-                                    "{} reached its usage limit; `{}` ran `{alternative}` instead",
-                                    step.provider, step.role
+                                    "{} reached its usage limit; `{alternative}` took over `{}` \
+                                     on {to}",
+                                    step.provider,
+                                    origin(&step)
                                 ),
                                 body: format!(
-                                    "{message}\n\nThe role's configured fallback `{alternative}` \
-                                     took over from a written summary of where `{}` got to. \
-                                     wtm never uses an API key.",
-                                    step.role
+                                    "{message}\n\n`{alternative}` is the next role in `{}`'s \
+                                     configured fallback chain, and it took over from a written \
+                                     summary of where the run got to: the step, the snapshot, the \
+                                     diff's shape, the findings so far and your answers. No \
+                                     conversation was carried over. wtm never uses an API key.",
+                                    origin(&step)
                                 ),
                             });
                             let why =
                                 format!("{} reached its usage limit ({message})", step.provider);
-                            match self.hand_over(ctx, &step, &alternative, &why) {
+                            match self.hand_over(
+                                ctx,
+                                &step,
+                                &alternative,
+                                SwitchReason::Limit,
+                                &why,
+                            ) {
                                 Some(next) => step = next,
                                 None => return,
                             }
                         }
                         OnLimit::Wait => {
-                            if !self.wait_for_capacity(ctx, run, &step, resets_at, &message) {
-                                return;
-                            }
-                            if let Ok(fresh) = db.steps(ctx.flow)
-                                && let Some(current) = fresh.into_iter().find(|s| s.id == step.id)
+                            match self
+                                .wait_for_capacity(ctx, run, &step, resets_at, &message, false)
                             {
-                                step = current;
+                                capacity::Waited::Resume => match self.fresh(&step) {
+                                    Some(current) => step = current,
+                                    None => return,
+                                },
+                                capacity::Waited::Skipped | capacity::Waited::Stopped => return,
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    /// The providers that reported a usage limit in this round of the run: attempts against its
+    /// current snapshot. A later round starts with every provider worth trying again.
+    fn spent_providers(&self, ctx: &RunCtx) -> BTreeSet<RoleProvider> {
+        self.spent_in(ctx.flow, Some(ctx.snapshot_id))
+    }
+
+    /// [`Self::spent_providers`], for a run read from its record rather than its thread.
+    fn spent_in(&self, flow: FlowId, snapshot: Option<SnapshotId>) -> BTreeSet<RoleProvider> {
+        self.db()
+            .and_then(|db| db.invocations(flow).map_err(text))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|i| i.status == InvocationStatus::LimitReached && i.snapshot == snapshot)
+            .map(|i| i.provider)
+            .collect()
+    }
+
+    /// The step as the record has it now, after something outside this thread changed it.
+    fn fresh(&self, step: &Step) -> Option<Step> {
+        self.db()
+            .ok()?
+            .steps(step.flow)
+            .ok()?
+            .into_iter()
+            .find(|s| s.id == step.id)
     }
 
     /// The answered questions `role` asked in any review of this worktree, oldest first.
@@ -1212,6 +1327,26 @@ impl Engine {
         if ctx.fix.is_some() {
             spec.output = OutputKind::Handoff;
         }
+        if let Some(limit) = self.injected_limit(ctx, step, attempt) {
+            return limit;
+        }
+        // Run once on another provider, at a limit: its model is the one you chose, and the
+        // role's effort is spelled for the provider it names, so it is left to the other one's
+        // default.
+        if step.provider != spec.provider {
+            spec.provider = step.provider;
+            spec.effort = None;
+        }
+        if let Some(problem) =
+            credit_problem(&step.role, &spec, step.provider, step.model.as_deref())
+        {
+            return AttemptEnd::Unrunnable(problem.to_string(), None);
+        }
+        // A place among the run sessions before the attempt is recorded, held until it ends.
+        let _seat = match self.take_seat(ctx.flow, run, step) {
+            Ok(seat) => seat,
+            Err(end) => return end,
+        };
         let cwd = match step.workspace {
             Workspace::Snapshot => match Self::checkout_path(ctx, snapshots, checkout) {
                 Ok(path) => path,
@@ -1545,8 +1680,23 @@ impl Engine {
                     }
                     AgentEvent::SessionReady {
                         provider_session_id,
+                        model,
                         ..
                     } => {
+                        // The model the provider says it is running, which for a role that named
+                        // none is the CLI's default: a backstop for the check made before the
+                        // session opened, which could only read the model the role named.
+                        if let Some(problem) =
+                            credit_problem(&step.role, spec, step.provider, model.as_deref())
+                        {
+                            return AttemptEnd::Unrunnable(
+                                format!(
+                                    "{problem}. The session reported it at its start, and wtm \
+                                     closed it then"
+                                ),
+                                None,
+                            );
+                        }
                         let _ = db.update_invocation(
                             invocation,
                             &InvocationChange {
@@ -1653,18 +1803,29 @@ impl Engine {
         }
     }
 
-    /// Record that `step` is replaced by `alternative`, and make the alternative's step.
-    fn hand_over(&self, ctx: &RunCtx, step: &Step, alternative: &str, why: &str) -> Option<Step> {
+    /// Record that `step` is replaced by `alternative`, make the alternative's step, and keep the
+    /// switch with the handover the alternative starts from.
+    fn hand_over(
+        &self,
+        ctx: &RunCtx,
+        step: &Step,
+        alternative: &str,
+        reason: SwitchReason,
+        why: &str,
+    ) -> Option<Step> {
         let db = self.db().ok()?;
         let spec = ctx.workflow.role.get(alternative)?;
-        let progress: Vec<String> = db
-            .invocations(ctx.flow)
-            .ok()?
-            .into_iter()
-            .filter(|i| i.step == step.id)
-            .filter_map(|i| i.progress)
-            .collect();
-        let handover = brief::handover(&step.role, why, &progress);
+        let handover = self.handover_for(
+            ctx,
+            step,
+            Runner {
+                role: alternative.to_owned(),
+                provider: spec.provider,
+                model: spec.model.clone(),
+            },
+            reason,
+            why,
+        );
         self.update_step(
             step,
             &StepChange::status(StepStatus::Replaced)
@@ -1683,15 +1844,31 @@ impl Engine {
                     timeout_ms: spec.timeout_ms(),
                     retries: spec.retries,
                     status: StepStatus::Pending,
-                    stands_in_for: Some(step.role.clone()),
-                    handover: Some(handover),
+                    // The role whose work this is, not the alternative that ran out before it:
+                    // the next alternative comes from that role's own chain.
+                    stands_in_for: Some(origin(step).to_owned()),
+                    handover: Some(handover.render()),
                     detail: None,
                 }],
                 self.now(),
             )
             .ok()?;
+        let next = added.into_iter().next()?;
+        if let Err(error) = db.record_switch(
+            &NewProviderSwitch {
+                flow: ctx.flow,
+                from_step: step.id,
+                to_step: next.id,
+                reason,
+                by: SwitchedBy::Config,
+                handover,
+            },
+            self.now(),
+        ) {
+            tracing::warn!(flow = %ctx.flow, %error, "could not record a provider switch");
+        }
         self.notice.changed(ctx.flow);
-        added.into_iter().next()
+        Some(next)
     }
 
     /// A role is out of attempts and fallbacks: say so where you will see it.
@@ -1716,84 +1893,6 @@ impl Engine {
                 if tries == 1 { "" } else { "s" }
             ),
         });
-    }
-
-    /// Hold the role until its provider's limit resets. `false` when the run stopped meanwhile.
-    fn wait_for_capacity(
-        &self,
-        ctx: &RunCtx,
-        run: &Run,
-        step: &Step,
-        resets_at: Option<u64>,
-        message: &str,
-    ) -> bool {
-        self.update_step(
-            step,
-            &StepChange {
-                resets_at: Field::from(resets_at),
-                ..StepChange::status(StepStatus::WaitingCapacity)
-            }
-            .detail(message.to_owned()),
-        );
-        self.hold_capacity(ctx.flow, step.provider, resets_at);
-        let when = resets_at.map_or_else(
-            || {
-                "The provider did not say when it resets, so it waits until you resume it."
-                    .to_owned()
-            },
-            |at| {
-                format!(
-                    "It resets at Unix time {at}; the role runs again by itself then, if wtm is open."
-                )
-            },
-        );
-        self.file(&NewInboxItem {
-            flow: ctx.flow,
-            kind: InboxKind::Capacity,
-            target: on(step),
-            title: format!(
-                "`{}` is paused: {} limit reached",
-                step.role, step.provider
-            ),
-            body: format!(
-                "{message}\n\n{when} Roles that finished keep their results. No fallback on another \
-                 provider is configured for this role, so nothing switches by itself, and wtm never \
-                 uses an API key."
-            ),
-        });
-
-        let resume = resume_at(resets_at);
-        loop {
-            std::thread::sleep(Duration::from_millis(self.tuning.tick_ms));
-            if self.quitting() {
-                return false;
-            }
-            if run.cancel.load(Ordering::SeqCst) {
-                self.update_step(step, &StepChange::status(StepStatus::Cancelled));
-                return false;
-            }
-            if run.wake.swap(false, Ordering::SeqCst) {
-                break;
-            }
-            if resume.is_some_and(|at| self.now() >= at) {
-                break;
-            }
-        }
-
-        self.update_step(
-            step,
-            &StepChange {
-                resets_at: Field::Clear,
-                detail: Field::Clear,
-                ..StepChange::status(StepStatus::Pending)
-            },
-        );
-        if let Ok(db) = self.db() {
-            let _ = db.resolve_inbox(ctx.flow, InboxKind::Capacity, Some(&on(step)), self.now());
-        }
-        self.release_capacity(ctx.flow);
-        self.notice.changed(ctx.flow);
-        true
     }
 
     fn hold_capacity(&self, flow: FlowId, provider: RoleProvider, resets_at: Option<u64>) {
@@ -2094,9 +2193,15 @@ impl Engine {
         for flow in flows {
             if self.is_planning(flow) {
                 self.interrupt_planner(flow, InterruptCause::Quit);
-            } else {
-                self.interrupt(flow, InterruptCause::Quit);
+                continue;
             }
+            // A run whose only unfinished work waits at a usage limit had no turn in flight, so
+            // nothing is cut off: it stays held as it is, and the next launch asks the provider
+            // again before anything runs.
+            if self.only_waiting_for_capacity(flow) {
+                continue;
+            }
+            self.interrupt(flow, InterruptCause::Quit);
         }
         self.shutdown_starts();
     }
@@ -2110,20 +2215,28 @@ impl Engine {
     /// # Errors
     ///
     /// When the database cannot be read.
-    pub fn recover(&self) -> Result<Vec<FlowId>, String> {
+    pub fn recover(self: &Arc<Self>) -> Result<Vec<FlowId>, String> {
         if !self.app.files.exists(&self.app.config.paths().flow_db) {
             return Ok(Vec::new());
         }
         let db = self.db()?;
         let mut interrupted = Vec::new();
+        let mut waits = Vec::new();
         for review in db.open_reviews().map_err(text)? {
             if self.is_running(review.flow) {
                 continue;
             }
+            // Left waiting at a usage limit, by a quit or a crash, with nothing mid-turn: the wait
+            // is picked up again below, and its role asks the provider before it runs. Nothing is
+            // re-sent, because nothing was in flight.
+            if self.only_waiting_for_capacity(review.flow) {
+                waits.push(review.flow);
+                continue;
+            }
             let state = self.state(review.flow)?;
             // A quit already said so of a flow held `Interrupted`, and a consolidated one was not
-            // running. `shutdown` turns a capacity wait into an interruption, so one still waiting
-            // here was left by a crash, like a flow caught mid-phase with no hold at all.
+            // running. A capacity wait with a role cut off mid-turn beside it was left by a crash,
+            // like a flow caught mid-phase with no hold at all.
             let gone = matches!(
                 (&state.hold, state.phase),
                 (Some(Hold::WaitingCapacity { .. }), _)
@@ -2137,7 +2250,20 @@ impl Engine {
                 interrupted.push(review.flow);
             }
         }
+        // Before any wait is picked up: a picked-up run holds a lease of its own, and one that is
+        // running is passed over, so reconciling after would keep the lease the last process took
+        // and never let go (found by the click-through, after a kill mid-wait).
         self.reconcile_leases();
+        for flow in waits {
+            match self.spawn(flow) {
+                Ok(()) => tracing::info!(%flow, "picked up a capacity wait at launch"),
+                Err(reason) => {
+                    tracing::warn!(%flow, %reason, "could not pick up a capacity wait");
+                    self.interrupt(flow, InterruptCause::Crash);
+                    interrupted.push(flow);
+                }
+            }
+        }
         // An issue's worktree cut off while it was being made or set up (`start.rs`). Its own
         // failure is logged rather than returned: the reviews above were recovered either way,
         // and saying they were not would send someone looking in the wrong place.
@@ -2329,6 +2455,8 @@ impl Engine {
         let leases = db.open_leases(Some(&review.worktree_path)).map_err(text)?;
         let writers = fix::writer_choices(workflow.as_ref());
         let screenshots = db.screenshots(flow).map_err(text)?;
+        let switches = db.switches(flow).map_err(text)?;
+        let capacity = self.capacity_view(flow, &steps);
         // What Start environment and run would start and run, when anything is blocked. A config
         // that no longer renders is shown as nothing to start rather than failing the whole view.
         let pending_start = self.pending_start(flow).unwrap_or_else(|e| {
@@ -2339,6 +2467,10 @@ impl Engine {
             fixes,
             screenshots,
             pending_start,
+            queued: self.queued_in(flow),
+            holding: self.holding_in(flow),
+            switches,
+            capacity,
             leases,
             writers,
             status: state.state.status(),
@@ -2573,6 +2705,29 @@ const ALL_KINDS: [InboxKind; 6] = [
     InboxKind::Interrupted,
     InboxKind::ReviewReady,
 ];
+
+/// The role whose work a step is: its own, or the one a fallback stands in for.
+fn origin(step: &Step) -> &str {
+    step.stands_in_for.as_deref().unwrap_or(&step.role)
+}
+
+/// Refuse a recipe that would run a model billing usage credits for a role that has not opted in.
+fn refuse_credits(workflow: &WorkflowSpec, recipe: &str) -> Result<(), Refusal> {
+    let credits = workflow.credit_problems(recipe);
+    if credits.is_empty() {
+        return Ok(());
+    }
+    let message = credits
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(". ");
+    Err(Refusal {
+        message: format!("{message}. Nothing was started."),
+        billing: Vec::new(),
+        credits,
+    })
+}
 
 /// The inbox target for a step: the role, by the step the store numbered.
 fn on(step: &Step) -> InboxTarget {

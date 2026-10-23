@@ -21,6 +21,7 @@ import { listen } from '@tauri-apps/api/event';
 import { commands } from '../ipc/commands';
 import type {
   ApprovedRoute,
+  CapacityChoice,
   FixDiffView,
   PublicationView,
   PublishPreview,
@@ -68,7 +69,7 @@ class ReviewRuns {
 
   async load(project: string, worktree: string): Promise<void> {
     try {
-      this.latest[worktree] = await commands.latestReview(project, worktree);
+      await this.read(worktree, () => commands.latestReview(project, worktree));
     } catch (error) {
       this.errors[worktree] = message(error);
     }
@@ -132,7 +133,7 @@ class ReviewRuns {
     delete this.errors[worktree];
     try {
       await commands.keepReviewPrivate(flow, notes);
-      this.latest[worktree] = await commands.reviewRun(flow);
+      await this.read(worktree, () => commands.reviewRun(flow));
       return true;
     } catch (error) {
       this.errors[worktree] = message(error);
@@ -164,7 +165,7 @@ class ReviewRuns {
   ): Promise<PublicationView> {
     const published = await commands.approveReviewPublish(flow, draft, hash, againstHead);
     try {
-      this.latest[worktree] = await commands.reviewRun(flow);
+      await this.read(worktree, () => commands.reviewRun(flow));
     } catch {
       // The approval stands; the next `flow:changed` reads the run again.
     }
@@ -183,7 +184,7 @@ class ReviewRuns {
     delete this.errors[key];
     try {
       await action();
-      this.latest[worktree] = await commands.reviewRun(flow);
+      await this.read(worktree, () => commands.reviewRun(flow));
     } catch (error) {
       this.errors[key] = message(error);
     } finally {
@@ -196,7 +197,7 @@ class ReviewRuns {
    * worktree someone holds is its own — so it is not kept as the worktree's error.
    */
   async startFix(worktree: string, flow: number, request: StartFix): Promise<void> {
-    this.latest[worktree] = await commands.startLocalFix(flow, request);
+    await this.read(worktree, () => commands.startLocalFix(flow, request));
   }
 
   async cancelFix(worktree: string, flow: number): Promise<void> {
@@ -224,7 +225,7 @@ class ReviewRuns {
   ): Promise<ApprovedRoute> {
     const approved = await commands.approveFixRoute(flow, request, hash);
     try {
-      this.latest[worktree] = await commands.reviewRun(flow);
+      await this.read(worktree, () => commands.reviewRun(flow));
     } catch {
       // The approval stands; the next `flow:changed` reads the run again.
     }
@@ -243,7 +244,7 @@ class ReviewRuns {
     delete this.errors[key];
     try {
       await action();
-      this.latest[worktree] = await commands.reviewRun(flow);
+      await this.read(worktree, () => commands.reviewRun(flow));
     } catch (error) {
       this.errors[key] = message(error);
     } finally {
@@ -256,7 +257,7 @@ class ReviewRuns {
     try {
       await commands.dismissFinding(finding, reason);
       const shown = this.latest[worktree];
-      if (shown) this.latest[worktree] = await commands.reviewRun(shown.flow.id);
+      if (shown) await this.read(worktree, () => commands.reviewRun(shown.flow.id));
     } catch (error) {
       this.errors[worktree] = message(error);
     }
@@ -307,13 +308,28 @@ class ReviewRuns {
     await this.act(worktree, () => commands.cancelReview(flow));
   }
 
+  /**
+   * What you chose for a role waiting at its provider's usage limit: keep waiting, run it once on
+   * another provider from a handover, or finish the review without it. A refusal — the provider it
+   * already ran out on, a model that bills usage credits the role has not allowed — is the
+   * worktree's error, and nothing changed.
+   */
+  async chooseCapacity(
+    worktree: string,
+    flow: number,
+    step: number,
+    choice: CapacityChoice,
+  ): Promise<void> {
+    await this.act(worktree, () => commands.chooseCapacity(flow, step, choice));
+  }
+
   private async act(worktree: string, action: () => Promise<ReviewRunView>): Promise<void> {
     if (this.busy[worktree]) return;
     this.busy[worktree] = true;
     delete this.errors[worktree];
     delete this.problems[worktree];
     try {
-      this.latest[worktree] = await action();
+      await this.read(worktree, () => action());
     } catch (error) {
       this.errors[worktree] = message(error);
       this.problems[worktree] = startProblem(error);
@@ -322,14 +338,55 @@ class ReviewRuns {
     }
   }
 
+  /** Numbers every read of a run as it starts, so their answers can be put in order. */
+  private ticket = 0;
+  /** Per worktree, the number of the read whose answer is drawn now. */
+  private drawn: Record<string, number> = {};
+
+  /**
+   * Keep an answer for a worktree unless it is older than what is drawn.
+   *
+   * A run announces several changes in a burst, and each read answers from Rust's thread pool, so
+   * answers can arrive out of order: drawing whichever came last drew a run as running after its
+   * hold was recorded (found by the click-through). So a reading of the run already drawn is kept
+   * only when it started later than the one drawn. Which run a worktree shows changes only by a
+   * load or an action — Run Review, Run again — never by a refresh of the run it showed before.
+   */
+  private keep(
+    worktree: string,
+    run: ReviewRunView | null,
+    ticket: number,
+    switches: boolean,
+  ): boolean {
+    const shown = this.latest[worktree];
+    const same = shown != null && run != null && shown.flow.id === run.flow.id;
+    if (!same && !switches) return false;
+    if (same && ticket < (this.drawn[worktree] ?? 0)) return false;
+    this.latest[worktree] = run;
+    this.drawn[worktree] = ticket;
+    return true;
+  }
+
+  /** A load or an action's read of a worktree's run, kept by `keep`'s rule. */
+  private async read<T extends ReviewRunView | null>(
+    worktree: string,
+    fetch: () => Promise<T>,
+  ): Promise<T | null> {
+    const ticket = ++this.ticket;
+    const run = await fetch();
+    return this.keep(worktree, run, ticket, true) ? run : null;
+  }
+
   /** A run moved: read it again wherever it is shown. */
   private async refreshFlow(flow: number): Promise<void> {
     const shown = Object.entries(this.latest).find(([, view]) => view?.flow.id === flow);
     if (shown) {
       try {
+        const worktree = shown[0];
+        const was = this.latest[worktree];
+        const ticket = ++this.ticket;
         const run = await commands.reviewRun(flow);
-        const was = this.latest[shown[0]];
-        this.latest[shown[0]] = run;
+        if (!this.keep(worktree, run, ticket, false)) return;
         // A run that just settled is the moment its results can first be compared with the tree.
         if (was?.running && !run.running) void this.checkStaleness(flow);
       } catch {

@@ -570,6 +570,8 @@ pub fn run() {
             flow::commands::latest_review,
             flow::commands::resume_review,
             flow::commands::cancel_review,
+            flow::commands::choose_capacity,
+            flow::commands::run_sessions,
             flow::commands::work_inbox,
             flow::commands::resolve_inbox_item,
             flow::commands::dismiss_inbox_item,

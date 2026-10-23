@@ -53,6 +53,7 @@
   import { arrival, type ReviewFocus } from './lib/inbox';
   import { attention, RUN_TARGET } from './lib/state/attention.svelte';
   import { inbox } from './lib/state/inbox.svelte';
+  import { seats } from './lib/state/seats.svelte';
   import { reviewRuns } from './lib/state/review-runs.svelte';
   import { environments } from './lib/state/environments.svelte';
   import { reviews } from './lib/state/reviews.svelte';
@@ -419,6 +420,11 @@
      */
     const unlistenInbox = inbox.init();
     /*
+     * Run-session places: what is queued under the caps, for the inbox column. Routine, so it is
+     * shown and never announced.
+     */
+    const unlistenSeats = seats.init();
+    /*
      * The sprint queue moves an issue between sections when one of its worktrees' runs changes.
      * That is a read of the mirror, never of the tracker.
      */
@@ -549,6 +555,7 @@
       void unlistenRuns.then((off) => off());
       void unlistenEnvironments.then((off) => off());
       void unlistenInbox.then((off) => off());
+      void unlistenSeats.then((off) => off());
       void unlistenTracker.then((off) => off());
       void unlistenStarts.then((off) => off());
       void unlistenPlans.then((off) => off());

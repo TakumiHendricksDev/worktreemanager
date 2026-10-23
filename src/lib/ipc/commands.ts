@@ -49,6 +49,8 @@ import type {
   ReviewOutcomeRecord,
   ReviewRunView,
   ReviewStaleness,
+  CapacityChoice,
+  SeatsView,
   InboxItem,
   Question,
   DictationStatus,
@@ -898,6 +900,13 @@ export const commands = {
   resumeReview: (flow: number) => invoke<ReviewRunView>('resume_review', { flow }),
 
   cancelReview: (flow: number) => invoke<ReviewRunView>('cancel_review', { flow }),
+
+  /** Wait, run once on another provider, or finish without a role waiting at its usage limit. */
+  chooseCapacity: (flow: number, step: number, choice: CapacityChoice) =>
+    invoke<ReviewRunView>('choose_capacity', { flow, step, choice }),
+
+  /** Who holds run-session places now and who waits, across every run. */
+  runSessions: () => invoke<SeatsView>('run_sessions'),
 
   /** Whether a run's results still describe its worktree. Asks git; call it on change, not on a timer. */
   reviewStaleness: (flow: number) => invoke<ReviewStaleness>('review_staleness', { flow }),

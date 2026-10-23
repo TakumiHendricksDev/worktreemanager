@@ -69,14 +69,18 @@ const run = (flow, dir, steps, findings, more = {}) => ({
   snapshot: { headSha: 'a1b2c3d4e5f6', treeSha: '9f00aa', baseSha: 'c0ffee11' },
   steps, invocations: [], inbox: [], running: false, findings, checks: [], expectedChecks: [],
   applied: { rules: [], sources: [], skills: [] },
-  pullRequest: null, fixes: [], leases: [], writers: [], screenshots: [], pendingStart: null, ...more });
+  pullRequest: null, fixes: [], leases: [], writers: [], screenshots: [], pendingStart: null,
+  queued: [], holding: [], switches: [], capacity: null, ...more });
 const runs = {
   [id('export')]: run(1, 'export', [step(11, 'conventions', 'claude', 'done', { result: done }),
       step(12, 'correctness', 'codex', 'failed', { failures: 2, detail: 'it had no result after 15 min' })], [
     record(61, 1, { kind: 'confirmed_bug', verification: 'ran unit: 1 failed' }, 'Drops the last row', 'src/totals.py', 7),
     record(62, 1, { kind: 'suggestion' }, 'Name the export job', 'src/jobs.py', 3),
   ]),
-  [id('dates')]: run(2, 'dates', [step(21, 'ui', 'claude', 'waiting_capacity', { resetsAt: 1792560000 })], []),
+  [id('dates')]: run(2, 'dates', [step(21, 'ui', 'claude', 'waiting_capacity', { resetsAt: 1792560000 })], [], {
+    capacity: { step: 21, role: 'ui', provider: 'claude', model: 'sonnet', resetsAt: 1792560000,
+      fallbacks: [{ role: 'ui-codex', provider: 'codex', model: null, passedOver: 'already ran in this review' }],
+      allowCreditBilling: false, recheck: null } }),
 };
 const at = Date.now() - 60_000;
 const item = (n, flow, kind, target, dir, title, body, more = {}) => ({ id: n, flow, kind, target,
@@ -279,6 +283,9 @@ try {
         const usage = await page.locator('.c-inbox-card').textContent();
         assert(usage.includes('Try now'), usage);
         assert(usage.includes('Show ui'), usage);
+        for (const choice of ['Wait and resume', 'Run this role on Codex once…', 'Finish without it'])
+            assert(usage.includes(choice), usage);
+        assert(usage.includes('ui-codex on Codex · passed over: already ran in this review'), usage);
         await shot(page, join(shots, `focused-usage-${scheme}.png`));
 
         // ── An approval whose session has gone says so, and offers nothing to press ─────────

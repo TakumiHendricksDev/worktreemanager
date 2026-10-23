@@ -186,6 +186,14 @@ pub struct UserConfig {
     /// Project-config defaults applied to every repository.
     #[serde(default)]
     pub defaults: Option<toml::Value>,
+    /// How many workflow run sessions may be open at once, in total and per provider, across every
+    /// project. Here rather than in a project's `[workflow]`, because the caps protect your
+    /// subscriptions, which every project shares; see `wtm_core::flow::SessionCaps`.
+    #[serde(
+        default,
+        skip_serializing_if = "wtm_core::flow::SessionCaps::is_default"
+    )]
+    pub run_sessions: wtm_core::flow::SessionCaps,
     /// Anything this version does not know about, preserved across writes.
     #[serde(flatten)]
     pub extra: BTreeMap<String, toml::Value>,
@@ -406,6 +414,40 @@ mod tests {
             reloaded.project_roots(),
             vec![PathBuf::from("/Users/dev/repo")]
         );
+    }
+
+    #[test]
+    fn run_session_caps_are_read_from_their_own_table_and_left_out_when_they_are_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[run_sessions]\ntotal = 1\ncodex = 2\n").unwrap();
+        let config = UserConfig::load(&path).unwrap();
+        assert_eq!(config.run_sessions.total.get(), 1);
+        assert_eq!(config.run_sessions.codex.get(), 2);
+        assert_eq!(
+            config.run_sessions.claude.get(),
+            wtm_core::flow::capacity::DEFAULT_PER_PROVIDER
+        );
+        config.save(&path).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("[run_sessions]")
+        );
+
+        UserConfig::default().save(&path).unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("run_sessions")
+        );
+
+        // A cap of zero would queue every run forever; it is a mistake to say, not to obey.
+        std::fs::write(&path, "[run_sessions]\ntotal = 0\n").unwrap();
+        assert!(matches!(
+            UserConfig::load(&path),
+            Err(ConfigError::Invalid { .. })
+        ));
     }
 
     #[test]
