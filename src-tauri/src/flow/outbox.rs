@@ -787,6 +787,9 @@ impl Engine {
             self.notice.changed(op.key.flow);
             checked.push(op.approval);
         }
+        // A publish or merge whose cut-off write was settled above may still have writes never
+        // sent: said once, sent only on Retry.
+        self.recover_waiting_own();
         Ok(checked)
     }
 

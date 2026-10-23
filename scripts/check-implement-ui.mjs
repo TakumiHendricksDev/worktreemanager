@@ -114,7 +114,11 @@ const implementView = () => ({ flow: flowView(), key: KEY, implementer: scenario
   review: implementation ? { flow: REVIEW, phase: 'consolidated', running: false, standing: handedOver ? 2 : 0 } : null,
   findings: [], questions: scenario === 'question' ? [{ link: { question: 70, flow: FLOW, kind: 'outliers', paths: ['README.md'], findings: [], planRevision: 1 }, question }] : [],
   sessions: [], step: null, lease: handedOver || scenario === 'none' ? null : { id: 3, worktree: WT, flow: FLOW, kind: 'writer', holder: 'implementer', acquiredAt: now, releasedAt: null, releasedWhy: null },
-  running: resumed, canStart: false, canResume: scenario === 'interrupted' && !resumed });
+  running: resumed, canStart: false, canResume: scenario === 'interrupted' && !resumed,
+  notes: scenario === 'interrupted' ? [
+    { id: 1, flow: FLOW, kind: 'asleep', from: now - 3_600_000, to: now - 1_200_000, text: 'The Mac was asleep; nothing in this run worked meanwhile.', at: now },
+    { id: 2, flow: FLOW, kind: 'reaped', from: null, to: null, text: 'The implementer session was still running when wtm started again (pid 4000); wtm stopped it.', at: now },
+  ] : [] });
 const item = (id, kind, title, body) => ({ id, flow: FLOW, kind, target: { kind: 'flow' }, title, body,
   state: 'open', createdAt: now, closedAt: null, project: '/x/webapp', worktree: WT, issue: KEY, question: null });
 const inbox = scenario === 'ready' ? [item(1, 'review_ready', KEY + ' is ready to test',
@@ -163,7 +167,7 @@ const pullView = () => ({ flow: FLOW, unavailable: null, branch: 'feature/' + KE
   sends: scenario === 'review' ? [draftSend, readySend] : [draftSend],
   feedback: scenario === 'review' ? [{ flow: FLOW, review: 501, author: 'sam', state: 'changes_requested', body: 'Sort the units by floor, please.',
     url: 'https://github.com/acme/webapp/pull/40#pullrequestreview-501', commitId: HEAD, comments: [{ path: 'src/export.rs', body: 'This loop should sort first.' }], seenAt: now, revisedIn: null }] : [],
-  canPublish: scenario === 'ready', canMerge: scenario === 'review', canSync: true, canReviseFeedback: scenario === 'review' });
+  canDraft: scenario === 'ready', canPublish: scenario === 'ready', canMerge: scenario === 'review', canSync: true, canReviseFeedback: scenario === 'review' });
 window.calls = [];
 mockIPC((cmd, args) => {
   const a = args ?? {};
@@ -221,6 +225,7 @@ mockIPC((cmd, args) => {
       base: 'develop', head: HEAD, pullRequest: prReading, methods: ['squash', 'merge', 'rebase'], problems: [] };
     case 'approve_ready':
     case 'approve_merge':
+    case 'draft_pull_request':
     case 'revise_from_feedback': return null;
     case 'environment': return environmentView();
     case 'revise_implementation':
@@ -498,6 +503,10 @@ try {
         await tab(cut).locator('.c-implement__title').getByText('Interrupted').waitFor();
         assert.match(await tab(cut).innerText(), /under way/);
         assert.match(await tab(cut).innerText(), /holds the worktree/);
+        // What happened while nothing moved: the Mac asleep, and the session launch stopped.
+        const notes = tab(cut).getByRole('list', { name: 'While nothing moved' });
+        assert.match(await notes.innerText(), /Mac asleep \d{1,2}:\d{2}( [AP]M)?–\d{1,2}:\d{2}/);
+        assert.match(await notes.innerText(), /wtm stopped it/);
         await shot(cut, join(shots, `implement-interrupted-${scheme}.png`));
         await tab(cut).getByRole('button', { name: 'Resume' }).click();
         await cut.waitForFunction(

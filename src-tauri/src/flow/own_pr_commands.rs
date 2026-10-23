@@ -51,6 +51,18 @@ pub async fn sync_pull_request(
     blocking(move || engine.sync_pull_request(FlowId(flow)).map_err(refused)).await
 }
 
+/// Push the hand-over and make or update its draft now.
+#[tauri::command]
+pub async fn draft_pull_request(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+) -> Reply<()> {
+    gate(&app)?;
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.draft_now(FlowId(flow)).map_err(refused)).await
+}
+
 /// Send a draft, a publish or a merge again, reading first.
 #[tauri::command]
 pub async fn retry_pull_request_write(

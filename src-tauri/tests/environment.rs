@@ -741,6 +741,51 @@ fn a_destructive_command_on_this_worktrees_own_resource_runs_without_asking() {
     );
 }
 
+#[test]
+fn a_command_a_quit_cut_off_is_said_to_have_stopped_at_the_next_launch_rather_than_left_running() {
+    let Some(h) = harness() else { return };
+    h.supervisor
+        .run_command(&h.project, &h.worktree, "wipe")
+        .unwrap();
+    until("the run to finish", || {
+        h.view().runs[0].state == CommandRunState::Succeeded
+    });
+    // Another run of it was under way when wtm went away: the record still says running.
+    let db = h.app.appdb.get().unwrap();
+    let first = &h.view().runs[0];
+    let flow = wtm_core::ports::EnvStore::command_run(db.as_ref(), first.id)
+        .unwrap()
+        .unwrap()
+        .flow;
+    let cut = wtm_core::ports::EnvStore::record_command_run(
+        db.as_ref(),
+        &wtm_core::flow::NewCommandRun {
+            flow,
+            command: "wipe".to_owned(),
+            label: "Wipe".to_owned(),
+            argv: vec!["true".to_owned()],
+            binding: wtm_core::flow::Binding::default(),
+            state: CommandRunState::Running,
+        },
+        1,
+    )
+    .unwrap();
+
+    let next = supervisor_for(&h.app, &h.engine, &h.heard, EnvTuning::default());
+    next.recover().unwrap();
+    let after = wtm_core::ports::EnvStore::command_run(db.as_ref(), cut.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.state, CommandRunState::Failed);
+    assert!(
+        after
+            .output
+            .as_deref()
+            .is_some_and(|o| o.contains("whether it finished is not known")),
+        "{after:?}"
+    );
+}
+
 // ═══════════════════════════════ idle stop ═══════════════════════════════
 
 #[test]

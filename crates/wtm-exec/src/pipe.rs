@@ -183,6 +183,13 @@ impl PipeHostImpl {
         self.take_pids_matching(|_| true)
     }
 
+    /// The process group leader of a running session, without taking it: what a run records so a
+    /// launch after a crash can find the process again.
+    #[must_use]
+    pub fn pid_of(&self, id: &SessionId) -> Option<u32> {
+        self.sessions.lock().get(id).and_then(|session| session.pid)
+    }
+
     /// Same as [`Self::take_running_pids`], but only for the named sessions.
     pub fn take_pids(&self, ids: &[SessionId]) -> Vec<u32> {
         self.take_pids_matching(|id| ids.iter().any(|wanted| wanted == id))

@@ -105,7 +105,11 @@ Worth stating because it narrows the surface considerably:
   moving the issue to review is one approval of yours, bound to the head you saw; merging is the
   Merge sheet's alone, sent with `gh pr merge --match-head-commit`, so GitHub refuses a head that
   moved. No agent tool can push, mark ready, move an issue or merge. Following the pull request
-  reads it with your `gh`, on demand and on window focus, never on a timer.
+  reads it with your `gh`, on demand and on window focus, never on a timer. After a crash, the next
+  launch stops a run session's CLI the last wtm left running only when its pid and start time both
+  still match what was recorded, so a pid that now belongs to something else is never signalled.
+  Keeping the Mac awake while runs work is off unless you turn it on, and runs `caffeinate -i -w`
+  tied to wtm's own pid.
   For a project whose own config names a tracker, the Work view also reads its issues and sprint
   through your own `acli`, signed in as `acli` already is, and keeps the last reading in its own
   database; a repository's `wtm.toml` cannot name the tracker for you. It writes two things to the

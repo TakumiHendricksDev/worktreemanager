@@ -2036,6 +2036,39 @@ pull request; the Merge sheet refusing a head that moved, and merging at the one
 cut off mid-write settled at launch without sending anything twice; and a task branch someone else
 pushed to, reported and never pushed over.
 
+## 6q. While nothing moved: sessions a crash left running, the Mac asleep, keeping it awake
+
+Recovery at launch (§6i and each run kind's own) holds every run a quit or a crash cut off as
+Interrupted, keeping what finished and re-sending nothing. Three things around it
+(`src-tauri/src/flow/awake.rs`, rules in `wtm_core::flow::awake`):
+
+**Sessions a crash left running are found and stopped — only if they are still those processes.**
+A run session's CLI is its own process group, so a crash of wtm leaves it running, possibly still
+editing a worktree. Each session's pid and start time are kept as it opens (migration 19), as an
+environment's services' are. The launch, before it picks up or interrupts anything, looks each one
+up: same pid and same start time, it is stopped, group and all, through the same identity check a
+service's stop makes, and the run gets a note; anything else under that pid is someone else's now,
+and is left alone. Either way the record is cleared, so a launch deals with a process once.
+
+**Sleep is a note, never progress.** A thread looks at the wall and monotonic clocks every few
+seconds; the wall clock half a minute ahead of the monotonic one is sleep (`capacity::slept`'s
+rule), and each run that was working gets a note saying when the Mac was asleep. A note is not a
+flow event, so it moves no run's `updated_at`: nothing worked meanwhile, and the Implement tab says
+so beside the run rather than as a step of it. A run the sleep cut off is held Interrupted by its own
+recovery, as before.
+
+**Keeping the Mac awake is yours to turn on.** Off by default (Settings → Work view). Turned on, wtm
+holds an idle-sleep assertion while at least one run is working, and lets it go when none is:
+`caffeinate -i -w <wtm's pid>`, which ends with wtm even after a crash. Closing the lid still sleeps
+the Mac.
+
+**And the gaps recovery had.** A review held for its environment when wtm went away is interrupted
+at launch like one caught mid-phase, because the thread that waited for the services went with the
+process. A designer cut off between moving to Designing and its session opening is interrupted
+rather than left with no hold. An environment command still recorded as running is recorded failed,
+saying that whether it finished is not known. A Ready + Needs Review or a merge with writes never
+sent says so once, and waits for Retry. Quitting interrupts a designer once.
+
 ## 7. Toolchain policy
 
 **Pinned to an exact version** (`1.97.1`) rather than the floating `stable` channel, so `cargo build`

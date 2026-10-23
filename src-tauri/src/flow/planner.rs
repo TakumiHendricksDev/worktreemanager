@@ -1001,6 +1001,7 @@ impl Engine {
                     },
                     self.now(),
                 );
+                self.keep_process(invocation.id, &session);
                 self.notice.changed(ctx.flow);
                 let end = self.read_planner(ctx, run, step, &session, invocation.id, words, &rx);
                 if !matches!(end, TurnEnd::Quitting) {

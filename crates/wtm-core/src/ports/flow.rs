@@ -367,6 +367,33 @@ pub trait RunStore: Send + Sync {
 
     /// A run's switches, oldest first.
     fn switches(&self, flow: FlowId) -> Result<Vec<crate::flow::ProviderSwitch>, FlowStoreError>;
+
+    /// Keep the process behind an invocation's session: its pid and start time.
+    fn keep_process(
+        &self,
+        invocation: InvocationId,
+        process: &crate::flow::ProcessIdentity,
+    ) -> Result<(), FlowStoreError>;
+
+    /// Every invocation that started no later than `before` and still has a process kept: what a launch
+    /// looks for, since a session this wtm opened is not the last one's.
+    fn kept_processes(
+        &self,
+        before: UnixMs,
+    ) -> Result<Vec<(Invocation, crate::flow::ProcessIdentity)>, FlowStoreError>;
+
+    /// The launch has dealt with this invocation's process: forget it.
+    fn forget_process(&self, invocation: InvocationId) -> Result<(), FlowStoreError>;
+
+    /// Keep a note on a run. It is not an event, and moves nothing.
+    fn note(
+        &self,
+        note: &crate::flow::NewNote,
+        at: UnixMs,
+    ) -> Result<crate::flow::FlowNote, FlowStoreError>;
+
+    /// A run's notes, oldest first.
+    fn notes(&self, flow: FlowId) -> Result<Vec<crate::flow::FlowNote>, FlowStoreError>;
 }
 
 /// What wtm keeps about a teammate's pull request beyond its review runs: what the forge last
@@ -691,6 +718,10 @@ pub trait EnvStore: Send + Sync {
 
     /// A flow's runs, newest first, at most `limit`.
     fn command_runs(&self, flow: FlowId, limit: usize) -> Result<Vec<CommandRun>, FlowStoreError>;
+
+    /// Every run, of any flow, still recorded as running: at launch, the ones a quit or a crash cut
+    /// off, since a run's process does not outlive the wtm that ran it.
+    fn running_command_runs(&self) -> Result<Vec<CommandRun>, FlowStoreError>;
 
     /// How many minutes in the background before a project's services are stopped, if you opted in.
     fn idle_stop(&self, project: &ProjectId) -> Result<Option<u32>, FlowStoreError>;

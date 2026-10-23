@@ -210,6 +210,8 @@ struct Harness {
     project: String,
     _config: tempfile::TempDir,
     tracker: Arc<FakeTracker>,
+    /// The engine's clock, for a test that puts the Mac to sleep.
+    clock: Arc<FakeClock>,
     /// The fake GitHub, and the bare repository its `origin` is, for a harness that publishes.
     github: Option<Arc<FakeGitHub>>,
     _origin: Option<tempfile::TempDir>,
@@ -349,7 +351,8 @@ impl Harness {
 
         let app = Arc::new(app);
         let host = FakeHost::new(Arc::clone(&app), script);
-        let engine = Self::engine(&app, &host);
+        let clock = Arc::new(FakeClock::new());
+        let engine = Self::engine_with(&app, &host, &clock);
         let h = Self {
             project: ProjectId::from_root(&root).to_string(),
             _fixture: fixture,
@@ -358,6 +361,7 @@ impl Harness {
             host,
             _config: config,
             tracker,
+            clock,
             github: fake_github,
             _origin: origin,
         };
@@ -366,10 +370,14 @@ impl Harness {
     }
 
     fn engine(app: &Arc<App>, host: &Arc<FakeHost>) -> Arc<Engine> {
+        Self::engine_with(app, host, &Arc::new(FakeClock::new()))
+    }
+
+    fn engine_with(app: &Arc<App>, host: &Arc<FakeHost>, clock: &Arc<FakeClock>) -> Arc<Engine> {
         let engine = Engine::new(
             Arc::clone(app),
             Arc::clone(host) as Arc<dyn RoleHost>,
-            Arc::new(FakeClock::new()) as Arc<dyn Clock>,
+            Arc::clone(clock) as Arc<dyn Clock>,
             Arc::new(Heard::default()) as Arc<dyn Notice>,
             Tuning {
                 tick_ms: 5,
@@ -1255,9 +1263,26 @@ fn a_crash_mid_turn_keeps_the_writer_lease_and_resume_carries_on_in_the_same_con
     let first = h.conversation(flow, 1).unwrap();
     h.host.sessions.lock().clear();
     go.store(true, Ordering::SeqCst);
+    // The writer's CLI outlived the crash, as a CLI in its own process group does.
+    let left: Vec<_> = h.host.processes.lock().values().cloned().collect();
+    assert_eq!(
+        left.len(),
+        1,
+        "the writer's process is still running: {left:?}"
+    );
     let relaunched = Harness::engine(&h.app, &h.host);
     let interrupted = relaunched.recover().unwrap();
     assert!(interrupted.contains(&flow), "{interrupted:?}");
+    // Found by what was recorded, and stopped: still that very process.
+    assert_eq!(*h.host.reaped.lock(), left);
+    let notes = relaunched.implement_view(flow).unwrap().notes;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0].kind, wtm_core::flow::NoteKind::Reaped);
+    assert!(
+        notes[0]
+            .text
+            .contains("was still running when wtm started again")
+    );
     let state = relaunched.implement_view(flow).unwrap().flow.state;
     assert_eq!(state.phase, Phase::Implementing);
     assert!(matches!(state.hold, Some(Hold::Interrupted { .. })));
@@ -1629,6 +1654,20 @@ fn a_ready_cut_off_mid_write_is_checked_at_launch_and_never_sent_twice() {
         Some(wtm_core::flow::OperationResult::Ready { adopted: true, .. })
     ));
     assert_eq!(ready.send.operations[1].state, OperationState::Pending);
+    // Said once, and nothing sent by itself.
+    let told: Vec<String> = relaunched
+        .inbox(None)
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.flow == flow && i.kind == InboxKind::Failure)
+        .map(|i| i.title)
+        .collect();
+    assert!(
+        told.iter()
+            .any(|t| t.contains("was not finished when wtm stopped")),
+        "{told:?}"
+    );
+    assert_eq!(h.tracker.status_of(KEY).as_deref(), Some("In Progress"));
     relaunched.retry_own(ready.send.approval.id).unwrap();
     for _ in 0..2_000 {
         if h.tracker.status_of(KEY).as_deref() == Some("In Review") {
@@ -1699,4 +1738,156 @@ fn a_task_branch_someone_else_pushed_to_is_reported_after_the_writers_round_and_
         "nothing was pushed over it"
     );
     assert_eq!(*github.writes.lock(), ["open #40"]);
+}
+
+// ═══════════════════════════════ while nothing moved ═══════════════════════════════
+
+/// A writer that works until told to stop, for the tests that watch a run while it works.
+fn working(flag: &Arc<AtomicBool>) -> Script {
+    let wait = Arc::clone(flag);
+    Box::new(move |role, attempt| match role {
+        "planner" => Behaviour::Tools(vec![("flow_submit", plan(false))], true),
+        "implementer" if attempt == 1 => Behaviour::Acts(vec![
+            Act::Write("src/export.rs", "pub fn export() {}\n"),
+            Act::WaitFor(Arc::clone(&wait)),
+            Act::Handoff("Added the exporter"),
+        ]),
+        "implementer" => fixing(),
+        _ => Behaviour::Submit(vec![no_findings()]),
+    })
+}
+
+fn until_working(h: &Harness, flow: FlowId) {
+    for _ in 0..4_000 {
+        let view = h.view(flow);
+        if view.running && view.sessions.iter().any(|s| s.session.is_some()) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("the writer never started");
+}
+
+#[test]
+fn a_process_whose_pid_now_belongs_to_something_else_is_left_alone_and_forgotten() {
+    let go = Arc::new(AtomicBool::new(false));
+    let h = Harness::new(working(&go));
+    let flow = h.planned();
+    h.approve_plan(flow);
+    until_working(&h, flow);
+
+    // The crash, and by the next launch the pid is someone else's: same number, another start.
+    h.host.sessions.lock().clear();
+    go.store(true, Ordering::SeqCst);
+    for process in h.host.processes.lock().values_mut() {
+        process.started = "Sat Oct 24 09:00:00 2026".to_owned();
+    }
+    let relaunched = Harness::engine(&h.app, &h.host);
+    relaunched.recover().unwrap();
+    assert!(
+        h.host.reaped.lock().is_empty(),
+        "nothing that is not ours is stopped"
+    );
+    assert_eq!(h.host.processes.lock().len(), 1, "and it is still running");
+    assert!(relaunched.implement_view(flow).unwrap().notes.is_empty());
+    // Dealt with once: the next launch looks for nothing.
+    let again = Harness::engine(&h.app, &h.host);
+    again.recover().unwrap();
+    assert!(h.host.reaped.lock().is_empty());
+}
+
+#[test]
+fn the_mac_asleep_is_a_note_on_each_working_run_that_never_counts_as_progress() {
+    let go = Arc::new(AtomicBool::new(false));
+    let h = Harness::new(working(&go));
+    let flow = h.planned();
+    h.approve_plan(flow);
+    until_working(&h, flow);
+    let before = h.view(flow).flow.updated_at;
+
+    let look = (h.clock.now_unix_ms(), h.clock.monotonic_ms());
+    // A look a few seconds later finds nothing to say.
+    h.clock.advance_ms(5_000);
+    let look = h.engine.watch_tick(look);
+    assert!(h.view(flow).notes.is_empty());
+    // Forty minutes with the lid shut.
+    h.clock.advance_ms(2_000);
+    h.clock.sleep_ms(40 * 60_000);
+    h.engine.watch_tick(look);
+    let notes = h.view(flow).notes;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0].kind, wtm_core::flow::NoteKind::Asleep);
+    let (from, to) = (notes[0].from.unwrap(), notes[0].to.unwrap());
+    assert_eq!(
+        to - from,
+        40 * 60_000,
+        "asleep from the last look's end to this one"
+    );
+    assert_eq!(
+        h.view(flow).flow.updated_at,
+        before,
+        "sleeping is not working"
+    );
+    go.store(true, Ordering::SeqCst);
+}
+
+/// Counts what it holds, and when each hold is let go.
+#[derive(Default)]
+struct CountingAwake {
+    held: Arc<std::sync::atomic::AtomicUsize>,
+    released: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct Holding(Arc<std::sync::atomic::AtomicUsize>);
+
+impl wtm_app_lib::flow::awake::Held for Holding {}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl wtm_app_lib::flow::awake::KeepAwake for CountingAwake {
+    fn hold(&self) -> Result<Box<dyn wtm_app_lib::flow::awake::Held>, String> {
+        self.held.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(Holding(Arc::clone(&self.released))))
+    }
+}
+
+#[test]
+fn the_mac_is_held_awake_only_when_turned_on_and_only_while_a_run_works() {
+    let go = Arc::new(AtomicBool::new(false));
+    let h = Harness::new(working(&go));
+    let power = Arc::new(CountingAwake::default());
+    h.engine.set_keep_awake(Arc::clone(&power) as _);
+    let flow = h.planned();
+    h.approve_plan(flow);
+    until_working(&h, flow);
+    let look = (h.clock.now_unix_ms(), h.clock.monotonic_ms());
+
+    // Off by default, even while a run works.
+    let look = h.engine.watch_tick(look);
+    assert!(!h.engine.holding_awake());
+    assert_eq!(power.held.load(Ordering::SeqCst), 0);
+
+    h.app
+        .config
+        .set_user_pref(wtm_app_lib::flow::awake::KEEP_AWAKE_PREF, "on")
+        .unwrap();
+    let look = h.engine.watch_tick(look);
+    assert!(h.engine.holding_awake());
+    let look = h.engine.watch_tick(look);
+    assert_eq!(
+        power.held.load(Ordering::SeqCst),
+        1,
+        "held once, not once a look"
+    );
+
+    // The run hands over and nothing works: let go.
+    go.store(true, Ordering::SeqCst);
+    h.ready(flow);
+    h.engine.watch_tick(look);
+    assert!(!h.engine.holding_awake());
+    assert_eq!(power.released.load(Ordering::SeqCst), 1);
 }

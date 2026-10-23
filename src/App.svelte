@@ -62,6 +62,7 @@
   import { plan } from './lib/state/plan.svelte';
   import { design } from './lib/state/design.svelte';
   import { implement } from './lib/state/implement.svelte';
+  import { keepAwake } from './lib/state/keep-awake.svelte';
   import { work } from './lib/state/work.svelte';
   import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
@@ -292,6 +293,7 @@
       await sessionAwareness.init();
       await browsers.init();
       await browserTools.init();
+      await keepAwake.init();
       // Before `sessions.init`, which reads it once to decide whether to restore the last run.
       await restoreSessions.init();
       // Before `booted`, so a remembered Work view that has since been turned off is left before

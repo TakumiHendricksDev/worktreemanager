@@ -365,6 +365,21 @@ impl EnvStore for AppDb {
         .collect()
     }
 
+    fn running_command_runs(&self) -> Result<Vec<CommandRun>, FlowStoreError> {
+        let conn = self.conn.lock();
+        query(
+            &conn,
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM env_command_runs WHERE state = 'running' ORDER BY id"
+            ),
+            [],
+            RunRow::read,
+        )?
+        .into_iter()
+        .map(RunRow::into_run)
+        .collect()
+    }
+
     fn idle_stop(&self, project: &ProjectId) -> Result<Option<u32>, FlowStoreError> {
         self.conn
             .lock()

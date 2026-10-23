@@ -54,6 +54,7 @@
 //! a handful of long waits, not thousands of short ones. Waits are polled against the [`Clock`]
 //! port, so a test drives every timeout, retry and reset by moving a fake clock.
 
+pub mod awake;
 pub mod brief;
 pub mod capacity;
 pub mod checks;
@@ -455,6 +456,8 @@ pub struct Engine {
     limit_fault: Option<capacity::LimitFault>,
     /// What the last recheck of a waiting role's provider said, by step, until it stops waiting.
     rechecks: Mutex<BTreeMap<StepId, String>>,
+    /// What keeps the Mac awake while runs work, when you turned that on (`awake.rs`).
+    awake: awake::AwakeState,
 }
 
 impl std::fmt::Debug for Engine {
@@ -500,6 +503,7 @@ impl Engine {
             seats: capacity::Seats::default(),
             limit_fault: capacity::LimitFault::from_env(),
             rechecks: Mutex::new(BTreeMap::new()),
+            awake: Mutex::new(awake::Awake::default()),
         })
     }
 
@@ -1634,6 +1638,7 @@ impl Engine {
             },
             self.now(),
         );
+        self.keep_process(invocation, &session);
         self.notice.changed(ctx.flow);
 
         let end = self.read_session(ctx, run, step, spec, &session, invocation, rx);
@@ -2271,6 +2276,7 @@ impl Engine {
             }
             if self.is_designer_running(flow) {
                 self.interrupt_designer(flow, InterruptCause::Quit);
+                continue;
             } else if self.is_planning(flow) {
                 self.interrupt_planner(flow, InterruptCause::Quit);
                 continue;
@@ -2300,6 +2306,12 @@ impl Engine {
             return Ok(Vec::new());
         }
         let db = self.db()?;
+        // First, before any run is picked up or interrupted: a session the last wtm left running
+        // may still be editing a worktree (`awake.rs`).
+        let reaped = self.reap_orphans(self.now());
+        if reaped > 0 {
+            tracing::info!(reaped, "stopped run sessions the last wtm left running");
+        }
         let mut interrupted = Vec::new();
         let mut waits = Vec::new();
         for review in db.open_reviews().map_err(text)? {
@@ -2317,13 +2329,22 @@ impl Engine {
             // A quit already said so of a flow held `Interrupted`, and a consolidated one was not
             // running. A capacity wait with a role cut off mid-turn beside it was left by a crash,
             // like a flow caught mid-phase with no hold at all.
+            // So was one held for its environment: the thread that waited for the services went
+            // with the process, and nothing would ever release it.
             let gone = matches!(
                 (&state.hold, state.phase),
-                (Some(Hold::WaitingCapacity { .. }), _)
-                    | (
-                        None,
-                        Phase::Resolving | Phase::Preparing | Phase::Reviewing | Phase::Fixing
-                    )
+                (
+                    Some(
+                        Hold::WaitingCapacity { .. }
+                            | Hold::Blocked {
+                                cause: wtm_core::flow::BlockCause::Env
+                            }
+                    ),
+                    _
+                ) | (
+                    None,
+                    Phase::Resolving | Phase::Preparing | Phase::Reviewing | Phase::Fixing
+                )
             );
             if gone {
                 self.interrupt(review.flow, InterruptCause::Crash);
@@ -2367,6 +2388,8 @@ impl Engine {
             Ok(held) => interrupted.extend(held),
             Err(error) => tracing::warn!(%error, "could not check implementations at launch"),
         }
+        // A publish or a merge a quit left with writes never sent: said, never sent by itself.
+        self.recover_waiting_own();
         Ok(interrupted)
     }
 

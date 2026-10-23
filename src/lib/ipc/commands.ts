@@ -328,6 +328,8 @@ export const commands = {
   issuePullRequest: (flow: number) => invoke<OwnPrView>('issue_pull_request', { flow }),
   /** Read the issue's pull request again: on demand, or on the window's focus. */
   syncPullRequest: (flow: number) => invoke<OwnPrView>('sync_pull_request', { flow }),
+  /** Push the hand-over and make or update its draft now, as the hand-over does by itself. */
+  draftPullRequest: (flow: number) => invoke<void>('draft_pull_request', { flow }),
   /** Send a draft, a Ready + Needs Review, or a merge again, reading first. */
   retryPullRequestWrite: (approval: number) =>
     invoke<void>('retry_pull_request_write', { approval }),

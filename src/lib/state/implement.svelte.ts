@@ -235,6 +235,10 @@ class ImplementState {
     return this.act(project, key, () => commands.approveMerge(flow, head, method));
   }
 
+  draftNow(project: string, key: string, flow: number) {
+    return this.act(project, key, () => commands.draftPullRequest(flow));
+  }
+
   retryWrite(project: string, key: string, approval: number) {
     return this.act(project, key, () => commands.retryPullRequestWrite(approval));
   }

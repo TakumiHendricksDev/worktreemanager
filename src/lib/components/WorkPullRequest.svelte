@@ -64,6 +64,14 @@
   const merge = $derived(newest('merge'));
   const shown = $derived([draft, ready, merge].filter((s) => s !== null));
   const open = $derived(pull?.feedback.filter((f) => f.revisedIn === null) ?? []);
+  // Whether the newest draft shows the worktree as handed over: pushed, and at its HEAD. Not when
+  // the automatic draft did not go, or you committed by hand since.
+  const drafted = $derived(
+    draft !== null &&
+      draft.state === 'published' &&
+      draft.request.kind === 'draft' &&
+      draft.request.request.commit === implement.handoffs[issueKey]?.headSha,
+  );
 
   let readySheet = $state<ReadySheet | null>(null);
   let mergeSheet = $state<MergeSheet | null>(null);
@@ -220,6 +228,15 @@
             title="Send the feedback to the implementer, in its same conversation"
             onclick={() => void implement.reviseFromFeedback(projectId, issueKey, flowId)}
             >Start a revision from the feedback</Button
+          >
+        {/if}
+        {#if pull.canDraft && !drafted}
+          <Button
+            size="sm"
+            disabled={busy}
+            title="Push the task branch and make or update its draft, as the hand-over does"
+            onclick={() => void implement.draftNow(projectId, issueKey, flowId)}
+            >Push and draft now</Button
           >
         {/if}
         {#if pull.canPublish}

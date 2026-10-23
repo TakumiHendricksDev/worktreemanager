@@ -105,6 +105,9 @@ pub struct OwnPrView {
     /// Drafts, Ready + Needs Review, merges, oldest first.
     pub sends: Vec<OwnSendView>,
     pub feedback: Vec<PrFeedback>,
+    /// Whether Push and draft now would push the hand-over: when the automatic draft did not go, a
+    /// quit cut it off, or you committed by hand since.
+    pub can_draft: bool,
     pub can_publish: bool,
     pub can_merge: bool,
     pub can_sync: bool,
@@ -514,6 +517,26 @@ impl Engine {
             short(&handoff.head_sha)
         );
         Ok(out)
+    }
+
+    /// Push the hand-over and make or update its draft now, as the hand-over does by itself.
+    ///
+    /// # Errors
+    ///
+    /// Why nothing was drafted: no forge or remote, an integration branch, a remote branch someone
+    /// else pushed to, or a run not handed over.
+    pub fn draft_now(self: &Arc<Self>, flow: FlowId) -> Result<(), String> {
+        let state = self.state(flow)?;
+        if state.phase != Phase::ReadyToTest || state.end.is_some() || state.hold.is_some() {
+            return Err(format!(
+                "a draft follows the hand-over; this run is at {:?}",
+                state.phase
+            ));
+        }
+        if self.publishing_now(flow) {
+            return Err("its pull request is being written to right now".to_owned());
+        }
+        self.draft(flow).map(|_| ())
     }
 
     // ═══════════════════════════════ the executor ═══════════════════════════════
@@ -1438,6 +1461,42 @@ impl Engine {
         true
     }
 
+    /// At launch: a Ready + Needs Review or a merge that a quit left with writes never sent says so,
+    /// once, and waits for Retry. Nothing is sent: a launch never sends what you approved before.
+    pub(super) fn recover_waiting_own(&self) {
+        let Ok(db) = self.db() else { return };
+        for implementation in db.implementations().unwrap_or_default() {
+            let flow = implementation.flow;
+            if self.state(flow).is_ok_and(|s| s.end.is_some()) {
+                continue;
+            }
+            let Some(send) = db
+                .own_sends(flow)
+                .unwrap_or_default()
+                .into_iter()
+                .rev()
+                .find(|s| !matches!(s.request, OwnRequest::Draft(_)))
+            else {
+                continue;
+            };
+            if send.state(None) != wtm_core::flow::PublicationState::Waiting {
+                continue;
+            }
+            let (_, what) = Self::what(&send);
+            self.file(&NewInboxItem {
+                flow,
+                kind: InboxKind::Failure,
+                target: InboxTarget::Approval {
+                    approval: send.approval.id,
+                },
+                title: format!("{what} was not finished when wtm stopped"),
+                body: "Part of it was never sent. Retry reads first and sends only what is \
+                       missing."
+                    .to_owned(),
+            });
+        }
+    }
+
     /// Retry one of the issue's own writes that failed or stopped. A head that moved needs the
     /// sheet again, not a retry.
     ///
@@ -1905,6 +1964,7 @@ impl Engine {
                 }),
             url: number.map(|(_, url)| url),
             reading,
+            can_draft: open && !busy && target.is_ok() && state.phase == Phase::ReadyToTest,
             can_publish: open
                 && !busy
                 && self.own_number(flow).is_some()

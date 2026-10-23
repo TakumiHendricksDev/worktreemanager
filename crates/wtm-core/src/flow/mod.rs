@@ -74,6 +74,7 @@ macro_rules! id {
 }
 
 pub mod approval;
+pub mod awake;
 pub mod capacity;
 pub mod comment;
 pub mod consolidate;
@@ -114,6 +115,7 @@ pub use approval::{
     Approval, ApprovalError, ApprovalId, ApprovalIntent, ApprovalSubject, Binding, NewApproval,
     PinChange, Pinned, Stale, review_binding,
 };
+pub use awake::{FlowNote, NewNote, NoteKind, WATCH_MS, asleep, keep_awake};
 pub use capacity::{
     AfterRecheck, CapacityChoice, CreditProblem, FileStat, Handover, HandoverAnswer,
     HandoverFinding, HandoverSnapshot, Ledger, LimitReading, MAX_FALLBACKS, NewProviderSwitch,

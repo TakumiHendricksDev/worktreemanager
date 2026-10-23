@@ -28,6 +28,7 @@
     emptyRoundWords,
     implementRunWords,
     latestChecks,
+    noteWords,
     roundWords,
     shortSha,
   } from '../implement';
@@ -138,6 +139,13 @@
     {:else}
       {#if progress && view.running}
         <p class="c-implement__progress"><CodeText text={progress} /></p>
+      {/if}
+      {#if view.notes.length > 0}
+        <ul class="o-plain-list c-implement__notes" aria-label="While nothing moved">
+          {#each view.notes as note (note.id)}
+            <li data-kind={note.kind}><CodeText text={noteWords(note)} /></li>
+          {/each}
+        </ul>
       {/if}
 
       <!-- Published, the pull request is what moves; before that, the hand-over is. -->

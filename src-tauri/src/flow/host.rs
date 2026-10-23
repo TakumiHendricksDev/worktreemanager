@@ -96,6 +96,20 @@ pub trait RoleHost: Send + Sync {
         Err(format!("{session} cannot be interrupted by this host"))
     }
 
+    /// The process behind `session`, by pid and start time, so a launch after a crash can find it
+    /// and stop it. A host that runs no processes has none.
+    fn process(&self, session: &SessionId) -> Option<wtm_core::flow::ProcessIdentity> {
+        let _ = session;
+        None
+    }
+
+    /// Stop a process a previous wtm left running, if it is still that process: same pid and the
+    /// same start time. `false` when it was not, or is gone.
+    fn reap(&self, process: &wtm_core::flow::ProcessIdentity) -> bool {
+        let _ = process;
+        false
+    }
+
     /// What `provider`'s own figures say now about running `model`, asked fresh: after the Mac
     /// slept through a wait at a limit, or when a wait is picked up at launch. A host that cannot
     /// ask says it does not know, which is never read as room.
@@ -226,6 +240,15 @@ impl RoleHost for TauriHost {
             .map_err(|e| e.to_string())
     }
 
+    fn process(&self, session: &SessionId) -> Option<wtm_core::flow::ProcessIdentity> {
+        let app = self.app().ok()?;
+        process_of(&app, session)
+    }
+
+    fn reap(&self, process: &wtm_core::flow::ProcessIdentity) -> bool {
+        self.app().is_ok_and(|app| reap_on(&app, process))
+    }
+
     fn limits(&self, provider: RoleProvider, model: Option<&str>) -> LimitReading {
         match self.app() {
             Ok(app) => reading(&app, Some(&self.handle), provider, model),
@@ -312,6 +335,14 @@ impl RoleHost for HeadlessHost {
         checked(&self.app, providers)
     }
 
+    fn process(&self, session: &SessionId) -> Option<wtm_core::flow::ProcessIdentity> {
+        process_of(&self.app, session)
+    }
+
+    fn reap(&self, process: &wtm_core::flow::ProcessIdentity) -> bool {
+        reap_on(&self.app, process)
+    }
+
     fn open(&self, spec: &RoleSession, sink: Arc<dyn AgentSink>) -> Result<SessionId, String> {
         crate::flow_session::open_headless(&self.app, spec, &sink, &self.endpoint)
             .map(|opened| opened.session)
@@ -368,4 +399,21 @@ impl AgentSink for Tee {
         self.first.on_ready(session);
         self.second.on_ready(session);
     }
+}
+
+/// The process behind an agent session of `app`'s, by pid and start time.
+fn process_of(app: &App, session: &SessionId) -> Option<wtm_core::flow::ProcessIdentity> {
+    use wtm_core::ports::ServiceHost as _;
+    let pid = app.pipe.pid_of(session)?;
+    app.launcher.identify(pid)
+}
+
+/// Stop `process`'s group if it is still that process, through the same check a service's stop
+/// makes: a pid that now belongs to something else is never signalled.
+fn reap_on(app: &App, process: &wtm_core::flow::ProcessIdentity) -> bool {
+    use wtm_core::ports::ServiceHost as _;
+    matches!(
+        app.launcher.terminate(process),
+        wtm_core::ports::Termination::Ended
+    )
 }

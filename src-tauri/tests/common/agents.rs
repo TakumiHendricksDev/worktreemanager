@@ -166,6 +166,11 @@ pub(crate) struct FakeHost {
     pub(crate) limits_asked: AtomicUsize,
     /// The model a session says it runs when it starts, by provider: what a CLI's `init` reports.
     pub(crate) ready_models: Mutex<BTreeMap<String, String>>,
+    /// The processes this machine has running, as `ps` would identify them: each session's, by its
+    /// id, from when it opened until a test or a reap ends it. A crash leaves them here.
+    pub(crate) processes: Mutex<BTreeMap<String, wtm_core::flow::ProcessIdentity>>,
+    /// The processes a launch stopped.
+    pub(crate) reaped: Mutex<Vec<wtm_core::flow::ProcessIdentity>>,
 }
 
 impl FakeHost {
@@ -191,6 +196,8 @@ impl FakeHost {
             readings: Mutex::new(std::collections::VecDeque::new()),
             limits_asked: AtomicUsize::new(0),
             ready_models: Mutex::new(BTreeMap::new()),
+            processes: Mutex::new(BTreeMap::new()),
+            reaped: Mutex::new(Vec::new()),
         })
     }
 
@@ -604,6 +611,40 @@ impl RoleHost for FakeHost {
     fn close(&self, session: &SessionId) {
         if self.sessions.lock().remove(session.as_str()).is_some() {
             self.open_now.fetch_sub(1, Ordering::SeqCst);
+        }
+        // A closed session's process exits with it.
+        self.processes.lock().remove(session.as_str());
+    }
+
+    /// Each session a process of its own, numbered as pids are, started at its open.
+    fn process(&self, session: &SessionId) -> Option<wtm_core::flow::ProcessIdentity> {
+        let mut processes = self.processes.lock();
+        let next = 4_000 + u32::try_from(processes.len()).unwrap();
+        Some(
+            processes
+                .entry(session.as_str().to_owned())
+                .or_insert_with(|| wtm_core::flow::ProcessIdentity {
+                    pid: next,
+                    started: format!("Fri Oct 23 12:00:{:02} 2026", next % 60),
+                })
+                .clone(),
+        )
+    }
+
+    /// Stopped only if it is still running as that very process.
+    fn reap(&self, process: &wtm_core::flow::ProcessIdentity) -> bool {
+        let mut processes = self.processes.lock();
+        let found = processes
+            .iter()
+            .find(|(_, p)| *p == process)
+            .map(|(id, _)| id.clone());
+        match found {
+            Some(id) => {
+                processes.remove(&id);
+                self.reaped.lock().push(process.clone());
+                true
+            }
+            None => false,
         }
     }
 

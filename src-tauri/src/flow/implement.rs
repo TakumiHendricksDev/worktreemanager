@@ -213,6 +213,9 @@ pub struct ImplementView {
     pub can_start: bool,
     /// Whether Resume would carry it on now.
     pub can_resume: bool,
+    /// What happened to the run while nothing in it moved: the Mac asleep, a session stopped at
+    /// launch. Never progress.
+    pub notes: Vec<wtm_core::flow::FlowNote>,
 }
 
 /// The first line of `text`, trimmed, at most 72 characters: a commit's subject.
@@ -427,6 +430,7 @@ impl Engine {
             running,
             can_start,
             can_resume,
+            notes: db.notes(flow).map_err(text)?,
         })
     }
 
@@ -1664,6 +1668,7 @@ impl Engine {
                     },
                     self.now(),
                 );
+                self.keep_process(invocation.id, &session);
                 self.notice.changed(ctx.flow);
                 let end =
                     self.read_implementer(ctx, run, step, &session, invocation.id, words, &rx);

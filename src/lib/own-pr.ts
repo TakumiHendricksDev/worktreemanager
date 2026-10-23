@@ -68,11 +68,15 @@ export function sendTitle(send: OwnSendView): string {
   }
 }
 
-/** Whether Retry may send it again: failed, or stopped for something other than a moved head. */
+/**
+ * Whether Retry may send it again: failed, left waiting by a quit, or stopped for something other
+ * than a moved head.
+ */
 export function retryable(send: OwnSendView): boolean {
   const stuck = send.operations.find((op) => op.state !== 'done');
   if (!stuck) return false;
-  if (stuck.state === 'failed') return true;
+  // Failed, or left waiting by a quit before it was sent: Retry reads first either way.
+  if (stuck.state === 'failed' || send.state === 'waiting') return true;
   return stuck.state === 'needs_attention' && stuck.attention?.kind !== 'head_moved';
 }
 

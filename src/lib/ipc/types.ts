@@ -2974,6 +2974,19 @@ export interface ImplementView {
   running: boolean;
   canStart: boolean;
   canResume: boolean;
+  /** What happened to the run while nothing in it moved. Never progress. */
+  notes: FlowNote[];
+}
+
+/** Something that happened to a run while nothing in it moved. `wtm_core::flow::FlowNote`. */
+export interface FlowNote {
+  id: number;
+  flow: number;
+  kind: 'asleep' | 'reaped';
+  from: number | null;
+  to: number | null;
+  text: string;
+  at: number;
 }
 
 /** Everything the issue's Plan tab shows: `issue_plan`. */
@@ -3070,6 +3083,8 @@ export interface OwnPrView {
   reading: MirroredPr | null;
   sends: OwnSendView[];
   feedback: PrFeedback[];
+  /** Whether Push and draft now would push the hand-over. */
+  canDraft: boolean;
   canPublish: boolean;
   canMerge: boolean;
   canSync: boolean;

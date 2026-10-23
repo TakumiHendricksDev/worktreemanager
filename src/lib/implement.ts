@@ -17,6 +17,7 @@ import type {
   CheckStatus,
   ImplementRound,
   ImplementStop,
+  FlowNote,
   ImplementView,
   LeftBecause,
 } from './ipc/types';
@@ -177,4 +178,14 @@ export function stopWords(stop: ImplementStop): string {
 /** The first seven characters of a commit. */
 export function shortSha(sha: string): string {
   return sha.slice(0, 7);
+}
+
+/** A note on a run, in a line: when the Mac was asleep, or what launch stopped. */
+export function noteWords(note: FlowNote): string {
+  if (note.kind === 'asleep' && note.from !== null && note.to !== null) {
+    const at = (ms: number) =>
+      new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `Mac asleep ${at(note.from)}–${at(note.to)}. ${note.text}`;
+  }
+  return note.text;
 }

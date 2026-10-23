@@ -318,6 +318,10 @@ pub fn run() {
                     flow::Tuning::default(),
                 );
                 handle.manage(Arc::clone(&engine));
+                // The clocks watched from here on: sleep noted on the runs it interrupts, and the
+                // Mac held awake while runs work when you turned that on (`flow/awake.rs`).
+                engine.set_keep_awake(Arc::new(flow::awake::Caffeinate));
+                engine.watch();
                 // The environment supervisor beside it: its approvals and inbox items belong to the
                 // engine's flows, and its services are announced to the window.
                 let supervisor = {
@@ -646,6 +650,7 @@ pub fn run() {
             flow::implement_commands::revise_implementation,
             flow::own_pr_commands::issue_pull_request,
             flow::own_pr_commands::sync_pull_request,
+            flow::own_pr_commands::draft_pull_request,
             flow::own_pr_commands::retry_pull_request_write,
             flow::own_pr_commands::ready_sheet,
             flow::own_pr_commands::approve_ready,
