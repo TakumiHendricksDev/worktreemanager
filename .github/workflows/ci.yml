@@ -118,9 +118,32 @@ jobs:
 
       - run: bun x tauri build --bundles app
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # Both halves of `just audit`: cargo-deny for the Rust tree, `bun audit` for the
+  # frontend.
+  #
+  # This job used to run only cargo-deny, while CONTRIBUTING said CI ran `just
+  # audit`. Six Vite advisories, one of them high, sat in bun.lock with this check
+  # green; only a local `just audit` showed them. Like cargo-deny, `bun audit` reads
+  # advisories published after the code was written, so it can turn a PR red that
+  # changed nothing. That is the point of running it on every PR.
+  #
+  # One job rather than two because `licenses + advisories` is a required check in
+  # the `main` ruleset, and a second job would mean editing that ruleset too.
+  # ───────────────────────────────────────────────────────────────────────────
   supply-chain:
     name: licenses + advisories
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+      # `!cancelled()` so a Rust advisory does not hide a frontend one. The two
+      # halves are independent, and a red cargo-deny would otherwise skip these
+      # steps and leave the frontend's state unknown until the Rust fix landed.
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ !cancelled() }}
+      # No `bun install`: `bun audit` reads bun.lock and asks the registry, so
+      # installing would download every package only to leave it unread.
+      - run: bun audit
+        if: ${{ !cancelled() }}
