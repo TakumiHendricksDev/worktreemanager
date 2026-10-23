@@ -13,7 +13,7 @@
 import { listen } from '@tauri-apps/api/event';
 
 import { commands } from '../ipc/commands';
-import { errorMessage, type ImplementView } from '../ipc/types';
+import { errorMessage, type HandoffView, type ImplementView } from '../ipc/types';
 
 class ImplementState {
   /** The project the views below belong to. */
@@ -24,6 +24,8 @@ class ImplementState {
   busy = $state<Record<string, boolean>>({});
   /** The last action's refusal, by key. */
   errors = $state<Record<string, string>>({});
+  /** Hand-overs on screen, by key, as last read. */
+  handoffs = $state<Record<string, HandoffView>>({});
 
   async init(): Promise<() => void> {
     return listen<{ flow: number }>('flow:changed', (event) => {
@@ -35,8 +37,10 @@ class ImplementState {
           view === null ||
           view.flow.id === changed ||
           view.implementation?.reviewFlow === changed
-        )
+        ) {
           void this.load(project, key);
+          if (view && this.handoffs[key]) void this.loadHandoff(key, view.flow.id);
+        }
       }
     });
   }
@@ -45,6 +49,7 @@ class ImplementState {
     if (this.projectId === project) return;
     this.projectId = project;
     this.views = {};
+    this.handoffs = {};
   }
 
   /** Read `key`'s implementation. */
@@ -57,6 +62,28 @@ class ImplementState {
     } catch (error) {
       if (this.projectId === project) this.fail(key, error);
     }
+  }
+
+  /**
+   * Read `key`'s hand-over: its diff and evidence, read from the worktree, so only while the panel
+   * is on screen and when its run changes.
+   */
+  async loadHandoff(key: string, flow: number): Promise<void> {
+    const project = this.projectId;
+    try {
+      const view = await commands.implementationHandoff(flow);
+      if (this.projectId !== project) return;
+      this.handoffs = { ...this.handoffs, [key]: view };
+    } catch (error) {
+      if (this.projectId === project) this.fail(key, error);
+    }
+  }
+
+  /** Stop reading `key`'s hand-over, as its panel leaves the screen. */
+  forgetHandoff(key: string): void {
+    this.handoffs = Object.fromEntries(
+      Object.entries(this.handoffs).filter(([k]) => k !== key),
+    );
   }
 
   private fail(key: string, error: unknown): void {
@@ -98,6 +125,10 @@ class ImplementState {
 
   resume(project: string, key: string, flow: number) {
     return this.act(project, key, () => commands.resumeImplementing(flow));
+  }
+
+  revise(project: string, key: string, flow: number, note: string) {
+    return this.act(project, key, () => commands.reviseImplementation(flow, note));
   }
 }
 

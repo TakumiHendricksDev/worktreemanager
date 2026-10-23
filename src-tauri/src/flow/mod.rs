@@ -64,6 +64,7 @@ pub mod designer;
 pub mod env;
 pub mod findings;
 pub mod fix;
+pub mod handoff;
 pub mod host;
 pub mod implement;
 pub mod implement_commands;

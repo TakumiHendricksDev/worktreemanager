@@ -150,11 +150,11 @@ pub use forge::{
     default_host, host_for, remote_for,
 };
 pub use implement::{
-    AttemptedFinding, CHANGE_THE_PLAN, CheckpointBy, FailingCheck, FixBounds, ImplementAsk,
-    ImplementChange, ImplementCheckpoint, ImplementOutcome, ImplementQuestion, ImplementScope,
-    Implementation, LeftBecause, LoopFacts, NewImplementation, NewRound, NextRound, Remaining,
-    Round, RoundKind, StopReason, affected_checks, attempts_at, named_files, next_round,
-    scope_options, widened,
+    AttemptedFinding, CHANGE_THE_PLAN, CheckpointBy, Coverage, FailingCheck, FixBounds,
+    ImplementAsk, ImplementChange, ImplementCheckpoint, ImplementOutcome, ImplementQuestion,
+    ImplementScope, Implementation, LeftBecause, LoopFacts, NewImplementation, NewRound, NextRound,
+    Remaining, Round, RoundKind, StopReason, affected_checks, attempts_at, coverage, named_files,
+    next_round, scope_options, widened,
 };
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxState, InboxTarget, NewInboxItem, review_ready,
@@ -238,7 +238,8 @@ pub use state::{
     Status, TransitionError,
 };
 pub use submission::{
-    FindingsReport, Handoff, PlanReport, ReportedClass, ReportedFinding, RuleCitation, Submission,
+    CriterionClaim, FindingsReport, Handoff, PlanReport, ReportedClass, ReportedFinding,
+    RuleCitation, Submission,
 };
 pub use tracker::{
     DEFAULT_QUEUE_LIMIT, Issue, IssueDetail, IssueField, IssueLink, IssueParent, IssueQuery,

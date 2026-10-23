@@ -33,7 +33,7 @@ use crate::flow::{
     CheckRun, FindingId, FindingRecord, NewCheckRun, NewScreenshot, Reconciled, Screenshot,
 };
 use crate::flow::{
-    CheckpointBy, ImplementChange, ImplementCheckpoint, ImplementQuestion, Implementation,
+    CheckpointBy, Handoff, ImplementChange, ImplementCheckpoint, ImplementQuestion, Implementation,
     NewImplementation, NewRound, Round,
 };
 use crate::flow::{
@@ -900,13 +900,15 @@ pub trait ImplementStore: Send + Sync {
     /// Record the run's next round: 1 for the first.
     fn start_round(&self, round: &NewRound, at: UnixMs) -> Result<Round, FlowStoreError>;
 
-    /// End round `round`, with where it left the worktree and what it changed. Once.
+    /// End round `round`, with where it left the worktree, what it changed and what the writer
+    /// handed in. Once.
     fn end_round(
         &self,
         flow: FlowId,
         round: u32,
         head_sha: Option<&str>,
         changed: &[String],
+        handoff: Option<&Handoff>,
         at: UnixMs,
     ) -> Result<Round, FlowStoreError>;
 

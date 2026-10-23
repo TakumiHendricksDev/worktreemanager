@@ -121,6 +121,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "implementations",
         sql: include_str!("../migrations/0016_implementations.sql"),
     },
+    Migration {
+        version: 17,
+        name: "revisions",
+        sql: include_str!("../migrations/0017_revisions.sql"),
+    },
 ];
 
 /// Bring the database at `path`, open as `conn`, up to the last of `migrations`.

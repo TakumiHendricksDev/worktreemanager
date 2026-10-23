@@ -123,6 +123,7 @@ fn rounds_are_numbered_by_the_store_and_a_fix_rounds_task_is_kept_as_it_was_set(
                 plan_revision: 1,
                 findings: Vec::new(),
                 checks: Vec::new(),
+                note: None,
             },
             2_100,
         )
@@ -135,6 +136,7 @@ fn rounds_are_numbered_by_the_store_and_a_fix_rounds_task_is_kept_as_it_was_set(
                 plan_revision: 1,
                 findings: vec![attempted(7)],
                 checks: vec!["unit".to_owned()],
+                note: None,
             },
             2_200,
         )
@@ -146,6 +148,7 @@ fn rounds_are_numbered_by_the_store_and_a_fix_rounds_task_is_kept_as_it_was_set(
             2,
             Some("d4e5f6"),
             &["src/export/csv.rs".to_owned()],
+            None,
             2_300,
         )
         .unwrap();
@@ -373,4 +376,72 @@ fn checkpoints_and_question_links_are_kept_as_written() {
         .is_err(),
         "a question that does not exist is not linked"
     );
+}
+
+#[test]
+fn a_revision_keeps_your_note_as_it_was_asked_and_every_round_keeps_its_hand_in() {
+    let s = Store::implementing();
+    let note = "An empty building should still export its header row";
+    let revision =
+        s.db.start_round(
+            &NewRound {
+                flow: s.flow,
+                kind: RoundKind::Revise,
+                plan_revision: 1,
+                findings: Vec::new(),
+                checks: Vec::new(),
+                note: Some(note.to_owned()),
+            },
+            2_100,
+        )
+        .unwrap();
+    assert_eq!(revision.note.as_deref(), Some(note));
+    let handoff = wtm_core::flow::Handoff {
+        summary: "Exported the header for an empty building".to_owned(),
+        changed: Vec::new(),
+        checks: Vec::new(),
+        open_questions: Vec::new(),
+        acceptance: vec![wtm_core::flow::CriterionClaim {
+            criterion: 2,
+            met: true,
+            evidence: "tests/test_export.py::test_empty".to_owned(),
+        }],
+    };
+    let ended =
+        s.db.end_round(
+            s.flow,
+            revision.round,
+            Some("a1b2c3"),
+            &[],
+            Some(&handoff),
+            2_200,
+        )
+        .unwrap();
+    assert_eq!(ended.handoff, Some(handoff));
+
+    let raw = s.raw();
+    assert!(
+        raw.execute("UPDATE implement_rounds SET note = 'something else'", [])
+            .is_err(),
+        "a revision's note was rewritten"
+    );
+    // A revision always says what it is for, and only a revision has a note.
+    for (kind, note) in [
+        ("revise", "NULL"),
+        ("revise", "'  '"),
+        ("implement", "'a note'"),
+    ] {
+        assert!(
+            raw.execute(
+                &format!(
+                    "INSERT INTO implement_rounds (flow_id, round, kind, plan_revision, note, \
+                     started_at) VALUES ({}, 9, '{kind}', 1, {note}, 3000)",
+                    s.flow.0
+                ),
+                [],
+            )
+            .is_err(),
+            "a {kind} round with note {note} was kept"
+        );
+    }
 }

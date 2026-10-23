@@ -52,19 +52,6 @@
   letter-spacing: 0.06em;
 }
 
-/* What the loop handed over with. Never only a colour: the heading says it. */
-.c-implement__handover {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  padding: var(--sp-3);
-  border: 1px solid var(--ok-line);
-  border-radius: var(--r-md);
-  background: var(--ok-soft);
-  font-size: var(--step--1);
-  line-height: 1.5;
-}
-
 .c-implement__left,
 .c-implement__scope,
 .c-implement__commits,

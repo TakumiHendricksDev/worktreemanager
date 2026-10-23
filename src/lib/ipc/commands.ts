@@ -29,6 +29,7 @@ import type {
   DesignComment,
   DesignDecision,
   DesignView,
+  HandoffView,
   ImplementView,
   QuestionThread,
   CommandRunView,
@@ -313,6 +314,12 @@ export const commands = {
     invoke<ImplementView | null>('issue_implementation', { project, key }),
   /** Carry an implementation on after a quit, a crash, a limit or a failure. */
   resumeImplementing: (flow: number) => invoke<void>('resume_implementing', { flow }),
+  /** What an implementation handed over: the diff, the evidence and each criterion. */
+  implementationHandoff: (flow: number) =>
+    invoke<HandoffView>('implementation_handoff', { flow }),
+  /** Send the implementation back to its writer with what testing it showed, in your words. */
+  reviseImplementation: (flow: number, note: string) =>
+    invoke<void>('revise_implementation', { flow, note }),
 
   // ── reviews: pull requests in the Work view ──
   /** The project's Reviews queue, from the local store. Reads no forge. */

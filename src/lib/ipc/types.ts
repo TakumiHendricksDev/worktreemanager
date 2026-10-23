@@ -2821,18 +2821,73 @@ export interface Implementation {
   updatedAt: number;
 }
 
-/** One round of writing: the plan, or a fix. */
+/** A writer's word on one acceptance criterion, by its number in the plan. Its claim, not proof. */
+export interface CriterionClaim {
+  criterion: number;
+  met: boolean;
+  evidence: string;
+}
+
+/** What a writer handed in to end a round. `wtm_core::flow::Handoff`. */
+export interface WriterHandoff {
+  summary: string;
+  changed: string[];
+  checks: string[];
+  openQuestions: string[];
+  acceptance: CriterionClaim[];
+}
+
+/** One round of writing: the plan, a fix, or a revision you asked for. */
 export interface ImplementRound {
   flow: number;
   round: number;
-  kind: 'implement' | 'fix';
+  kind: 'implement' | 'fix' | 'revise';
   planRevision: number;
   findings: { finding: number; title: string; location: unknown }[];
   checks: string[];
   headSha: string | null;
   changed: string[];
+  /** A revision's request, in your words. */
+  note: string | null;
+  handoff: WriterHandoff | null;
   startedAt: number;
   endedAt: number | null;
+}
+
+/** One acceptance criterion as the hand-over shows it: the writer's word, and findings citing it. */
+export interface CriterionCoverage {
+  criterion: number;
+  text: string;
+  claim: CriterionClaim | null;
+  findings: number[];
+}
+
+/** One check's latest run, the end of what it printed, and whether the worktree changed since. */
+export interface CheckEvidence {
+  run: CheckRun;
+  tail: string | null;
+  stale: boolean;
+}
+
+/** Everything the hand-over panel shows: `implementation_handoff`. */
+export interface HandoffView {
+  flow: number;
+  key: string;
+  project: string;
+  /** The worktree's id, for its environment's controls. */
+  worktree: string;
+  branch: string | null;
+  baseSha: string;
+  headSha: string;
+  files: { path: string; added: number | null; removed: number | null }[];
+  patch: string;
+  truncated: boolean;
+  uncommitted: string[];
+  coverage: CriterionCoverage[];
+  checks: CheckEvidence[];
+  /** Set when the worktree is no longer what the checks and the review saw. */
+  since: { paths: string[]; complete: boolean; findings: number[] } | null;
+  canRevise: boolean;
 }
 
 /** A commit the app made for an implementation. */

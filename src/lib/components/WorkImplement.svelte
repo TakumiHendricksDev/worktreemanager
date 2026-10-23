@@ -3,10 +3,10 @@
    * An issue's Implement tab: where the writer is, what it committed, what the checks and the
    * review said, each fix round, and what was left when it handed over.
    *
-   * A status, not the handoff panel: the handoff — acceptance-criteria coverage, the diff, preview
-   * controls — is a later item. What is here is what the run already knows, read from Rust: the
-   * rounds and commits the app made, the checks the app ran, the review's findings, the questions
-   * the run asked, and why the loop stopped.
+   * What is here is what the run already knows, read from Rust: the rounds and commits the app
+   * made, the checks the app ran, the review's findings, the questions the run asked, and why the
+   * loop stopped. Once handed over, the hand-over panel (`WorkHandoff`) leads: the evidence to test
+   * by, the diff, the environment's controls, and Revise.
    *
    * # In the order it happens
    *
@@ -17,8 +17,8 @@
    * 3. **Checks**: each configured check's newest record, as the app ran it. Never shown as a pass
    *    when it did not run.
    * 4. **Questions** about work outside the plan, answered in the Inbox.
-   * 5. **The hand-over**, once ready to test: why the loop stopped and what it left, with why.
-   *    Reading it settles its inbox item, as reading a finished review does.
+   * 5. **The hand-over**, once ready to test, above the rest (`WorkHandoff`). Reading it settles its
+   *    inbox item, as reading a finished review does.
    */
   import { untrack } from 'svelte';
 
@@ -28,25 +28,26 @@
     emptyRoundWords,
     implementRunWords,
     latestChecks,
-    leftWords,
     roundWords,
     shortSha,
-    stopWords,
   } from '../implement';
   import { implement } from '../state/implement.svelte';
   import { inbox } from '../state/inbox.svelte';
   import { work } from '../state/work.svelte';
   import CodeText from './CodeText.svelte';
+  import WorkHandoff from './WorkHandoff.svelte';
   import Button from './ui/Button.svelte';
 
   const {
     projectId,
     issueKey,
     visible,
+    onopenworktree,
   }: {
     projectId: string;
     issueKey: string;
     visible: boolean;
+    onopenworktree: (worktreeId: string) => void;
   } = $props();
 
   // Read when shown, untracked: `load` writes the store it would otherwise be tracking.
@@ -133,30 +134,7 @@
       {/if}
 
       {#if implementation.outcome === 'ready' && implementation.stopped}
-        <section class="c-implement__handover" aria-labelledby="implement-handover">
-          <h3 class="c-implement__label" id="implement-handover">Ready to test</h3>
-          <p>{stopWords(implementation.stopped)}</p>
-          {#if implementation.remaining.length > 0}
-            <ul class="o-plain-list c-implement__left">
-              {#each implementation.remaining as left (left.finding)}
-                <li>
-                  <strong>F{left.finding}</strong>
-                  <CodeText text={left.title} />
-                  {#if left.location}
-                    <span class="u-mono c-implement__place"
-                      >{left.location.path}:{left.location.startLine}</span
-                    >
-                  {/if}
-                  <span class="c-implement__why">— {leftWords(left.because)}</span>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          <p class="c-implement__note">
-            Nothing has left this Mac. The worktree is yours again; the handoff panel comes
-            with a later version of wtm.
-          </p>
-        </section>
+        <WorkHandoff {projectId} {issueKey} {view} {visible} {onopenworktree} />
       {/if}
 
       <dl class="o-facts o-facts--wide">

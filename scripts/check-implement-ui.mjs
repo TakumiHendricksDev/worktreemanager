@@ -70,9 +70,14 @@ const state = {
 }[scenario];
 const flowView = () => ({ id: FLOW, workItem: FLOW, state: { kind: 'implement', phase: state.phase, hold: state.hold, end: null },
   seq: 9, startedAt: now, updatedAt: now });
+const claim = (criterion, met, evidence) => ({ criterion, met, evidence });
+const handedIn = { 1: { summary: 'Added the exporter and its page', acceptance: [claim(1, false, 'one unit is still missing')] },
+  2: { summary: 'Fixed the off-by-one', acceptance: [claim(1, true, 'tests/export_test.py::test_every_unit')] },
+  3: { summary: 'Sorted the units; the order needs a decision', acceptance: [] } };
 const round = (n, kind, findings, checks, ended) => ({ flow: FLOW, round: n, kind, planRevision: 1,
   findings: findings.map((f) => ({ finding: f, title: 'Off by one', location: null })), checks,
-  headSha: ended ? 'c' + n + 'e4f5a6b7' : null, changed: ['src/export.rs'], startedAt: now, endedAt: ended ? now : null });
+  headSha: ended ? 'c' + n + 'e4f5a6b7' : null, changed: ['src/export.rs'], note: null,
+  handoff: ended ? { changed: [], checks: [], openQuestions: [], ...handedIn[n] } : null, startedAt: now, endedAt: ended ? now : null });
 const rounds = scenario === 'none' ? [] : scenario === 'question' ? [round(1, 'implement', [], [], false)]
   : scenario === 'interrupted' ? [round(1, 'implement', [], [], true), round(2, 'fix', [7], ['src-test'], false)]
   : [round(1, 'implement', [], [], true), round(2, 'fix', [7], ['src-test'], true), round(3, 'fix', [9], [], true)];
@@ -115,6 +120,20 @@ const inbox = scenario === 'ready' ? [item(1, 'review_ready', KEY + ' is ready t
   : scenario === 'interrupted' ? [item(2, 'interrupted', KEY + ': wtm quit while it was being implemented',
     'Nothing was sent again. The writer still holds the issue\\'s worktree. Resume carries it on where it stopped.')] : [];
 const changed = () => setTimeout(() => emit('flow:changed', { flow: FLOW }), 0);
+/* The hand-over, as handoff_view reads it: a docs edit by hand since the evidence was gathered. */
+const handoffView = () => ({ flow: FLOW, key: KEY, project: '/x/webapp', worktree: WT, branch: 'feature/' + KEY,
+  baseSha: 'a1b2c3d4e5', headSha: 'c3d2e5b1a0f9', files: [{ path: 'docs/export.md', added: 4, removed: 0 }, { path: 'src/export.rs', added: 31, removed: 2 }],
+  patch: 'diff --git a/src/export.rs b/src/export.rs\\n+pub fn export(units: &[Unit]) -> String {\\n', truncated: false, uncommitted: ['docs/export.md'],
+  coverage: [{ criterion: 1, text: 'The export lists every unit', claim: claim(1, true, 'tests/export_test.py::test_every_unit'), findings: [] },
+    { criterion: 2, text: 'Units come out in the order the page shows them', claim: null, findings: [9] }],
+  checks: [{ run: checks[2], tail: 'web is stopped', stale: true }, { run: checks[3], tail: 'ok', stale: true },
+    { run: checks[4], tail: 'test result: ok. 12 passed', stale: false }],
+  since: { paths: ['docs/export.md'], complete: true, findings: [] }, canRevise: !revised });
+const environmentView = () => ({ project: '/x/webapp', worktree: WT, declared: true,
+  services: [{ id: 'web', label: 'Web', state: 'healthy', detail: null, ports: [], health: 'http://localhost:18431/healthz',
+    preview: 'http://localhost:18431', detached: false, pid: 4242, leftRunning: false, conflicts: [], startedAt: now, updatedAt: now }],
+  resources: [], commands: [], runs: [], idleStopMinutes: null, problem: null });
+let revised = false;
 window.calls = [];
 mockIPC((cmd, args) => {
   const a = args ?? {};
@@ -163,6 +182,12 @@ mockIPC((cmd, args) => {
       changed();
       return null;
     case 'work_inbox': return structuredClone(inbox);
+    case 'implementation_handoff': return handoffView();
+    case 'environment': return environmentView();
+    case 'revise_implementation':
+      revised = true;
+      changed();
+      return null;
     default: return cmd.startsWith('list_') ? [] : null;
   }
 }, { shouldMockEvents: true });
@@ -263,7 +288,7 @@ try {
         await tab(page).locator('.c-implement__title').getByText('Ready to test').waitFor();
 
         // Why it stopped, and what it left with why.
-        const handover = tab(page).locator('.c-implement__handover');
+        const handover = tab(page).locator('.c-handoff');
         await handover.getByText('The fix loop stopped at its bound of 2 rounds.').waitFor();
         const left = await handover.innerText();
         for (const part of [
@@ -290,7 +315,40 @@ try {
         assert.match(await check('e2e').innerText(), /blocked: environment not started/);
         assert.doesNotMatch(await check('e2e').innerText(), /passed/);
         assert.match(await tab(page).innerText(), /has let the worktree go/);
+
+        // The hand-over panel: each round's words, each criterion with the writer's word as its
+        // word and the finding that cites it, the evidence gone stale with the docs edit, the
+        // diff, the environment's controls, and Revise in your words.
+        const said = await handover.innerText();
+        for (const part of [
+            'Round 2 · Fixed 1 finding and src-test failing',
+            'Fixed the off-by-one',
+            'The export lists every unit',
+            'The writer says met',
+            'tests/export_test.py::test_every_unit',
+            'Units come out in the order the page shows them',
+            'The writer said nothing about it.',
+            'Cited by F9, still standing',
+            'Changed since the checks ran and the review read it: docs/export.md',
+            '2 files from a1b2c3d to c3d2e5b on feature/ACME-301',
+            'Not committed: docs/export.md',
+        ])
+            assert(said.includes(part), `the hand-over panel shows “${part}”:\n${said}`);
+        const evidence = (name) => handover.locator('.c-handoff__check').filter({ hasText: name });
+        assert.match(await evidence('lint').innerText(), /stale: changed since/);
+        assert.doesNotMatch(await evidence('src-test').innerText(), /stale/);
+        assert.equal(await evidence('e2e').getAttribute('data-status'), 'blocked');
+        await handover.getByRole('group', { name: 'Environment' }).getByText('Env: Healthy').waitFor();
+        const revise = handover.getByRole('button', { name: 'Revise' });
+        assert(await revise.isDisabled(), 'Revise waits for your words');
         await shot(page, join(shots, `implement-ready-${scheme}.png`));
+        await handover.getByLabel('What should change?').fill('Sort the units by building, then floor');
+        await revise.click();
+        await page.waitForFunction(() => window.calls.some((c) => c.cmd === 'revise_implementation'));
+        assert.deepEqual((await calls(page, 'revise_implementation'))[0].args, {
+            flow: 40,
+            note: 'Sort the units by building, then floor',
+        });
         await page.context().close();
 
         // ── Cut off by a quit: Resume from the card, once ────────────────────────────────────

@@ -1,5 +1,5 @@
-//! Implementing over IPC: the issue's Implement tab, Start implementing behind the gate, and
-//! Resume.
+//! Implementing over IPC: the issue's Implement tab, Start implementing behind the gate, Resume,
+//! the hand-over and Revise.
 //!
 //! Every action needs the Work view on, as planning and designing do.
 
@@ -9,6 +9,7 @@ use wtm_core::flow::FlowId;
 
 use super::Refusal;
 use super::commands::EngineState;
+use super::handoff::HandoffView;
 use super::implement::ImplementView;
 use crate::commands::{AppState, Reply, blocking};
 use crate::view::ErrorView;
@@ -52,4 +53,24 @@ pub async fn resume_implementing(
     gate(&app)?;
     let engine = Arc::clone(&engine);
     blocking(move || engine.resume_implementation(FlowId(flow)).map_err(refusal)).await
+}
+
+/// What an implementation handed over, for the hand-over panel.
+#[tauri::command]
+pub async fn implementation_handoff(engine: EngineState<'_>, flow: i64) -> Reply<HandoffView> {
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.handoff_view(FlowId(flow)).map_err(refused)).await
+}
+
+/// Send the implementation back to its writer with what testing it showed.
+#[tauri::command]
+pub async fn revise_implementation(
+    app: AppState<'_>,
+    engine: EngineState<'_>,
+    flow: i64,
+    note: String,
+) -> Reply<()> {
+    gate(&app)?;
+    let engine = Arc::clone(&engine);
+    blocking(move || engine.revise(FlowId(flow), &note).map_err(refusal)).await
 }

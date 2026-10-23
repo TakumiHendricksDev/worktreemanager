@@ -83,6 +83,9 @@ pub(crate) enum Act {
     Checkpoint(&'static str),
     /// Call `flow_submit` with a handoff saying this.
     Handoff(&'static str),
+    /// Call `flow_submit` with a handoff saying this, and this word on each acceptance criterion:
+    /// its number, whether it is met, and where that can be seen.
+    HandoffClaiming(&'static str, Vec<(u32, bool, &'static str)>),
     /// Call `flow_submit` with these findings, as a reviewer that read the worktree does.
     Findings(Value),
     /// Wait until the flag is set, as a writer still working does.
@@ -381,6 +384,26 @@ impl FakeHost {
                                     "changed": [],
                                     "checks": [],
                                     "openQuestions": [],
+                                }}),
+                            );
+                        }
+                        Act::HandoffClaiming(summary, claims) => {
+                            let acceptance: Vec<Value> = claims
+                                .iter()
+                                .map(|(criterion, met, evidence)| {
+                                    json!({
+                                        "criterion": criterion,
+                                        "met": met,
+                                        "evidence": evidence,
+                                    })
+                                })
+                                .collect();
+                            self.call(
+                                session,
+                                "flow_submit",
+                                json!({ "kind": "handoff", "payload": {
+                                    "summary": summary,
+                                    "acceptance": acceptance,
                                 }}),
                             );
                         }

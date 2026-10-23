@@ -1944,6 +1944,35 @@ a crash mid-turn keeping the lease, refusing a review, and resuming in the same 
 stopping the run letting the worktree go. `implement_store.rs` holds the record's rules against a real
 SQLite file: a round's task never rewritten, a stopped implementation never reopened.
 
+## 6o. The hand-over, and revisions
+
+Ready to test shows what an implementation left for you to test, in the order you would test it
+(`src-tauri/src/flow/handoff.rs`, the Implement tab's `WorkHandoff`): each round's hand-in in the
+writer's words; each acceptance criterion of the approved plan with the writer's word on it and the
+standing findings whose `requirement` cites it (`wtm_core::flow::coverage`); the checks Verifying ran,
+each by its latest record with the end of what it printed; what the loop left and why; the diff from
+where implementing began; and the environment's controls (E2's), to try it.
+
+**Evidence, not a verdict.** A writer's hand-in may say, criterion by criterion, whether the work
+meets it and where that can be seen. That is shown as its claim, beside the checks and the review that
+are the evidence, never as the app's judgement. Every round keeps its own hand-in (migration 17)
+because the step's result keeps only the last, and the newest word on a criterion wins: a fix round
+that says nothing about it leaves the earlier claim standing.
+
+**When the evidence stops describing the worktree.** Manual edits are first-class: you test, you
+change something by hand. The panel then says, above everything, which files changed since the checks
+ran and the review read the tree, and marks each check whose `paths` the change touched — §6i's
+staleness, on the implementation's review run — because a pass on another tree is not a pass.
+
+**Revise is the same run, writer and conversation.** Your words go to the writer that did the work, in
+its conversation, fenced as a request; the run takes the writer lease again and goes back to
+Implementing as a revision round (migration 17: a `revise` round always has a note, and the note is
+never rewritten). What follows is what followed the first round: the app's commits, which take your
+manual edits in with the writer's, the checks those changes touch, the review roles whose files
+changed, and a fix loop whose bounds start again, because a revision is new work — `next_round`
+counts rounds and attempts since the last revision of the same plan revision. Revise is offered at
+Ready to test and, once published (§6p), for a pull request's feedback.
+
 ## 7. Toolchain policy
 
 **Pinned to an exact version** (`1.97.1`) rather than the floating `stable` channel, so `cargo build`

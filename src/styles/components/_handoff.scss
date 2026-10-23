@@ -1,0 +1,161 @@
+/*
+ * The hand-over panel (`WorkHandoff`): what an implementation left for you to test. Quiet parts in
+ * the order you test in, each under a small heading; the one loud thing is the note that the
+ * evidence no longer describes the worktree, because then everything under it is about another
+ * tree. The diff and a check's output scroll in their own boxes, as a local fix's diff does.
+ */
+
+.c-handoff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--ok-line);
+  border-radius: var(--r-md);
+  background: var(--ok-soft);
+}
+
+.c-handoff__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.c-handoff__lead,
+.c-handoff__note,
+.c-handoff__summary,
+.c-handoff__asked,
+.c-handoff__claim {
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-handoff__note,
+.c-handoff__asked,
+.c-handoff__why {
+  color: var(--fg-muted);
+}
+
+/* The evidence is about another tree: a warning, never only a colour. */
+.c-handoff__stale {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-handoff__part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.c-handoff__heading {
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-handoff__rounds,
+.c-handoff__criteria,
+.c-handoff__checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-handoff__round,
+.c-handoff__criterion {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--step--1);
+}
+
+.c-handoff__round-head {
+  font-size: var(--step--1);
+}
+
+.c-handoff__check {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--step--1);
+}
+
+.c-handoff__check-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.c-handoff__files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--step--1);
+}
+
+.c-handoff__file {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+.c-handoff__added {
+  color: var(--ok);
+  font-family: var(--font-mono);
+}
+
+.c-handoff__removed {
+  color: var(--danger);
+  font-family: var(--font-mono);
+}
+
+.c-handoff__read > summary {
+  cursor: pointer;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-handoff__patch,
+.c-handoff__output {
+  max-height: 320px;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2);
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.c-handoff__revise {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-handoff__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-handoff__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}

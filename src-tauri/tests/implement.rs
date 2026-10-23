@@ -637,6 +637,138 @@ fn an_implementation_is_checked_reviewed_fixed_in_its_conversation_and_handed_ov
 }
 
 #[test]
+fn the_hand_over_shows_the_diff_the_evidence_and_each_criterion_and_revise_goes_back_to_the_writer()
+{
+    let h = Harness::new(script(|attempt| match attempt {
+        1 => Behaviour::Acts(vec![
+            Act::Write("src/export.rs", "pub fn export() {}\n"),
+            Act::Write("docs/export.md", "# Export\n"),
+            Act::Checkpoint("Export the units"),
+            Act::HandoffClaiming(
+                "Added the exporter and its page",
+                vec![(1, false, "one unit is still missing")],
+            ),
+        ]),
+        2 => Behaviour::Acts(vec![
+            Act::Write("src/export.rs", "pub fn export() {} // fixed\n"),
+            Act::Checkpoint("Export every unit"),
+            Act::HandoffClaiming(
+                "Fixed the off-by-one",
+                vec![(1, true, "src/export.rs exports every unit")],
+            ),
+        ]),
+        _ => Behaviour::Acts(vec![
+            Act::Write(
+                "src/export.rs",
+                "pub fn export() {} // fixed, with a header\n",
+            ),
+            Act::Checkpoint("Write a header row"),
+            Act::Handoff("Added the header row"),
+        ]),
+    }));
+    let flow = h.planned();
+    h.approve_plan(flow);
+    h.ready(flow);
+
+    let handoff = h.engine.handoff_view(flow).unwrap();
+    assert!(handoff.can_revise);
+    let files: Vec<&str> = handoff.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(files, ["docs/export.md", "src/export.rs"]);
+    assert!(
+        handoff.patch.contains("+pub fn export() {} // fixed"),
+        "{}",
+        handoff.patch
+    );
+    assert!(handoff.uncommitted.is_empty());
+    assert!(
+        handoff.since.is_none(),
+        "nothing changed since the evidence"
+    );
+    // Every check Verifying runs, with what it printed; never a check that did not run.
+    let checks: Vec<(&str, CheckStatus, bool)> = handoff
+        .checks
+        .iter()
+        .map(|c| (c.run.check.as_str(), c.run.status, c.stale))
+        .collect();
+    assert_eq!(
+        checks,
+        [
+            ("docs-check", CheckStatus::Passed, false),
+            ("lint", CheckStatus::Passed, false),
+            ("src-test", CheckStatus::Passed, false),
+        ]
+    );
+    // The writer's newest word on the criterion, as its word.
+    assert_eq!(handoff.coverage.len(), 1);
+    assert_eq!(handoff.coverage[0].text, "The export lists every unit");
+    let claim = handoff.coverage[0].claim.clone().unwrap();
+    assert!(claim.met);
+    assert_eq!(claim.evidence, "src/export.rs exports every unit");
+
+    // An edit by hand makes the evidence stale, and says which checks it touches.
+    let worktree = h.worktree(flow);
+    std::fs::write(worktree.join("docs/export.md"), "# Export\n\nBy hand.\n").unwrap();
+    let edited = h.engine.handoff_view(flow).unwrap();
+    assert_eq!(edited.uncommitted, ["docs/export.md"]);
+    let since = edited.since.clone().unwrap();
+    assert_eq!(since.paths, ["docs/export.md"]);
+    let stale: Vec<&str> = edited
+        .checks
+        .iter()
+        .filter(|c| c.stale)
+        .map(|c| c.run.check.as_str())
+        .collect();
+    assert_eq!(stale, ["docs-check", "lint"], "src-test reads only src/");
+
+    // Revise needs your words.
+    assert!(h.engine.revise(flow, "   ").is_err());
+    h.engine
+        .revise(flow, "Put a header row first, and keep my docs edit")
+        .unwrap();
+    let view = h.ready(flow);
+    // The same writer, in the same conversation, given your words.
+    assert_eq!(h.host.attempts_of("implementer"), 3);
+    let first = h.conversation(flow, 1).unwrap();
+    assert_eq!(
+        h.opened("implementer", 3).resume.as_deref(),
+        Some(first.as_str())
+    );
+    let turn = h.turns("implementer", 3).join("\n");
+    assert!(
+        turn.contains(
+            "<wtm_revision>\nPut a header row first, and keep my docs edit\n</wtm_revision>"
+        ),
+        "{turn}"
+    );
+    let kinds: Vec<RoundKind> = view.rounds.iter().map(|r| r.kind).collect();
+    assert_eq!(
+        kinds,
+        [RoundKind::Implement, RoundKind::Fix, RoundKind::Revise]
+    );
+    assert_eq!(
+        view.rounds[2].note.as_deref(),
+        Some("Put a header row first, and keep my docs edit")
+    );
+    assert_eq!(
+        view.rounds[2].handoff.as_ref().map(|h| h.summary.as_str()),
+        Some("Added the header row")
+    );
+    // Your edit went in with the revision, through the app's commit, and the checks it touched ran
+    // again; the review found nothing more, so it is handed over clean.
+    assert_eq!(subjects(&worktree)[0], "Write a header row");
+    let after = h.engine.handoff_view(flow).unwrap();
+    assert!(after.uncommitted.is_empty());
+    assert!(after.since.is_none());
+    assert_eq!(
+        view.implementation.unwrap().stopped,
+        Some(StopReason::Clean)
+    );
+    assert!(h.db().open_leases(None).unwrap().is_empty());
+    // The writer's earlier word on the criterion stands: the revision said nothing about it.
+    assert!(after.coverage[0].claim.as_ref().unwrap().met);
+}
+
+#[test]
 fn a_fix_round_runs_again_only_the_checks_and_review_roles_its_changes_touched() {
     let h = Harness::new(script(|attempt| match attempt {
         1 => first_round(),

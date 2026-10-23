@@ -7,7 +7,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use wtm_core::flow::{
-    CheckpointBy, Field, FixBounds, FlowId, ImplementChange, ImplementCheckpoint,
+    CheckpointBy, Field, FixBounds, FlowId, Handoff, ImplementChange, ImplementCheckpoint,
     ImplementQuestion, Implementation, NewImplementation, NewRound, QuestionId, Round, UnixMs,
 };
 use wtm_core::model::ProjectId;
@@ -106,7 +106,7 @@ fn implementation_where(
 }
 
 const ROUND_COLUMNS: &str = "flow_id, round, kind, plan_revision, findings, checks, head_sha, \
-     changed, started_at, ended_at";
+     changed, started_at, ended_at, note, handoff";
 
 struct RoundRow {
     flow: i64,
@@ -119,6 +119,8 @@ struct RoundRow {
     changed: String,
     started_at: UnixMs,
     ended_at: Option<UnixMs>,
+    note: Option<String>,
+    handoff: Option<String>,
 }
 
 impl RoundRow {
@@ -134,6 +136,8 @@ impl RoundRow {
             changed: row.get(7)?,
             started_at: row.get(8)?,
             ended_at: row.get(9)?,
+            note: row.get(10)?,
+            handoff: row.get(11)?,
         })
     }
 
@@ -147,6 +151,8 @@ impl RoundRow {
             checks: from_json(&self.checks)?,
             head_sha: self.head_sha,
             changed: from_json(&self.changed)?,
+            note: self.note,
+            handoff: self.handoff.as_deref().map(from_json).transpose()?,
             started_at: self.started_at,
             ended_at: self.ended_at,
         })
@@ -354,8 +360,8 @@ impl ImplementStore for AppDb {
             .map_err(storage)?;
         tx.execute(
             "INSERT INTO implement_rounds
-                 (flow_id, round, kind, plan_revision, findings, checks, started_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 (flow_id, round, kind, plan_revision, findings, checks, note, started_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 round.flow.0,
                 next,
@@ -363,6 +369,7 @@ impl ImplementStore for AppDb {
                 round.plan_revision,
                 json(&round.findings)?,
                 json(&round.checks)?,
+                round.note,
                 at
             ],
         )
@@ -379,13 +386,15 @@ impl ImplementStore for AppDb {
         round: u32,
         head_sha: Option<&str>,
         changed: &[String],
+        handoff: Option<&Handoff>,
         at: UnixMs,
     ) -> Result<Round, FlowStoreError> {
         let conn = self.conn.lock();
+        let handoff = handoff.map(json).transpose()?;
         conn.execute(
-            "UPDATE implement_rounds SET head_sha = ?3, changed = ?4, ended_at = ?5
+            "UPDATE implement_rounds SET head_sha = ?3, changed = ?4, handoff = ?5, ended_at = ?6
              WHERE flow_id = ?1 AND round = ?2",
-            params![flow.0, round, head_sha, json(&changed)?, at],
+            params![flow.0, round, head_sha, json(&changed)?, handoff, at],
         )
         .map_err(storage)?;
         round_of(&conn, flow, round)?.ok_or(FlowStoreError::UnknownImplementation(flow))

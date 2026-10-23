@@ -51,9 +51,8 @@ export function implementRunWords(view: ImplementView): string {
         return view.implementer
           ? 'Ready to implement'
           : 'Implementing: no implementer configured';
-      return view.step?.status === 'failed' && !view.running
-        ? 'Implementer stopped'
-        : 'Implementing';
+      if (view.step?.status === 'failed' && !view.running) return 'Implementer stopped';
+      return view.rounds.at(-1)?.kind === 'revise' ? 'Revising' : 'Implementing';
     case 'verifying':
       return 'Running the checks';
     case 'reviewing':
@@ -88,14 +87,24 @@ export function emptyRoundWords(round: ImplementRound, rounds: ImplementRound[])
     : 'Nothing committed.';
 }
 
-/** Fix rounds of plan revision `revision` so far. */
+/**
+ * Fix rounds of plan revision `revision` so far, since the last revision you asked for: a revision
+ * gets the loop's bounds afresh, as `wtm_core::flow::next_round` counts them.
+ */
 export function fixRounds(rounds: ImplementRound[], revision: number): number {
-  return rounds.filter((r) => r.kind === 'fix' && r.planRevision === revision).length;
+  let since = -1;
+  rounds.forEach((r, at) => {
+    if (r.kind === 'revise' && r.planRevision === revision) since = at;
+  });
+  return rounds
+    .slice(since + 1)
+    .filter((r) => r.kind === 'fix' && r.planRevision === revision).length;
 }
 
 /** What a round set out to do, in a phrase. */
 export function roundWords(round: ImplementRound): string {
   if (round.kind === 'implement') return `Implemented plan revision ${round.planRevision}`;
+  if (round.kind === 'revise') return 'Revised, as you asked';
   const parts = [];
   if (round.findings.length > 0)
     parts.push(`${round.findings.length} finding${round.findings.length === 1 ? '' : 's'}`);
