@@ -1,0 +1,344 @@
+/**
+ * Drive the real app shell with mocked IPC: an issue's Implement tab and the inbox cards about its
+ * implementation. No Tauri, no CLIs, no `acli`.
+ *
+ * What it proves, in order: a ready-to-test item leads to the Implement tab rather than offering to
+ * pause the run; the tab says why the loop stopped (at its bound) and lists what it left with why,
+ * each round with the commits the app made in it, and each configured check by its newest record —
+ * a blocked one as blocked, never as passed. Then an implementation a quit cut off: its inbox card
+ * and the tab both offer Resume, which asks Rust once. Then a question about a file outside the plan,
+ * shown as waiting in the Inbox; and a project that names no implementer, which says so and offers
+ * nothing to start.
+ *
+ * The mocked backend keeps what Rust would: the rounds, commits and checks, and whether Resume or
+ * Start implementing is allowed.
+ *
+ * `WTM_PLAYWRIGHT_MODULE` names a Playwright module, as for `check-work-view-ui.mjs`. Screenshots
+ * go to `WTM_SHOTS`, or a directory under the system temp dir, in light and dark.
+ */
+import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createServer } from 'vite';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
+
+if (!process.env.WTM_PLAYWRIGHT_MODULE)
+    throw new Error('Set WTM_PLAYWRIGHT_MODULE to an existing Playwright module.');
+const { chromium } = await import(pathToFileURL(process.env.WTM_PLAYWRIGHT_MODULE).href);
+const shots = process.env.WTM_SHOTS || join(tmpdir(), 'wtm-implement');
+mkdirSync(shots, { recursive: true });
+
+const entry = `
+import { emit } from '@tauri-apps/api/event';
+import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
+const params = new URLSearchParams(location.search);
+const scenario = params.get('scenario') ?? 'ready';
+const prefKey = (k) => 'harness.pref.' + k;
+localStorage.setItem(prefKey('ui.notify'), 'off');
+localStorage.setItem(prefKey('ui.work_view'), 'on');
+localStorage.setItem('wtm.view', 'work');
+document.documentElement.dataset.theme = params.get('theme') ?? 'light';
+document.documentElement.dataset.palette = 'pine';
+document.documentElement.dataset.platform = 'macos';
+mockWindows('main');
+const KEY = 'ACME-301';
+const FLOW = 40;
+const REVIEW = 41;
+const WT = '/x/' + KEY;
+const project = { id: '/x/webapp', name: 'webapp', root: '/x/webapp', usable: true, problem: null, trust: null };
+const wt = (dir, branch) => ({
+  id: dir === 'webapp' ? '/x/webapp' : '/x/' + dir, title: dir, subtitle: branch ?? '(detached)',
+  path: dir === 'webapp' ? '/x/webapp' : '/x/' + dir, dirname: dir, branch, head: 'a1b2c3d4e5',
+  isMain: dir === 'webapp', isBare: false, locked: null, prunable: null, dirty: false, untracked: 0,
+  staged: 0, ahead: 0, behind: 0, issueKey: null, badges: [], links: [], table: [], env: [],
+  browserHome: null });
+const worktrees = [wt('webapp', 'main'), wt(KEY, 'feature/' + KEY)];
+const status = { name: 'In Progress', category: 'in_progress' };
+const issue = { key: KEY, summary: 'Export the unit list', status, kind: 'Story', priority: 'High', assignee: null, labels: [] };
+const sprint = { id: 41, name: 'Sprint 41', state: 'active', goal: null, startsAt: null, endsAt: null, board: 3 };
+const columns = [{ role: 'todo', status: 'To Do' }, { role: 'started', status: 'In Progress' }, { role: 'done', status: 'Done' }];
+const now = Date.now();
+
+/* Rust's record, kept as the engine keeps it. */
+const state = {
+  ready: { phase: 'ready_to_test', hold: null },
+  interrupted: { phase: 'fixing', hold: { kind: 'interrupted', cause: 'quit' } },
+  question: { phase: 'implementing', hold: { kind: 'awaiting_answer' } },
+  none: { phase: 'implementing', hold: null },
+}[scenario];
+const flowView = () => ({ id: FLOW, workItem: FLOW, state: { kind: 'implement', phase: state.phase, hold: state.hold, end: null },
+  seq: 9, startedAt: now, updatedAt: now });
+const round = (n, kind, findings, checks, ended) => ({ flow: FLOW, round: n, kind, planRevision: 1,
+  findings: findings.map((f) => ({ finding: f, title: 'Off by one', location: null })), checks,
+  headSha: ended ? 'c' + n + 'e4f5a6b7' : null, changed: ['src/export.rs'], startedAt: now, endedAt: ended ? now : null });
+const rounds = scenario === 'none' ? [] : scenario === 'question' ? [round(1, 'implement', [], [], false)]
+  : scenario === 'interrupted' ? [round(1, 'implement', [], [], true), round(2, 'fix', [7], ['src-test'], false)]
+  : [round(1, 'implement', [], [], true), round(2, 'fix', [7], ['src-test'], true), round(3, 'fix', [9], [], true)];
+const commit = (n, sha, message, by, paths) => ({ flow: FLOW, round: n, commit: sha, message, paths, by, madeAt: now });
+const checkpoints = scenario === 'none' || scenario === 'question' ? [] : [
+  commit(1, 'a1f0c3d9e8b7', 'Export the units', 'writer', ['src/export.rs', 'docs/export.md']),
+  commit(2, 'b2e1d4c0f9a8', 'Export every unit', 'writer', ['src/export.rs']),
+  ...(scenario === 'ready' ? [commit(3, 'c3d2e5b1a0f9', 'ACME-301: fix what the review found', 'app', ['src/export.rs'])] : []),
+];
+const check = (id, name, status, detail) => ({ id, check: name, role: null, status, detail, exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null,
+  treeSha: 't' + id, cwd: WT, services: [], startedAt: now, endedAt: now });
+const checks = scenario === 'none' || scenario === 'question' ? [] : [
+  check(1, 'lint', 'passed', null), check(2, 'src-test', 'failed', null), check(3, 'e2e', 'blocked', 'blocked: environment not started: web is stopped'),
+  check(4, 'lint', 'passed', null), check(5, 'src-test', 'passed', null),
+];
+const implementation = scenario === 'none' ? null : {
+  flow: FLOW, project: '/x/webapp', worktree: WT, key: KEY, role: 'implementer', recipe: 'standard', baseSha: 'a1b2c3d4e5',
+  planRevision: 1, scope: { areas: ['src/**', 'docs/**'], files: ['tests/export_test.py'] }, bounds: { rounds: 2, attempts: 1 },
+  reviewFlow: REVIEW, outcome: scenario === 'ready' ? 'ready' : null,
+  remaining: scenario === 'ready' ? [
+    { finding: 9, title: 'Units are exported out of order', location: { path: 'src/export.rs', startLine: 12, endLine: 14 }, because: { kind: 'rounds_spent' } },
+    { finding: 11, title: 'The README says nothing exports', location: { path: 'README.md', startLine: 1, endLine: 1 }, because: { kind: 'outside_plan', paths: ['README.md'] } },
+  ] : [],
+  stopped: scenario === 'ready' ? { kind: 'bounded', rounds: 2 } : null, startedAt: now, updatedAt: now };
+const question = { id: 70, flow: FLOW, step: 5, role: 'implementer', text: '\`implementer\` changed \`README.md\` outside the approved plan. Change the plan to include it?',
+  why: 'Plan revision 1 covers \`src/**\`, \`docs/**\`.', unblocks: 'Committing those files.', blocks: 'verifying', context: [],
+  recommendation: null, options: ['Change the plan to include them', 'Keep to the plan'], askedAt: now, answer: null };
+let resumed = false;
+const implementView = () => ({ flow: flowView(), key: KEY, implementer: scenario === 'none' ? null : 'implementer',
+  implementation: structuredClone(implementation), rounds: structuredClone(rounds), checkpoints: structuredClone(checkpoints),
+  checks: structuredClone(checks), verifying: ['lint', 'src-test', 'e2e'],
+  review: implementation ? { flow: REVIEW, phase: 'consolidated', running: false, standing: scenario === 'ready' ? 2 : 0 } : null,
+  findings: [], questions: scenario === 'question' ? [{ link: { question: 70, flow: FLOW, kind: 'outliers', paths: ['README.md'], findings: [], planRevision: 1 }, question }] : [],
+  sessions: [], step: null, lease: scenario === 'ready' || scenario === 'none' ? null : { id: 3, worktree: WT, flow: FLOW, kind: 'writer', holder: 'implementer', acquiredAt: now, releasedAt: null, releasedWhy: null },
+  running: resumed, canStart: false, canResume: scenario === 'interrupted' && !resumed });
+const item = (id, kind, title, body) => ({ id, flow: FLOW, kind, target: { kind: 'flow' }, title, body,
+  state: 'open', createdAt: now, closedAt: null, project: '/x/webapp', worktree: WT, issue: KEY, question: null });
+const inbox = scenario === 'ready' ? [item(1, 'review_ready', KEY + ' is ready to test',
+    '3 commits by the app on \`feature/' + KEY + '\`, 2 fix rounds. Checks: e2e blocked: environment not started, lint passed, src-test passed. The fix loop stopped at its bound of 2 rounds.')]
+  : scenario === 'interrupted' ? [item(2, 'interrupted', KEY + ': wtm quit while it was being implemented',
+    'Nothing was sent again. The writer still holds the issue\\'s worktree. Resume carries it on where it stopped.')] : [];
+const changed = () => setTimeout(() => emit('flow:changed', { flow: FLOW }), 0);
+window.calls = [];
+mockIPC((cmd, args) => {
+  const a = args ?? {};
+  window.calls.push({ cmd, args: structuredClone(a) });
+  switch (cmd) {
+    case 'get_pref': return localStorage.getItem(prefKey(a.key));
+    case 'set_pref': localStorage.setItem(prefKey(a.key), a.value); return null;
+    case 'list_projects': return [structuredClone(project)];
+    case 'list_worktrees': return structuredClone(worktrees);
+    case 'sidebar_layout': return { groups: [], origins: {} };
+    case 'list_agents': return [];
+    case 'home_jobs': return [];
+    case 'list_openers': return { openers: [], preferred: null };
+    case 'usage_limits': return [];
+    case 'browser_available': return { runtime: false, reason: 'harness' };
+    case 'notification_permission': return 'granted';
+    case 'dictation_status': return { available: false, recording: false, key: null, reason: 'harness' };
+    case 'doctor': return { path: [], tools: [], problems: [] };
+    case 'review_queue': return { forge: null, items: [] };
+    case 'tracker_queue':
+    case 'sync_tracker': {
+      const queue = { tracker: 'jira', query: 'assignee = currentUser()', board: 3, columns, sprints: [sprint],
+        issues: [{ tracker: 'jira', issue: structuredClone(issue), sprint: 41, column: 1, role: 'started', workItem: FLOW,
+          worktrees: [WT], run: { flow: FLOW, worktree: WT, state: flowView().state,
+            openItems: inbox.length, start: 'ready' }, section: inbox.length > 0 ? 'needs_you' : 'running' }],
+        readAt: now, failure: null, outdated: false };
+      return cmd === 'sync_tracker' ? { queue, report: null } : queue;
+    }
+    case 'tracker_issue':
+      return { tracker: 'jira', readAt: now, column: 1, role: 'started', account: null,
+        detail: { issue: structuredClone(issue), description: 'Export the units as CSV.',
+          parent: null, updated: null, sprints: [sprint], links: [], fields: [] } };
+    case 'issue_start':
+      return { workItem: FLOW, flow: flowView(), job: { workItem: FLOW, flow: FLOW, project: '/x/webapp', key: KEY,
+        candidate: { kind: 'new', branch: 'feature/' + KEY, directory: WT, base: 'main' }, worktree: WT,
+        branch: 'feature/' + KEY, state: 'ready', detail: null, setupSession: null, createdAt: now, updatedAt: now },
+        working: false, moves: [], inbox: structuredClone(inbox), startMove: { kind: 'stay', reason: 'already_there' },
+        startStatus: 'In Progress' };
+    case 'issue_plan': return null;
+    case 'issue_design': return null;
+    case 'issue_implementation': return implementView();
+    case 'resume_implementing':
+      resumed = true;
+      state.hold = null;
+      inbox.splice(0, inbox.length);
+      changed();
+      return null;
+    case 'work_inbox': return structuredClone(inbox);
+    default: return cmd.startsWith('list_') ? [] : null;
+  }
+}, { shouldMockEvents: true });
+await import('@xterm/xterm/css/xterm.css');
+await import('/src/styles/main.scss');
+const { mount } = await import('svelte');
+const { default: App } = await import('/src/App.svelte');
+const { view: views } = await import('/src/lib/state/view.svelte.ts');
+const { workspace } = await import('/src/lib/state/workspace.svelte.ts');
+const { work } = await import('/src/lib/state/work.svelte.ts');
+window.harness = { emit, view: views, workspace, work };
+mount(App, { target: document.getElementById('app') });`;
+
+const server = await createServer({
+    configFile: false,
+    envDir: false,
+    logLevel: 'warn',
+    plugins: [
+        svelte(),
+        {
+            name: 'implement-probe',
+            resolveId: (id) => (id === '/probe-entry.js' ? '\0probe-entry' : undefined),
+            load: (id) => (id === '\0probe-entry' ? entry : undefined),
+            configureServer(dev) {
+                dev.middlewares.use((request, response, next) => {
+                    if (request.url === '/favicon.ico') {
+                        response.statusCode = 204;
+                        response.end();
+                        return;
+                    }
+                    if (request.url?.split('?')[0] !== '/probe') return next();
+                    response.setHeader('Content-Type', 'text/html');
+                    response.end(
+                        '<!doctype html><html lang="en"><body><div id="app"></div>' +
+                            '<script type="module" src="/probe-entry.js"></script></body></html>',
+                    );
+                });
+            },
+        },
+    ],
+    server: { host: '127.0.0.1', port: 0 },
+});
+
+let browser;
+try {
+    await server.listen();
+    const base = `http://127.0.0.1:${server.httpServer.address().port}/probe`;
+    browser = await chromium.launch({
+        executablePath:
+            process.env.WTM_CHROME ||
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        headless: true,
+    });
+
+    async function open(query, colorScheme) {
+        const context = await browser.newContext({
+            viewport: { width: 1280, height: 900 },
+            colorScheme,
+        });
+        const page = await context.newPage();
+        page.on('pageerror', (e) => {
+            throw new Error(`page error: ${e.message}`);
+        });
+        page.on('console', (message) => {
+            if (message.type() === 'error') console.error('CONSOLE', message.text());
+        });
+        await page.goto(base + query);
+        await page.waitForFunction(() => window.harness?.workspace.worktrees.length > 0);
+        await page.waitForFunction(() => window.harness.view.current === 'work');
+        await queue(page).waitFor({ state: 'visible' });
+        await queue(page).getByText('ACME-301').waitFor();
+        return page;
+    }
+
+    const shot = (page, path) => page.screenshot({ path, animations: 'disabled' });
+    const calls = (page, cmd) =>
+        page.evaluate((c) => window.calls.filter((x) => x.cmd === c), cmd);
+    const queue = (page) => page.getByRole('navigation', { name: 'Work queue' });
+    const row = (page, key) => queue(page).locator('.c-work-row').filter({ hasText: key });
+    const panel = (page) => page.getByRole('tabpanel');
+    const tab = (page) => panel(page).locator('.c-implement');
+    const openInbox = (page) =>
+        page
+            .getByRole('button', { name: /^Inbox/ })
+            .first()
+            .click();
+
+    for (const scheme of ['light', 'dark']) {
+        // ── Ready to test: the item leads to the Implement tab, not to a pause ───────────────
+        const page = await open(`?theme=${scheme}`, scheme);
+        await openInbox(page);
+        const ready = page.locator('.c-inbox-card').filter({ hasText: 'ACME-301 is ready to test' });
+        await ready.waitFor();
+        assert.equal(await ready.getByRole('button', { name: 'Pause the run' }).count(), 0);
+        await shot(page, join(shots, `inbox-ready-to-test-${scheme}.png`));
+        await ready.getByRole('button', { name: 'See what was done' }).click();
+        await tab(page).waitFor();
+        await tab(page).locator('.c-implement__title').getByText('Ready to test').waitFor();
+
+        // Why it stopped, and what it left with why.
+        const handover = tab(page).locator('.c-implement__handover');
+        await handover.getByText('The fix loop stopped at its bound of 2 rounds.').waitFor();
+        const left = await handover.innerText();
+        for (const part of [
+            'Units are exported out of order',
+            'the fix rounds were spent',
+            'The README says nothing exports',
+            'outside the plan (README.md): fixing it needs a plan change',
+        ])
+            assert(left.includes(part), `the hand-over shows “${part}”:\n${left}`);
+
+        // Each round with its commits.
+        const rounds = tab(page).locator('.c-implement__round');
+        assert.equal(await rounds.count(), 3);
+        assert.match(await rounds.nth(0).innerText(), /Implemented plan revision 1[\s\S]*a1f0c3d/);
+        assert.match(await rounds.nth(1).innerText(), /Fixed 1 finding and src-test failing/);
+        assert.match(await rounds.nth(2).innerText(), /what it left/);
+
+        // Each check by its newest record; the blocked one is blocked, not passed.
+        const check = (name) =>
+            tab(page).locator('.c-implement__check').filter({ hasText: name });
+        assert.equal(await check('src-test').getAttribute('data-status'), 'passed');
+        assert.match(await check('src-test').innerText(), /2 runs/);
+        assert.equal(await check('e2e').getAttribute('data-status'), 'blocked');
+        assert.match(await check('e2e').innerText(), /blocked: environment not started/);
+        assert.doesNotMatch(await check('e2e').innerText(), /passed/);
+        assert.match(await tab(page).innerText(), /has let the worktree go/);
+        await shot(page, join(shots, `implement-ready-${scheme}.png`));
+        await page.context().close();
+
+        // ── Cut off by a quit: Resume from the card, once ────────────────────────────────────
+        const cut = await open(`?theme=${scheme}&scenario=interrupted`, scheme);
+        await openInbox(cut);
+        const card = cut.locator('.c-inbox-card').filter({ hasText: 'wtm quit while it was being implemented' });
+        await card.waitFor();
+        await shot(cut, join(shots, `inbox-interrupted-${scheme}.png`));
+        await row(cut, 'ACME-301').click();
+        await cut.getByRole('tab', { name: 'Implement' }).click();
+        await tab(cut).locator('.c-implement__title').getByText('Interrupted').waitFor();
+        assert.match(await tab(cut).innerText(), /under way/);
+        assert.match(await tab(cut).innerText(), /holds the worktree/);
+        await shot(cut, join(shots, `implement-interrupted-${scheme}.png`));
+        await tab(cut).getByRole('button', { name: 'Resume' }).click();
+        await cut.waitForFunction(
+            () => window.calls.filter((c) => c.cmd === 'resume_implementing').length === 1,
+        );
+        assert.deepEqual((await calls(cut, 'resume_implementing'))[0].args, { flow: 40 });
+        await tab(cut).getByRole('button', { name: 'Resume' }).waitFor({ state: 'detached' });
+        await cut.context().close();
+
+        // ── A question about a file outside the plan waits in the Inbox ──────────────────────
+        const asked = await open(`?theme=${scheme}&scenario=question`, scheme);
+        await row(asked, 'ACME-301').click();
+        await asked.getByRole('tab', { name: 'Implement' }).click();
+        await tab(asked).locator('.c-implement__title').getByText('Waiting for your answer').waitFor();
+        await tab(asked).getByText('waiting for you in the Inbox').waitFor();
+        assert.match(await tab(asked).innerText(), /README\.md/);
+        await shot(asked, join(shots, `implement-question-${scheme}.png`));
+        await asked.context().close();
+
+        // ── No implementer configured: said, and nothing to start ────────────────────────────
+        const none = await open(`?theme=${scheme}&scenario=none`, scheme);
+        await row(none, 'ACME-301').click();
+        await none.getByRole('tab', { name: 'Implement' }).click();
+        await tab(none).getByText(/This project names no implementer/).waitFor();
+        assert.equal(
+            await tab(none).getByRole('button', { name: /Start implementing|Resume/ }).count(),
+            0,
+            'nothing to start without an implementer',
+        );
+        await shot(none, join(shots, `implement-none-${scheme}.png`));
+        await none.context().close();
+    }
+
+    console.log(`ok — screenshots in ${shots}`);
+} finally {
+    await browser?.close();
+    await server.close();
+}

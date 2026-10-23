@@ -155,7 +155,7 @@ fn listed(paths: &[String]) -> String {
 }
 
 /// The refusal for a worktree someone else holds, naming them.
-fn leased(lease: &Lease) -> String {
+pub(super) fn leased(lease: &Lease) -> String {
     match lease.kind {
         LeaseKind::Writer => format!(
             "A local fix is being written in this worktree by `{}` (run {}). It has the worktree \
@@ -190,8 +190,31 @@ impl Engine {
             self.now(),
         ) {
             Ok(lease) => Ok(Some(lease.id)),
-            Err(FlowStoreError::Leased { lease }) => Err(leased(&lease)),
+            Err(FlowStoreError::Leased { lease }) => Err(self.who_holds(&lease)),
             Err(e) => Err(text(e)),
+        }
+    }
+
+    /// The refusal for a worktree `lease` holds, naming who and for what: an issue being
+    /// implemented holds its worktree as a local fix does, for longer.
+    pub(super) fn who_holds(&self, lease: &Lease) -> String {
+        let implementing = lease.kind == LeaseKind::Writer
+            && self
+                .db()
+                .ok()
+                .and_then(|db| {
+                    use wtm_core::ports::ImplementStore as _;
+                    db.implementation(lease.flow).ok().flatten()
+                })
+                .is_some();
+        if implementing {
+            format!(
+                "`{}` is implementing an issue in this worktree (run {}). It has the worktree to \
+                 itself until the issue is ready to test or its run is stopped.",
+                lease.holder, lease.flow
+            )
+        } else {
+            leased(lease)
         }
     }
 
@@ -209,7 +232,7 @@ impl Engine {
     }
 
     /// Release every open lease `flow` holds of `kind`.
-    fn release_leases_of(&self, flow: FlowId, kind: LeaseKind, why: LeaseRelease) {
+    pub(super) fn release_leases_of(&self, flow: FlowId, kind: LeaseKind, why: LeaseRelease) {
         let Ok(db) = self.db() else { return };
         for lease in db.open_leases(None).unwrap_or_default() {
             if lease.flow == flow && lease.kind == kind {
@@ -235,14 +258,14 @@ impl Engine {
     /// when the reviewer lease is taken; this says so before anything is recorded.
     pub(super) fn refuse_if_written(&self, worktree_path: &str) -> Result<(), Refusal> {
         match self.writer_on(worktree_path) {
-            Some(lease) => Err(leased(&lease).into()),
+            Some(lease) => Err(self.who_holds(&lease).into()),
             None => Ok(()),
         }
     }
 
     /// At launch: let go of every lease nothing can come back for. A writer lease stays while its
-    /// run is still fixing, interrupted or not, because the worktree holds its edits; everything
-    /// else that is open belonged to a thread of a process that is gone.
+    /// run is still fixing or implementing, interrupted or not, because the worktree holds its
+    /// edits; everything else that is open belonged to a thread of a process that is gone.
     pub(super) fn reconcile_leases(&self) {
         let Ok(db) = self.db() else { return };
         for lease in db.open_leases(None).unwrap_or_default() {
@@ -252,7 +275,7 @@ impl Engine {
             let fixing = self
                 .state(lease.flow)
                 .is_ok_and(|state| state.end.is_none() && state.phase == Phase::Fixing);
-            if lease.kind == LeaseKind::Writer && fixing {
+            if lease.kind == LeaseKind::Writer && (fixing || self.holds_its_worktree(lease.flow)) {
                 continue;
             }
             tracing::info!(lease = %lease.id, flow = %lease.flow, kind = ?lease.kind,

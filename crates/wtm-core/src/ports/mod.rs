@@ -48,8 +48,8 @@ pub use database::{DatabaseConnection, DatabaseHost, DatabaseSession};
 pub use dictate::{DictateError, Utterance};
 pub use exec::{CancelToken, CommandRunner, EnvScrub, Invocation, Output};
 pub use flow::{
-    DesignStore, EnvStore, FixStore, FlowStore, FlowStoreError, InboxStore, LeaseStore,
-    OutboxStore, PlanStore, PullReviewStore, RunStore, StartStore,
+    DesignStore, EnvStore, FixStore, FlowStore, FlowStoreError, ImplementStore, InboxStore,
+    LeaseStore, OutboxStore, PlanStore, PullReviewStore, RunStore, StartStore,
 };
 pub use forge::{
     Forge, ForgeError, PullRequestWriter, RemotePullRequest, ReviewWriter, SentComment,

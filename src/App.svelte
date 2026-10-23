@@ -61,6 +61,7 @@
   import { startWork } from './lib/state/start-work.svelte';
   import { plan } from './lib/state/plan.svelte';
   import { design } from './lib/state/design.svelte';
+  import { implement } from './lib/state/implement.svelte';
   import { work } from './lib/state/work.svelte';
   import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
@@ -434,6 +435,7 @@
     const unlistenStarts = startWork.init();
     const unlistenPlans = plan.init();
     const unlistenDesigns = design.init();
+    const unlistenImplementations = implement.init();
 
     /*
      * A macOS notification was clicked. The payload is the pane's address, attached by
@@ -562,6 +564,7 @@
       void unlistenStarts.then((off) => off());
       void unlistenPlans.then((off) => off());
       void unlistenDesigns.then((off) => off());
+      void unlistenImplementations.then((off) => off());
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
       offFleet?.();

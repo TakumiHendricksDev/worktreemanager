@@ -113,6 +113,14 @@ pub struct WorkflowSpec {
     /// a design spends, by itself, once you approve a plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub designer: Option<String>,
+    /// How an approved plan is implemented: the writer, the review its work gets, the checks that
+    /// verify it, and how far fixing what they find may go. Absent, a run whose plan you approved
+    /// waits at Implementing and nothing is spent on it.
+    ///
+    /// Your own config and the local layer only, for the planner's reason, and more so: approving
+    /// a plan starts this writer by itself, and it edits the worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implement: Option<ImplementSpec>,
     /// Commands the app runs when a role asks, through `flow_run_check`.
     ///
     /// Your own config and the local layer only, like roles: a check is a command wtm runs outside
@@ -199,6 +207,75 @@ pub struct CheckSpec {
     /// [`WorkflowSpec::start_services`], and that defaults to asking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_services: Option<StartServices>,
+    /// Globs, relative to the repository root, of the files whose change can change this check's
+    /// result. Empty means any file can. After an implementation's fix round, only the checks whose
+    /// files the round changed run again (`implement::affected_checks`): a docs link check need not
+    /// run because a function moved, and the whole test suite need not run because a heading did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+}
+
+/// `[workflow.implement]`: what follows a plan you approved.
+///
+/// The writer edits the issue's worktree under the writer profile, and the app commits for it; the
+/// checks run, then the recipe reviews the new tree, and what they find inside the plan is fixed by
+/// the same writer, at most `fix_rounds` times and `fix_attempts` per problem (see
+/// [`implement`](super::implement)).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImplementSpec {
+    /// A role with `profile = "writer"`.
+    pub writer: String,
+    /// The review recipe the work gets after each round.
+    pub recipe: String,
+    /// The checks Verifying runs, in this order. Absent, every `[workflow.check]`; an empty list,
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<String>>,
+    /// Fix rounds per plan revision, at most
+    /// [`MAX_FIX_ROUNDS`](super::implement::MAX_FIX_ROUNDS). Zero reviews the work and fixes
+    /// nothing.
+    #[serde(default = "default_fix_rounds")]
+    pub fix_rounds: u32,
+    /// Rounds that may try one problem, at least one and at most
+    /// [`MAX_FIX_ATTEMPTS`](super::implement::MAX_FIX_ATTEMPTS).
+    #[serde(default = "default_fix_attempts")]
+    pub fix_attempts: u32,
+}
+
+fn default_fix_rounds() -> u32 {
+    super::implement::DEFAULT_FIX_ROUNDS
+}
+
+fn default_fix_attempts() -> u32 {
+    super::implement::DEFAULT_FIX_ATTEMPTS
+}
+
+impl ImplementSpec {
+    /// The checks Verifying runs, by id, in order.
+    #[must_use]
+    pub fn checks<'a>(&'a self, workflow: &'a WorkflowSpec) -> Vec<(&'a str, &'a CheckSpec)> {
+        match &self.checks {
+            Some(named) => named
+                .iter()
+                .filter_map(|id| workflow.check.get_key_value(id.as_str()))
+                .map(|(id, spec)| (id.as_str(), spec))
+                .collect(),
+            None => workflow
+                .check
+                .iter()
+                .map(|(id, spec)| (id.as_str(), spec))
+                .collect(),
+        }
+    }
+
+    #[must_use]
+    pub fn bounds(&self) -> super::implement::FixBounds {
+        super::implement::FixBounds {
+            rounds: self.fix_rounds,
+            attempts: self.fix_attempts,
+        }
+    }
 }
 
 /// What a check, or a runtime role, does about services it needs that are not running.
@@ -601,6 +678,11 @@ impl WorkflowSpec {
                     "a service name cannot be empty",
                 ));
             }
+            for pattern in &check.paths {
+                glob::check(pattern).map_err(|why| {
+                    WorkflowError::new(format!("check.{id}.paths"), format!("`{pattern}`: {why}"))
+                })?;
+            }
         }
         for pattern in self.instruction_sources.iter().flatten() {
             glob::check(pattern).map_err(|message| {
@@ -612,6 +694,9 @@ impl WorkflowSpec {
         }
         if let Some(designer) = &self.designer {
             self.check_designer(designer)?;
+        }
+        if let Some(implement) = &self.implement {
+            self.check_implement(implement)?;
         }
         self.statuses.validate()?;
         tracker::validate_fields(&self.fields)?;
@@ -882,6 +967,94 @@ impl WorkflowSpec {
                 format!("role.{designer}.workspace"),
                 "a designer reads the issue's worktree: its conversation is resumed there when you \
                  ask for changes, and a snapshot checkout is gone by then",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The implementer is a writer, its review a recipe of readers, and its bounds within what a
+    /// run with nobody watching should spend.
+    ///
+    /// Being a writer also keeps it apart from the planner and the designer, which must be
+    /// reviewers: a run finds a role's step and conversation by its id, and one role in two of them
+    /// would continue one's conversation as the other. A recipe with a writer in it would edit the
+    /// tree the review exists to read, beside the implementer that owns it.
+    fn check_implement(&self, implement: &ImplementSpec) -> Result<(), WorkflowError> {
+        let writer = &implement.writer;
+        let Some(role) = self.role.get(writer) else {
+            return Err(WorkflowError::new(
+                "implement.writer",
+                format!("there is no role `{writer}`; declare it as `[workflow.role.{writer}]`"),
+            ));
+        };
+        if role.profile != RoleProfile::Writer {
+            return Err(WorkflowError::new(
+                "implement.writer",
+                format!(
+                    "`{writer}` is a reviewer; the implementer edits the worktree, so its role \
+                     needs `profile = \"writer\"`"
+                ),
+            ));
+        }
+        let Some(recipe) = self.recipe.get(&implement.recipe) else {
+            return Err(WorkflowError::new(
+                "implement.recipe",
+                format!(
+                    "there is no recipe `{}`; declare it as `[workflow.recipe.{}]`",
+                    implement.recipe, implement.recipe
+                ),
+            ));
+        };
+        if let Some(writer) = recipe
+            .stages
+            .iter()
+            .flat_map(|stage| &stage.roles)
+            .find(|id| {
+                self.role
+                    .get(*id)
+                    .is_some_and(|r| r.profile == RoleProfile::Writer)
+            })
+        {
+            return Err(WorkflowError::new(
+                "implement.recipe",
+                format!(
+                    "`{writer}` is a writer; the review of an implementation reads the tree the \
+                     implementer wrote, and a second writer in it would change what it reads"
+                ),
+            ));
+        }
+        if let Some(missing) = implement
+            .checks
+            .iter()
+            .flatten()
+            .find(|id| !self.check.contains_key(*id))
+        {
+            return Err(WorkflowError::new(
+                "implement.checks",
+                format!(
+                    "there is no check `{missing}`; declare it as `[workflow.check.{missing}]`"
+                ),
+            ));
+        }
+        if implement.fix_rounds > super::implement::MAX_FIX_ROUNDS {
+            return Err(WorkflowError::new(
+                "implement.fix_rounds",
+                format!(
+                    "at most {}: each round is a writer turn and a review, with nobody watching",
+                    super::implement::MAX_FIX_ROUNDS
+                ),
+            ));
+        }
+        if implement.fix_attempts == 0
+            || implement.fix_attempts > super::implement::MAX_FIX_ATTEMPTS
+        {
+            return Err(WorkflowError::new(
+                "implement.fix_attempts",
+                format!(
+                    "between 1 and {}: a problem the writer could not fix in that many rounds \
+                     needs a person",
+                    super::implement::MAX_FIX_ATTEMPTS
+                ),
             ));
         }
         Ok(())
@@ -1403,6 +1576,79 @@ mod tests {
         let mut spec = review_with(&json!({ "role": { "planner": fields } }));
         spec.planner = Some("planner".to_owned());
         spec
+    }
+
+    #[test]
+    fn the_implementer_is_a_writer_its_review_has_none_and_its_bounds_are_capped() {
+        let with = |implement: serde_json::Value| {
+            let mut spec = review_with(&json!({
+                "role": { "implementer": {
+                    "objective": "Implement the approved plan",
+                    "provider": "claude",
+                    "profile": "writer",
+                    "inputs": ["issue", "plan"],
+                }},
+                "check": { "unit": { "run": ["just", "test"], "paths": ["src/**"] } },
+            }));
+            spec.implement = Some(serde_json::from_value(implement).unwrap());
+            spec
+        };
+        let good = with(json!({ "writer": "implementer", "recipe": "review" }));
+        good.validate().unwrap();
+        let implement = good.implement.as_ref().unwrap();
+        assert_eq!(
+            implement.bounds(),
+            crate::flow::implement::FixBounds {
+                rounds: 2,
+                attempts: 1
+            }
+        );
+        // Absent, every configured check verifies; named, only those, in that order.
+        assert_eq!(implement.checks(&good).len(), 1);
+
+        let reviewer = with(json!({ "writer": "correctness", "recipe": "review" }));
+        assert!(refusal(&reviewer).message.contains("writer"));
+        assert_eq!(
+            refusal(&with(json!({ "writer": "implementer", "recipe": "nope" }))).key,
+            "implement.recipe"
+        );
+        assert_eq!(
+            refusal(&with(json!({
+                "writer": "implementer", "recipe": "review", "checks": ["lint"],
+            })))
+            .key,
+            "implement.checks"
+        );
+        assert_eq!(
+            refusal(&with(json!({
+                "writer": "implementer", "recipe": "review", "fix_rounds": 9,
+            })))
+            .key,
+            "implement.fix_rounds"
+        );
+        assert_eq!(
+            refusal(&with(json!({
+                "writer": "implementer", "recipe": "review", "fix_attempts": 0,
+            })))
+            .key,
+            "implement.fix_attempts"
+        );
+        let mut writing_review = with(json!({ "writer": "implementer", "recipe": "review" }));
+        writing_review.role.get_mut("correctness").unwrap().profile = RoleProfile::Writer;
+        writing_review
+            .role
+            .get_mut("correctness")
+            .unwrap()
+            .workspace = Some(Workspace::Worktree);
+        assert_eq!(refusal(&writing_review).key, "implement.recipe");
+    }
+
+    #[test]
+    fn a_checks_paths_are_globs_the_matcher_accepts() {
+        let spec = review_with(&json!({
+            "check": { "docs": { "run": ["just", "docs"], "paths": ["/docs/**"] } },
+        }));
+        assert_eq!(refusal(&spec).key, "check.docs.paths");
     }
 
     #[test]

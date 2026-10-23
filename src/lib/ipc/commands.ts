@@ -29,6 +29,7 @@ import type {
   DesignComment,
   DesignDecision,
   DesignView,
+  ImplementView,
   QuestionThread,
   CommandRunView,
   EnvironmentView,
@@ -307,6 +308,11 @@ export const commands = {
     invoke<BrowserView>('preview_design_revision', { flow, revision }),
   /** Move the run to Implementing, through the gate that wants the approved plan and design. */
   startImplementing: (flow: number) => invoke<void>('start_implementing', { flow }),
+  /** An issue's implementation, for its Implement tab. `null` before it has a run. */
+  issueImplementation: (project: string, key: string) =>
+    invoke<ImplementView | null>('issue_implementation', { project, key }),
+  /** Carry an implementation on after a quit, a crash, a limit or a failure. */
+  resumeImplementing: (flow: number) => invoke<void>('resume_implementing', { flow }),
 
   // ── reviews: pull requests in the Work view ──
   /** The project's Reviews queue, from the local store. Reads no forge. */

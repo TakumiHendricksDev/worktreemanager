@@ -225,7 +225,7 @@ impl Engine {
 
     /// The plan you approved, and what the approval was of, while the newest decision is an
     /// approval.
-    fn approved_plan(
+    pub(super) fn approved_plan(
         &self,
         flow: FlowId,
     ) -> Result<Option<(PlanRecord, PlanApproval, PlanStanding)>, String> {
@@ -370,7 +370,7 @@ impl Engine {
     /// Whether the run may enter Implementing now: the plan and the design it needs, approved and
     /// still covering what would be built. `Ok(Ok(()))` for a run of another kind, which this gate
     /// is not about.
-    fn implement_gate(&self, flow: FlowId) -> Result<Result<(), Blocked>, String> {
+    pub(super) fn implement_gate(&self, flow: FlowId) -> Result<Result<(), Blocked>, String> {
         let state = self.state(flow)?;
         if state.kind != FlowKind::Implement {
             return Ok(Ok(()));
@@ -1131,6 +1131,7 @@ impl Engine {
                     plan_revision: ctx.plan.revision,
                     published: Mutex::new(None),
                 })),
+                implement: None,
                 project: ctx.design.project.as_str().to_owned(),
                 worktree: ctx.design.worktree.clone(),
                 // A designer runs no checks and drives no pane: it reads, and publishes.
@@ -1791,6 +1792,9 @@ impl Engine {
         }
         self.settle_design_items(flow);
         self.notice.changed(flow);
+        // The approval opens the gate in front of Implementing; implementing starts when the
+        // project names an implementer (`implement.rs`).
+        self.implement_after_approval(flow);
         Ok(decision)
     }
 
@@ -1878,41 +1882,6 @@ impl Engine {
                 let _ = db.resolve_inbox_item(item.id, self.now());
             }
         }
-    }
-
-    /// Move an issue's run to Implementing, through the gate: an approved plan, and the approved
-    /// design it needs. The run then stops there: driving an implementer is a later item, and what
-    /// this proves is that nothing gets this far without the approvals.
-    ///
-    /// # Errors
-    ///
-    /// The gate's refusal, or why the run is not where implementing follows. Nothing was recorded.
-    pub fn start_implementing(&self, flow: FlowId) -> Result<(), Refusal> {
-        let state = self.state(flow)?;
-        if state.end.is_some() {
-            return Err("this run has ended".into());
-        }
-        if self.is_running(flow) {
-            return Err("this run is working now".into());
-        }
-        if !matches!(state.phase, Phase::Planned | Phase::DesignReady) {
-            return Err(format!(
-                "implementing follows a plan, or a design, you approved; this run is at {:?}",
-                state.phase
-            )
-            .into());
-        }
-        if let Err(blocked) = self.implement_gate(flow)? {
-            return Err(format!("Not yet: {blocked}.").into());
-        }
-        self.record(
-            flow,
-            &FlowEvent::Advanced {
-                to: Phase::Implementing,
-            },
-        )?;
-        self.notice.changed(flow);
-        Ok(())
     }
 
     // ═══════════════════════════════ holds and recovery ═══════════════════════════════

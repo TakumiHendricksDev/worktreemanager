@@ -65,6 +65,8 @@ pub mod env;
 pub mod findings;
 pub mod fix;
 pub mod host;
+pub mod implement;
+pub mod implement_commands;
 pub mod moves;
 pub mod outbox;
 pub mod plan_commands;
@@ -291,6 +293,8 @@ struct Live {
     planner: Option<Arc<planner::PlannerLive>>,
     /// What a designer's turn answers, for a designer; `None` for every other role.
     designer: Option<Arc<designer::DesignerLive>>,
+    /// What an implementation's writer is held to, for its writer; `None` for every other role.
+    implement: Option<Arc<implement::ImplementLive>>,
     /// The project and worktree, which a check that needs services asks the gate about.
     project: String,
     worktree: String,
@@ -954,7 +958,11 @@ impl Engine {
                 to: Phase::Consolidated,
             },
         )?;
-        self.file_ready(flow);
+        // An implementation's review is one step of its run, which says when the work is ready;
+        // a second item for the review alone would announce the middle of it.
+        if self.reviewing_for(flow).is_none() {
+            self.file_ready(flow);
+        }
         Ok(())
     }
 
@@ -1443,6 +1451,7 @@ impl Engine {
                 fix: ctx.fix.clone(),
                 planner: None,
                 designer: None,
+                implement: None,
                 project: ctx.project.clone(),
                 worktree: ctx.worktree.clone(),
                 start_services: ctx.workflow.start_services,
@@ -1537,6 +1546,20 @@ impl Engine {
         } else {
             None
         };
+        // The same for a plan: a review of an implementation is measured against the plan it
+        // implements, its acceptance criteria first.
+        let plan = if spec.inputs.contains(&wtm_core::flow::RoleInput::Plan) {
+            self.reviewing_for(ctx.flow).and_then(|implementation| {
+                use wtm_core::ports::PlanStore as _;
+                let plans = self.db().ok()?.plans(implementation.flow).ok()?;
+                let plan = plans
+                    .into_iter()
+                    .find(|p| p.revision == implementation.plan_revision)?;
+                Some(brief::plan_section(&plan))
+            })
+        } else {
+            None
+        };
         // Following a pull request to a new head, the earlier findings are what the round is for,
         // so a role is given them whatever it lists as inputs; the ones you dismissed are settled
         // and are not asked about again.
@@ -1563,6 +1586,7 @@ impl Engine {
             answers: &answers,
             runtime: setup,
             design: design.as_deref(),
+            plan: plan.as_deref(),
         };
         let invocation = invocation.id;
         let session_spec = RoleSession {
@@ -2010,16 +2034,21 @@ impl Engine {
                 self.note_progress(role, &progress.text);
                 Ok("Noted.".to_owned())
             }
-            (FlowCall::Ask(ask), Some(live)) => match &live.planner {
-                Some(planner) => self.planner_ask(role, &live, planner, ask),
-                None => Ok(self.ask(role, &live, ask)),
+            (FlowCall::Ask(ask), Some(live)) => match (&live.planner, &live.implement) {
+                (Some(planner), _) => self.planner_ask(role, &live, planner, ask),
+                (None, Some(implement)) => self.implement_ask(role, &live, implement, ask),
+                (None, None) => Ok(self.ask(role, &live, ask)),
             },
             (FlowCall::RunCheck { name }, Some(live)) => self.run_check(role, &live, name),
-            // A run of this engine's commits only through a fix, held to the fix's files. Never
-            // through the ledger's unscoped commit, which is for sessions no engine runs.
-            (FlowCall::Checkpoint { message }, Some(live)) => match &live.fix {
-                Some(fix) => self.fix_checkpoint(role, &live, fix, message),
-                None => {
+            // A run of this engine's commits only through a fix or an implementation, held to the
+            // fix's files or the plan's. Never through the ledger's unscoped commit, which is for
+            // sessions no engine runs.
+            (FlowCall::Checkpoint { message }, Some(live)) => match (&live.fix, &live.implement) {
+                (Some(fix), _) => self.fix_checkpoint(role, &live, fix, message),
+                (None, Some(implement)) => {
+                    self.implement_checkpoint(role, &live, implement, message)
+                }
+                (None, None) => {
                     Err("this role is not fixing anything, so it has nothing to commit".to_owned())
                 }
             },
@@ -2066,6 +2095,14 @@ impl Engine {
     /// When the review has ended, is waiting on something a resume does not answer, or has nothing
     /// left to run.
     pub fn resume(self: &Arc<Self>, flow: FlowId) -> Result<(), Refusal> {
+        // An issue's run cut off while it was being implemented, or the review of its work: the
+        // implementation carries on, its review with it (`implement.rs`).
+        if self.is_implementing(flow) {
+            return self.resume_implementation(flow);
+        }
+        if let Some(implementation) = self.reviewing_for(flow) {
+            return self.resume_implementation(implementation.flow);
+        }
         // An issue's run cut off while it was being designed: the designer's conversation carries
         // on (`designer.rs`).
         if self
@@ -2186,6 +2223,9 @@ impl Engine {
         if let Some(run) = self.runs.lock().get(&flow) {
             run.cancel.store(true, Ordering::SeqCst);
         }
+        // An implementation stops with its run: its writer, its review, and its hold on the
+        // worktree.
+        self.stop_implementation(flow);
         if self.is_start(flow) {
             return self.cancel_start(flow);
         }
@@ -2222,6 +2262,10 @@ impl Engine {
         self.quitting.store(true, Ordering::SeqCst);
         let flows: Vec<FlowId> = self.runs.lock().keys().copied().collect();
         for flow in flows {
+            if self.is_implementing(flow) {
+                self.interrupt_implementation(flow, InterruptCause::Quit);
+                continue;
+            }
             if self.is_designer_running(flow) {
                 self.interrupt_designer(flow, InterruptCause::Quit);
             } else if self.is_planning(flow) {
@@ -2314,6 +2358,11 @@ impl Engine {
         match self.recover_designers() {
             Ok(held) => interrupted.extend(held),
             Err(error) => tracing::warn!(%error, "could not check designers at launch"),
+        }
+        // An implementation cut off mid-phase; its lease was kept above, for its worktree's work.
+        match self.recover_implementations() {
+            Ok(held) => interrupted.extend(held),
+            Err(error) => tracing::warn!(%error, "could not check implementations at launch"),
         }
         Ok(interrupted)
     }
@@ -2623,6 +2672,7 @@ impl Engine {
         self.on_outlier_answer(&answered);
         self.notice.changed(answered.flow);
         self.on_planner_answer(&answered);
+        self.on_implement_answer(&answered);
         Ok(answered)
     }
 

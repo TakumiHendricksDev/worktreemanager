@@ -172,7 +172,8 @@ export function resumeWords(item: InboxItem): string | null {
 
 /** What the button that goes to an item's target says. */
 export function showWords(item: InboxItem): string {
-  if (item.kind === 'review_ready') return 'Read the review';
+  if (item.kind === 'review_ready')
+    return item.issue ? 'See what was done' : 'Read the review';
   if (isEnvironmentApproval(item)) return 'Show the environment';
   switch (item.target.kind) {
     case 'step':

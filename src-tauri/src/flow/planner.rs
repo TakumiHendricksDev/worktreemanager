@@ -312,9 +312,20 @@ impl Engine {
             .flow(question.flow)
             .map_err(text)?
             .is_some_and(|f| matches!(f.state.hold, Some(Hold::AwaitingAnswer)));
-        let planned = db.planning(question.flow).map_err(text)?.is_some();
+        let planning = db.planning(question.flow).map_err(text)?;
+        let planned = planning.is_some();
+        // Discuss resumes the planner's conversation, so it is for the planner's own questions
+        // while it plans. The run asks later too — its writer, about files outside the plan — and
+        // a discussion of one of those would put the planner to answering for the writer.
+        let planners = planning
+            .as_ref()
+            .is_some_and(|p| question.role.as_deref() == Some(p.role.as_str()))
+            && db
+                .flow(question.flow)
+                .map_err(text)?
+                .is_some_and(|f| f.state.phase == Phase::Investigating);
         let can_discuss =
-            planned && question.answer.is_none() && question.blocks.is_some() && held && !running;
+            planners && question.answer.is_none() && question.blocks.is_some() && held && !running;
         let issue = db
             .planning(question.flow)
             .map_err(text)?
@@ -506,7 +517,7 @@ impl Engine {
     }
 
     /// Release an `AwaitingAnswer` hold. `false` when it was not held so, or the release failed.
-    fn release_answered(&self, flow: FlowId) -> bool {
+    pub(super) fn release_answered(&self, flow: FlowId) -> bool {
         let _held = self.holds.lock();
         match self.state(flow) {
             Ok(state) if matches!(state.hold, Some(Hold::AwaitingAnswer)) => self
@@ -947,6 +958,7 @@ impl Engine {
                 fix: None,
                 planner: Some(Arc::new(PlannerLive { discussing })),
                 designer: None,
+                implement: None,
                 project: ctx.planning.project.as_str().to_owned(),
                 worktree: ctx.planning.worktree.clone(),
                 // A planner runs no checks and drives no pane: it reads, and hands in a plan.
@@ -1552,6 +1564,14 @@ impl Engine {
         if question.blocks.is_none() || !self.is_planning(question.flow) {
             return;
         }
+        // An issue's run asks in more than one phase: past planning, its questions are the
+        // implementation's, and their answers go there (`implement.rs`).
+        if self
+            .state(question.flow)
+            .is_ok_and(|state| state.phase != Phase::Investigating)
+        {
+            return;
+        }
         let Some(me) = self.me.upgrade() else { return };
         // The thread that asked may still be closing its session; it picks the answers up as it
         // goes (`planner_next`). Otherwise they go now.
@@ -1737,8 +1757,18 @@ impl Engine {
             }
         }
         self.notice.changed(flow);
-        // A plan that says the work needs a design goes on to Designing, unless you skipped it.
-        self.design_after_plan(flow, subject.design_needed, skip_design);
+        // A plan that says the work needs a design goes on to Designing, unless you skipped it, or
+        // unless it is a plan change found while implementing, whose design stands. Otherwise
+        // the approval opens the gate, and implementing starts (`implement.rs`).
+        let replanned = self.db().is_ok_and(|db| {
+            use wtm_core::ports::ImplementStore as _;
+            db.implementation(flow).ok().flatten().is_some()
+        });
+        if replanned || !subject.design_needed || skip_design {
+            self.implement_after_approval(flow);
+        } else {
+            self.design_after_plan(flow, subject.design_needed, skip_design);
+        }
         Ok(decision)
     }
 

@@ -24,7 +24,8 @@
   function openWords(item: InboxItem): string {
     if (item.kind === 'question') return 'Answer…';
     if (item.kind === 'approval') return 'Review…';
-    if (item.kind === 'review_ready') return 'Read the review';
+    if (item.kind === 'review_ready')
+      return item.issue ? 'See what was done' : 'Read the review';
     return 'Show';
   }
 </script>

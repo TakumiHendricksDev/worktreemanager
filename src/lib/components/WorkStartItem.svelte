@@ -16,6 +16,9 @@
    * - **Its design**: a revision ready for your decision, or a design approval its sources made
    *   stale, go to the Design tab, where every revision can be previewed and commented on before
    *   it is decided on; a designer that was cut off or stopped is resumed in its own conversation.
+   * - **Its implementation**: ready to test goes to the Implement tab, where what was done and what
+   *   was left is listed; an implementation that was cut off, paused at a limit or stopped is
+   *   resumed where it stopped, under its lease, in the writer's conversation.
    *
    * Each reads the issue's start the way its workspace does (`startWork`), so acting here updates
    * both, and Show the issue goes to the workspace's Run section.
@@ -26,6 +29,7 @@
   import type { InboxItem } from '../ipc/types';
   import { inbox } from '../state/inbox.svelte';
   import { design } from '../state/design.svelte';
+  import { implement } from '../state/implement.svelte';
   import { plan } from '../state/plan.svelte';
   import { startWork } from '../state/start-work.svelte';
   import { view as mainView } from '../state/view.svelte';
@@ -46,6 +50,7 @@
         void startWork.load(project, key);
         void plan.load(project, key);
         void design.load(project, key);
+        void implement.load(project, key);
       });
   });
 
@@ -92,12 +97,27 @@
       designed.canStart &&
       designed.sessions.length > 0,
   );
+  const implemented = $derived(implement.views[item.issue] ?? null);
+  /** The implementation handed over: what it did and left is in the Implement tab. */
+  const readyToTest = $derived(
+    item.kind === 'review_ready' && implemented?.flow.state.phase === 'ready_to_test',
+  );
+  /** The implementation was cut off, paused at a limit, or stopped, and can carry on. */
+  const implementerStopped = $derived(
+    item.target.kind !== 'approval' &&
+      (item.kind === 'failure' ||
+        item.kind === 'interrupted' ||
+        item.kind === 'capacity') &&
+      implemented !== null &&
+      implemented.canResume,
+  );
   // The Design tab's refusals are the tab's, Start implementing's among them; this card shows only
-  // what its own Resume designer was refused.
+  // what its own Resume designer, or Resume, was refused.
   const error = $derived(
     startWork.errors[item.issue] ??
       plan.errors[item.issue] ??
       (designerStopped ? design.errors[item.issue] : undefined) ??
+      (implementerStopped ? implement.errors[item.issue] : undefined) ??
       inbox.errors[item.id] ??
       null,
   );
@@ -131,7 +151,7 @@
       (job.state === 'setup_failed' || job.state === 'interrupted'),
   );
 
-  function show(tab: 'overview' | 'plan' | 'design' = 'overview'): void {
+  function show(tab: 'overview' | 'plan' | 'design' | 'implement' = 'overview'): void {
     work.pickIssue(item.issue, tab);
     mainView.show('work');
   }
@@ -155,7 +175,19 @@
   <div class="c-inbox-card__actions">
     {#if item.project && flow}
       {@const project = item.project}
-      {#if designReady || designStale}
+      {#if readyToTest}
+        <Button variant="accent" size="sm" onclick={() => show('implement')}
+          >See what was done</Button
+        >
+      {:else if implementerStopped && implemented}
+        <Button
+          variant="accent"
+          size="sm"
+          disabled={implement.busy[item.issue] ?? false}
+          onclick={() => void implement.resume(project, item.issue, implemented.flow.id)}
+          >Resume implementing</Button
+        >
+      {:else if designReady || designStale}
         <Button variant="accent" size="sm" onclick={() => show('design')}
           >{designStale ? 'Show what changed' : 'Review the design'}</Button
         >
