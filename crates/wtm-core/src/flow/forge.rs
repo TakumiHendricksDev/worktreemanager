@@ -367,6 +367,53 @@ pub struct PullRequest {
     pub maintainer_can_modify: bool,
     pub requested_reviewers: Vec<Reviewer>,
     pub checks: ChecksSummary,
+    /// GitHub's word on its reviews. `None` when it gave none, as for a repository that requires
+    /// no review.
+    #[serde(default)]
+    pub review_decision: Option<ReviewDecision>,
+    /// Whether it can merge as it stands, as GitHub's `mergeStateStatus` says. `None` when GitHub
+    /// had not worked it out yet.
+    #[serde(default)]
+    pub merge_state: Option<MergeState>,
+}
+
+/// GitHub's `reviewDecision`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+}
+
+/// GitHub's `mergeStateStatus`: whether the pull request can merge, and if not, the reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeState {
+    /// Mergeable, with every required check and review satisfied.
+    Clean,
+    /// Mergeable, but checks that are not required are failing.
+    Unstable,
+    /// Mergeable, with pre-receive hooks on the base.
+    HasHooks,
+    /// Branch protection blocks it: a review or a required check is missing.
+    Blocked,
+    /// The head is behind the base, which protection requires it not to be.
+    Behind,
+    /// It conflicts with the base.
+    Dirty,
+    /// A draft cannot be merged.
+    Draft,
+    /// A state this build has no name for, or GitHub's own "unknown".
+    Unknown,
+}
+
+impl MergeState {
+    /// Whether GitHub would take a merge now, as far as this state says.
+    #[must_use]
+    pub fn mergeable(self) -> bool {
+        matches!(self, Self::Clean | Self::Unstable | Self::HasHooks)
+    }
 }
 
 impl PullRequest {

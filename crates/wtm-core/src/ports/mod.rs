@@ -52,7 +52,8 @@ pub use flow::{
     LeaseStore, OutboxStore, PlanStore, PullReviewStore, RunStore, StartStore,
 };
 pub use forge::{
-    Forge, ForgeError, PullRequestWriter, RemotePullRequest, ReviewWriter, SentComment,
+    Forge, ForgeError, OwnPullWriter, PullRequestWriter, RemotePullRequest, ReviewWriter,
+    SentComment,
 };
 pub use fs::{FileDigest, FileStore};
 pub use git::{AddOptions, BranchFilter, Git, RemoteUrl};

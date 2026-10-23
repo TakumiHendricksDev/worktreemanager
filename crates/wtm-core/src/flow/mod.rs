@@ -74,6 +74,7 @@ macro_rules! id {
 }
 
 pub mod approval;
+pub mod awake;
 pub mod capacity;
 pub mod comment;
 pub mod consolidate;
@@ -89,6 +90,7 @@ pub mod instructions;
 pub mod knowledge;
 pub mod moves;
 pub mod outbox;
+pub mod own_pr;
 pub mod plan;
 pub mod planning;
 pub mod publish;
@@ -113,6 +115,7 @@ pub use approval::{
     Approval, ApprovalError, ApprovalId, ApprovalIntent, ApprovalSubject, Binding, NewApproval,
     PinChange, Pinned, Stale, review_binding,
 };
+pub use awake::{FlowNote, NewNote, NoteKind, WATCH_MS, asleep, keep_awake};
 pub use capacity::{
     AfterRecheck, CapacityChoice, CreditProblem, FileStat, Handover, HandoverAnswer,
     HandoverFinding, HandoverSnapshot, Ledger, LimitReading, MAX_FALLBACKS, NewProviderSwitch,
@@ -145,16 +148,16 @@ pub use fix::{
     LeaseRelease, NewFix, NewLease, OutlierQuestion, lease_conflict,
 };
 pub use forge::{
-    BranchProtection, ChecksState, ChecksSummary, ForgeAccount, ForgeKind, GITHUB_HOST, Permission,
-    PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug, Reviewer,
-    default_host, host_for, remote_for,
+    BranchProtection, ChecksState, ChecksSummary, ForgeAccount, ForgeKind, GITHUB_HOST, MergeState,
+    Permission, PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug,
+    ReviewDecision, Reviewer, default_host, host_for, remote_for,
 };
 pub use implement::{
-    AttemptedFinding, CHANGE_THE_PLAN, CheckpointBy, FailingCheck, FixBounds, ImplementAsk,
-    ImplementChange, ImplementCheckpoint, ImplementOutcome, ImplementQuestion, ImplementScope,
-    Implementation, LeftBecause, LoopFacts, NewImplementation, NewRound, NextRound, Remaining,
-    Round, RoundKind, StopReason, affected_checks, attempts_at, named_files, next_round,
-    scope_options, widened,
+    AttemptedFinding, CHANGE_THE_PLAN, CheckpointBy, Coverage, FailingCheck, FixBounds,
+    ImplementAsk, ImplementChange, ImplementCheckpoint, ImplementOutcome, ImplementQuestion,
+    ImplementScope, Implementation, LeftBecause, LoopFacts, NewImplementation, NewRound, NextRound,
+    Remaining, Round, RoundKind, StopReason, affected_checks, attempts_at, coverage, named_files,
+    next_round, scope_options, widened,
 };
 pub use inbox::{
     InboxItem, InboxItemId, InboxKind, InboxState, InboxTarget, NewInboxItem, review_ready,
@@ -170,7 +173,13 @@ pub use moves::{MoveCause, MoveIssuePayload, MoveRequest, MoveStep, MovedElsewhe
 pub use outbox::{
     Activity, Approved, Attention, CommentSend, MoveSend, NewOperation, Operation, OperationChange,
     OperationId, OperationKey, OperationKind, OperationPayload, OperationResult, OperationState,
-    OutboxError, Publication, PublicationState, Resolution, RouteSend, SuggestedFix, progress,
+    OutboxError, OwnRequest, OwnSend, Publication, PublicationState, Resolution, RouteSend,
+    SuggestedFix, progress,
+};
+pub use own_pr::{
+    DraftFacts, DraftPlan, DraftPullRequestPayload, FeedbackComment, MarkReadyPayload, MergeMethod,
+    MergePayload, MergeRequest, PrFeedback, ReadyRequest, TaskRemote, Unexplained,
+    UpdatePullRequestPayload, feedback_note, is_feedback, unexplained,
 };
 pub use plan::{PlanError, PlannedRole, PlannedStage, RecipePlan, SkipReason, SkippedRole, plan};
 pub use planning::{
@@ -238,7 +247,8 @@ pub use state::{
     Status, TransitionError,
 };
 pub use submission::{
-    FindingsReport, Handoff, PlanReport, ReportedClass, ReportedFinding, RuleCitation, Submission,
+    CriterionClaim, FindingsReport, Handoff, PlanReport, ReportedClass, ReportedFinding,
+    RuleCitation, Submission,
 };
 pub use tracker::{
     DEFAULT_QUEUE_LIMIT, Issue, IssueDetail, IssueField, IssueLink, IssueParent, IssueQuery,

@@ -324,7 +324,12 @@
     {/if}
   {:else if work.tab === 'implement'}
     {#if workspace.activeProjectId}
-      <WorkImplement projectId={workspace.activeProjectId} {issueKey} {visible} />
+      <WorkImplement
+        projectId={workspace.activeProjectId}
+        {issueKey}
+        {visible}
+        {onopenworktree}
+      />
     {/if}
   {:else if work.tab === 'reviews'}
     {#if reviewed && workspace.activeProjectId}

@@ -127,6 +127,17 @@
       planned?.standing.kind === 'stale' &&
       planned.standing.approval === item.target.approval,
   );
+  // Feedback on the issue's own pull request, or one of its writes that stopped or failed: the
+  // Implement tab holds the pull request, its sheets and Retry.
+  const aboutPullRequest = $derived(
+    implemented !== null &&
+      (item.kind === 'feedback' ||
+        (item.target.kind === 'approval' &&
+          (item.kind === 'failure' || item.kind === 'approval') &&
+          move === null &&
+          !planStale &&
+          !designStale)),
+  );
   /** The planner was cut off or stopped part-way through, and nothing else holds it. */
   const plannerStopped = $derived(
     item.target.kind === 'flow' &&
@@ -178,6 +189,10 @@
       {#if readyToTest}
         <Button variant="accent" size="sm" onclick={() => show('implement')}
           >See what was done</Button
+        >
+      {:else if aboutPullRequest}
+        <Button variant="accent" size="sm" onclick={() => show('implement')}
+          >{item.kind === 'feedback' ? 'See the feedback' : 'Open its pull request'}</Button
         >
       {:else if implementerStopped && implemented}
         <Button

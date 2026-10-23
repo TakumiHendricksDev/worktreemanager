@@ -1502,6 +1502,8 @@ pub struct FakeTracker {
     failure: Mutex<Option<wtm_core::error::TrackerError>>,
     calls: Mutex<Vec<String>>,
     lose_move_reply: Mutex<bool>,
+    /// The next move is refused with this, and nothing moves.
+    refuse_move: Mutex<Option<wtm_core::error::TrackerError>>,
     /// Descriptions a test gave, by key; an issue without one reads a fixed sentence.
     descriptions: Mutex<BTreeMap<String, String>>,
     /// Each issue's comments, oldest first.
@@ -1543,6 +1545,12 @@ impl FakeTracker {
     /// The next call fails with `error`, once.
     pub fn fail_next(&self, error: wtm_core::error::TrackerError) {
         *self.failure.lock() = Some(error);
+    }
+
+    /// The next move is refused with `error`, once, and the issue stays where it is. Reads still
+    /// answer.
+    pub fn refuse_next_move(&self, error: wtm_core::error::TrackerError) {
+        *self.refuse_move.lock() = Some(error);
     }
 
     /// The next move happens in the tracker and its reply is lost: the caller is told it timed
@@ -1766,6 +1774,9 @@ impl wtm_core::ports::TrackerWriter for FakeTracker {
         status: &str,
     ) -> Result<(), wtm_core::error::TrackerError> {
         self.note(format!("move {key} {status}"))?;
+        if let Some(refused) = self.refuse_move.lock().take() {
+            return Err(refused);
+        }
         let mut issues = self.issues.lock();
         // The category another issue in that status has, as a tracker's workflow would give it.
         let category = issues

@@ -62,6 +62,7 @@
   import { plan } from './lib/state/plan.svelte';
   import { design } from './lib/state/design.svelte';
   import { implement } from './lib/state/implement.svelte';
+  import { keepAwake } from './lib/state/keep-awake.svelte';
   import { work } from './lib/state/work.svelte';
   import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
@@ -292,6 +293,7 @@
       await sessionAwareness.init();
       await browsers.init();
       await browserTools.init();
+      await keepAwake.init();
       // Before `sessions.init`, which reads it once to decide whether to restore the last run.
       await restoreSessions.init();
       // Before `booted`, so a remembered Work view that has since been turned off is left before
@@ -369,6 +371,10 @@
       // you were elsewhere is on the board when you look. Spaced out by the store; never a timer.
       if (booted && view.work && workspace.activeProjectId)
         void trackerQueue.sync(workspace.activeProjectId, 'focus');
+      // The issue's own pull request on screen is followed the same way: its checks, reviews and
+      // merge state, at most once a minute (`implement.svelte.ts`).
+      const pull = booted && view.work ? implement.shownPull() : null;
+      if (pull) void implement.syncPull(pull.key, pull.flow, 'focus');
       /*
        * Coming back to the window is looking at what is on screen.
        *

@@ -1,0 +1,94 @@
+/*
+ * The issue's own pull request (`WorkPullRequest`): where its draft stands, what GitHub last said,
+ * each write with what happened to it, the feedback it got, and the two sheets. Quiet like the
+ * Implement tab's other parts; a write that stopped says so in words, never only in colour.
+ */
+
+.c-own-pr {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.c-own-pr__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.c-own-pr__actions,
+.c-own-pr__row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-own-pr__note,
+.c-own-pr__body {
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-own-pr__note,
+.c-own-pr__why {
+  color: var(--fg-muted);
+}
+
+.c-own-pr__heading {
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.c-own-pr__send {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--step--1);
+}
+
+.c-own-pr__send-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-own-pr__ops,
+.c-own-pr__feedback,
+.c-own-pr__problems {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--step--1);
+}
+
+.c-own-pr__review {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.c-own-pr__problems {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+}
+
+.c-own-pr__sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0 0 var(--sp-2);
+  padding-left: var(--sp-4);
+  font-size: var(--step--1);
+}

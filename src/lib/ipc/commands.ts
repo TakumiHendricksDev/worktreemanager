@@ -29,7 +29,12 @@ import type {
   DesignComment,
   DesignDecision,
   DesignView,
+  HandoffView,
   ImplementView,
+  MergeMethod,
+  MergeSheet,
+  OwnPrView,
+  ReadySheet,
   QuestionThread,
   CommandRunView,
   EnvironmentView,
@@ -313,6 +318,33 @@ export const commands = {
     invoke<ImplementView | null>('issue_implementation', { project, key }),
   /** Carry an implementation on after a quit, a crash, a limit or a failure. */
   resumeImplementing: (flow: number) => invoke<void>('resume_implementing', { flow }),
+  /** What an implementation handed over: the diff, the evidence and each criterion. */
+  implementationHandoff: (flow: number) =>
+    invoke<HandoffView>('implementation_handoff', { flow }),
+  /** Send the implementation back to its writer with what testing it showed, in your words. */
+  reviseImplementation: (flow: number, note: string) =>
+    invoke<void>('revise_implementation', { flow, note }),
+  /** The issue's own pull request, from the record. Reads nothing remote. */
+  issuePullRequest: (flow: number) => invoke<OwnPrView>('issue_pull_request', { flow }),
+  /** Read the issue's pull request again: on demand, or on the window's focus. */
+  syncPullRequest: (flow: number) => invoke<OwnPrView>('sync_pull_request', { flow }),
+  /** Push the hand-over and make or update its draft now, as the hand-over does by itself. */
+  draftPullRequest: (flow: number) => invoke<void>('draft_pull_request', { flow }),
+  /** Send a draft, a Ready + Needs Review, or a merge again, reading first. */
+  retryPullRequestWrite: (approval: number) =>
+    invoke<void>('retry_pull_request_write', { approval }),
+  /** What Mark ready + Needs Review would do, read fresh. */
+  readySheet: (flow: number) => invoke<ReadySheet>('ready_sheet', { flow }),
+  /** Approve both writes of Mark ready + Needs Review, at the head the sheet showed. */
+  approveReady: (flow: number, head: string) =>
+    invoke<void>('approve_ready', { flow, head }),
+  /** Start a revision from the pull request's feedback. */
+  reviseFromFeedback: (flow: number) => invoke<void>('revise_from_feedback', { flow }),
+  /** What the Merge sheet shows, read fresh. */
+  mergeSheet: (flow: number) => invoke<MergeSheet>('merge_sheet', { flow }),
+  /** Merge at the head the sheet showed, by the method picked there. Only the sheet sends this. */
+  approveMerge: (flow: number, head: string, method: MergeMethod) =>
+    invoke<void>('approve_merge', { flow, head, method }),
 
   // ── reviews: pull requests in the Work view ──
   /** The project's Reviews queue, from the local store. Reads no forge. */

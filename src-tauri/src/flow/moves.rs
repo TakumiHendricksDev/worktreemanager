@@ -53,12 +53,12 @@ pub enum MoveAction {
 }
 
 /// Where a move writes, read from its run's work item and project.
-struct MoveTarget {
-    root: PathBuf,
+pub(super) struct MoveTarget {
+    pub(super) root: PathBuf,
     tracker: TrackerKind,
     fields: BTreeMap<String, String>,
     /// The destination as the tracker spells it, when the queue holds an issue in it.
-    spelled: String,
+    pub(super) spelled: String,
 }
 
 impl Engine {
@@ -107,18 +107,19 @@ impl Engine {
     }
 
     fn move_target(&self, send: &MoveSend) -> Result<MoveTarget, String> {
+        self.move_target_for(send.approval.flow, &send.request.payload.to)
+    }
+
+    /// Where a move of `flow`'s issue to `to` writes.
+    pub(super) fn move_target_for(&self, flow: FlowId, to: &str) -> Result<MoveTarget, String> {
         let db = self.db()?;
-        let flow = db
-            .flow(send.approval.flow)
-            .map_err(text)?
-            .ok_or("the run has gone")?;
+        let flow = db.flow(flow).map_err(text)?.ok_or("the run has gone")?;
         let item = db
             .work_item(flow.work_item)
             .map_err(text)?
             .ok_or("the work item has gone")?;
         let (project, tracker) = crate::tracker::tracker_project(&self.app, item.project.as_str())
             .map_err(|e| e.message)?;
-        let to = &send.request.payload.to;
         let spelled = db
             .mirrored_queue(&item.project)
             .map_err(text)?
@@ -129,7 +130,7 @@ impl Engine {
                     .map(|q| q.issue.status.name)
                     .find(|name| wtm_core::flow::tracker::same_status(name, to))
             })
-            .unwrap_or_else(|| to.clone());
+            .unwrap_or_else(|| to.to_owned());
         Ok(MoveTarget {
             root: project.root.clone(),
             tracker,
@@ -139,7 +140,7 @@ impl Engine {
     }
 
     /// The issue's status now, read whole and kept in the mirror, so the board shows it.
-    fn read_status(&self, target: &MoveTarget, key: &str) -> Result<String, String> {
+    pub(super) fn read_status(&self, target: &MoveTarget, key: &str) -> Result<String, String> {
         let detail = self
             .app
             .tracker

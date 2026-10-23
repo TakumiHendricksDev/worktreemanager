@@ -1803,6 +1803,26 @@ impl Supervisor {
             return Ok(Vec::new());
         }
         let db = self.db()?;
+        // A command's process does not outlive the wtm that ran it, so one still recorded as
+        // running was cut off by a quit or a crash. Said so, rather than left running forever.
+        for run in db.running_command_runs().map_err(text)? {
+            if let Err(error) = db.change_command_run(
+                run.id,
+                &wtm_core::flow::CommandRunChange {
+                    state: Some(wtm_core::flow::CommandRunState::Failed),
+                    approval: None,
+                    exit_code: None,
+                    output: Some(
+                        "wtm stopped while this ran, so whether it finished is not known. Look \
+                         at what it changes before running it again."
+                            .to_owned(),
+                    ),
+                },
+                self.now(),
+            ) {
+                tracing::warn!(run = %run.id, %error, "could not settle a command a quit cut off");
+            }
+        }
         let mut adopted = Vec::new();
         for mut record in db.services(None).map_err(text)? {
             if !record.state.is_running() && record.process.is_none() {

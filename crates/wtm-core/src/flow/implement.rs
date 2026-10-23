@@ -40,6 +40,7 @@ use super::recipe::CheckSpec;
 use super::review::{FindingClass, FindingId, Location};
 use super::run::Field;
 use super::state::FlowId;
+use super::submission::{CriterionClaim, Handoff};
 use super::submission::{PlanReport, ReportedFinding};
 use crate::model::ProjectId;
 
@@ -342,6 +343,9 @@ pub enum RoundKind {
     Implement,
     /// Fixing what a review or the checks found.
     Fix,
+    /// A revision you asked for after the hand-over, in your words: what testing it showed, or the
+    /// pull request's feedback.
+    Revise,
 }
 
 /// A finding a fix round tried, as it was when the round began: enough to know the same problem
@@ -414,6 +418,12 @@ pub struct Round {
     pub head_sha: Option<String>,
     /// The files the round changed, from its first commit's parent to its last.
     pub changed: Vec<String>,
+    /// For a revision: what you asked for, in your words.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// What the writer handed in to end the round.
+    #[serde(default)]
+    pub handoff: Option<Handoff>,
     pub started_at: UnixMs,
     pub ended_at: Option<UnixMs>,
 }
@@ -426,6 +436,89 @@ pub struct NewRound {
     pub plan_revision: u32,
     pub findings: Vec<AttemptedFinding>,
     pub checks: Vec<String>,
+    /// A revision's note. Only a revision has one, and a revision always does.
+    pub note: Option<String>,
+}
+
+/// One acceptance criterion of the plan as the hand-over shows it: the writer's word on it, beside
+/// the review's findings that name it. Never a verdict of the app's: whether a criterion is met is
+/// yours to judge, from that and from the checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Coverage {
+    /// 1 for the plan's first criterion.
+    pub criterion: u32,
+    pub text: String,
+    /// What the writer said last about it, when it said anything.
+    pub claim: Option<CriterionClaim>,
+    /// Findings still standing whose requirement is this criterion.
+    pub findings: Vec<FindingId>,
+}
+
+/// The plan's acceptance criteria with what the writer last said about each and the standing
+/// findings that cite it. The writer's newest word on a criterion wins: a fix round's hand-in
+/// that says nothing about it leaves the earlier claim standing.
+#[must_use]
+pub fn coverage(
+    criteria: &[String],
+    rounds: &[Round],
+    findings: &[FindingRecord],
+) -> Vec<Coverage> {
+    criteria
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let number = u32::try_from(index + 1).unwrap_or(u32::MAX);
+            let claim = rounds
+                .iter()
+                .rev()
+                .filter_map(|r| r.handoff.as_ref())
+                .find_map(|h| h.acceptance.iter().find(|c| c.criterion == number))
+                .cloned();
+            let cited = findings
+                .iter()
+                .filter(|r| r.finding.dismissed.is_none())
+                .filter(|r| {
+                    r.finding
+                        .requirement
+                        .as_deref()
+                        .is_some_and(|req| cites(req, number, text))
+                })
+                .map(|r| r.finding.id)
+                .collect();
+            Coverage {
+                criterion: number,
+                text: text.clone(),
+                claim,
+                findings: cited,
+            }
+        })
+        .collect()
+}
+
+/// Whether a finding's `requirement` names criterion `number`: its text, or "AC 2", "criterion 2",
+/// "#2". A reviewer quotes the plan more often than it numbers it.
+fn cites(requirement: &str, number: u32, text: &str) -> bool {
+    let requirement = requirement.trim().to_lowercase();
+    let text = text.trim().to_lowercase();
+    if requirement.is_empty() {
+        return false;
+    }
+    // Either way round, a reviewer may quote part of it; a few words are not a quote.
+    if !text.is_empty()
+        && (requirement.contains(&text) || requirement.len() >= 12 && text.contains(&requirement))
+    {
+        return true;
+    }
+    let n = number.to_string();
+    ["ac", "ac ", "ac-", "ac#", "criterion ", "criterion #", "#"]
+        .iter()
+        .any(|prefix| {
+            requirement
+                .split([',', ';', '(', ')'])
+                .map(str::trim)
+                .any(|part| part == format!("{prefix}{n}"))
+        })
 }
 
 /// Who asked for a commit.
@@ -621,9 +714,14 @@ impl NextRound {
     }
 }
 
-/// The fix rounds of `plan_revision` so far.
+/// The fix rounds of `plan_revision` so far, since the last revision you asked for: a revision is
+/// new work, so the loop that checks it gets the bounds afresh, as a new plan revision does.
 fn fix_rounds(rounds: &[Round], plan_revision: u32) -> impl Iterator<Item = &Round> {
-    rounds
+    let since = rounds
+        .iter()
+        .rposition(|r| r.kind == RoundKind::Revise && r.plan_revision == plan_revision)
+        .map_or(0, |at| at + 1);
+    rounds[since..]
         .iter()
         .filter(move |r| r.kind == RoundKind::Fix && r.plan_revision == plan_revision)
 }
@@ -912,6 +1010,8 @@ mod tests {
             checks: checks.iter().map(|c| (*c).to_owned()).collect(),
             head_sha: None,
             changed: Vec::new(),
+            note: None,
+            handoff: None,
             started_at: 0,
             ended_at: None,
         }
@@ -1024,6 +1124,107 @@ mod tests {
         assert_eq!(why, StopReason::Bounded { rounds: 2 });
         assert_eq!(remaining[0].because, LeftBecause::RoundsSpent);
         assert_eq!(failing[0].check, "unit");
+    }
+
+    #[test]
+    fn a_revision_you_asked_for_gets_the_fix_loop_its_bounds_afresh() {
+        let first = bug(1, "src/a.rs", 10);
+        let second = bug(2, "src/b.rs", 11);
+        let mut revise = fix_round(4, &[], &[]);
+        revise.kind = RoundKind::Revise;
+        revise.note = Some("The total is wrong for an empty building".to_owned());
+        let rounds = [
+            fix_round(2, &[&first], &[]),
+            fix_round(3, &[&second], &[]),
+            revise,
+        ];
+        // The same problem as round 2's, found again after the revision.
+        let again = bug(5, "src/a.rs", 10);
+        let findings = [again];
+        let facts = LoopFacts {
+            findings: &findings,
+            failing: &[],
+            scope: &scope(),
+            rounds: &rounds,
+            plan_revision: 1,
+            bounds: FixBounds {
+                rounds: 2,
+                attempts: 1,
+            },
+        };
+        assert!(
+            matches!(next_round(&facts), NextRound::Fix { ref findings, .. } if findings == &[FindingId(5)]),
+            "a revision's review starts a fresh budget, of rounds and of attempts"
+        );
+        // Without the revision, both bounds were spent.
+        let spent = LoopFacts {
+            rounds: &rounds[..2],
+            ..facts
+        };
+        assert!(matches!(next_round(&spent), NextRound::Stop { .. }));
+    }
+
+    #[test]
+    fn coverage_puts_the_writers_latest_word_beside_the_findings_that_cite_each_criterion() {
+        let criteria = [
+            "A CSV downloads from the Units page".to_owned(),
+            "An empty building exports a header row only".to_owned(),
+        ];
+        let claim = |criterion, met, evidence: &str| CriterionClaim {
+            criterion,
+            met,
+            evidence: evidence.to_owned(),
+        };
+        let mut implement = fix_round(1, &[], &[]);
+        implement.kind = RoundKind::Implement;
+        implement.handoff = Some(Handoff {
+            summary: "Added the export".to_owned(),
+            changed: Vec::new(),
+            checks: Vec::new(),
+            open_questions: Vec::new(),
+            acceptance: vec![
+                claim(1, true, "tests/test_export.py::test_download"),
+                claim(2, false, "not handled yet"),
+            ],
+        });
+        let mut fix = fix_round(2, &[], &[]);
+        fix.handoff = Some(Handoff {
+            summary: "Handled the empty building".to_owned(),
+            changed: Vec::new(),
+            checks: Vec::new(),
+            open_questions: Vec::new(),
+            acceptance: vec![claim(2, true, "tests/test_export.py::test_empty")],
+        });
+        let mut cites_two = bug(8, "src/export.rs", 10);
+        cites_two.finding.requirement = Some("AC 2".to_owned());
+        let mut quotes_one = bug(9, "src/export.rs", 30);
+        quotes_one.finding.requirement = Some("a CSV downloads from the units page".to_owned());
+        let mut dismissed = bug(10, "src/export.rs", 40);
+        dismissed.finding.requirement = Some("AC 1".to_owned());
+        dismissed.finding.dismissed = Some(crate::flow::review::Dismissal {
+            reason: "not ours".to_owned(),
+            at: 0,
+        });
+        let shown = coverage(
+            &criteria,
+            &[implement, fix],
+            &[cites_two, quotes_one, dismissed],
+        );
+        assert_eq!(
+            shown[0].claim,
+            Some(claim(1, true, "tests/test_export.py::test_download"))
+        );
+        assert_eq!(
+            shown[0].findings,
+            vec![FindingId(9)],
+            "a dismissed finding is not standing"
+        );
+        assert_eq!(
+            shown[1].claim,
+            Some(claim(2, true, "tests/test_export.py::test_empty")),
+            "the fix round's word is the newer one"
+        );
+        assert_eq!(shown[1].findings, vec![FindingId(8)]);
     }
 
     #[test]

@@ -125,7 +125,11 @@ pub(super) fn preview_of(
             OperationPayload::PushBranch(_)
             | OperationPayload::OpenPullRequest(_)
             | OperationPayload::MoveIssue(_)
-            | OperationPayload::PostComment(_) => {}
+            | OperationPayload::PostComment(_)
+            | OperationPayload::CreateDraftPullRequest(_)
+            | OperationPayload::UpdatePullRequest(_)
+            | OperationPayload::MarkReady(_)
+            | OperationPayload::Merge(_) => {}
         }
     }
     PublishPreview {

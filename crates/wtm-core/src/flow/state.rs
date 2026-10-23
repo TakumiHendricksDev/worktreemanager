@@ -162,6 +162,11 @@ const IMPLEMENT: Lifecycle = Lifecycle {
         (Phase::ReadyToTest, Phase::Publishing),
         (Phase::Revising, Phase::ReadyToTest),
         (Phase::Publishing, Phase::InReview),
+        // A revision you ask for, after testing it or from the pull request's feedback, goes back
+        // to the writer, in its same conversation, and through the checks and the review again.
+        (Phase::ReadyToTest, Phase::Implementing),
+        (Phase::Publishing, Phase::Implementing),
+        (Phase::InReview, Phase::Implementing),
         // Work the plan does not cover, which you agreed should be in it: the plan revision that
         // covers it goes back to you, and implementing waits for that approval as it did for the
         // first. From wherever the implementation's thread stops to let it.
@@ -602,6 +607,30 @@ mod tests {
             ],
         );
         assert_eq!(state.phase, Phase::Planned);
+    }
+
+    #[test]
+    fn a_revision_goes_back_to_implementing_from_the_hand_over_and_from_review() {
+        let state = walk(
+            FlowKind::Implement,
+            &[
+                Phase::Preparing,
+                Phase::Investigating,
+                Phase::Planned,
+                Phase::Implementing,
+                Phase::Verifying,
+                Phase::Reviewing,
+                Phase::ReadyToTest,
+                Phase::Implementing,
+                Phase::Verifying,
+                Phase::Reviewing,
+                Phase::ReadyToTest,
+                Phase::Publishing,
+                Phase::InReview,
+                Phase::Implementing,
+            ],
+        );
+        assert_eq!(state.phase, Phase::Implementing);
     }
 
     #[test]

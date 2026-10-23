@@ -24,6 +24,7 @@ use super::comment::CommentRequest;
 use super::design::DesignApproval;
 use super::env::CommandRequest;
 use super::moves::MoveRequest;
+use super::own_pr::{DraftPlan, MergeRequest, ReadyRequest};
 use super::planning::{PlanApproval, plan_binding};
 use super::publish::ReviewPayload;
 use super::route::{RoutePlan, SuggestionRoute};
@@ -232,6 +233,15 @@ pub enum ApprovalSubject {
     /// is the same kind of thing — processes run once on this machine, pinned by the hash of exactly
     /// what runs — and a new intent would rebuild `approvals` for a word.
     Services(Box<StartRequest>),
+    /// The issue's task branch pushed and its draft pull request made or updated, at a hand-over.
+    /// Granted by the app, because the plan made the draft automatic, under the `route` intent:
+    /// what it allows is the same kind of thing — this commit to this ref on this remote — and a
+    /// new intent would rebuild `approvals` for a word.
+    Draft(Box<DraftPlan>),
+    /// Mark the issue's pull request ready and move the issue to review, at the head you saw.
+    Ready(Box<ReadyRequest>),
+    /// Merge the issue's pull request at the head you saw, by the method you picked.
+    Merge(Box<MergeRequest>),
 }
 
 /// An approval to record, not yet numbered.
@@ -444,6 +454,44 @@ impl NewApproval {
                 super::outbox::OperationPayload::PostComment(request.payload.clone()).hash(),
             ),
             subject: ApprovalSubject::Comment(Box::new(request.clone())),
+        }
+    }
+}
+
+impl NewApproval {
+    /// The app's approval of a draft at a hand-over: exactly the remote, the ref, the diff and the
+    /// commit it pushes.
+    ///
+    /// # Errors
+    ///
+    /// When a pin a route needs is missing, which a draft cannot leave out.
+    pub fn draft(flow: FlowId, plan: &DraftPlan) -> Result<Self, ApprovalError> {
+        Self::checked(
+            flow,
+            plan.binding(),
+            ApprovalSubject::Draft(Box::new(plan.clone())),
+        )
+    }
+
+    /// Your approval of "Mark ready + Needs Review", bound to the head you saw.
+    #[must_use]
+    pub fn ready(flow: FlowId, request: &ReadyRequest) -> Self {
+        Self {
+            flow,
+            intent: ApprovalIntent::Publish,
+            binding: request.binding(),
+            subject: ApprovalSubject::Ready(Box::new(request.clone())),
+        }
+    }
+
+    /// Your approval, from the Merge sheet, of a merge of exactly one head.
+    #[must_use]
+    pub fn merge(flow: FlowId, request: &MergeRequest) -> Self {
+        Self {
+            flow,
+            intent: ApprovalIntent::Merge,
+            binding: request.binding(),
+            subject: ApprovalSubject::Merge(Box::new(request.clone())),
         }
     }
 }

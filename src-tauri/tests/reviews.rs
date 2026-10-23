@@ -44,6 +44,8 @@ fn pull_request(owner: &str) -> PullRequest {
         cross_repository: true,
         maintainer_can_modify: false,
         requested_reviewers: vec![],
+        review_decision: None,
+        merge_state: None,
         checks: ChecksSummary::default(),
     }
 }

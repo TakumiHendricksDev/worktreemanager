@@ -17,6 +17,7 @@ import type {
   CheckStatus,
   ImplementRound,
   ImplementStop,
+  FlowNote,
   ImplementView,
   LeftBecause,
 } from './ipc/types';
@@ -26,7 +27,8 @@ export function implementRunWords(view: ImplementView): string {
   const { state } = view.flow;
   if (state.end?.kind === 'cancelled') return 'Run stopped';
   if (state.end?.kind === 'failed') return 'Run could not finish';
-  if (state.end?.kind === 'done') return 'Run done';
+  if (state.end?.kind === 'done')
+    return state.phase === 'in_review' ? 'Merged: run done' : 'Run done';
   switch (state.hold?.kind) {
     case 'awaiting_answer':
       return 'Waiting for your answer';
@@ -51,9 +53,8 @@ export function implementRunWords(view: ImplementView): string {
         return view.implementer
           ? 'Ready to implement'
           : 'Implementing: no implementer configured';
-      return view.step?.status === 'failed' && !view.running
-        ? 'Implementer stopped'
-        : 'Implementing';
+      if (view.step?.status === 'failed' && !view.running) return 'Implementer stopped';
+      return view.rounds.at(-1)?.kind === 'revise' ? 'Revising' : 'Implementing';
     case 'verifying':
       return 'Running the checks';
     case 'reviewing':
@@ -64,6 +65,10 @@ export function implementRunWords(view: ImplementView): string {
         : `Fixing: round ${fixRounds(view.rounds, view.implementation?.planRevision ?? 1)}`;
     case 'ready_to_test':
       return 'Ready to test';
+    case 'publishing':
+      return 'Marking ready and moving it to review';
+    case 'in_review':
+      return 'In review';
     case 'planned':
       return 'Planned';
     case 'designing':
@@ -88,14 +93,24 @@ export function emptyRoundWords(round: ImplementRound, rounds: ImplementRound[])
     : 'Nothing committed.';
 }
 
-/** Fix rounds of plan revision `revision` so far. */
+/**
+ * Fix rounds of plan revision `revision` so far, since the last revision you asked for: a revision
+ * gets the loop's bounds afresh, as `wtm_core::flow::next_round` counts them.
+ */
 export function fixRounds(rounds: ImplementRound[], revision: number): number {
-  return rounds.filter((r) => r.kind === 'fix' && r.planRevision === revision).length;
+  let since = -1;
+  rounds.forEach((r, at) => {
+    if (r.kind === 'revise' && r.planRevision === revision) since = at;
+  });
+  return rounds
+    .slice(since + 1)
+    .filter((r) => r.kind === 'fix' && r.planRevision === revision).length;
 }
 
 /** What a round set out to do, in a phrase. */
 export function roundWords(round: ImplementRound): string {
   if (round.kind === 'implement') return `Implemented plan revision ${round.planRevision}`;
+  if (round.kind === 'revise') return 'Revised, as you asked';
   const parts = [];
   if (round.findings.length > 0)
     parts.push(`${round.findings.length} finding${round.findings.length === 1 ? '' : 's'}`);
@@ -163,4 +178,14 @@ export function stopWords(stop: ImplementStop): string {
 /** The first seven characters of a commit. */
 export function shortSha(sha: string): string {
   return sha.slice(0, 7);
+}
+
+/** A note on a run, in a line: when the Mac was asleep, or what launch stopped. */
+export function noteWords(note: FlowNote): string {
+  if (note.kind === 'asleep' && note.from !== null && note.to !== null) {
+    const at = (ms: number) =>
+      new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `Mac asleep ${at(note.from)}–${at(note.to)}. ${note.text}`;
+  }
+  return note.text;
 }

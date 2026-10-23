@@ -11,8 +11,9 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 use wtm_core::flow::{
-    ChangedLines, ChecksSummary, FileLines, LineRange, Permission, PrBase, PrHead, PrState,
-    PrTarget, PullRequest, RemoteComment, RemoteReview, RemoteReviewState, RepoSlug, Reviewer,
+    ChangedLines, ChecksSummary, FileLines, LineRange, MergeState, Permission, PrBase, PrHead,
+    PrState, PrTarget, PullRequest, RemoteComment, RemoteReview, RemoteReviewState, RepoSlug,
+    ReviewDecision, Reviewer,
 };
 use wtm_core::model::CommitId;
 use wtm_core::ports::forge::RemotePullRequest;
@@ -259,6 +260,8 @@ fn read_remote_pull_request(value: &Value) -> Result<RemotePullRequest, String> 
         head: text(&value["head"], "label").unwrap_or_default(),
         base: text(&value["base"], "ref").unwrap_or_default(),
         body: value["body"].as_str().unwrap_or_default().to_owned(),
+        draft: value["draft"].as_bool().unwrap_or(false),
+        head_sha: text(&value["head"], "sha").unwrap_or_default(),
     })
 }
 
@@ -356,6 +359,22 @@ fn read_pull_request(value: &Value) -> Result<PullRequest, String> {
         cross_repository,
         maintainer_can_modify: value["maintainerCanModify"].as_bool().unwrap_or(false),
         requested_reviewers: reviewers(&value["reviewRequests"]),
+        review_decision: match value["reviewDecision"].as_str() {
+            Some("APPROVED") => Some(ReviewDecision::Approved),
+            Some("CHANGES_REQUESTED") => Some(ReviewDecision::ChangesRequested),
+            Some("REVIEW_REQUIRED") => Some(ReviewDecision::ReviewRequired),
+            _ => None,
+        },
+        merge_state: value["mergeStateStatus"].as_str().map(|state| match state {
+            "CLEAN" => MergeState::Clean,
+            "UNSTABLE" => MergeState::Unstable,
+            "HAS_HOOKS" => MergeState::HasHooks,
+            "BLOCKED" => MergeState::Blocked,
+            "BEHIND" => MergeState::Behind,
+            "DIRTY" => MergeState::Dirty,
+            "DRAFT" => MergeState::Draft,
+            _ => MergeState::Unknown,
+        }),
         checks: checks(&value["statusCheckRollup"]),
     })
 }

@@ -7,10 +7,10 @@
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use wtm_core::flow::{
-    BlobRef, CheckRun, FindingId, FindingRecord, FlowId, Invocation, InvocationChange,
-    InvocationId, NewCheckRun, NewInvocation, NewProviderSwitch, NewReviewRun, NewScreenshot,
-    NewStep, ProviderSwitch, Reconciled, ReviewRun, Screenshot, Snapshot, SnapshotId, Step,
-    StepChange, StepId, SwitchId, UnixMs, WorkItemId,
+    BlobRef, CheckRun, FindingId, FindingRecord, FlowId, FlowNote, Invocation, InvocationChange,
+    InvocationId, NewCheckRun, NewInvocation, NewNote, NewProviderSwitch, NewReviewRun,
+    NewScreenshot, NewStep, ProcessIdentity, ProviderSwitch, Reconciled, ReviewRun, Screenshot,
+    Snapshot, SnapshotId, Step, StepChange, StepId, SwitchId, UnixMs, WorkItemId,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStoreError, RunStore};
@@ -513,6 +513,115 @@ impl RunStore for AppDb {
                 })
             })
             .collect()
+    }
+
+    fn keep_process(
+        &self,
+        invocation: InvocationId,
+        process: &ProcessIdentity,
+    ) -> Result<(), FlowStoreError> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE invocations SET pid = ?2, pid_started = ?3 WHERE id = ?1",
+            params![invocation.0, process.pid, process.started],
+        )
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    fn kept_processes(
+        &self,
+        before: UnixMs,
+    ) -> Result<Vec<(Invocation, ProcessIdentity)>, FlowStoreError> {
+        let conn = self.conn.lock();
+        let rows = query(
+            &conn,
+            &format!(
+                "SELECT {INVOCATION_COLUMNS}, pid, pid_started FROM invocations
+                 WHERE pid IS NOT NULL AND pid_started IS NOT NULL AND started_at <= ?1 ORDER BY id"
+            ),
+            params![before],
+            |row| {
+                Ok((
+                    InvocationRow::read(row)?,
+                    row.get::<_, u32>(18)?,
+                    row.get::<_, String>(19)?,
+                ))
+            },
+        )?;
+        rows.into_iter()
+            .map(|(row, pid, started)| {
+                Ok((row.into_invocation()?, ProcessIdentity { pid, started }))
+            })
+            .collect()
+    }
+
+    fn forget_process(&self, invocation: InvocationId) -> Result<(), FlowStoreError> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE invocations SET pid = NULL, pid_started = NULL WHERE id = ?1",
+            params![invocation.0],
+        )
+        .map_err(storage)?;
+        Ok(())
+    }
+
+    fn note(&self, note: &NewNote, at: UnixMs) -> Result<FlowNote, FlowStoreError> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO flow_notes (flow_id, kind, from_ms, to_ms, text, at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                note.flow.0,
+                tag(&note.kind)?,
+                note.from,
+                note.to,
+                note.text,
+                at
+            ],
+        )
+        .map_err(storage)?;
+        Ok(FlowNote {
+            id: conn.last_insert_rowid(),
+            flow: note.flow,
+            kind: note.kind,
+            from: note.from,
+            to: note.to,
+            text: note.text.clone(),
+            at,
+        })
+    }
+
+    fn notes(&self, flow: FlowId) -> Result<Vec<FlowNote>, FlowStoreError> {
+        let conn = self.conn.lock();
+        query(
+            &conn,
+            "SELECT id, kind, from_ms, to_ms, text, at FROM flow_notes WHERE flow_id = ?1 ORDER BY id",
+            params![flow.0],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<UnixMs>>(2)?,
+                    row.get::<_, Option<UnixMs>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, UnixMs>(5)?,
+                ))
+            },
+        )?
+        .into_iter()
+        .map(|(id, kind, from, to, text, at)| {
+            Ok(FlowNote {
+                id,
+                flow,
+                kind: untag(kind)?,
+                from,
+                to,
+                text,
+                at,
+            })
+        })
+        .collect()
     }
 }
 

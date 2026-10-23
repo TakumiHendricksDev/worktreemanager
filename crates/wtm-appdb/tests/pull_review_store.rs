@@ -46,6 +46,8 @@ fn pull_request(head: &str) -> PullRequest {
         cross_repository: true,
         maintainer_can_modify: false,
         requested_reviewers: Vec::new(),
+        review_decision: None,
+        merge_state: None,
         checks: ChecksSummary::default(),
     }
 }

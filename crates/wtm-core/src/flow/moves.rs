@@ -57,6 +57,9 @@ pub enum MoveCause {
     Start,
     /// A card dropped on another column of the board.
     Drop,
+    /// "Mark ready + Needs Review": the move to the mapped "needs review" status, beside the pull
+    /// request marked ready, on one approval.
+    Publish,
 }
 
 /// A move as its approval keeps it: what is sent, and why.

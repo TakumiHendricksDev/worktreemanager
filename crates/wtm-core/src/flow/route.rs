@@ -94,6 +94,12 @@ impl IntegrationBranches {
     pub fn covers(&self, branch: &str) -> bool {
         self.0.iter().any(|pattern| glob::matches(pattern, branch))
     }
+
+    /// The names and patterns, sorted.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.0.clone()
+    }
 }
 
 /// One push, spelled out: a commit to a branch.
@@ -1180,6 +1186,8 @@ mod tests {
             cross_repository,
             maintainer_can_modify,
             requested_reviewers: Vec::new(),
+            review_decision: None,
+            merge_state: None,
             checks: ChecksSummary::default(),
         }
     }

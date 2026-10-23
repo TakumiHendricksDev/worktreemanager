@@ -529,7 +529,18 @@ export interface PullRequest {
   maintainerCanModify: boolean;
   requestedReviewers: { name: string; team: boolean }[];
   checks: { passed: number; failed: number; pending: number; skipped: number };
+  /** GitHub's word on its reviews; null when it gave none. */
+  reviewDecision?: ReviewDecision | null;
+  /** Whether it can merge as it stands; null when GitHub had not worked it out. */
+  mergeState?: MergeState | null;
 }
+
+/** GitHub's `reviewDecision`. */
+export type ReviewDecision = 'approved' | 'changes_requested' | 'review_required';
+
+/** GitHub's `mergeStateStatus`. */
+export type MergeState =
+  'clean' | 'unstable' | 'has_hooks' | 'blocked' | 'behind' | 'dirty' | 'draft' | 'unknown';
 
 export interface BranchProtection {
   branch: string;
@@ -1668,7 +1679,13 @@ export type RerunScope = 'affected' | 'all';
 
 /** What an inbox item asks of you. `wtm_core::flow::InboxKind`. */
 export type InboxKind =
-  'question' | 'approval' | 'failure' | 'capacity' | 'interrupted' | 'review_ready';
+  | 'question'
+  | 'approval'
+  | 'failure'
+  | 'capacity'
+  | 'interrupted'
+  | 'review_ready'
+  | 'feedback';
 
 /** Where the thing an item is about lives, and so where a click on it lands. */
 export type InboxTarget =
@@ -2250,7 +2267,26 @@ export type OperationPayload =
       };
     }
   | { kind: 'move_issue'; tracker: 'jira'; key: string; from: string; to: string }
-  | { kind: 'post_comment'; tracker: 'jira'; key: string; body: string };
+  | { kind: 'post_comment'; tracker: 'jira'; key: string; body: string }
+  | {
+      kind: 'create_draft_pull_request';
+      draft: string;
+      repo: RepoSlug;
+      base: string;
+      head: string;
+      title: string;
+      body: string;
+    }
+  | {
+      kind: 'update_pull_request';
+      draft: string;
+      repo: RepoSlug;
+      number: number;
+      title: string;
+      body: string;
+    }
+  | { kind: 'mark_ready'; repo: RepoSlug; number: number; head: string }
+  | { kind: 'merge'; repo: RepoSlug; number: number; head: string; method: MergeMethod };
 
 /** What an operation left on GitHub. */
 export type OperationResult =
@@ -2264,6 +2300,8 @@ export type OperationResult =
     }
   | { kind: 'pushed'; url: string; reference: string; commit: string; adopted: boolean }
   | { kind: 'pull_request'; number: number; url: string; adopted: boolean }
+  | { kind: 'ready'; number: number; url: string; adopted: boolean }
+  | { kind: 'merged'; number: number; url: string; head: string; adopted: boolean }
   /** An issue now in the status a move asked for; `adopted` when it was there already. */
   | { kind: 'moved'; key: string; status: string; adopted: boolean }
   /** A comment now on the issue; `adopted` when it was found there before anything was sent. */
@@ -2821,18 +2859,73 @@ export interface Implementation {
   updatedAt: number;
 }
 
-/** One round of writing: the plan, or a fix. */
+/** A writer's word on one acceptance criterion, by its number in the plan. Its claim, not proof. */
+export interface CriterionClaim {
+  criterion: number;
+  met: boolean;
+  evidence: string;
+}
+
+/** What a writer handed in to end a round. `wtm_core::flow::Handoff`. */
+export interface WriterHandoff {
+  summary: string;
+  changed: string[];
+  checks: string[];
+  openQuestions: string[];
+  acceptance: CriterionClaim[];
+}
+
+/** One round of writing: the plan, a fix, or a revision you asked for. */
 export interface ImplementRound {
   flow: number;
   round: number;
-  kind: 'implement' | 'fix';
+  kind: 'implement' | 'fix' | 'revise';
   planRevision: number;
   findings: { finding: number; title: string; location: unknown }[];
   checks: string[];
   headSha: string | null;
   changed: string[];
+  /** A revision's request, in your words. */
+  note: string | null;
+  handoff: WriterHandoff | null;
   startedAt: number;
   endedAt: number | null;
+}
+
+/** One acceptance criterion as the hand-over shows it: the writer's word, and findings citing it. */
+export interface CriterionCoverage {
+  criterion: number;
+  text: string;
+  claim: CriterionClaim | null;
+  findings: number[];
+}
+
+/** One check's latest run, the end of what it printed, and whether the worktree changed since. */
+export interface CheckEvidence {
+  run: CheckRun;
+  tail: string | null;
+  stale: boolean;
+}
+
+/** Everything the hand-over panel shows: `implementation_handoff`. */
+export interface HandoffView {
+  flow: number;
+  key: string;
+  project: string;
+  /** The worktree's id, for its environment's controls. */
+  worktree: string;
+  branch: string | null;
+  baseSha: string;
+  headSha: string;
+  files: { path: string; added: number | null; removed: number | null }[];
+  patch: string;
+  truncated: boolean;
+  uncommitted: string[];
+  coverage: CriterionCoverage[];
+  checks: CheckEvidence[];
+  /** Set when the worktree is no longer what the checks and the review saw. */
+  since: { paths: string[]; complete: boolean; findings: number[] } | null;
+  canRevise: boolean;
 }
 
 /** A commit the app made for an implementation. */
@@ -2881,6 +2974,19 @@ export interface ImplementView {
   running: boolean;
   canStart: boolean;
   canResume: boolean;
+  /** What happened to the run while nothing in it moved. Never progress. */
+  notes: FlowNote[];
+}
+
+/** Something that happened to a run while nothing in it moved. `wtm_core::flow::FlowNote`. */
+export interface FlowNote {
+  id: number;
+  flow: number;
+  kind: 'asleep' | 'reaped';
+  from: number | null;
+  to: number | null;
+  text: string;
+  at: number;
 }
 
 /** Everything the issue's Plan tab shows: `issue_plan`. */
@@ -2903,4 +3009,114 @@ export interface PlanView {
   running: boolean;
   /** Plan would start it now. */
   canStart: boolean;
+}
+
+// ── the issue's own pull request (`flow/own_pr.rs`) ──
+
+/** How a pull request is merged. `wtm_core::flow::MergeMethod`. */
+export type MergeMethod = 'squash' | 'merge' | 'rebase';
+
+/** A review someone left on the issue's pull request, kept as wtm first read it. */
+export interface PrFeedback {
+  flow: number;
+  review: number;
+  author: string | null;
+  state:
+    'pending' | 'commented' | 'changes_requested' | 'approved' | 'dismissed' | 'unknown';
+  body: string;
+  url: string;
+  commitId: string | null;
+  comments: { path: string; body: string }[];
+  seenAt: number;
+  /** The round of the revision that took it in. */
+  revisedIn: number | null;
+}
+
+/** What an approval of the issue's own pull request was of. */
+export type OwnRequest =
+  | {
+      kind: 'draft';
+      request: {
+        key: string;
+        branch: string;
+        base: string;
+        commit: string;
+        pullRequest: number | null;
+      };
+    }
+  | {
+      kind: 'ready';
+      request: {
+        key: string;
+        ready: { number: number; head: string };
+        toReview: { key: string; from: string; to: string };
+      };
+    }
+  | {
+      kind: 'merge';
+      request: {
+        key: string;
+        merge: { number: number; head: string; method: MergeMethod };
+        branch: string;
+        base: string;
+      };
+    };
+
+/** One approval of the issue's own pull request: a draft, Ready + Needs Review, or a merge. */
+export interface OwnSendView {
+  approval: { id: number; flow: number; intent: string; grantedAt: number };
+  request: OwnRequest;
+  operations: Operation[];
+  state: PublicationState;
+}
+
+/** The issue's own pull request, from the record: `issue_pull_request`. */
+export interface OwnPrView {
+  flow: number;
+  /** Why nothing is drafted, when nothing can be. */
+  unavailable: string | null;
+  branch: string | null;
+  base: string | null;
+  repo: string | null;
+  pullRequest: { repo: string; number: number } | null;
+  url: string | null;
+  reading: MirroredPr | null;
+  sends: OwnSendView[];
+  feedback: PrFeedback[];
+  /** Whether Push and draft now would push the hand-over. */
+  canDraft: boolean;
+  canPublish: boolean;
+  canMerge: boolean;
+  canSync: boolean;
+  canReviseFeedback: boolean;
+}
+
+/** What Mark ready + Needs Review would do, read fresh: `ready_sheet`. */
+export interface ReadySheet {
+  flow: number;
+  key: string;
+  repo: string;
+  number: number;
+  url: string;
+  draft: boolean;
+  head: string;
+  handedOver: string;
+  trackerFrom: string | null;
+  trackerTo: string | null;
+  problems: string[];
+}
+
+/** What the Merge sheet shows, read fresh: `merge_sheet`. */
+export interface MergeSheet {
+  flow: number;
+  key: string;
+  repo: string;
+  number: number;
+  url: string;
+  branch: string;
+  base: string;
+  head: string;
+  pullRequest: PullRequest;
+  methods: MergeMethod[];
+  problems: string[];
 }

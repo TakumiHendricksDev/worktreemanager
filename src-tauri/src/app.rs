@@ -1014,6 +1014,9 @@ pub struct App {
     /// Opening a local fix's follow-up pull request through the same `gh`. Like the review writer,
     /// held only by the outbox's executor, for a route you approved (`flow/routes.rs`).
     pub pr_writer: Arc<dyn wtm_core::ports::PullRequestWriter>,
+    /// The issue's own pull request: its draft, ready and merge. Held by the outbox's executor alone
+    /// (`flow/own_pr.rs`); no agent tool reaches it.
+    pub own_pulls: Arc<dyn wtm_core::ports::OwnPullWriter>,
     /// Issues, sprints and the queue, read through the user's own `acli`. Only the Work view asks,
     /// and only for a project whose workflow names a tracker — see `tracker.rs`.
     pub tracker: Arc<dyn wtm_core::ports::Tracker>,
@@ -1148,6 +1151,7 @@ impl App {
             forge: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
             review_writer: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
             pr_writer: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
+            own_pulls: Arc::new(wtm_forge::GhForge::new(Arc::clone(&forge_runner))),
             tracker: Arc::new(wtm_tracker::AcliTracker::new(Arc::clone(&forge_runner))),
             tracker_writer: Arc::new(wtm_tracker::AcliTracker::new(Arc::clone(&forge_runner))),
         })

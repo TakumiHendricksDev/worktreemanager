@@ -37,6 +37,7 @@
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { updates } from '../state/update.svelte';
   import { browserTools } from '../state/browser-tools.svelte';
+  import { keepAwake } from '../state/keep-awake.svelte';
   import { restoreSessions } from '../state/restore-sessions.svelte';
   import { sessionAwareness } from '../state/session-awareness.svelte';
   import { view } from '../state/view.svelte';
@@ -456,6 +457,18 @@
             queue of this project’s worktrees, a workspace for reviewing one, and an inbox.
             Reviews run the recipes in your own config; a project without one has nothing to
             run, and its worktrees read Not reviewed.
+          </p>
+          <Choice
+            type="checkbox"
+            checked={keepAwake.enabled}
+            onchange={(enabled) => void keepAwake.setEnabled(enabled)}
+          >
+            Keep the Mac awake while runs work
+          </Choice>
+          <p class="c-field__help">
+            While a planner, designer, implementer or review is working, wtm holds an
+            idle-sleep assertion, and lets it go when none is. Closing the lid still sleeps
+            the Mac. A run the Mac slept through says when it was asleep.
           </p>
         </div>
 

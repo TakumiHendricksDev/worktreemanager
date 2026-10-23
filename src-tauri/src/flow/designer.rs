@@ -1171,6 +1171,7 @@ impl Engine {
                     },
                     self.now(),
                 );
+                self.keep_process(invocation.id, &session);
                 self.notice.changed(ctx.flow);
                 let end = self.read_designer(ctx, run, step, &session, invocation.id, words, &rx);
                 if !matches!(end, TurnEnd::Quitting) {
@@ -1962,11 +1963,12 @@ impl Engine {
             let Some(flow) = db.flow(design.flow).map_err(text)? else {
                 continue;
             };
-            let running = db
-                .steps(design.flow)
-                .unwrap_or_default()
-                .iter()
-                .any(|s| s.role == design.role && s.status == StepStatus::Running);
+            // Running, or about to: a crash between the run moving to Designing and its session
+            // opening leaves the step pending and no hold, which nothing would ever pick up.
+            let running = db.steps(design.flow).unwrap_or_default().iter().any(|s| {
+                s.role == design.role
+                    && matches!(s.status, StepStatus::Running | StepStatus::Pending)
+            });
             if flow.state.end.is_none()
                 && flow.state.hold.is_none()
                 && flow.state.phase == Phase::Designing

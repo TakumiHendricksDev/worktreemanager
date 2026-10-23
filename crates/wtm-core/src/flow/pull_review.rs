@@ -290,6 +290,8 @@ mod tests {
             cross_repository,
             maintainer_can_modify,
             requested_reviewers: Vec::new(),
+            review_decision: None,
+            merge_state: None,
             checks: ChecksSummary::default(),
         }
     }

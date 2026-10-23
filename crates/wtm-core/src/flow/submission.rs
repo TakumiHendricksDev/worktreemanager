@@ -75,6 +75,21 @@ pub struct Handoff {
     pub checks: Vec<String>,
     #[serde(default)]
     pub open_questions: Vec<String>,
+    /// What the writer says about each acceptance criterion of the plan. Its claim, shown as its
+    /// claim: the hand-over sets it beside the checks and the review, which are the evidence.
+    #[serde(default)]
+    pub acceptance: Vec<CriterionClaim>,
+}
+
+/// A writer's word on one acceptance criterion, by its number in the plan's list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CriterionClaim {
+    /// 1 for the plan's first criterion.
+    pub criterion: u32,
+    pub met: bool,
+    /// Where it can be seen: a test, a file and line, a check.
+    pub evidence: String,
 }
 
 /// A review's findings, from a reviewer.
@@ -273,6 +288,23 @@ pub fn schema(kind: OutputKind) -> Value {
                 "changed": texts(),
                 "checks": texts(),
                 "openQuestions": texts(),
+                "acceptance": {
+                    "type": "array",
+                    "description": "One entry per acceptance criterion of the plan you were \
+                                    given, by its number in that list: whether it is met, and \
+                                    where that can be seen. Leave it out when you were given no \
+                                    plan.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "criterion": { "type": "integer", "minimum": 1 },
+                            "met": { "type": "boolean" },
+                            "evidence": text(),
+                        },
+                        "required": ["criterion", "met", "evidence"],
+                        "additionalProperties": false,
+                    },
+                },
             },
             "required": ["summary"],
             "additionalProperties": false,

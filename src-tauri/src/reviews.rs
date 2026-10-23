@@ -424,7 +424,9 @@ pub fn queue(app: &App, project_id: &str) -> Result<ReviewQueueView, ErrorView> 
         .work_items(&project.id)
         .map_err(|err| store_error(&err))?
         .iter()
-        .filter(|item| item.pull_request.is_some())
+        // A teammate's pull request, not an issue's own: the one an issue's run drafted is its
+        // Implement tab's to follow.
+        .filter(|item| item.pull_request.is_some() && item.issue.is_none())
         .map(|item| item_view(app, store.as_ref(), item))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ReviewQueueView { forge, items })

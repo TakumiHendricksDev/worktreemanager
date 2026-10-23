@@ -770,6 +770,25 @@ mod tests {
     }
 
     #[test]
+    fn no_run_tool_merges_marks_ready_or_moves_an_issue_and_none_can_be_asked_for() {
+        for authority in [Authority::Reviewer, Authority::Writer] {
+            for tool in tools_for(authority) {
+                for verb in ["merge", "ready", "publish", "push", "transition", "move"] {
+                    assert!(!tool.contains(verb), "{tool} would {verb}");
+                }
+            }
+        }
+        // A request is recorded and nothing else; the ones that publish your work are not even
+        // that, because they are yours (the Ready + Needs Review and Merge sheets).
+        for intent in ["merge", "mark_ready", "ready", "publish", "approve"] {
+            assert!(
+                parse(REQUEST, &json!({ "intent": intent }), Authority::Writer).is_err(),
+                "{intent} could be requested"
+            );
+        }
+    }
+
+    #[test]
     fn context_takes_no_arguments_and_tolerates_a_cli_that_sends_none() {
         assert_eq!(
             parse(CONTEXT, &Value::Null, Authority::Reviewer),

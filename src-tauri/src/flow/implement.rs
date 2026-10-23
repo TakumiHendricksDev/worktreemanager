@@ -213,6 +213,9 @@ pub struct ImplementView {
     pub can_start: bool,
     /// Whether Resume would carry it on now.
     pub can_resume: bool,
+    /// What happened to the run while nothing in it moved: the Mac asleep, a session stopped at
+    /// launch. Never progress.
+    pub notes: Vec<wtm_core::flow::FlowNote>,
 }
 
 /// The first line of `text`, trimmed, at most 72 characters: a commit's subject.
@@ -293,7 +296,9 @@ impl Engine {
     }
 
     /// The implementer a project names, with its config and its role's spec.
-    fn implementer_of(project: &wtm_core::model::Project) -> Option<(ImplementSpec, RoleSpec)> {
+    pub(super) fn implementer_of(
+        project: &wtm_core::model::Project,
+    ) -> Option<(ImplementSpec, RoleSpec)> {
         let workflow = project.workflow.as_ref()?;
         let implement = workflow.implement.clone()?;
         let spec = workflow.role.get(&implement.writer)?.clone();
@@ -425,6 +430,7 @@ impl Engine {
             running,
             can_start,
             can_resume,
+            notes: db.notes(flow).map_err(text)?,
         })
     }
 
@@ -564,7 +570,12 @@ impl Engine {
 
     /// Take the worktree for `flow`'s writer, or say who has it. `true` when it was taken now,
     /// `false` when the run held it already.
-    fn take_writer_lease(&self, flow: FlowId, worktree: &str, role: &str) -> Result<bool, Refusal> {
+    pub(super) fn take_writer_lease(
+        &self,
+        flow: FlowId,
+        worktree: &str,
+        role: &str,
+    ) -> Result<bool, Refusal> {
         if let Some(lease) = self.writer_on(worktree) {
             return if lease.flow == flow {
                 Ok(false)
@@ -1104,6 +1115,7 @@ impl Engine {
                         plan_revision,
                         findings: Vec::new(),
                         checks: Vec::new(),
+                        note: None,
                     },
                     self.now(),
                 )
@@ -1175,6 +1187,22 @@ impl Engine {
             _ => match round.kind {
                 RoundKind::Implement => brief::implementer_opening_turn(ctx.key()),
                 RoundKind::Fix => self.fix_words(ctx, &round, resumed)?,
+                RoundKind::Revise => brief::implementer_revise_turn(
+                    round.note.as_deref().unwrap_or_default(),
+                    &ctx.implementation
+                        .remaining
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "F{} {} ({})",
+                                r.finding,
+                                r.title.trim(),
+                                left_words(&r.because)
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                    resumed,
+                ),
             },
         };
         let end = self.implementer_turn(ctx, run, &step, &round, resume.as_deref(), &words);
@@ -1419,6 +1447,12 @@ impl Engine {
                     ctx.key(),
                     handoff.summary.trim()
                 ),
+                RoundKind::Revise => format!(
+                    "{}: {}\n\n{}",
+                    ctx.key(),
+                    subject(&handoff.summary),
+                    handoff.summary.trim()
+                ),
             };
             let made = wtm_git::checkpoint::commit(
                 runner,
@@ -1463,8 +1497,17 @@ impl Engine {
                 .map(|(path, _, _)| path)
                 .collect()
         };
-        db.end_round(ctx.flow, round.round, Some(&head), &touched, self.now())
-            .map_err(text)?;
+        db.end_round(
+            ctx.flow,
+            round.round,
+            Some(&head),
+            &touched,
+            Some(handoff),
+            self.now(),
+        )
+        .map_err(text)?;
+        // After the writer's round, the remote is read for anything wtm did not put there.
+        self.watch_remote(ctx.flow);
         self.record(
             ctx.flow,
             &FlowEvent::Advanced {
@@ -1625,6 +1668,7 @@ impl Engine {
                     },
                     self.now(),
                 );
+                self.keep_process(invocation.id, &session);
                 self.notice.changed(ctx.flow);
                 let end =
                     self.read_implementer(ctx, run, step, &session, invocation.id, words, &rx);
@@ -2028,7 +2072,8 @@ impl Engine {
         let configured = ctx.implement.checks(&ctx.workflow);
         let rounds = db.rounds(ctx.flow).map_err(text)?;
         let names: Vec<String> = match rounds.last() {
-            Some(round) if round.kind == RoundKind::Fix => {
+            // After a fix or a revision, only the checks its changes can affect run again.
+            Some(round) if matches!(round.kind, RoundKind::Fix | RoundKind::Revise) => {
                 let mut names = affected_checks(configured.iter().copied(), &round.changed);
                 for asked in &round.checks {
                     if !names.contains(asked) && configured.iter().any(|(id, _)| id == asked) {
@@ -2281,6 +2326,7 @@ impl Engine {
                             plan_revision: ctx.implementation.plan_revision,
                             findings: attempted,
                             checks,
+                            note: None,
                         },
                         self.now(),
                     )
@@ -2424,7 +2470,18 @@ impl Engine {
                     .join("; ")
             );
         }
-        body.push_str(" Nothing has left this Mac.");
+        let drafts = self
+            .app
+            .project(ctx.project())
+            .ok()
+            .and_then(|p| p.workflow.and_then(|w| w.forge))
+            .is_some();
+        body.push_str(if drafts {
+            " The task branch is pushed and its draft pull request made or updated; nothing is \
+             marked ready, moved or merged without you."
+        } else {
+            " Nothing has left this Mac."
+        });
         self.file(&NewInboxItem {
             flow: ctx.flow,
             kind: InboxKind::ReviewReady,
@@ -2434,6 +2491,10 @@ impl Engine {
         });
         tracing::info!(flow = %ctx.flow, ?why, left = remaining.len(), "an implementation is ready to test");
         self.notice.changed(ctx.flow);
+        // The plan makes the draft automatic: at the first hand-over and after each revision.
+        if let Some(me) = self.me.upgrade() {
+            me.draft_after_handover(ctx.flow);
+        }
         Ok(())
     }
 
@@ -2794,7 +2855,7 @@ impl Engine {
                 .ok()
                 .flatten()
                 .map(|c| c.as_str().to_owned());
-            db.end_round(flow, open.round, head.as_deref(), &[], self.now())
+            db.end_round(flow, open.round, head.as_deref(), &[], None, self.now())
                 .map_err(text)?;
         }
         {
@@ -3153,7 +3214,7 @@ fn left_words(because: &wtm_core::flow::LeftBecause) -> String {
     }
 }
 
-fn no_implementer() -> String {
+pub(super) fn no_implementer() -> String {
     "this project names no implementer: add `[workflow.implement]` with a `writer` role and a review \
      `recipe` to your own config"
         .to_owned()

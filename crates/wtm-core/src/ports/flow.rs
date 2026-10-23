@@ -33,8 +33,8 @@ use crate::flow::{
     CheckRun, FindingId, FindingRecord, NewCheckRun, NewScreenshot, Reconciled, Screenshot,
 };
 use crate::flow::{
-    CheckpointBy, ImplementChange, ImplementCheckpoint, ImplementQuestion, Implementation,
-    NewImplementation, NewRound, Round,
+    CheckpointBy, Handoff, ImplementChange, ImplementCheckpoint, ImplementQuestion, Implementation,
+    NewImplementation, NewRound, PrFeedback, Round,
 };
 use crate::flow::{
     CommandRun, CommandRunChange, CommandRunId, CommandRunRefused, NewCommandRun, ServiceRecord,
@@ -57,7 +57,7 @@ use crate::flow::{
     Snapshot, SnapshotId, Step, StepChange, StepId,
 };
 use crate::flow::{MirroredPr, NewOutcome, NewReviewedHead, Outcome, ReviewClaim, ReviewedHead};
-use crate::flow::{MoveSend, NewStartJob, StartJob, StartJobChange, StartJobError};
+use crate::flow::{MoveSend, NewStartJob, OwnSend, StartJob, StartJobChange, StartJobError};
 use crate::model::ProjectId;
 
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -367,6 +367,33 @@ pub trait RunStore: Send + Sync {
 
     /// A run's switches, oldest first.
     fn switches(&self, flow: FlowId) -> Result<Vec<crate::flow::ProviderSwitch>, FlowStoreError>;
+
+    /// Keep the process behind an invocation's session: its pid and start time.
+    fn keep_process(
+        &self,
+        invocation: InvocationId,
+        process: &crate::flow::ProcessIdentity,
+    ) -> Result<(), FlowStoreError>;
+
+    /// Every invocation that started no later than `before` and still has a process kept: what a launch
+    /// looks for, since a session this wtm opened is not the last one's.
+    fn kept_processes(
+        &self,
+        before: UnixMs,
+    ) -> Result<Vec<(Invocation, crate::flow::ProcessIdentity)>, FlowStoreError>;
+
+    /// The launch has dealt with this invocation's process: forget it.
+    fn forget_process(&self, invocation: InvocationId) -> Result<(), FlowStoreError>;
+
+    /// Keep a note on a run. It is not an event, and moves nothing.
+    fn note(
+        &self,
+        note: &crate::flow::NewNote,
+        at: UnixMs,
+    ) -> Result<crate::flow::FlowNote, FlowStoreError>;
+
+    /// A run's notes, oldest first.
+    fn notes(&self, flow: FlowId) -> Result<Vec<crate::flow::FlowNote>, FlowStoreError>;
 }
 
 /// What wtm keeps about a teammate's pull request beyond its review runs: what the forge last
@@ -553,6 +580,20 @@ pub trait OutboxStore: Send + Sync {
             .collect())
     }
 
+    /// One approval of a write to the issue's own pull request.
+    fn own_send(&self, approval: ApprovalId) -> Result<Option<OwnSend>, FlowStoreError> {
+        Ok(self.approved(approval)?.and_then(Approved::into_own))
+    }
+
+    /// A flow's writes to its own pull request, oldest first.
+    fn own_sends(&self, flow: FlowId) -> Result<Vec<OwnSend>, FlowStoreError> {
+        Ok(self
+            .approvals(flow)?
+            .into_iter()
+            .filter_map(Approved::into_own)
+            .collect())
+    }
+
     /// One approval of a comment on an issue.
     fn issue_comment(&self, approval: ApprovalId) -> Result<Option<CommentSend>, FlowStoreError> {
         Ok(self.approved(approval)?.and_then(Approved::into_comment))
@@ -677,6 +718,10 @@ pub trait EnvStore: Send + Sync {
 
     /// A flow's runs, newest first, at most `limit`.
     fn command_runs(&self, flow: FlowId, limit: usize) -> Result<Vec<CommandRun>, FlowStoreError>;
+
+    /// Every run, of any flow, still recorded as running: at launch, the ones a quit or a crash cut
+    /// off, since a run's process does not outlive the wtm that ran it.
+    fn running_command_runs(&self) -> Result<Vec<CommandRun>, FlowStoreError>;
 
     /// How many minutes in the background before a project's services are stopped, if you opted in.
     fn idle_stop(&self, project: &ProjectId) -> Result<Option<u32>, FlowStoreError>;
@@ -900,13 +945,15 @@ pub trait ImplementStore: Send + Sync {
     /// Record the run's next round: 1 for the first.
     fn start_round(&self, round: &NewRound, at: UnixMs) -> Result<Round, FlowStoreError>;
 
-    /// End round `round`, with where it left the worktree and what it changed. Once.
+    /// End round `round`, with where it left the worktree, what it changed and what the writer
+    /// handed in. Once.
     fn end_round(
         &self,
         flow: FlowId,
         round: u32,
         head_sha: Option<&str>,
         changed: &[String],
+        handoff: Option<&Handoff>,
         at: UnixMs,
     ) -> Result<Round, FlowStoreError>;
 
@@ -937,4 +984,19 @@ pub trait ImplementStore: Send + Sync {
 
     /// What the run's questions are about, oldest first.
     fn implement_questions(&self, flow: FlowId) -> Result<Vec<ImplementQuestion>, FlowStoreError>;
+
+    /// Keep each review of the issue's pull request read for the first time, and return those: a
+    /// review already kept is kept as it was first read.
+    fn keep_feedback(&self, feedback: &[PrFeedback]) -> Result<Vec<PrFeedback>, FlowStoreError>;
+
+    /// The reviews kept for a run, oldest first.
+    fn feedback(&self, flow: FlowId) -> Result<Vec<PrFeedback>, FlowStoreError>;
+
+    /// Say that revision round `round` took `reviews` in. Each review is taken in once.
+    fn feedback_revised(
+        &self,
+        flow: FlowId,
+        reviews: &[u64],
+        round: u32,
+    ) -> Result<(), FlowStoreError>;
 }

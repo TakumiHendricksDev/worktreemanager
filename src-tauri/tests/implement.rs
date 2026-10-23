@@ -30,23 +30,28 @@ use serde_json::{Value, json};
 use wtm_app_lib::app::{App, WORK_VIEW_PREF};
 use wtm_app_lib::flow::host::RoleHost;
 use wtm_app_lib::flow::implement::ImplementView;
+use wtm_app_lib::flow::own_pr::OwnPrView;
 use wtm_app_lib::flow::start::{StartOutcome, StartWork};
 use wtm_app_lib::flow::{Engine, Notice, Tuning};
 use wtm_app_lib::tracker;
 use wtm_config::AppPaths;
 use wtm_core::flow::{
     CheckStatus, FlowId, Hold, ImplementAsk, ImplementOutcome, InboxKind, Issue, IssueStatus,
-    LeaseKind, LeftBecause, Phase, RoundKind, Sprint, SprintState, StatusCategory, StopReason,
+    LeaseKind, LeftBecause, MergeMethod, OperationState, OwnRequest, Phase, PrState,
+    PublicationState, RemoteReviewState, RoundKind, Sprint, SprintState, StatusCategory,
+    StopReason,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::config::{ConfigStore, TrustDecision};
+use wtm_core::ports::forge::{Forge, OwnPullWriter, PullRequestWriter, ReviewWriter};
 use wtm_core::ports::{ImplementStore, LeaseStore, PlanStore, Tracker, TrackerWriter};
 use wtm_core::usecase::SyncReason;
 use wtm_testkit::{FakeClock, FakeTracker, GitFixture};
 
 mod common;
 use common::agents::{Act, Behaviour, FakeHost, Heard, Script};
+use common::github::FakeGitHub;
 
 // ═══════════════════════════════ the harness ═══════════════════════════════
 
@@ -76,6 +81,7 @@ branch_must_match = "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
 /// `lint` reads everything, `src-test` only `src/`, `docs-check` only `docs/`. `src-test` fails
 /// until the export says it was fixed, so the first round always has a check to make pass.
 const WORKFLOW: &str = "tracker = \"jira\"\n\
+     {forge}\
      planner = \"planner\"\n\
      {designer}\
      [projects.\"{root}\".config.workflow.statuses]\n\
@@ -203,6 +209,29 @@ struct Harness {
     host: Arc<FakeHost>,
     project: String,
     _config: tempfile::TempDir,
+    tracker: Arc<FakeTracker>,
+    /// The engine's clock, for a test that puts the Mac to sleep.
+    clock: Arc<FakeClock>,
+    /// The fake GitHub, and the bare repository its `origin` is, for a harness that publishes.
+    github: Option<Arc<FakeGitHub>>,
+    _origin: Option<tempfile::TempDir>,
+}
+
+/// Run `git` in `dir`.
+fn git(dir: &Path, args: &[&str]) -> String {
+    // A test is a sanctioned place to spawn directly.
+    #[allow(clippy::disallowed_methods)]
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
 impl Harness {
@@ -211,10 +240,43 @@ impl Harness {
     }
 
     fn configured(script: Script, designer: bool, rounds: u32, attempts: u32) -> Self {
+        Self::build(script, designer, rounds, attempts, false)
+    }
+
+    /// A project whose workflow names GitHub: `origin` is a bare repository here, reached through
+    /// `url.<path>.insteadOf` so the remote reads as `github.com/acme/units`, and the forge is
+    /// [`FakeGitHub`].
+    fn publishing(script: Script) -> Self {
+        Self::build(script, false, 2, 1, true)
+    }
+
+    fn build(script: Script, designer: bool, rounds: u32, attempts: u32, github: bool) -> Self {
         let fixture = GitFixture::new();
         fixture.commit("wtm.toml", CONFIG, "add wtm config");
         fixture.commit("README.md", "# Units\n", "a readme");
         fixture.commit("src/lib.rs", "pub mod units;\n", "a library");
+        let origin = github.then(|| {
+            let origin = tempfile::tempdir().unwrap();
+            git(
+                origin.path(),
+                &["init", "--bare", "--initial-branch=main", "-q"],
+            );
+            let url = "https://github.com/acme/units.git";
+            git(fixture.root(), &["remote", "set-url", "origin", url]);
+            git(
+                fixture.root(),
+                &[
+                    "config",
+                    &format!("url.{}.insteadOf", origin.path().display()),
+                    url,
+                ],
+            );
+            git(
+                fixture.root(),
+                &["push", "-q", "origin", "HEAD:refs/heads/main"],
+            );
+            origin
+        });
         let config = tempfile::tempdir().unwrap();
         let paths = AppPaths::rooted(config.path());
         let config_file = paths.config_file.clone();
@@ -250,6 +312,15 @@ impl Harness {
         tracker.describe(KEY, "Export the units as CSV.");
         app.tracker = Arc::clone(&tracker) as Arc<dyn Tracker>;
         app.tracker_writer = Arc::clone(&tracker) as Arc<dyn TrackerWriter>;
+        let fake_github = origin
+            .as_ref()
+            .map(|origin| Arc::new(FakeGitHub::new(origin.path())));
+        if let Some(github) = &fake_github {
+            app.forge = Arc::clone(github) as Arc<dyn Forge>;
+            app.pr_writer = Arc::clone(github) as Arc<dyn PullRequestWriter>;
+            app.own_pulls = Arc::clone(github) as Arc<dyn OwnPullWriter>;
+            app.review_writer = Arc::clone(github) as Arc<dyn ReviewWriter>;
+        }
 
         let root = app.register(fixture.root()).unwrap();
         app.config
@@ -265,6 +336,7 @@ impl Harness {
                 .replace("{root}", &shown)
                 .replace("{rounds}", &rounds.to_string())
                 .replace("{attempts}", &attempts.to_string())
+                .replace("{forge}", if github { "forge = \"github\"\n" } else { "" })
                 .replace(
                     "{designer}",
                     if designer {
@@ -279,7 +351,8 @@ impl Harness {
 
         let app = Arc::new(app);
         let host = FakeHost::new(Arc::clone(&app), script);
-        let engine = Self::engine(&app, &host);
+        let clock = Arc::new(FakeClock::new());
+        let engine = Self::engine_with(&app, &host, &clock);
         let h = Self {
             project: ProjectId::from_root(&root).to_string(),
             _fixture: fixture,
@@ -287,16 +360,24 @@ impl Harness {
             engine,
             host,
             _config: config,
+            tracker,
+            clock,
+            github: fake_github,
+            _origin: origin,
         };
         tracker::sync(&h.app, &h.project, SyncReason::Demand).unwrap();
         h
     }
 
     fn engine(app: &Arc<App>, host: &Arc<FakeHost>) -> Arc<Engine> {
+        Self::engine_with(app, host, &Arc::new(FakeClock::new()))
+    }
+
+    fn engine_with(app: &Arc<App>, host: &Arc<FakeHost>, clock: &Arc<FakeClock>) -> Arc<Engine> {
         let engine = Engine::new(
             Arc::clone(app),
             Arc::clone(host) as Arc<dyn RoleHost>,
-            Arc::new(FakeClock::new()) as Arc<dyn Clock>,
+            Arc::clone(clock) as Arc<dyn Clock>,
             Arc::new(Heard::default()) as Arc<dyn Notice>,
             Tuning {
                 tick_ms: 5,
@@ -420,6 +501,35 @@ impl Harness {
             .nth(n - 1)
             .cloned()
             .unwrap()
+    }
+
+    fn github(&self) -> &FakeGitHub {
+        self.github.as_deref().expect("a harness that publishes")
+    }
+
+    /// Wait until the run's own pull request satisfies `done`, with nothing being sent.
+    fn until_published(
+        &self,
+        flow: FlowId,
+        what: &str,
+        done: impl Fn(&OwnPrView) -> bool,
+    ) -> OwnPrView {
+        for _ in 0..6_000 {
+            let view = self.engine.own_pr_view(flow).unwrap();
+            if !view
+                .sends
+                .iter()
+                .any(|s| s.state == PublicationState::Posting)
+                && done(&view)
+            {
+                return view;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!(
+            "never {what}: {:#?}",
+            self.engine.own_pr_view(flow).unwrap()
+        );
     }
 
     /// The conversation the `n`th session of `role` reported, as its invocation recorded it.
@@ -634,6 +744,138 @@ fn an_implementation_is_checked_reviewed_fixed_in_its_conversation_and_handed_ov
             .id,
         review
     );
+}
+
+#[test]
+fn the_hand_over_shows_the_diff_the_evidence_and_each_criterion_and_revise_goes_back_to_the_writer()
+{
+    let h = Harness::new(script(|attempt| match attempt {
+        1 => Behaviour::Acts(vec![
+            Act::Write("src/export.rs", "pub fn export() {}\n"),
+            Act::Write("docs/export.md", "# Export\n"),
+            Act::Checkpoint("Export the units"),
+            Act::HandoffClaiming(
+                "Added the exporter and its page",
+                vec![(1, false, "one unit is still missing")],
+            ),
+        ]),
+        2 => Behaviour::Acts(vec![
+            Act::Write("src/export.rs", "pub fn export() {} // fixed\n"),
+            Act::Checkpoint("Export every unit"),
+            Act::HandoffClaiming(
+                "Fixed the off-by-one",
+                vec![(1, true, "src/export.rs exports every unit")],
+            ),
+        ]),
+        _ => Behaviour::Acts(vec![
+            Act::Write(
+                "src/export.rs",
+                "pub fn export() {} // fixed, with a header\n",
+            ),
+            Act::Checkpoint("Write a header row"),
+            Act::Handoff("Added the header row"),
+        ]),
+    }));
+    let flow = h.planned();
+    h.approve_plan(flow);
+    h.ready(flow);
+
+    let handoff = h.engine.handoff_view(flow).unwrap();
+    assert!(handoff.can_revise);
+    let files: Vec<&str> = handoff.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(files, ["docs/export.md", "src/export.rs"]);
+    assert!(
+        handoff.patch.contains("+pub fn export() {} // fixed"),
+        "{}",
+        handoff.patch
+    );
+    assert!(handoff.uncommitted.is_empty());
+    assert!(
+        handoff.since.is_none(),
+        "nothing changed since the evidence"
+    );
+    // Every check Verifying runs, with what it printed; never a check that did not run.
+    let checks: Vec<(&str, CheckStatus, bool)> = handoff
+        .checks
+        .iter()
+        .map(|c| (c.run.check.as_str(), c.run.status, c.stale))
+        .collect();
+    assert_eq!(
+        checks,
+        [
+            ("docs-check", CheckStatus::Passed, false),
+            ("lint", CheckStatus::Passed, false),
+            ("src-test", CheckStatus::Passed, false),
+        ]
+    );
+    // The writer's newest word on the criterion, as its word.
+    assert_eq!(handoff.coverage.len(), 1);
+    assert_eq!(handoff.coverage[0].text, "The export lists every unit");
+    let claim = handoff.coverage[0].claim.clone().unwrap();
+    assert!(claim.met);
+    assert_eq!(claim.evidence, "src/export.rs exports every unit");
+
+    // An edit by hand makes the evidence stale, and says which checks it touches.
+    let worktree = h.worktree(flow);
+    std::fs::write(worktree.join("docs/export.md"), "# Export\n\nBy hand.\n").unwrap();
+    let edited = h.engine.handoff_view(flow).unwrap();
+    assert_eq!(edited.uncommitted, ["docs/export.md"]);
+    let since = edited.since.clone().unwrap();
+    assert_eq!(since.paths, ["docs/export.md"]);
+    let stale: Vec<&str> = edited
+        .checks
+        .iter()
+        .filter(|c| c.stale)
+        .map(|c| c.run.check.as_str())
+        .collect();
+    assert_eq!(stale, ["docs-check", "lint"], "src-test reads only src/");
+
+    // Revise needs your words.
+    assert!(h.engine.revise(flow, "   ").is_err());
+    h.engine
+        .revise(flow, "Put a header row first, and keep my docs edit")
+        .unwrap();
+    let view = h.ready(flow);
+    // The same writer, in the same conversation, given your words.
+    assert_eq!(h.host.attempts_of("implementer"), 3);
+    let first = h.conversation(flow, 1).unwrap();
+    assert_eq!(
+        h.opened("implementer", 3).resume.as_deref(),
+        Some(first.as_str())
+    );
+    let turn = h.turns("implementer", 3).join("\n");
+    assert!(
+        turn.contains(
+            "<wtm_revision>\nPut a header row first, and keep my docs edit\n</wtm_revision>"
+        ),
+        "{turn}"
+    );
+    let kinds: Vec<RoundKind> = view.rounds.iter().map(|r| r.kind).collect();
+    assert_eq!(
+        kinds,
+        [RoundKind::Implement, RoundKind::Fix, RoundKind::Revise]
+    );
+    assert_eq!(
+        view.rounds[2].note.as_deref(),
+        Some("Put a header row first, and keep my docs edit")
+    );
+    assert_eq!(
+        view.rounds[2].handoff.as_ref().map(|h| h.summary.as_str()),
+        Some("Added the header row")
+    );
+    // Your edit went in with the revision, through the app's commit, and the checks it touched ran
+    // again; the review found nothing more, so it is handed over clean.
+    assert_eq!(subjects(&worktree)[0], "Write a header row");
+    let after = h.engine.handoff_view(flow).unwrap();
+    assert!(after.uncommitted.is_empty());
+    assert!(after.since.is_none());
+    assert_eq!(
+        view.implementation.unwrap().stopped,
+        Some(StopReason::Clean)
+    );
+    assert!(h.db().open_leases(None).unwrap().is_empty());
+    // The writer's earlier word on the criterion stands: the revision said nothing about it.
+    assert!(after.coverage[0].claim.as_ref().unwrap().met);
 }
 
 #[test]
@@ -1021,9 +1263,26 @@ fn a_crash_mid_turn_keeps_the_writer_lease_and_resume_carries_on_in_the_same_con
     let first = h.conversation(flow, 1).unwrap();
     h.host.sessions.lock().clear();
     go.store(true, Ordering::SeqCst);
+    // The writer's CLI outlived the crash, as a CLI in its own process group does.
+    let left: Vec<_> = h.host.processes.lock().values().cloned().collect();
+    assert_eq!(
+        left.len(),
+        1,
+        "the writer's process is still running: {left:?}"
+    );
     let relaunched = Harness::engine(&h.app, &h.host);
     let interrupted = relaunched.recover().unwrap();
     assert!(interrupted.contains(&flow), "{interrupted:?}");
+    // Found by what was recorded, and stopped: still that very process.
+    assert_eq!(*h.host.reaped.lock(), left);
+    let notes = relaunched.implement_view(flow).unwrap().notes;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0].kind, wtm_core::flow::NoteKind::Reaped);
+    assert!(
+        notes[0]
+            .text
+            .contains("was still running when wtm started again")
+    );
     let state = relaunched.implement_view(flow).unwrap().flow.state;
     assert_eq!(state.phase, Phase::Implementing);
     assert!(matches!(state.hold, Some(Hold::Interrupted { .. })));
@@ -1102,4 +1361,533 @@ fn stopping_the_run_stops_the_writer_and_lets_the_worktree_go() {
         Some(ImplementOutcome::Cancelled)
     );
     assert!(h.db().open_leases(None).unwrap().is_empty());
+}
+
+// ═══════════════════════════════ publishing ═══════════════════════════════
+
+/// Start, approve and implement the issue, and wait for its hand-over's draft to be on GitHub.
+fn handed_over_and_drafted(h: &Harness) -> FlowId {
+    let flow = h.planned();
+    h.approve_plan(flow);
+    h.ready(flow);
+    h.until_published(flow, "drafted", |v| {
+        v.sends
+            .last()
+            .is_some_and(|s| s.state == PublicationState::Published)
+    });
+    flow
+}
+
+#[test]
+fn the_hand_over_drafts_the_pull_request_and_ready_with_needs_review_retries_only_what_failed() {
+    let h = Harness::publishing(script(|attempt| match attempt {
+        1 => first_round(),
+        _ => fixing(),
+    }));
+    let flow = handed_over_and_drafted(&h);
+    let worktree = h.worktree(flow);
+    let head = git(&worktree, &["rev-parse", "HEAD"]);
+
+    // The draft: the task branch's commit on origin, and a draft pull request into its base, under
+    // an approval the app gave itself for exactly that.
+    let github = h.github();
+    assert_eq!(github.head_of("feature/ACME-9"), head);
+    let prs = github.prs.lock().clone();
+    assert_eq!(prs.len(), 1);
+    assert!(prs[0].draft);
+    assert_eq!(
+        (prs[0].base.as_str(), prs[0].branch.as_str()),
+        ("main", "feature/ACME-9")
+    );
+    assert_eq!(prs[0].title, "ACME-9: Export the unit list");
+    assert!(prs[0].body.contains("## What was done"), "{}", prs[0].body);
+    assert!(prs[0].body.contains("<!-- wtm:"), "signed with its marker");
+    let view = h.engine.own_pr_view(flow).unwrap();
+    assert!(matches!(&view.sends[0].send.request, OwnRequest::Draft(plan) if plan.commit == head));
+    assert_eq!(view.pull_request.as_ref().map(|p| p.number), Some(40));
+    // Nothing more left this Mac: not ready, not moved.
+    assert_eq!(*github.writes.lock(), ["open #40"]);
+    assert_eq!(h.tracker.status_of(KEY).as_deref(), Some("In Progress"));
+    // The work item knows its pull request now; it is not a teammate's review to queue.
+    assert!(
+        wtm_app_lib::reviews::queue(&h.app, &h.project)
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    // Ready + Needs Review: one approval, bound to the head the sheet showed.
+    let sheet = h.engine.ready_sheet(flow).unwrap();
+    assert!(sheet.problems.is_empty(), "{:?}", sheet.problems);
+    assert_eq!((sheet.head.as_str(), sheet.draft), (head.as_str(), true));
+    assert_eq!(sheet.tracker_from.as_deref(), Some("In Progress"));
+    assert_eq!(sheet.tracker_to.as_deref(), Some("In Review"));
+    assert!(
+        h.engine
+            .approve_ready(flow, "0000000000000000000000000000000000000000")
+            .is_err()
+    );
+
+    // The pull request goes ready; the tracker refuses the move.
+    h.tracker
+        .refuse_next_move(wtm_core::error::TrackerError::Failed {
+            argv: "acli jira workitem transition".to_owned(),
+            message: "Transition is not available".to_owned(),
+        });
+    h.engine.approve_ready(flow, &head).unwrap();
+    let partial = h.until_published(flow, "half published", |v| {
+        v.sends
+            .last()
+            .is_some_and(|s| s.state == PublicationState::Failed)
+    });
+    let ready = partial.sends.last().unwrap();
+    let states: Vec<OperationState> = ready.send.operations.iter().map(|op| op.state).collect();
+    assert_eq!(states, [OperationState::Done, OperationState::Failed]);
+    assert!(!github.prs.lock()[0].draft);
+    assert_eq!(h.view(flow).flow.state.phase, Phase::Publishing);
+    assert_eq!(h.tracker.status_of(KEY).as_deref(), Some("In Progress"));
+
+    // Retry sends the move alone: no second pull request, no second "ready".
+    h.engine.retry_own(ready.send.approval.id).unwrap();
+    h.until_published(flow, "published", |v| {
+        v.sends
+            .last()
+            .is_some_and(|s| s.state == PublicationState::Published)
+    });
+    assert_eq!(*github.writes.lock(), ["open #40", "ready #40"]);
+    assert_eq!(h.tracker.status_of(KEY).as_deref(), Some("In Review"));
+    assert_eq!(h.view(flow).flow.state.phase, Phase::InReview);
+    let failures = h
+        .engine
+        .inbox(None)
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.flow == flow && i.kind == InboxKind::Failure)
+        .count();
+    assert_eq!(failures, 0, "the failure was settled by the retry");
+}
+
+#[test]
+fn feedback_is_news_once_a_revision_takes_it_in_and_only_the_sheet_merges_at_the_head_it_showed() {
+    let h = Harness::publishing(script(|attempt| match attempt {
+        1 => first_round(),
+        2 => fixing(),
+        _ => Behaviour::Acts(vec![
+            Act::Write(
+                "src/export.rs",
+                "pub fn export() {} // fixed, sorted by floor\n",
+            ),
+            Act::Checkpoint("Sort the units by floor"),
+            Act::Handoff("Sorted the units by floor"),
+        ]),
+    }));
+    let flow = handed_over_and_drafted(&h);
+    let head = git(&h.worktree(flow), &["rev-parse", "HEAD"]);
+    h.engine.approve_ready(flow, &head).unwrap();
+    h.until_published(flow, "published", |_| {
+        h.view(flow).flow.state.phase == Phase::InReview
+    });
+    let github = h.github();
+
+    // A review asking for changes is news once, however often the pull request is read.
+    github.review(
+        40,
+        501,
+        "sam",
+        RemoteReviewState::ChangesRequested,
+        "Sort them by floor",
+    );
+    github.review(
+        40,
+        502,
+        "you",
+        RemoteReviewState::Commented,
+        "A note to myself",
+    );
+    let read = h.engine.sync_pull_request(flow).unwrap();
+    assert_eq!(read.feedback.len(), 1, "your own review is not feedback");
+    assert!(read.can_revise_feedback);
+    assert_eq!(
+        read.reading.as_ref().map(|r| r.pull_request.state),
+        Some(PrState::Open)
+    );
+    h.engine.sync_pull_request(flow).unwrap();
+    let feedback_items = |h: &Harness| {
+        h.engine
+            .inbox(None)
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.flow == flow && i.kind == InboxKind::Feedback)
+            .count()
+    };
+    assert_eq!(feedback_items(&h), 1);
+
+    // One click: the same writer, the same conversation, given the reviewer's words.
+    h.engine.revise_from_feedback(flow).unwrap();
+    let view = h.ready(flow);
+    let turn = h.turns("implementer", 3).join("\n");
+    assert!(turn.contains("Sort them by floor"), "{turn}");
+    assert!(turn.contains("sam's line comment"), "{turn}");
+    let revision = view.rounds.last().unwrap();
+    assert_eq!(revision.kind, RoundKind::Revise);
+    let taken = h.engine.own_pr_view(flow).unwrap().feedback;
+    assert_eq!(taken[0].revised_in, Some(revision.round));
+    assert_eq!(feedback_items(&h), 0);
+    assert!(
+        h.engine.revise_from_feedback(flow).is_err(),
+        "nothing left to take in"
+    );
+
+    // The hand-over after the revision updates the pull request it already has.
+    let revised = h.until_published(flow, "re-drafted", |v| {
+        v.sends.len() == 3
+            && v.sends
+                .last()
+                .is_some_and(|s| s.state == PublicationState::Published)
+    });
+    let new_head = git(&h.worktree(flow), &["rev-parse", "HEAD"]);
+    assert_ne!(new_head, head);
+    assert_eq!(github.head_of("feature/ACME-9"), new_head);
+    assert_eq!(
+        *github.writes.lock(),
+        ["open #40", "ready #40", "update #40"]
+    );
+    assert_eq!(revised.pull_request.as_ref().map(|p| p.number), Some(40));
+
+    // Published again: already ready and already in review, both adopted, nothing sent.
+    h.engine.approve_ready(flow, &new_head).unwrap();
+    h.until_published(flow, "in review again", |_| {
+        h.view(flow).flow.state.phase == Phase::InReview
+    });
+    assert_eq!(github.writes.lock().len(), 3);
+
+    // The sheet refuses a head that moved after it was read: someone pushed to the branch.
+    let sheet = h.engine.merge_sheet(flow).unwrap();
+    assert!(sheet.problems.is_empty(), "{:?}", sheet.problems);
+    assert_eq!(sheet.head, new_head);
+    let bare = github.bare.clone();
+    let tree = git(&bare, &["rev-parse", &format!("{new_head}^{{tree}}")]);
+    let theirs = git(
+        &bare,
+        &["commit-tree", &tree, "-p", &new_head, "-m", "someone else"],
+    );
+    git(&bare, &["update-ref", "refs/heads/feature/ACME-9", &theirs]);
+    let refused = h
+        .engine
+        .approve_merge(flow, &new_head, MergeMethod::Squash)
+        .unwrap_err();
+    assert!(refused.message.contains("moved"), "{}", refused.message);
+    assert!(!github.writes.lock().iter().any(|w| w.starts_with("merge")));
+    git(
+        &bare,
+        &["update-ref", "refs/heads/feature/ACME-9", &new_head],
+    );
+
+    // From the sheet, at its head: merged, with GitHub told the head, and the run is done.
+    h.engine
+        .approve_merge(flow, &new_head, MergeMethod::Squash)
+        .unwrap();
+    h.until_published(flow, "merged", |v| {
+        v.sends
+            .last()
+            .is_some_and(|s| s.state == PublicationState::Published)
+    });
+    assert_eq!(
+        github.writes.lock().last().cloned(),
+        Some(format!("merge #40 Squash at {}", &new_head[..7]))
+    );
+    assert!(
+        h.view(flow).flow.state.end.is_some(),
+        "a merged run is done"
+    );
+}
+
+#[test]
+fn a_ready_cut_off_mid_write_is_checked_at_launch_and_never_sent_twice() {
+    let h = Harness::publishing(script(|attempt| match attempt {
+        1 => first_round(),
+        _ => fixing(),
+    }));
+    let flow = handed_over_and_drafted(&h);
+    let head = git(&h.worktree(flow), &["rev-parse", "HEAD"]);
+    // Approved, and wtm died with the ready request sent and its answer never recorded: GitHub has
+    // the pull request ready, and the operation reads executing.
+    let request = wtm_core::flow::ReadyRequest {
+        key: KEY.to_owned(),
+        ready: wtm_core::flow::MarkReadyPayload {
+            repo: h.github().repo.clone(),
+            number: 40,
+            head: head.clone(),
+        },
+        to_review: wtm_core::flow::MoveIssuePayload {
+            tracker: wtm_core::flow::TrackerKind::Jira,
+            key: KEY.to_owned(),
+            from: "In Progress".to_owned(),
+            to: "In Review".to_owned(),
+        },
+    };
+    let db = h.db();
+    let approved = wtm_core::ports::OutboxStore::approve(
+        db.as_ref(),
+        &wtm_core::flow::NewApproval::ready(flow, &request),
+        &request.operations(flow),
+        1,
+    )
+    .unwrap();
+    wtm_core::ports::OutboxStore::change_operation(
+        db.as_ref(),
+        approved.operations[0].id,
+        &wtm_core::flow::OperationChange::sending(),
+        2,
+    )
+    .unwrap();
+    h.github().prs.lock()[0].draft = false;
+
+    // The next launch reads GitHub: the write happened, so it is adopted, and the move waits.
+    let relaunched = Harness::engine(&h.app, &h.host);
+    relaunched.recover_publications().unwrap();
+    let view = relaunched.own_pr_view(flow).unwrap();
+    let ready = view.sends.last().unwrap();
+    assert_eq!(ready.send.operations[0].state, OperationState::Done);
+    assert!(matches!(
+        ready.send.operations[0].result,
+        Some(wtm_core::flow::OperationResult::Ready { adopted: true, .. })
+    ));
+    assert_eq!(ready.send.operations[1].state, OperationState::Pending);
+    // Said once, and nothing sent by itself.
+    let told: Vec<String> = relaunched
+        .inbox(None)
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.flow == flow && i.kind == InboxKind::Failure)
+        .map(|i| i.title)
+        .collect();
+    assert!(
+        told.iter()
+            .any(|t| t.contains("was not finished when wtm stopped")),
+        "{told:?}"
+    );
+    assert_eq!(h.tracker.status_of(KEY).as_deref(), Some("In Progress"));
+    relaunched.retry_own(ready.send.approval.id).unwrap();
+    for _ in 0..2_000 {
+        if h.tracker.status_of(KEY).as_deref() == Some("In Review") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(h.tracker.status_of(KEY).as_deref(), Some("In Review"));
+    assert_eq!(
+        *h.github().writes.lock(),
+        ["open #40"],
+        "nothing was sent to GitHub twice, nor at all after the crash"
+    );
+}
+
+#[test]
+fn a_task_branch_someone_else_pushed_to_is_reported_after_the_writers_round_and_never_pushed_over()
+{
+    let h = Harness::publishing(script(|attempt| match attempt {
+        1 => first_round(),
+        2 => fixing(),
+        _ => Behaviour::Acts(vec![
+            Act::Write(
+                "src/export.rs",
+                "pub fn export() {} // fixed, with a header\n",
+            ),
+            Act::Checkpoint("Write a header row"),
+            Act::Handoff("Added the header row"),
+        ]),
+    }));
+    let flow = handed_over_and_drafted(&h);
+    let github = h.github();
+    let bare = github.bare.clone();
+    let ours = github.head_of("feature/ACME-9");
+    let tree = git(&bare, &["rev-parse", &format!("{ours}^{{tree}}")]);
+    let theirs = git(
+        &bare,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &ours,
+            "-m",
+            "a teammate's commit",
+        ],
+    );
+    git(&bare, &["update-ref", "refs/heads/feature/ACME-9", &theirs]);
+
+    h.engine.revise(flow, "Add a header row").unwrap();
+    h.ready(flow);
+    // Said in the Inbox after the writer's round; and the hand-over's draft, on its own thread,
+    // refuses to push over it. Give that thread its moment: it reads, and stops.
+    std::thread::sleep(Duration::from_millis(500));
+    let inbox = h.engine.inbox(None).unwrap();
+    let said: Vec<&str> = inbox
+        .iter()
+        .filter(|i| i.flow == flow && i.kind == InboxKind::Failure)
+        .map(|i| i.body.as_str())
+        .collect();
+    assert!(
+        said.iter()
+            .any(|b| b.contains("a commit this worktree does not have")),
+        "{said:#?}"
+    );
+    assert_eq!(
+        github.head_of("feature/ACME-9"),
+        theirs,
+        "nothing was pushed over it"
+    );
+    assert_eq!(*github.writes.lock(), ["open #40"]);
+}
+
+// ═══════════════════════════════ while nothing moved ═══════════════════════════════
+
+/// A writer that works until told to stop, for the tests that watch a run while it works.
+fn working(flag: &Arc<AtomicBool>) -> Script {
+    let wait = Arc::clone(flag);
+    Box::new(move |role, attempt| match role {
+        "planner" => Behaviour::Tools(vec![("flow_submit", plan(false))], true),
+        "implementer" if attempt == 1 => Behaviour::Acts(vec![
+            Act::Write("src/export.rs", "pub fn export() {}\n"),
+            Act::WaitFor(Arc::clone(&wait)),
+            Act::Handoff("Added the exporter"),
+        ]),
+        "implementer" => fixing(),
+        _ => Behaviour::Submit(vec![no_findings()]),
+    })
+}
+
+fn until_working(h: &Harness, flow: FlowId) {
+    for _ in 0..4_000 {
+        let view = h.view(flow);
+        if view.running && view.sessions.iter().any(|s| s.session.is_some()) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("the writer never started");
+}
+
+#[test]
+fn a_process_whose_pid_now_belongs_to_something_else_is_left_alone_and_forgotten() {
+    let go = Arc::new(AtomicBool::new(false));
+    let h = Harness::new(working(&go));
+    let flow = h.planned();
+    h.approve_plan(flow);
+    until_working(&h, flow);
+
+    // The crash, and by the next launch the pid is someone else's: same number, another start.
+    h.host.sessions.lock().clear();
+    go.store(true, Ordering::SeqCst);
+    for process in h.host.processes.lock().values_mut() {
+        process.started = "Sat Oct 24 09:00:00 2026".to_owned();
+    }
+    let relaunched = Harness::engine(&h.app, &h.host);
+    relaunched.recover().unwrap();
+    assert!(
+        h.host.reaped.lock().is_empty(),
+        "nothing that is not ours is stopped"
+    );
+    assert_eq!(h.host.processes.lock().len(), 1, "and it is still running");
+    assert!(relaunched.implement_view(flow).unwrap().notes.is_empty());
+    // Dealt with once: the next launch looks for nothing.
+    let again = Harness::engine(&h.app, &h.host);
+    again.recover().unwrap();
+    assert!(h.host.reaped.lock().is_empty());
+}
+
+#[test]
+fn the_mac_asleep_is_a_note_on_each_working_run_that_never_counts_as_progress() {
+    let go = Arc::new(AtomicBool::new(false));
+    let h = Harness::new(working(&go));
+    let flow = h.planned();
+    h.approve_plan(flow);
+    until_working(&h, flow);
+    let before = h.view(flow).flow.updated_at;
+
+    let look = (h.clock.now_unix_ms(), h.clock.monotonic_ms());
+    // A look a few seconds later finds nothing to say.
+    h.clock.advance_ms(5_000);
+    let look = h.engine.watch_tick(look);
+    assert!(h.view(flow).notes.is_empty());
+    // Forty minutes with the lid shut.
+    h.clock.advance_ms(2_000);
+    h.clock.sleep_ms(40 * 60_000);
+    h.engine.watch_tick(look);
+    let notes = h.view(flow).notes;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0].kind, wtm_core::flow::NoteKind::Asleep);
+    let (from, to) = (notes[0].from.unwrap(), notes[0].to.unwrap());
+    assert_eq!(
+        to - from,
+        40 * 60_000,
+        "asleep from the last look's end to this one"
+    );
+    assert_eq!(
+        h.view(flow).flow.updated_at,
+        before,
+        "sleeping is not working"
+    );
+    go.store(true, Ordering::SeqCst);
+}
+
+/// Counts what it holds, and when each hold is let go.
+#[derive(Default)]
+struct CountingAwake {
+    held: Arc<std::sync::atomic::AtomicUsize>,
+    released: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct Holding(Arc<std::sync::atomic::AtomicUsize>);
+
+impl wtm_app_lib::flow::awake::Held for Holding {}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl wtm_app_lib::flow::awake::KeepAwake for CountingAwake {
+    fn hold(&self) -> Result<Box<dyn wtm_app_lib::flow::awake::Held>, String> {
+        self.held.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(Holding(Arc::clone(&self.released))))
+    }
+}
+
+#[test]
+fn the_mac_is_held_awake_only_when_turned_on_and_only_while_a_run_works() {
+    let go = Arc::new(AtomicBool::new(false));
+    let h = Harness::new(working(&go));
+    let power = Arc::new(CountingAwake::default());
+    h.engine.set_keep_awake(Arc::clone(&power) as _);
+    let flow = h.planned();
+    h.approve_plan(flow);
+    until_working(&h, flow);
+    let look = (h.clock.now_unix_ms(), h.clock.monotonic_ms());
+
+    // Off by default, even while a run works.
+    let look = h.engine.watch_tick(look);
+    assert!(!h.engine.holding_awake());
+    assert_eq!(power.held.load(Ordering::SeqCst), 0);
+
+    h.app
+        .config
+        .set_user_pref(wtm_app_lib::flow::awake::KEEP_AWAKE_PREF, "on")
+        .unwrap();
+    let look = h.engine.watch_tick(look);
+    assert!(h.engine.holding_awake());
+    let look = h.engine.watch_tick(look);
+    assert_eq!(
+        power.held.load(Ordering::SeqCst),
+        1,
+        "held once, not once a look"
+    );
+
+    // The run hands over and nothing works: let go.
+    go.store(true, Ordering::SeqCst);
+    h.ready(flow);
+    h.engine.watch_tick(look);
+    assert!(!h.engine.holding_awake());
+    assert_eq!(power.released.load(Ordering::SeqCst), 1);
 }

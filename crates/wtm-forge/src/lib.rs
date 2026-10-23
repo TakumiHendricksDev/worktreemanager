@@ -32,6 +32,7 @@
 //! the message rather than a parse error from a CLI that printed a login prompt.
 
 mod gh;
+mod own;
 mod parse;
 mod write;
 
