@@ -21,6 +21,7 @@
 
 use serde::Serialize;
 
+use crate::flow::RunPart;
 use crate::flow::{
     Answer, InboxItem, InboxItemId, InboxKind, InboxTarget, NewInboxItem, NewQuestion, Question,
     QuestionError, QuestionId,
@@ -50,7 +51,7 @@ use crate::flow::{
 use crate::flow::{Fix, FixChange, FixId, Lease, LeaseId, LeaseRelease, NewFix, NewLease};
 use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
-    UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink,
+    UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink, WorkflowSpec,
 };
 use crate::flow::{
     Invocation, InvocationChange, InvocationId, NewInvocation, NewReviewRun, NewStep, ReviewRun,
@@ -235,6 +236,23 @@ pub trait FlowStore: Send + Sync {
 
     /// The flow's history, in order.
     fn events(&self, flow: FlowId) -> Result<Vec<RecordedEvent>, FlowStoreError>;
+
+    /// The `[workflow]` `part` of the flow runs with, once it has one.
+    fn run_workflow(
+        &self,
+        flow: FlowId,
+        part: RunPart,
+    ) -> Result<Option<WorkflowSpec>, FlowStoreError>;
+
+    /// Keep `workflow` as the one `part` of the flow runs with, unless it already has one, and
+    /// return the one it has. The first to ask wins, so two threads starting the same step agree.
+    fn capture_workflow(
+        &self,
+        flow: FlowId,
+        part: RunPart,
+        workflow: &WorkflowSpec,
+        at: UnixMs,
+    ) -> Result<WorkflowSpec, FlowStoreError>;
 }
 
 /// A review run's working records: what it is of, its snapshot, and its steps and their attempts.

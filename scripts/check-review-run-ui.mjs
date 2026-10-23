@@ -278,6 +278,17 @@ mockIPC((cmd, args) => {
         throw { kind: 'billing', message: "Workflow runs won't start until Claude Code is signed in with a claude.ai subscription.", detail: { providers: ['claude'] } };
       return structuredClone({ ...runs[id('running')], review: { ...runs[id('running')].review, worktree: a.request.worktree, recipe: a.request.recipe } });
     case 'review_screenshot': return PNG;
+    // Settings › Recipes, which panel 9's Edit recipe and Move role open on the role.
+    case 'recipe_settings': return {
+      file: { home: 'local', declaring: ['local'], roleHomes: {}, recipeHomes: {}, userPath: '/u/config.toml',
+        localPath: '/x/webapp/.git/wtm.local.toml', rootKey: '/x/webapp', revision: '1' },
+      places: [{ home: 'local', header: '[workflow]', path: '/x/webapp/.git/wtm.local.toml' }],
+      workflow: { planner: null, designer: null, implement: null, checks: [],
+        role: { conventions: { objective: 'Conventions', instructions: null, provider: 'claude', model: 'sonnet',
+          effort: 'high', skills: ['team-review'], inputs: ['diff'], output: 'findings', profile: 'reviewer',
+          workspace: null, timeout_ms: null, retries: 1, fallback: 'ask' } },
+        recipe: { standard: { label: 'Standard', stage: [{ roles: ['conventions'] }], concurrency: null } } } };
+    case 'check_recipes': return null;
     case 'start_review_environment': {
       const r = Object.values(runs).find((x) => x.flow.id === a.flow);
       return structuredClone({ ...r, pendingStart: null, running: true,
@@ -454,13 +465,18 @@ try {
         assert(await panel(page).getByRole('button', { name: 'Try now' }).isVisible());
         assert(text.includes('never uses an API key'), text);
         assert(text.includes('paused for usage capacity'), text);
-        assert(text.includes('resumes automatically if wtm is open and the Mac is awake'), text);
+        assert(
+            text.includes('resumes automatically if wtm is open and the Mac is awake'),
+            text,
+        );
         assert(text.includes('None configured for this role'), text);
         assert(text.includes('unknown: Codex has not reported figures'), text);
         await shot(page, join(shots, `waiting-capacity-${scheme}.png`));
         const capacity = panel(page).locator('.c-capacity');
         await capacity.getByRole('button', { name: 'Wait and resume' }).click();
-        await capacity.getByRole('button', { name: 'Run this role on Claude once…' }).click();
+        await capacity
+            .getByRole('button', { name: 'Run this role on Claude once…' })
+            .click();
         await capacity.getByRole('combobox', { name: 'Model' }).waitFor();
         await shot(page, join(shots, `run-once-${scheme}.png`));
         await capacity.getByRole('button', { name: 'Run once on Claude' }).click();
@@ -468,7 +484,11 @@ try {
             (await calls(page, 'choose_capacity')).map((c) => c.args),
             [
                 { flow: 2, step: 22, choice: { kind: 'wait' } },
-                { flow: 2, step: 22, choice: { kind: 'run_once', provider: 'claude', model: null } },
+                {
+                    flow: 2,
+                    step: 22,
+                    choice: { kind: 'run_once', provider: 'claude', model: null },
+                },
             ],
         );
         // The mock answers as if the role started on Claude; the run itself is unchanged, so
@@ -705,7 +725,9 @@ try {
         const cardText = await card.textContent();
         assert(
             cardText.includes('Approval needed · start the environment') &&
-                cardText.includes('Blocked: environment not started. Check browser e2e needs') &&
+                cardText.includes(
+                    'Blocked: environment not started. Check browser e2e needs',
+                ) &&
                 cardText.includes('Start web and run what it blocks?') &&
                 cardText.includes('python3 server.py {{ env.WEB_PORT }}') &&
                 cardText.includes('npx playwright test'),
@@ -738,7 +760,9 @@ try {
         await pick(page, 'runtime');
         await readout(page, 'Reviewed', '1 finding from 2 roles');
         const seen = panel(page).locator('.c-finding', { hasText: 'Save does nothing' });
-        await seen.getByRole('img', { name: 'Screenshot s2 of http://localhost:18431/' }).waitFor();
+        await seen
+            .getByRole('img', { name: 'Screenshot s2 of http://localhost:18431/' })
+            .waitFor();
         assert(
             (await seen.textContent()).includes('taken by clickthrough'),
             'the picture says who took it',
@@ -768,7 +792,33 @@ try {
             "/team-review isn't available to Claude here",
         );
         assert(text.includes('Providers don’t share skills'.replace('’', "'")), text);
+        assert(text.includes('a review keeps the recipe it started with'), text);
         await shot(page, join(shots, `missing-skill-${scheme}.png`));
+        // Panel 9: Move role to Codex opens the role's editor in Settings › Recipes, Codex chosen,
+        // to be checked by Apply and written by Save: the click itself changes nothing.
+        assert(await panel(page).getByRole('button', { name: 'Edit recipe' }).isVisible());
+        await panel(page).getByRole('button', { name: 'Move role to Codex' }).click();
+        const moving = page.getByRole('dialog', { name: 'Edit role conventions' });
+        await moving.waitFor();
+        assert.equal(await moving.getByLabel('Provider').inputValue(), 'codex');
+        assert.equal(await moving.getByLabel('Model').inputValue(), '');
+        assert.equal(
+            await page
+                .getByRole('dialog', { name: 'Settings' })
+                .getByRole('tab', { name: 'Recipes' })
+                .getAttribute('aria-selected'),
+            'true',
+        );
+        assert.equal(
+            (await calls(page, 'save_recipes')).length,
+            0,
+            'nothing is saved by the click',
+        );
+        await moving.getByRole('button', { name: 'Cancel' }).click();
+        await page
+            .getByRole('dialog', { name: 'Settings' })
+            .getByRole('button', { name: 'Done' })
+            .click();
 
         // ── Can't start: billing — nothing was recorded, so it is the refusal that is drawn ──
         await pick(page, 'billing');

@@ -99,9 +99,9 @@ use wtm_core::flow::{
     InboxItemId, InboxKind, InboxTarget, InterruptCause, Invocation, InvocationChange,
     InvocationStatus, NewInboxItem, NewInvocation, NewProviderSwitch, NewQuestion, NewReviewRun,
     NewStep, NewWorkItem, OnLimit, OutputKind, Phase, Question, QuestionId, ReviewRun, RoleKind,
-    RoleProvider, RoleSpec, Runner, ScratchLabel, SkillProblem, Snapshot, SnapshotId, Status, Step,
-    StepChange, StepId, StepStatus, Submission, SwitchReason, SwitchedBy, WorkLink, WorkflowSpec,
-    Workspace, after_failure, credit_problem, on_limit,
+    RoleProvider, RoleSpec, RunPart, Runner, ScratchLabel, SkillProblem, Snapshot, SnapshotId,
+    Status, Step, StepChange, StepId, StepStatus, Submission, SwitchReason, SwitchedBy, WorkLink,
+    WorkflowSpec, Workspace, after_failure, credit_problem, on_limit,
 };
 use wtm_core::model::{AgentEvent, AgentSkill, ApprovalRequest, ExitOutcome, ProjectId, SessionId};
 use wtm_core::ports::clock::Clock;
@@ -515,6 +515,65 @@ impl Engine {
         self.clock.now_unix_ms()
     }
 
+    /// The `[workflow]` `part` of `flow` runs with: the one it read as that part began, kept in its
+    /// record.
+    ///
+    /// Every call for a part that has begun returns what it began with, from any drive of the run.
+    /// An edit to your config — saved from Settings › Recipes or made by hand — therefore reaches
+    /// the runs and steps that begin after it and never one under way: not a review a quit or a
+    /// usage limit paused, not a planner a question holds, not an implementation between its rounds.
+    /// A part with no record yet keeps the project's config as it is now: one from before the
+    /// record existed, the first time this build drives it.
+    ///
+    /// # Errors
+    ///
+    /// When the part has no record and the project no longer declares a workflow.
+    pub(crate) fn run_workflow(
+        &self,
+        flow: FlowId,
+        part: RunPart,
+        project: &wtm_core::model::Project,
+    ) -> Result<WorkflowSpec, String> {
+        let db = self.db()?;
+        if let Some(kept) = db.run_workflow(flow, part).map_err(text)? {
+            return Ok(kept);
+        }
+        let current = project
+            .workflow
+            .clone()
+            .ok_or_else(|| "the project's workflow config has gone".to_owned())?;
+        db.capture_workflow(flow, part, &current, self.now())
+            .map_err(text)
+    }
+
+    /// [`Self::run_workflow`] without keeping anything: the part's own when it has begun, else the
+    /// project's as it is. For drawing a run, and for asking whether a step that has not begun is
+    /// configured yet — neither is beginning it.
+    pub(crate) fn kept_workflow(
+        &self,
+        flow: FlowId,
+        part: RunPart,
+        project: Option<&wtm_core::model::Project>,
+    ) -> Option<WorkflowSpec> {
+        self.db()
+            .ok()
+            .and_then(|db| db.run_workflow(flow, part).ok().flatten())
+            .or_else(|| project.and_then(|p| p.workflow.clone()))
+    }
+
+    /// Keep `workflow` as `part`'s, as the part begins: the config it was started from, rather than
+    /// the config as it is by the time its first drive reads it.
+    pub(crate) fn begin_part(
+        &self,
+        flow: FlowId,
+        part: RunPart,
+        workflow: &WorkflowSpec,
+    ) -> Result<WorkflowSpec, String> {
+        self.db()?
+            .capture_workflow(flow, part, workflow, self.now())
+            .map_err(text)
+    }
+
     fn quitting(&self) -> bool {
         self.quitting.load(Ordering::SeqCst)
     }
@@ -637,6 +696,9 @@ impl Engine {
             now,
         )
         .map_err(text)?;
+        // The config the preflight above was made against is the one the run keeps.
+        db.capture_workflow(flow.id, RunPart::Review, workflow, now)
+            .map_err(text)?;
         self.notice.changed(flow.id);
         if let Err(reason) = self.spawn(flow.id) {
             // Lost a race for the worktree, or no thread: the run says so rather than sitting
@@ -791,10 +853,7 @@ impl Engine {
             .app
             .worktree(&project, &review.worktree)
             .map_err(|e| format!("the worktree is no longer there: {e}"))?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or_else(|| "the project's workflow config has gone".to_owned())?;
+        let workflow = self.run_workflow(flow, RunPart::Review, &project)?;
 
         let mut state = self.state(flow)?;
         if state.phase == Phase::Resolving {
@@ -908,7 +967,7 @@ impl Engine {
                 .recipe
                 .get(&review.recipe)
                 .and_then(|r| r.concurrency),
-            patterns: crate::knowledge::patterns(&project).0,
+            patterns: workflow.instruction_sources(),
             pull_request: db
                 .flow(flow)
                 .ok()
@@ -2161,11 +2220,11 @@ impl Engine {
         }
         self.refuse_if_written(&review.worktree_path)?;
         let project = self.app.project(review.project.as_str()).map_err(text)?;
-        if let Some(workflow) = &project.workflow
-            && let Ok(plan) = wtm_core::flow::plan(workflow, &review.recipe, None)
+        if let Some(workflow) = self.kept_workflow(flow, RunPart::Review, Some(&project))
+            && let Ok(plan) = wtm_core::flow::plan(&workflow, &review.recipe, None)
         {
             let providers: Vec<&str> = plan
-                .providers(workflow)
+                .providers(&workflow)
                 .into_iter()
                 .map(RoleProvider::id)
                 .collect();
@@ -2556,11 +2615,11 @@ impl Engine {
         };
         let steps = db.steps(flow).map_err(text)?;
         let invocations = db.invocations(flow).map_err(text)?;
-        let workflow = self
-            .app
-            .project(review.project.as_str())
-            .ok()
-            .and_then(|project| project.workflow);
+        let workflow = self.kept_workflow(
+            flow,
+            RunPart::Review,
+            self.app.project(review.project.as_str()).ok().as_ref(),
+        );
         let found = db.findings(flow).map_err(text)?;
         let checks = db.checks(flow).map_err(text)?;
         let pull_request = self.pull_request_view(&state, snapshot.as_ref(), &found, &checks)?;

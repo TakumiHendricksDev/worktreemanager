@@ -37,6 +37,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Serialize;
+use wtm_core::flow::RunPart;
 use wtm_core::flow::{
     AfterRecheck, CapacityChoice, Field, FileStat, FlowId, Handover, HandoverAnswer,
     HandoverFinding, HandoverSnapshot, InboxKind, InboxTarget, Ledger, LimitReading, NewInboxItem,
@@ -696,9 +697,7 @@ impl Engine {
                 .map_err(text)?
                 .ok_or_else(|| format!("run {flow} is not a review"))?;
             let project = self.app.project(review.project.as_str()).map_err(text)?;
-            let workflow = project
-                .workflow
-                .ok_or("the project's workflow config has gone")?;
+            let workflow = self.run_workflow(flow, RunPart::Review, &project)?;
             let spec = workflow.role.get(&current.role).ok_or_else(|| {
                 format!(
                     "role `{}` is no longer in your workflow config",
@@ -776,10 +775,7 @@ impl Engine {
             .app
             .worktree(&project, &review.worktree)
             .map_err(|e| format!("the worktree is no longer there: {e}"))?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or("the project's workflow config has gone")?;
+        let workflow = self.run_workflow(flow, RunPart::Review, &project)?;
         let snapshot_id = review.snapshot.ok_or("this review has no snapshot yet")?;
         let snapshot = db
             .snapshot(snapshot_id)
@@ -814,11 +810,11 @@ impl Engine {
             .find(|s| s.status == StepStatus::WaitingCapacity)?;
         let db = self.db().ok()?;
         let review = db.review(flow).ok()??;
-        let workflow = self
-            .app
-            .project(review.project.as_str())
-            .ok()
-            .and_then(|project| project.workflow);
+        let workflow = self.kept_workflow(
+            flow,
+            RunPart::Review,
+            self.app.project(review.project.as_str()).ok().as_ref(),
+        );
         let origin = step.stands_in_for.as_deref().unwrap_or(&step.role);
         let ran: std::collections::BTreeSet<&str> = steps.iter().map(|s| s.role.as_str()).collect();
         let spent = self.spent_in(flow, review.snapshot);

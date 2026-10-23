@@ -1,0 +1,314 @@
+/*
+ * Settings › Recipes: the recipe picker, where the workflow is saved, the enforced-profile notice,
+ * each stage's role cards, Add a role or stage, and Check recipe and Save at the foot.
+ *
+ * One scrolling column at the workspace dialog's width, rather than Knowledge's two: a recipe reads
+ * top to bottom, stage after stage, and a list beside it would only be the picker again. The role
+ * cards fill a stage's row and wrap, so a stage of three sits side by side where there is room, as
+ * the design drew it, and stacks in a narrow window.
+ *
+ * A card that needs a fix has a danger frame and says so in its corner; a skill's mark is coloured
+ * by what its provider said, and "not checked yet" is muted rather than green, because a skill no
+ * provider has been asked about is not known to be there.
+ */
+
+.c-recipes {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.c-recipes__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.c-recipes__title {
+  flex: 1 1 auto;
+  font-size: var(--step-1);
+  font-weight: 600;
+}
+
+.c-recipes__picker {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-recipes__where,
+.c-recipes__empty,
+.c-recipes__home-help {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-recipes__home-help {
+  display: block;
+}
+
+.c-recipes__settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+/* Level with the inputs beside it, below their labels. */
+.c-recipes__id {
+  padding-top: calc(var(--sp-5) + var(--sp-2));
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-recipes__delete {
+  padding-top: var(--sp-5);
+}
+
+.c-recipes__notice {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-md);
+  background: var(--info-soft);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-recipes__notice-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--info);
+}
+
+.c-recipes__add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+}
+
+.c-recipes__add-actions {
+  display: flex;
+  gap: var(--sp-2);
+  padding-bottom: 2px;
+}
+
+.c-recipes__add-button {
+  align-self: flex-start;
+}
+
+.c-recipes__others {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-recipes__other {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  font-size: var(--step--1);
+}
+
+.c-recipes__other-line {
+  flex: 1 1 240px;
+  min-width: 0;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Held at the bottom of the scrolling column, so Check recipe and Save stay in reach while a long
+   recipe scrolls under them. The dialog's own surface, so what scrolls beneath does not show through. */
+.c-recipes__foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: auto;
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.c-recipes__foot-note {
+  flex: 1 1 320px;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+/* ── a stage ────────────────────────────────────────────────────────────── */
+
+.c-recipe-stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.c-recipe-stage__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.c-recipe-stage__title {
+  flex: 1 1 auto;
+  font-size: var(--step--1);
+  font-weight: 700;
+}
+
+.c-recipe-stage__empty {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-recipe-stage__error {
+  color: var(--danger);
+  font-size: var(--step--1);
+}
+
+/* `auto-fit`, as the design has it: a stage of two fills the row in two, rather than leaving a third
+   of it empty for a role that is not there. */
+.c-recipe-stage__roles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--sp-3);
+}
+
+/* ── a role's card ──────────────────────────────────────────────────────── */
+
+.c-recipe-role {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+
+  &.is-failing {
+    border-color: var(--danger-line);
+  }
+}
+
+.c-recipe-role__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-recipe-role__number {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-active);
+  font-size: var(--step--1);
+  font-weight: 700;
+}
+
+.c-recipe-role__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--step-0);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-recipe-role__state {
+  font-size: var(--step--1);
+}
+
+.c-recipe-role__state--ok {
+  color: var(--ok);
+}
+
+.c-recipe-role__state--danger {
+  color: var(--danger);
+}
+
+.c-recipe-role__state--muted {
+  color: var(--fg-muted);
+}
+
+.c-recipe-role__objective {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-recipe-role__facts {
+  font-size: var(--step--1);
+}
+
+.c-recipe-role__skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+}
+
+.c-recipe-role__skill {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1);
+}
+
+.c-recipe-role__mark--listed {
+  color: var(--ok);
+}
+
+.c-recipe-role__mark--missing {
+  color: var(--danger);
+}
+
+.c-recipe-role__mark--unasked {
+  color: var(--warn);
+}
+
+.c-recipe-role__mark--unchecked,
+.c-recipe-role__none {
+  color: var(--fg-muted);
+}
+
+.c-recipe-role__mono {
+  font-family: var(--font-mono);
+}
+
+.c-recipe-role__error {
+  color: var(--danger);
+  font-size: var(--step--1);
+}
+
+.c-recipe-role__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: auto;
+}
+
+/* The reorder controls sit at the trailing edge, apart from Edit role, which is the card's action. */
+.c-recipe-role__order {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}

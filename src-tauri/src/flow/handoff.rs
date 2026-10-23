@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Serialize;
+use wtm_core::flow::RunPart;
 use wtm_core::flow::{
     CheckRun, Coverage, FindingId, FlowDir, FlowEvent, FlowId, ImplementChange, ImplementOutcome,
     InboxKind, LeaseKind, LeaseRelease, NewRound, Phase, RoundKind, StepChange, StepStatus,
@@ -204,8 +205,10 @@ impl Engine {
         let staleness = implementation
             .review_flow
             .and_then(|review| self.staleness(review).ok());
-        let configured: Vec<String> = Self::implementer_of(&project)
-            .zip(project.workflow.as_ref())
+        let workflow = self.kept_workflow(flow, RunPart::Implement, Some(&project));
+        let configured: Vec<String> = workflow
+            .as_ref()
+            .and_then(|workflow| Self::implementer_of(workflow).zip(Some(workflow)))
             .map(|((implement, _), workflow)| {
                 implement
                     .checks(workflow)
@@ -284,8 +287,9 @@ impl Engine {
             .app
             .project(implementation.project.as_str())
             .map_err(text)?;
-        let (_, spec) = Self::implementer_of(&project)
-            .ok_or_else(|| Refusal::from(super::implement::no_implementer()))?;
+        let (_, spec) =
+            Self::implementer_of(&self.run_workflow(flow, RunPart::Implement, &project)?)
+                .ok_or_else(|| Refusal::from(super::implement::no_implementer()))?;
         self.host.preflight(&[spec.provider.id()])?;
         let worktree = self
             .app

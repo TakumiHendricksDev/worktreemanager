@@ -63,6 +63,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use serde::Serialize;
+use wtm_core::flow::RunPart;
 use wtm_core::flow::{
     AttemptedFinding, CHANGE_THE_PLAN, CheckRun, CheckSpec, CheckStatus, CheckpointBy, ContextLink,
     Field, FindingRecord, FlowDir, FlowEvent, FlowId, FlowKind, Handoff, Hold, HoldKind,
@@ -295,11 +296,8 @@ impl Engine {
             .filter(|i| i.outcome.is_none())
     }
 
-    /// The implementer a project names, with its config and its role's spec.
-    pub(super) fn implementer_of(
-        project: &wtm_core::model::Project,
-    ) -> Option<(ImplementSpec, RoleSpec)> {
-        let workflow = project.workflow.as_ref()?;
+    /// The implementer a workflow names, with its config and its role's spec.
+    pub(super) fn implementer_of(workflow: &WorkflowSpec) -> Option<(ImplementSpec, RoleSpec)> {
         let implement = workflow.implement.clone()?;
         let spec = workflow.role.get(&implement.writer)?.clone();
         Some((implement, spec))
@@ -321,7 +319,8 @@ impl Engine {
         let project = planning
             .as_ref()
             .and_then(|p| self.app.project(p.project.as_str()).ok());
-        let configured = project.as_ref().and_then(Self::implementer_of);
+        let workflow = self.kept_workflow(flow, RunPart::Implement, project.as_ref());
+        let configured = workflow.as_ref().and_then(Self::implementer_of);
         let implementation = db.implementation(flow).map_err(text)?;
         let rounds = db.rounds(flow).map_err(text)?;
         let checkpoints = db.implement_checkpoints(flow).map_err(text)?;
@@ -342,10 +341,7 @@ impl Engine {
             }
             None => (Vec::new(), Vec::new(), None),
         };
-        let verifying = match (
-            &configured,
-            project.as_ref().and_then(|p| p.workflow.as_ref()),
-        ) {
+        let verifying = match (&configured, workflow.as_ref()) {
             (Some((implement, _)), Some(workflow)) => implement
                 .checks(workflow)
                 .into_iter()
@@ -492,7 +488,10 @@ impl Engine {
             .map_err(text)?
             .ok_or("only a planned issue's run implements")?;
         let project = self.app.project(planning.project.as_str()).map_err(text)?;
-        if Self::implementer_of(&project).is_none() {
+        let configured = self
+            .kept_workflow(flow, RunPart::Implement, Some(&project))
+            .unwrap_or_default();
+        if Self::implementer_of(&configured).is_none() {
             if state.phase != Phase::Implementing {
                 self.record(
                     flow,
@@ -537,7 +536,8 @@ impl Engine {
                     .ok()
                     .and_then(|db| db.planning(flow).ok().flatten())
                     .and_then(|p| self.app.project(p.project.as_str()).ok())
-                    .is_some_and(|p| Self::implementer_of(&p).is_some());
+                    .and_then(|p| self.kept_workflow(flow, RunPart::Implement, Some(&p)))
+                    .is_some_and(|w| Self::implementer_of(&w).is_some());
                 if !configured {
                     return;
                 }
@@ -631,8 +631,13 @@ impl Engine {
             .map_err(text)?
             .ok_or("only a planned issue's run implements")?;
         let project = self.app.project(planning.project.as_str()).map_err(text)?;
+        // Kept as implementing begins, below: an implementer configured since the plan was approved
+        // is the one that runs.
+        let workflow = self
+            .kept_workflow(flow, RunPart::Implement, Some(&project))
+            .unwrap_or_default();
         let (implement, spec) =
-            Self::implementer_of(&project).ok_or_else(|| Refusal::from(no_implementer()))?;
+            Self::implementer_of(&workflow).ok_or_else(|| Refusal::from(no_implementer()))?;
         let Some((plan, _, PlanStanding::Approved { .. })) = self.approved_plan(flow)? else {
             return Err("approve the plan first: implementing follows an approved plan".into());
         };
@@ -681,6 +686,7 @@ impl Engine {
                 self.now(),
             )
             .map_err(text)?;
+            self.begin_part(flow, RunPart::Implement, &workflow)?;
             Ok(())
         })();
         if let Err(reason) = recorded {
@@ -718,7 +724,8 @@ impl Engine {
             .project(implementation.project.as_str())
             .map_err(text)?;
         let (_, spec) =
-            Self::implementer_of(&project).ok_or_else(|| Refusal::from(no_implementer()))?;
+            Self::implementer_of(&self.run_workflow(flow, RunPart::Implement, &project)?)
+                .ok_or_else(|| Refusal::from(no_implementer()))?;
         self.host.preflight(&[spec.provider.id()])?;
         let worktree = self
             .app
@@ -814,7 +821,8 @@ impl Engine {
             .project(implementation.project.as_str())
             .map_err(text)?;
         let (_, spec) =
-            Self::implementer_of(&project).ok_or_else(|| Refusal::from(no_implementer()))?;
+            Self::implementer_of(&self.run_workflow(flow, RunPart::Implement, &project)?)
+                .ok_or_else(|| Refusal::from(no_implementer()))?;
         self.host.preflight(&[spec.provider.id()])?;
         let worktree = self
             .app
@@ -965,10 +973,7 @@ impl Engine {
             .app
             .worktree(&project, &implementation.worktree)
             .map_err(|e| format!("the issue's worktree is no longer there: {e}"))?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or("the project's workflow config has gone")?;
+        let workflow = self.run_workflow(flow, RunPart::Implement, &project)?;
         let implement = workflow.implement.clone().ok_or_else(no_implementer)?;
         let spec = workflow
             .role
@@ -1001,7 +1006,7 @@ impl Engine {
             tracker: planning.tracker,
             branch: worktree.branch().map(|b| b.as_str().to_owned()),
             worktree_path: worktree.path.clone(),
-            patterns: crate::knowledge::patterns(&project).0,
+            patterns: workflow.instruction_sources(),
             workflow,
             implementation,
         })
@@ -2026,6 +2031,10 @@ impl Engine {
             now,
         )
         .map_err(text)?;
+        // Its review is part of the issue's run, so it reads the recipe the run started with, not
+        // the one your config names now.
+        db.capture_workflow(flow, RunPart::Review, &ctx.workflow, now)
+            .map_err(text)?;
         db.change_implementation(
             ctx.flow,
             &ImplementChange {
@@ -2092,6 +2101,7 @@ impl Engine {
             };
             let place = super::checks::CheckPlace {
                 flow: review_flow,
+                project: ctx.project().to_owned(),
                 step: None,
                 invocation: None,
                 role: None,
@@ -2203,10 +2213,7 @@ impl Engine {
             .map_err(text)?
             .ok_or("the implementation's review has no record")?;
         let project = self.app.project(review.project.as_str()).map_err(text)?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or("the project's workflow config has gone")?;
+        let workflow = self.run_workflow(review_flow, RunPart::Review, &project)?;
         let worktree = self
             .app
             .worktree(&project, &review.worktree)

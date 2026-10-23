@@ -336,7 +336,9 @@ The Work view's recipes and roles are refused in a repository's `wtm.toml` outri
 trust-gated. A role is authority rather than a command: it chooses which of your MCP servers and
 plugins a run session may load and which provider account it spends. The prompt shows commands to
 approve, so approving a role would mean clicking yes to something the prompt never showed. Roles
-live in your own config, or in the untracked local layer, which is also yours.
+live in your own config, or in the untracked local layer, which is also yours. Settings › Recipes
+writes them there, and how its write keeps the local layer's approval, and only its own write does,
+is §6r.
 
 ---
 
@@ -2068,6 +2070,69 @@ process. A designer cut off between moving to Designing and its session opening 
 rather than left with no hold. An environment command still recorded as running is recorded failed,
 saying that whether it finished is not known. A Ready + Needs Review or a merge with writes never
 sent says so once, and waits for Retry. Quitting interrupts a designer once.
+
+## 6r. Settings › Recipes: your config written back, its trust, and runs that keep what they read
+
+Recipes and roles were hand-written TOML in your own config or the local layer, the only two places
+that may declare them (§6). Settings › Recipes edits them in the app (`src-tauri/src/recipes.rs`,
+writing in `wtm_config::workflow_file` and `FileConfigStore::save_workflow`). Three decisions shape
+it.
+
+**The file is the record, so the edit is a patch, not a rewrite.** An edit is written to the most
+specific place that already declares recipes or roles — `[workflow]` in the local layer,
+`[projects."<root>".config.workflow]` or `[defaults.workflow]` in your own config — so it lands where
+you would have made it; with none, the place that declares `[workflow]` at all; with neither, the
+editor asks, offering the local layer first, and never a repository's `wtm.toml`. The file is edited
+with `toml_edit`: the editor sends the whole merged draft, and each key is compared with what the
+file and the layers beneath it already give, so a key whose value did not change is not touched
+however it is spelled, a value keeps its alignment and trailing comment, and every unrelated table
+comes through byte for byte. That is also what keeps an override an override: a project entry that
+changes one role's model over your defaults stays that one line. A layer can override a weaker one's
+value but not remove it, and an optional key such as `model` has no spelling for "none", so clearing
+one your defaults set, or deleting a role they declare, is refused with the table to change instead.
+Before anything is written the whole project is resolved from the layers as they would be — refusals,
+merge, deserialization, `WorkflowSpec::validate` — and the result must equal the draft, so what is
+saved is what loads; a refusal's key (`role.x.retries`, `recipe.y.stage[1].roles`) puts it beside
+the field. `[defaults.workflow]` is every project's, so a save there also resolves every other
+registered project, and is refused, naming it, when one that loaded before would not after. A save carries a hash of the files it was read from and is refused when either changed
+meanwhile, so a hand edit is never overwritten by a screen that did not show it. Your own config is
+still re-serialized by preference and sidebar writes, as before, which drops comments there; the
+local layer, which the app never wrote before, keeps them.
+
+**An edit made here keeps the local layer's approval; one made anywhere else does not.** The local
+layer is behind the trust prompt when it declares commands (§6), and its approval is bound to its
+bytes, which this write changes. Prompting for the change you just made would ask you to re-approve
+commands you did not touch, and train the click-through §6 warns about. So the app carries your
+approval to the bytes it writes — only when you had approved the file as it was, and only when the
+commands and databases it declares are exactly the ones before (checked, not assumed: recipes and
+roles run nothing). A local layer you never approved is not written at all. Anything else that
+changes the file — an editor, a `git` checkout — changes its hash and brings the prompt back, as it
+always did. Your own config is not a trust boundary, so a write there needs none of this.
+
+**A run reads the workflow it started with.** Editing a recipe became a click, and the engine used
+to read your config afresh on every drive: a review resumed after a quit or a usage limit, a planner
+picked up by an answer, an implementation between rounds would each have run on whatever the config
+said by then — a role's skills or effort changed mid-review, a planner's conversation continued on
+another provider. Now each part of a run keeps the whole `[workflow]` as JSON when it begins
+(migration 20, `run_workflows`, one row per part, written once and refused an update by a trigger):
+a review when it starts, and an issue's planning, designing and implementing each as that step
+begins, the implementation's review copied from its implementing. Per step rather than at Start
+Work, because those steps begin days apart and one that has not begun must still see the config: a
+planner named after Start Work, or an implementer configured after the plan was approved, is the
+one that runs. Every path that continues a part — stages, retries, fallbacks, capacity waits,
+resumes, reruns, fixes, a planner's or a writer's resumed conversation — reads its copy
+(`Engine::run_workflow`), and views draw from it too; a step not yet begun is asked about with the
+config as it is (`kept_workflow`), which keeps nothing. An edit reaches what begins after it. The
+cost is deliberate: a fix to a role does not reach a step already under way, so "can't run: recipe"
+says Run again, which starts a new review with the edited recipe, while Retry asks the same provider
+again — the right thing once the skill is installed for it. A part from before migration 20 keeps
+what this build reads the first time it drives it. What is the project's rather than the run's — the
+forge, the tracker, the integration branches a push is checked against — is still read as it is now.
+
+One thing a run keeps is still the trust prompt's: a check is a command run outside every sandbox,
+so `flow_run_check` and Verifying run one only while your config, loaded and trusted now, still
+declares it with the same argv (`flow/checks.rs`). Removing a check, or changing what it runs,
+reaches a run already under way; nothing else about the run does.
 
 ## 7. Toolchain policy
 

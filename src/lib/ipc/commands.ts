@@ -9,6 +9,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { DesignDiscovery, PrototypeState } from '../open-design';
 import type { InstructionSources, RuleChange, RuleDraft, RuleView } from '../knowledge';
+import type {
+  RecipeSettingsView,
+  SkillCheckView,
+  WorkflowDraft,
+  WorkflowHome,
+} from '../recipes';
 import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 import type { IssueDetailView, SyncReason, SyncedQueue, TrackerQueue } from '../tracker';
 import type {
@@ -176,6 +182,26 @@ export const commands = {
   /** Answers with the new rule; the old one is now superseded by it. */
   replaceRule: (projectId: string, ruleId: number, draft: RuleDraft) =>
     invoke<RuleView>('replace_rule', { projectId, ruleId, draft }),
+  // ── review recipes ──
+  /** Settings › Recipes: the project's merged recipes and roles, and where an edit is written. */
+  recipeSettings: (project: string) =>
+    invoke<RecipeSettingsView>('recipe_settings', { project }),
+  /** Whether `draft` would load if saved. Nothing is written. Refused with a `recipes` detail. */
+  checkRecipes: (project: string, draft: WorkflowDraft, home: WorkflowHome | null) =>
+    invoke<null>('check_recipes', { project, draft, home }),
+  /**
+   * Write `draft` to the file that declares the workflow, or to `home` when none does. Refused,
+   * changing nothing, when either file changed since `revision` was read.
+   */
+  saveRecipes: (
+    project: string,
+    draft: WorkflowDraft,
+    revision: string,
+    home: WorkflowHome | null,
+  ) => invoke<RecipeSettingsView>('save_recipes', { project, draft, revision, home }),
+  /** Ask each provider `recipe`'s skilled roles use for its skills, as a run's session would. */
+  checkRecipeSkills: (project: string, draft: WorkflowDraft, recipe: string) =>
+    invoke<SkillCheckView>('check_recipe_skills', { project, draft, recipe }),
 
   // ── projects ──
   listProjects: () => invoke<Project[]>('list_projects'),

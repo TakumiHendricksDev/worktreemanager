@@ -896,3 +896,82 @@ fn the_planner_is_given_the_issue_its_sprint_goal_and_the_repositorys_instructio
     let cwd = h.host.opened.lock()[0].cwd.clone().unwrap();
     assert!(cwd.ends_with(KEY), "{}", cwd.display());
 }
+
+// ═══════════════════════════════ the config a run reads ═══════════════════════════════
+
+impl Harness {
+    /// Rewrite your own config, as Settings › Recipes or a hand edit would.
+    fn edit_config(&self, edit: impl Fn(&str) -> String) {
+        let path = self.app.config.paths().config_file.clone();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let next = edit(&text);
+        assert_ne!(next, text, "the edit changed nothing");
+        std::fs::write(&path, next).unwrap();
+    }
+}
+
+/// A step that has not begun reads the config as it is when it begins: the run kept nothing at
+/// Start Work, so a planner named afterwards is the one the issue gets.
+#[test]
+fn a_planner_named_after_start_work_is_the_one_the_issue_gets() {
+    let h = Harness::new(Box::new(|_, _| {
+        submit("Export the unit list as CSV, in the list's column order.")
+    }));
+    h.edit_config(|text| text.replace("planner = \"planner\"\n", ""));
+    let flow = h.start();
+    let mut refused = String::new();
+    for _ in 0..2_000 {
+        refused = h.engine.start_planning(flow).unwrap_err().message;
+        if refused.contains("names no planner") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(refused.contains("names no planner"), "{refused}");
+    assert!(h.host.opened.lock().is_empty());
+
+    h.edit_config(|text| {
+        text.replace(
+            "tracker = \"jira\"\n",
+            "tracker = \"jira\"\nplanner = \"planner\"\n",
+        )
+    });
+    h.engine.start_planning(flow).unwrap();
+    h.planned(flow);
+    assert_eq!(h.host.opened.lock()[0].role, "planner");
+}
+
+/// Once planning has begun, it keeps what it began with: an answer resumes the conversation on the
+/// provider that asked, whatever the config says by then.
+#[test]
+fn an_edit_made_while_a_question_holds_the_planner_does_not_reach_the_conversation_it_resumes() {
+    let h = Harness::new(ask_then_plan());
+    let flow = h.start();
+    let waiting = h.waiting_for_answer(flow);
+    h.edit_config(|text| {
+        text.replace("provider = \"claude\"", "provider = \"codex\"")
+            .replace(
+                "Investigate the issue and plan its implementation",
+                "An objective written after the question was asked",
+            )
+    });
+
+    h.engine
+        .answer(waiting.questions[0].question.id, Some(0), "CSV.")
+        .unwrap();
+    h.planned(flow);
+    let opened = h.host.opened.lock().clone();
+    assert_eq!(opened.len(), 2);
+    assert_eq!(
+        opened[1].provider, "claude",
+        "the provider the conversation is on"
+    );
+    assert_eq!(opened[1].resume.as_deref(), Some("conv-1"));
+    assert!(
+        !opened[1]
+            .brief
+            .contains("written after the question was asked"),
+        "{}",
+        opened[1].brief
+    );
+}
