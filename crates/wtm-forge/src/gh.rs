@@ -32,7 +32,8 @@ pub(crate) const READ_TIMEOUT_MS: u64 = 30_000;
 /// asked for, and `files` or `comments` on a large pull request cost seconds.
 const PR_FIELDS: &str = "number,url,title,author,state,isDraft,headRefName,headRefOid,\
                          headRepository,headRepositoryOwner,baseRefName,baseRefOid,\
-                         isCrossRepository,maintainerCanModify,reviewRequests,statusCheckRollup";
+                         isCrossRepository,maintainerCanModify,reviewRequests,statusCheckRollup,\
+                         reviewDecision,mergeStateStatus";
 
 /// How many pull requests `pull_request_for_head` looks through. A branch is reused for a new
 /// pull request after the last one closed, rarely more than a few times.

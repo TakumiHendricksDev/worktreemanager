@@ -57,6 +57,8 @@ pub enum InboxKind {
     Interrupted,
     /// A review finished and its findings are ready to read.
     ReviewReady,
+    /// Someone reviewed your issue's pull request: changes asked for, or comments to act on.
+    Feedback,
 }
 
 /// Where the thing an item is about lives, and so where a click on it lands.

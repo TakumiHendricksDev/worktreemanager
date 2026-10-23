@@ -89,6 +89,7 @@ pub mod instructions;
 pub mod knowledge;
 pub mod moves;
 pub mod outbox;
+pub mod own_pr;
 pub mod plan;
 pub mod planning;
 pub mod publish;
@@ -145,9 +146,9 @@ pub use fix::{
     LeaseRelease, NewFix, NewLease, OutlierQuestion, lease_conflict,
 };
 pub use forge::{
-    BranchProtection, ChecksState, ChecksSummary, ForgeAccount, ForgeKind, GITHUB_HOST, Permission,
-    PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug, Reviewer,
-    default_host, host_for, remote_for,
+    BranchProtection, ChecksState, ChecksSummary, ForgeAccount, ForgeKind, GITHUB_HOST, MergeState,
+    Permission, PrBase, PrHead, PrState, PrTarget, PrTargetError, PullRequest, RepoSlug,
+    ReviewDecision, Reviewer, default_host, host_for, remote_for,
 };
 pub use implement::{
     AttemptedFinding, CHANGE_THE_PLAN, CheckpointBy, Coverage, FailingCheck, FixBounds,
@@ -170,7 +171,13 @@ pub use moves::{MoveCause, MoveIssuePayload, MoveRequest, MoveStep, MovedElsewhe
 pub use outbox::{
     Activity, Approved, Attention, CommentSend, MoveSend, NewOperation, Operation, OperationChange,
     OperationId, OperationKey, OperationKind, OperationPayload, OperationResult, OperationState,
-    OutboxError, Publication, PublicationState, Resolution, RouteSend, SuggestedFix, progress,
+    OutboxError, OwnRequest, OwnSend, Publication, PublicationState, Resolution, RouteSend,
+    SuggestedFix, progress,
+};
+pub use own_pr::{
+    DraftFacts, DraftPlan, DraftPullRequestPayload, FeedbackComment, MarkReadyPayload, MergeMethod,
+    MergePayload, MergeRequest, PrFeedback, ReadyRequest, TaskRemote, Unexplained,
+    UpdatePullRequestPayload, feedback_note, is_feedback, unexplained,
 };
 pub use plan::{PlanError, PlannedRole, PlannedStage, RecipePlan, SkipReason, SkippedRole, plan};
 pub use planning::{

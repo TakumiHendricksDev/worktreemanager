@@ -98,13 +98,21 @@ Worth stating because it narrows the surface considerably:
   approved the plan, and the design when the plan needs one; it edits only the issue's worktree and
   cannot commit or push; wtm commits for it, with git hooks off, only files the approved plan covers,
   and a file outside that is a question to you, never a commit. Covering more takes a new plan
-  revision you approve. Nothing it writes leaves your machine.
+  revision you approve. For a project whose own config names a forge, each hand-over pushes the
+  task branch and makes or updates its draft pull request (ARCHITECTURE §6p): exactly that commit
+  to `refs/heads/<task branch>`, a fast-forward of where the remote branch was, never forced and
+  never to an integration branch, and a branch someone else pushed to stops it. Marking it ready and
+  moving the issue to review is one approval of yours, bound to the head you saw; merging is the
+  Merge sheet's alone, sent with `gh pr merge --match-head-commit`, so GitHub refuses a head that
+  moved. No agent tool can push, mark ready, move an issue or merge. Following the pull request
+  reads it with your `gh`, on demand and on window focus, never on a timer.
   For a project whose own config names a tracker, the Work view also reads its issues and sprint
   through your own `acli`, signed in as `acli` already is, and keeps the last reading in its own
   database; a repository's `wtm.toml` cannot name the tracker for you. It writes two things to the
   tracker. An issue's status: Start Work's move to the "started" status, shown on the button before
-  you press it, and a card you drop on another board column, each one issue by key, read before and
-  after it is moved. And a comment: a planner's question with your answer, only when you open Send
+  you press it, a card you drop on another board column, and the move to "needs review" that Mark
+  ready + Needs Review shows in its sheet, each one issue by key, read before and after it is
+  moved. And a comment: a planner's question with your answer, only when you open Send
   to Jira's draft and then click Post, exactly the text you posted, on that one issue, with its
   comments read before and after so a retry or a crash never posts it twice. A planner's
   discussion, progress and anything else an agent says are never sent. It never edits, assigns or

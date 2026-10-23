@@ -445,3 +445,45 @@ fn a_revision_keeps_your_note_as_it_was_asked_and_every_round_keeps_its_hand_in(
         );
     }
 }
+
+#[test]
+fn feedback_is_news_once_and_taken_into_one_revision() {
+    let s = Store::implementing();
+    let review = |id: u64, body: &str| wtm_core::flow::PrFeedback {
+        flow: s.flow,
+        review: id,
+        author: Some("sam".to_owned()),
+        state: wtm_core::flow::RemoteReviewState::ChangesRequested,
+        body: body.to_owned(),
+        url: format!("https://github.com/acme/units/pull/40#pullrequestreview-{id}"),
+        commit_id: Some("a1b2c3".to_owned()),
+        comments: vec![wtm_core::flow::FeedbackComment {
+            path: "src/export.rs".to_owned(),
+            body: "Sort these".to_owned(),
+        }],
+        seen_at: 3_000,
+        revised_in: None,
+    };
+    let first = s.db.keep_feedback(&[review(1, "Sort by floor")]).unwrap();
+    assert_eq!(first.len(), 1);
+    // Read again, with the reviewer's text edited since: it was news once, and is kept as first read.
+    let again =
+        s.db.keep_feedback(&[review(1, "Edited"), review(2, "And name the file")])
+            .unwrap();
+    assert_eq!(again.iter().map(|f| f.review).collect::<Vec<_>>(), [2]);
+    s.db.feedback_revised(s.flow, &[1, 2], 4).unwrap();
+    s.db.feedback_revised(s.flow, &[1], 6).unwrap();
+    let kept = s.db.feedback(s.flow).unwrap();
+    assert_eq!(kept[0].body, "Sort by floor");
+    assert_eq!(kept[0].comments[0].body, "Sort these");
+    assert_eq!(
+        kept.iter().map(|f| f.revised_in).collect::<Vec<_>>(),
+        [Some(4), Some(4)],
+        "a review is taken into one revision"
+    );
+    assert!(
+        s.raw()
+            .execute("DELETE FROM pull_request_feedback", [])
+            .is_err()
+    );
+}

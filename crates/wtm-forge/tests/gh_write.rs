@@ -15,9 +15,13 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use wtm_core::error::ExecError;
-use wtm_core::flow::{FileLines, LineRange, PrState, RemoteReviewState, RepoSlug, ReviewEvent};
+use wtm_core::flow::{
+    FileLines, LineRange, MergeMethod, PrState, RemoteReviewState, RepoSlug, ReviewEvent,
+};
 use wtm_core::ports::exec::Output;
-use wtm_core::ports::forge::{Forge, ForgeError, PullRequestWriter, ReviewWriter, SentComment};
+use wtm_core::ports::forge::{
+    Forge, ForgeError, OwnPullWriter, PullRequestWriter, ReviewWriter, SentComment,
+};
 use wtm_forge::GhForge;
 use wtm_testkit::FakeRunner;
 
@@ -67,7 +71,8 @@ fn stdin_of(runner: &FakeRunner, call: usize) -> Value {
     serde_json::from_str(runner.calls()[call].stdin.as_deref().unwrap()).unwrap()
 }
 
-/// Whether an argv is one of the write side's three writes or one of its reads.
+/// Whether an argv is one of the write side's writes or one of its reads: a review's three, a
+/// follow-up's, and the issue's own pull request's draft, update, ready and merge.
 fn is_allowed(argv: &[String]) -> bool {
     let words: Vec<&str> = argv.iter().map(String::as_str).collect();
     match words.as_slice() {
@@ -90,6 +95,32 @@ fn is_allowed(argv: &[String]) -> bool {
                     | ["repos", _, _, "pulls", _, "reviews", _, "events"]
             )
         }
+        [
+            "gh",
+            "api",
+            "--method",
+            "PATCH",
+            "--hostname",
+            _,
+            path,
+            "--input",
+            "-",
+        ] => matches!(
+            path.split('/').collect::<Vec<_>>().as_slice(),
+            ["repos", _, _, "pulls", _]
+        ),
+        ["gh", "pr", "ready", number, "--repo", _] => number.parse::<u64>().is_ok(),
+        [
+            "gh",
+            "pr",
+            "merge",
+            number,
+            "--repo",
+            _,
+            "--squash" | "--merge" | "--rebase",
+            "--match-head-commit",
+            sha,
+        ] => number.parse::<u64>().is_ok() && sha.len() == 40,
         ["gh", "api", "graphql", "--hostname", _, "--input", "-"] => true,
         ["gh", "api", "--method", "GET", rest @ ..] => !rest
             .iter()
@@ -472,4 +503,104 @@ fn pull_requests_from_a_head_are_read_with_their_head_label_and_base() {
         argv.last().unwrap(),
         "repos/acme/webapp/pulls?head=acme:feature/csv-export&state=all&per_page=100"
     );
+}
+
+#[test]
+fn the_issues_own_pull_request_is_opened_as_a_draft_and_updated_with_its_text_on_stdin() {
+    let (forge, runner) = harness(vec![
+        FakeRunner::ok(&fixture("pull_created.json")),
+        FakeRunner::ok(&fixture("pull_created.json")),
+    ]);
+    let root = Path::new(ROOT);
+    forge
+        .open_draft(
+            root,
+            &repo(),
+            "develop",
+            "feature/ACME-9",
+            "ACME-9: Export the unit list",
+            "What was done.\n\n<!-- wtm:0123456789abcdef -->",
+        )
+        .unwrap();
+    let sent = stdin_of(&runner, 0);
+    assert_eq!(
+        sent["draft"], true,
+        "the issue's own pull request opens as a draft"
+    );
+    assert_eq!(sent["base"], "develop");
+    assert_eq!(sent["head"], "feature/ACME-9");
+    forge
+        .update(root, &repo(), 2, "ACME-9: Export the unit list", "Revised.")
+        .unwrap();
+    assert_eq!(
+        runner.argvs()[1],
+        [
+            "gh",
+            "api",
+            "--method",
+            "PATCH",
+            "--hostname",
+            "github.com",
+            "repos/acme/webapp/pulls/2",
+            "--input",
+            "-"
+        ]
+    );
+    assert_eq!(stdin_of(&runner, 1)["body"], "Revised.");
+    for argv in runner.argvs() {
+        assert!(is_allowed(&argv), "not an allowed call: {}", argv.join(" "));
+        assert!(!argv.iter().any(|arg| arg.contains("What was done")));
+    }
+}
+
+#[test]
+fn ready_and_merge_name_the_pull_request_and_a_merge_names_the_head_it_was_approved_at() {
+    let (forge, runner) = harness(vec![FakeRunner::ok(""), FakeRunner::ok("")]);
+    let root = Path::new(ROOT);
+    forge.mark_ready(root, &repo(), 2).unwrap();
+    forge
+        .merge(root, &repo(), 2, HEAD, MergeMethod::Squash)
+        .unwrap();
+    let argvs = runner.argvs();
+    assert_eq!(
+        argvs[0],
+        ["gh", "pr", "ready", "2", "--repo", "github.com/acme/webapp"]
+    );
+    assert_eq!(
+        argvs[1],
+        [
+            "gh",
+            "pr",
+            "merge",
+            "2",
+            "--repo",
+            "github.com/acme/webapp",
+            "--squash",
+            "--match-head-commit",
+            HEAD
+        ]
+    );
+    for argv in &argvs {
+        assert!(is_allowed(argv), "not an allowed call: {}", argv.join(" "));
+        for never in ["--admin", "--auto", "--delete-branch"] {
+            assert!(!argv.iter().any(|arg| arg == never), "{never} in {argv:?}");
+        }
+    }
+}
+
+#[test]
+fn a_merge_github_refuses_for_a_moved_head_is_a_refusal_that_would_recur() {
+    let (forge, _) = harness(vec![Ok(Output {
+        code: 1,
+        stdout: String::new(),
+        stderr: "GraphQL: Head branch was modified. Review and try the merge again. \
+                 (mergePullRequest)"
+            .to_owned(),
+        duration_ms: 1,
+    })]);
+    let error = forge
+        .merge(Path::new(ROOT), &repo(), 2, HEAD, MergeMethod::Merge)
+        .unwrap_err();
+    assert!(matches!(error, ForgeError::Rejected { .. }), "{error:?}");
+    assert!(!error.outcome_unknown());
 }

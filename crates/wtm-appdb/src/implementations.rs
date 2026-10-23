@@ -8,7 +8,8 @@
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use wtm_core::flow::{
     CheckpointBy, Field, FixBounds, FlowId, Handoff, ImplementChange, ImplementCheckpoint,
-    ImplementQuestion, Implementation, NewImplementation, NewRound, QuestionId, Round, UnixMs,
+    ImplementQuestion, Implementation, NewImplementation, NewRound, PrFeedback, QuestionId, Round,
+    UnixMs,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStoreError, ImplementStore};
@@ -498,5 +499,107 @@ impl ImplementStore for AppDb {
             Ok(link)
         })
         .collect()
+    }
+
+    fn keep_feedback(&self, feedback: &[PrFeedback]) -> Result<Vec<PrFeedback>, FlowStoreError> {
+        let mut conn = self.conn.lock();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let mut kept = Vec::new();
+        for review in feedback {
+            let added = tx
+                .execute(
+                    "INSERT INTO pull_request_feedback
+                         (flow_id, review_id, author, state, body, url, commit_id, comments, seen_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                     ON CONFLICT (flow_id, review_id) DO NOTHING",
+                    params![
+                        review.flow.0,
+                        i64::try_from(review.review).map_err(storage)?,
+                        review.author,
+                        tag(&review.state)?,
+                        review.body,
+                        review.url,
+                        review.commit_id,
+                        json(&review.comments)?,
+                        review.seen_at
+                    ],
+                )
+                .map_err(storage)?;
+            if added == 1 {
+                kept.push(PrFeedback {
+                    revised_in: None,
+                    ..review.clone()
+                });
+            }
+        }
+        tx.commit().map_err(storage)?;
+        Ok(kept)
+    }
+
+    fn feedback(&self, flow: FlowId) -> Result<Vec<PrFeedback>, FlowStoreError> {
+        let conn = self.conn.lock();
+        query(
+            &conn,
+            "SELECT flow_id, review_id, author, state, body, url, commit_id, comments, seen_at,
+                    revised_in
+             FROM pull_request_feedback WHERE flow_id = ?1 ORDER BY seen_at, review_id",
+            params![flow.0],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, UnixMs>(8)?,
+                    row.get::<_, Option<u32>>(9)?,
+                ))
+            },
+        )?
+        .into_iter()
+        .map(
+            |(flow, review, author, state, body, url, commit_id, comments, seen_at, revised_in)| {
+                Ok(PrFeedback {
+                    flow: FlowId(flow),
+                    review: u64::try_from(review).map_err(storage)?,
+                    author,
+                    state: untag(state)?,
+                    body,
+                    url,
+                    commit_id,
+                    comments: from_json(&comments)?,
+                    seen_at,
+                    revised_in,
+                })
+            },
+        )
+        .collect()
+    }
+
+    fn feedback_revised(
+        &self,
+        flow: FlowId,
+        reviews: &[u64],
+        round: u32,
+    ) -> Result<(), FlowStoreError> {
+        let mut conn = self.conn.lock();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        for review in reviews {
+            tx.execute(
+                "UPDATE pull_request_feedback SET revised_in = ?3
+                 WHERE flow_id = ?1 AND review_id = ?2 AND revised_in IS NULL",
+                params![flow.0, i64::try_from(*review).map_err(storage)?, round],
+            )
+            .map_err(storage)?;
+        }
+        tx.commit().map_err(storage)?;
+        Ok(())
     }
 }

@@ -104,6 +104,8 @@ impl PullRequestWriter for FakePulls {
             head: label,
             base: base.to_owned(),
             body: body.to_owned(),
+            draft: false,
+            head_sha: String::new(),
         };
         open.push((repo.clone(), pr.clone()));
         self.opened.lock().push((

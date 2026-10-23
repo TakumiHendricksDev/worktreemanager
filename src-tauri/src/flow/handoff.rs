@@ -94,7 +94,7 @@ fn tail(text: &str) -> String {
 
 impl Engine {
     /// Whether `flow` is where a revision may be asked for: handed over, or published, and still.
-    fn revisable(&self, flow: FlowId) -> Result<(), String> {
+    pub(super) fn revisable(&self, flow: FlowId) -> Result<(), String> {
         if self.is_running(flow) {
             return Err("its writer is working now".to_owned());
         }
@@ -116,6 +116,9 @@ impl Engine {
                 "this run is waiting ({:?}); settle that first",
                 hold.kind()
             ));
+        }
+        if self.publishing_now(flow) {
+            return Err("its pull request is being written to right now".to_owned());
         }
         let implementation = self
             .db()?

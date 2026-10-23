@@ -74,7 +74,7 @@ fn rest_comment(comment: &SentComment) -> Value {
 
 impl GhForge {
     /// `gh api` with `body` on stdin, and its failure read as GitHub meant it.
-    fn send(
+    pub(crate) fn send(
         &self,
         cwd: &Path,
         host: &str,

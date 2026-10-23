@@ -1502,6 +1502,8 @@ impl Engine {
             self.now(),
         )
         .map_err(text)?;
+        // After the writer's round, the remote is read for anything wtm did not put there.
+        self.watch_remote(ctx.flow);
         self.record(
             ctx.flow,
             &FlowEvent::Advanced {
@@ -2463,7 +2465,18 @@ impl Engine {
                     .join("; ")
             );
         }
-        body.push_str(" Nothing has left this Mac.");
+        let drafts = self
+            .app
+            .project(ctx.project())
+            .ok()
+            .and_then(|p| p.workflow.and_then(|w| w.forge))
+            .is_some();
+        body.push_str(if drafts {
+            " The task branch is pushed and its draft pull request made or updated; nothing is \
+             marked ready, moved or merged without you."
+        } else {
+            " Nothing has left this Mac."
+        });
         self.file(&NewInboxItem {
             flow: ctx.flow,
             kind: InboxKind::ReviewReady,
@@ -2473,6 +2486,10 @@ impl Engine {
         });
         tracing::info!(flow = %ctx.flow, ?why, left = remaining.len(), "an implementation is ready to test");
         self.notice.changed(ctx.flow);
+        // The plan makes the draft automatic: at the first hand-over and after each revision.
+        if let Some(me) = self.me.upgrade() {
+            me.draft_after_handover(ctx.flow);
+        }
         Ok(())
     }
 

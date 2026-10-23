@@ -1973,6 +1973,69 @@ changed, and a fix loop whose bounds start again, because a revision is new work
 counts rounds and attempts since the last revision of the same plan revision. Revise is offered at
 Ready to test and, once published (§6p), for a pull request's feedback.
 
+## 6p. The issue's own pull request: drafted, published on one approval, followed, merged from a sheet
+
+An issue's run carries its work to a merged pull request through the outbox (§6a), like every
+other write, in four steps (`src-tauri/src/flow/own_pr.rs`, rules in `wtm_core::flow::own_pr`).
+
+**The draft is automatic, and narrow.** At each hand-over — the first, and after each revision —
+the app pushes the task branch and creates the draft pull request, or updates the one the branch
+already has (§2.2 step 12 of the plan). That is the plan's one automatic write to a forge: inside a
+task you started and a plan you approved, and a draft asks nobody for anything. So the app grants
+that approval itself, under the `route` intent, because what it allows is the same kind of thing as
+a fix's route — this commit, to this ref, on this remote, with this diff — and a new intent would
+rebuild `approvals` for a word. The refspec names the commit and `refs/heads/<task branch>`, never
+a pattern and never a `+`; [`DraftPlan::new`] refuses a task branch that is an integration branch
+(the configured ones, `main`, `master` and the base). The push is a fast-forward of where the
+remote branch is; a remote branch at a commit this worktree does not have stops the draft rather
+than overwriting it. The pull request's base is the base the task was started from. Its
+description is the hand-over's text — what was done, each acceptance criterion with the writer's
+word labelled as its word, the checks wtm ran, what was left — signed with the operation's marker,
+so a lost reply is adopted rather than opened twice. Linked to its work item, it is the issue's,
+not a teammate's review: the Reviews queue does not list it.
+
+**Ready and Needs Review are one approval of yours.** Its sheet reads the pull request and the
+issue fresh and shows both writes: the pull request from draft to ready at its head, and the issue
+from its status to the mapped `needs_review` one. Approving binds the head (`ApprovalIntent::Publish`
+requires it); the run is Publishing while the two operations go, in order, each read before it is
+sent: a pull request already ready is adopted, an issue already in review is adopted, an issue
+somewhere else stops the move, and a head that moved stops both. Each is its own operation, so a
+partial success is exactly that: with the pull request ready and the tracker refusing the move,
+Retry sends the move alone — never a second pull request, never a second "ready". Both done, the
+run is In review.
+
+**Followed on demand and on focus, never on a timer.** Sync, and the window coming back into focus
+(at most once a minute), read the pull request with your `gh`: state, checks, review decision and
+merge state, kept as the work item's reading (`mirror_prs`). Each review someone else leaves asking
+for changes, or commenting with something to say, is kept the first time it is read with its inline
+comments (migration 18), and is news once: one `feedback` item. A revision from it is one click —
+§6o's Revise, with the reviewers' words fenced as its note — and the reviews it took in are marked
+with its round, so the next click takes in only what is new. Merged on GitHub rather than from the
+sheet, the run is done all the same.
+
+**Merged only from the Merge sheet.** The sheet shows the repository, the branches, the head, the
+checks and the merge state, and the method you pick. Approving binds exactly that head
+(`ApprovalIntent::Merge`), the executor reads the pull request again, and the merge is sent as
+`gh pr merge <n> --<method> --match-head-commit <sha>`, so a push that lands between your click and
+the merge is refused by GitHub itself. No `--admin`, `--auto` or `--delete-branch`. Merged, the run
+is done. No agent tool reaches any of this: the run tools have nothing that pushes, marks ready,
+moves an issue or merges, and `flow_request` cannot even ask for a merge.
+
+**What the remote holds that wtm did not put there.** After each writer round, `git ls-remote`
+reads the task branch and the integration branches and compares them with what the outbox recorded
+([`unexplained`]): the task branch at a commit this worktree does not have, or gone after wtm
+pushed it, and an integration branch at one of this run's own commits — which nothing but a merge
+from the sheet should do. Either is said in the Inbox; the first also stops the next draft.
+
+**Tested with real git and a fake GitHub.** `implement.rs` pushes through real git to a bare
+repository standing in for `origin` (`url.<path>.insteadOf`), against a fake forge whose pull
+requests' heads are what that repository holds: the draft at the hand-over and nothing else sent;
+Ready + Needs Review with the tracker refusing the move, and Retry sending the move alone; feedback
+news once, a revision from it in the writer's conversation, and the next hand-over updating the same
+pull request; the Merge sheet refusing a head that moved, and merging at the one it showed; a ready
+cut off mid-write settled at launch without sending anything twice; and a task branch someone else
+pushed to, reported and never pushed over.
+
 ## 7. Toolchain policy
 
 **Pinned to an exact version** (`1.97.1`) rather than the floating `stable` channel, so `cargo build`

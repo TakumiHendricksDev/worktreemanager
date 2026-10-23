@@ -29,7 +29,10 @@ export const FILTERS: { id: InboxFilter; label: string }[] = [
   { id: 'usage', label: 'Usage' },
 ];
 
-/** The filter each kind is under, besides All. A ready review is under All alone. */
+/**
+ * The filter each kind is under, besides All. A ready review, and feedback on your own pull
+ * request, are under All alone.
+ */
 const GROUP: Record<InboxKind, Exclude<InboxFilter, 'all'> | null> = {
   question: 'questions',
   approval: 'approvals',
@@ -37,6 +40,7 @@ const GROUP: Record<InboxKind, Exclude<InboxFilter, 'all'> | null> = {
   interrupted: 'failures',
   capacity: 'usage',
   review_ready: null,
+  feedback: null,
 };
 
 export function inFilter(item: InboxItem, filter: InboxFilter): boolean {
@@ -50,6 +54,7 @@ export const KIND_WORDS: Record<InboxKind, string> = {
   capacity: 'Usage limit',
   interrupted: 'Interrupted',
   review_ready: 'Review ready',
+  feedback: 'Feedback',
 };
 
 export type InboxTone = 'info' | 'accent' | 'danger' | 'warn' | 'ok';
@@ -61,6 +66,7 @@ export const KIND_TONE: Record<InboxKind, InboxTone> = {
   capacity: 'warn',
   interrupted: 'warn',
   review_ready: 'ok',
+  feedback: 'info',
 };
 
 export const KIND_ICON: Record<InboxKind, IconName> = {
@@ -70,6 +76,7 @@ export const KIND_ICON: Record<InboxKind, IconName> = {
   capacity: 'pause',
   interrupted: 'restart',
   review_ready: 'file',
+  feedback: 'question',
 };
 
 /** Something in a run's Reviews tab a click can land on. A publication is its approval's id. */
@@ -142,6 +149,7 @@ export function notificationWords(
     capacity: `${where}: review paused for usage`,
     interrupted: `${where}: ${item.issue ? 'run' : 'review'} interrupted`,
     review_ready: `${where}: ${item.title}`,
+    feedback: `${where}: ${item.title}`,
   };
   const detail =
     item.kind === 'review_ready' ? (item.body.split('\n')[0] ?? '') : item.title;

@@ -64,6 +64,7 @@ const now = Date.now();
 /* Rust's record, kept as the engine keeps it. */
 const state = {
   ready: { phase: 'ready_to_test', hold: null },
+  review: { phase: 'in_review', hold: null },
   interrupted: { phase: 'fixing', hold: { kind: 'interrupted', cause: 'quit' } },
   question: { phase: 'implementing', hold: { kind: 'awaiting_answer' } },
   none: { phase: 'implementing', hold: null },
@@ -81,11 +82,12 @@ const round = (n, kind, findings, checks, ended) => ({ flow: FLOW, round: n, kin
 const rounds = scenario === 'none' ? [] : scenario === 'question' ? [round(1, 'implement', [], [], false)]
   : scenario === 'interrupted' ? [round(1, 'implement', [], [], true), round(2, 'fix', [7], ['src-test'], false)]
   : [round(1, 'implement', [], [], true), round(2, 'fix', [7], ['src-test'], true), round(3, 'fix', [9], [], true)];
+const handedOver = scenario === 'ready' || scenario === 'review';
 const commit = (n, sha, message, by, paths) => ({ flow: FLOW, round: n, commit: sha, message, paths, by, madeAt: now });
 const checkpoints = scenario === 'none' || scenario === 'question' ? [] : [
   commit(1, 'a1f0c3d9e8b7', 'Export the units', 'writer', ['src/export.rs', 'docs/export.md']),
   commit(2, 'b2e1d4c0f9a8', 'Export every unit', 'writer', ['src/export.rs']),
-  ...(scenario === 'ready' ? [commit(3, 'c3d2e5b1a0f9', 'ACME-301: fix what the review found', 'app', ['src/export.rs'])] : []),
+  ...(handedOver ? [commit(3, 'c3d2e5b1a0f9', 'ACME-301: fix what the review found', 'app', ['src/export.rs'])] : []),
 ];
 const check = (id, name, status, detail) => ({ id, check: name, role: null, status, detail, exitCode: status === 'passed' ? 0 : status === 'failed' ? 1 : null,
   treeSha: 't' + id, cwd: WT, services: [], startedAt: now, endedAt: now });
@@ -96,12 +98,12 @@ const checks = scenario === 'none' || scenario === 'question' ? [] : [
 const implementation = scenario === 'none' ? null : {
   flow: FLOW, project: '/x/webapp', worktree: WT, key: KEY, role: 'implementer', recipe: 'standard', baseSha: 'a1b2c3d4e5',
   planRevision: 1, scope: { areas: ['src/**', 'docs/**'], files: ['tests/export_test.py'] }, bounds: { rounds: 2, attempts: 1 },
-  reviewFlow: REVIEW, outcome: scenario === 'ready' ? 'ready' : null,
-  remaining: scenario === 'ready' ? [
+  reviewFlow: REVIEW, outcome: handedOver ? 'ready' : null,
+  remaining: handedOver ? [
     { finding: 9, title: 'Units are exported out of order', location: { path: 'src/export.rs', startLine: 12, endLine: 14 }, because: { kind: 'rounds_spent' } },
     { finding: 11, title: 'The README says nothing exports', location: { path: 'README.md', startLine: 1, endLine: 1 }, because: { kind: 'outside_plan', paths: ['README.md'] } },
   ] : [],
-  stopped: scenario === 'ready' ? { kind: 'bounded', rounds: 2 } : null, startedAt: now, updatedAt: now };
+  stopped: handedOver ? { kind: 'bounded', rounds: 2 } : null, startedAt: now, updatedAt: now };
 const question = { id: 70, flow: FLOW, step: 5, role: 'implementer', text: '\`implementer\` changed \`README.md\` outside the approved plan. Change the plan to include it?',
   why: 'Plan revision 1 covers \`src/**\`, \`docs/**\`.', unblocks: 'Committing those files.', blocks: 'verifying', context: [],
   recommendation: null, options: ['Change the plan to include them', 'Keep to the plan'], askedAt: now, answer: null };
@@ -109,14 +111,16 @@ let resumed = false;
 const implementView = () => ({ flow: flowView(), key: KEY, implementer: scenario === 'none' ? null : 'implementer',
   implementation: structuredClone(implementation), rounds: structuredClone(rounds), checkpoints: structuredClone(checkpoints),
   checks: structuredClone(checks), verifying: ['lint', 'src-test', 'e2e'],
-  review: implementation ? { flow: REVIEW, phase: 'consolidated', running: false, standing: scenario === 'ready' ? 2 : 0 } : null,
+  review: implementation ? { flow: REVIEW, phase: 'consolidated', running: false, standing: handedOver ? 2 : 0 } : null,
   findings: [], questions: scenario === 'question' ? [{ link: { question: 70, flow: FLOW, kind: 'outliers', paths: ['README.md'], findings: [], planRevision: 1 }, question }] : [],
-  sessions: [], step: null, lease: scenario === 'ready' || scenario === 'none' ? null : { id: 3, worktree: WT, flow: FLOW, kind: 'writer', holder: 'implementer', acquiredAt: now, releasedAt: null, releasedWhy: null },
+  sessions: [], step: null, lease: handedOver || scenario === 'none' ? null : { id: 3, worktree: WT, flow: FLOW, kind: 'writer', holder: 'implementer', acquiredAt: now, releasedAt: null, releasedWhy: null },
   running: resumed, canStart: false, canResume: scenario === 'interrupted' && !resumed });
 const item = (id, kind, title, body) => ({ id, flow: FLOW, kind, target: { kind: 'flow' }, title, body,
   state: 'open', createdAt: now, closedAt: null, project: '/x/webapp', worktree: WT, issue: KEY, question: null });
 const inbox = scenario === 'ready' ? [item(1, 'review_ready', KEY + ' is ready to test',
     '3 commits by the app on \`feature/' + KEY + '\`, 2 fix rounds. Checks: e2e blocked: environment not started, lint passed, src-test passed. The fix loop stopped at its bound of 2 rounds.')]
+  : scenario === 'review' ? [item(3, 'feedback', KEY + ': new feedback on #40',
+    'sam reviewed it. Start a revision from the issue\\'s Implement tab: the implementer gets the feedback in its same conversation.')]
   : scenario === 'interrupted' ? [item(2, 'interrupted', KEY + ': wtm quit while it was being implemented',
     'Nothing was sent again. The writer still holds the issue\\'s worktree. Resume carries it on where it stopped.')] : [];
 const changed = () => setTimeout(() => emit('flow:changed', { flow: FLOW }), 0);
@@ -134,6 +138,32 @@ const environmentView = () => ({ project: '/x/webapp', worktree: WT, declared: t
     preview: 'http://localhost:18431', detached: false, pid: 4242, leftRunning: false, conflicts: [], startedAt: now, updatedAt: now }],
   resources: [], commands: [], runs: [], idleStopMinutes: null, problem: null });
 let revised = false;
+/* The issue's own pull request, as own_pr_view keeps it. */
+const HEAD = 'c3d2e5b1a0f9d8c7b6a5f4e3d2c1b0a9f8e7d6c5';
+const op = (id, position, payload, state, result) => ({ id, key: { flow: FLOW, kind: payload.kind, target: 'acme/webapp#40', payloadHash: 'h' + id },
+  approval: 0, position, payload, state, attempts: 1, lastError: null, result, attention: null, resolution: null, createdAt: now, updatedAt: now });
+const repoSlug = { host: 'github.com', owner: 'acme', name: 'webapp' };
+const draftSend = { approval: { id: 61, flow: FLOW, intent: 'route', grantedAt: now },
+  request: { kind: 'draft', request: { key: KEY, branch: 'feature/' + KEY, base: 'develop', commit: HEAD, pullRequest: null } },
+  operations: [op(1, 0, { kind: 'push_branch', route: 'r', destination: {}, commit: HEAD, expect: { kind: 'absent' } }, 'done', { kind: 'pushed', url: '', reference: 'refs/heads/feature/' + KEY, commit: HEAD, adopted: false }),
+    op(2, 1, { kind: 'create_draft_pull_request', draft: 'r', repo: repoSlug, base: 'develop', head: 'feature/' + KEY, title: 't', body: 'b' }, 'done', { kind: 'pull_request', number: 40, url: 'https://github.com/acme/webapp/pull/40', adopted: false })],
+  state: 'published' };
+const readySend = { approval: { id: 62, flow: FLOW, intent: 'publish', grantedAt: now },
+  request: { kind: 'ready', request: { key: KEY, ready: { number: 40, head: HEAD }, toReview: { key: KEY, from: 'In Progress', to: 'In Review' } } },
+  operations: [op(3, 0, { kind: 'mark_ready', repo: repoSlug, number: 40, head: HEAD }, 'done', { kind: 'ready', number: 40, url: '', adopted: false }),
+    op(4, 1, { kind: 'move_issue', tracker: 'jira', key: KEY, from: 'In Progress', to: 'In Review' }, 'done', { kind: 'moved', key: KEY, status: 'In Review', adopted: false })],
+  state: 'published' };
+const prReading = { number: 40, url: 'https://github.com/acme/webapp/pull/40', title: KEY + ': Export the unit list', author: 'you', state: 'open',
+  draft: scenario !== 'review', head: { repo: repoSlug, branch: 'feature/' + KEY, sha: HEAD }, base: { repo: repoSlug, branch: 'develop', sha: null },
+  crossRepository: false, maintainerCanModify: true, requestedReviewers: [], checks: { passed: 3, failed: 0, pending: 0, skipped: 0 },
+  reviewDecision: scenario === 'review' ? 'changes_requested' : null, mergeState: scenario === 'review' ? 'clean' : 'draft' };
+const pullView = () => ({ flow: FLOW, unavailable: null, branch: 'feature/' + KEY, base: 'develop', repo: 'acme/webapp',
+  pullRequest: { repo: 'acme/webapp', number: 40 }, url: 'https://github.com/acme/webapp/pull/40',
+  reading: scenario === 'review' ? { item: FLOW, pullRequest: prReading, permission: 'admin', readAt: now } : null,
+  sends: scenario === 'review' ? [draftSend, readySend] : [draftSend],
+  feedback: scenario === 'review' ? [{ flow: FLOW, review: 501, author: 'sam', state: 'changes_requested', body: 'Sort the units by floor, please.',
+    url: 'https://github.com/acme/webapp/pull/40#pullrequestreview-501', commitId: HEAD, comments: [{ path: 'src/export.rs', body: 'This loop should sort first.' }], seenAt: now, revisedIn: null }] : [],
+  canPublish: scenario === 'ready', canMerge: scenario === 'review', canSync: true, canReviseFeedback: scenario === 'review' });
 window.calls = [];
 mockIPC((cmd, args) => {
   const a = args ?? {};
@@ -183,6 +213,15 @@ mockIPC((cmd, args) => {
       return null;
     case 'work_inbox': return structuredClone(inbox);
     case 'implementation_handoff': return handoffView();
+    case 'issue_pull_request':
+    case 'sync_pull_request': return pullView();
+    case 'ready_sheet': return { flow: FLOW, key: KEY, repo: 'acme/webapp', number: 40, url: prReading.url, draft: true, head: HEAD,
+      handedOver: HEAD, trackerFrom: 'In Progress', trackerTo: 'In Review', problems: [] };
+    case 'merge_sheet': return { flow: FLOW, key: KEY, repo: 'acme/webapp', number: 40, url: prReading.url, branch: 'feature/' + KEY,
+      base: 'develop', head: HEAD, pullRequest: prReading, methods: ['squash', 'merge', 'rebase'], problems: [] };
+    case 'approve_ready':
+    case 'approve_merge':
+    case 'revise_from_feedback': return null;
     case 'environment': return environmentView();
     case 'revise_implementation':
       revised = true;
@@ -279,7 +318,9 @@ try {
         // ── Ready to test: the item leads to the Implement tab, not to a pause ───────────────
         const page = await open(`?theme=${scheme}`, scheme);
         await openInbox(page);
-        const ready = page.locator('.c-inbox-card').filter({ hasText: 'ACME-301 is ready to test' });
+        const ready = page
+            .locator('.c-inbox-card')
+            .filter({ hasText: 'ACME-301 is ready to test' });
         await ready.waitFor();
         assert.equal(await ready.getByRole('button', { name: 'Pause the run' }).count(), 0);
         await shot(page, join(shots, `inbox-ready-to-test-${scheme}.png`));
@@ -289,7 +330,9 @@ try {
 
         // Why it stopped, and what it left with why.
         const handover = tab(page).locator('.c-handoff');
-        await handover.getByText('The fix loop stopped at its bound of 2 rounds.').waitFor();
+        await handover
+            .getByText('The fix loop stopped at its bound of 2 rounds.')
+            .waitFor();
         const left = await handover.innerText();
         for (const part of [
             'Units are exported out of order',
@@ -302,8 +345,14 @@ try {
         // Each round with its commits.
         const rounds = tab(page).locator('.c-implement__round');
         assert.equal(await rounds.count(), 3);
-        assert.match(await rounds.nth(0).innerText(), /Implemented plan revision 1[\s\S]*a1f0c3d/);
-        assert.match(await rounds.nth(1).innerText(), /Fixed 1 finding and src-test failing/);
+        assert.match(
+            await rounds.nth(0).innerText(),
+            /Implemented plan revision 1[\s\S]*a1f0c3d/,
+        );
+        assert.match(
+            await rounds.nth(1).innerText(),
+            /Fixed 1 finding and src-test failing/,
+        );
         assert.match(await rounds.nth(2).innerText(), /what it left/);
 
         // Each check by its newest record; the blocked one is blocked, not passed.
@@ -334,27 +383,114 @@ try {
             'Not committed: docs/export.md',
         ])
             assert(said.includes(part), `the hand-over panel shows “${part}”:\n${said}`);
-        const evidence = (name) => handover.locator('.c-handoff__check').filter({ hasText: name });
+        const evidence = (name) =>
+            handover.locator('.c-handoff__check').filter({ hasText: name });
         assert.match(await evidence('lint').innerText(), /stale: changed since/);
         assert.doesNotMatch(await evidence('src-test').innerText(), /stale/);
         assert.equal(await evidence('e2e').getAttribute('data-status'), 'blocked');
-        await handover.getByRole('group', { name: 'Environment' }).getByText('Env: Healthy').waitFor();
+        await handover
+            .getByRole('group', { name: 'Environment' })
+            .getByText('Env: Healthy')
+            .waitFor();
         const revise = handover.getByRole('button', { name: 'Revise' });
         assert(await revise.isDisabled(), 'Revise waits for your words');
         await shot(page, join(shots, `implement-ready-${scheme}.png`));
-        await handover.getByLabel('What should change?').fill('Sort the units by building, then floor');
+        await handover
+            .getByLabel('What should change?')
+            .fill('Sort the units by building, then floor');
         await revise.click();
-        await page.waitForFunction(() => window.calls.some((c) => c.cmd === 'revise_implementation'));
+        await page.waitForFunction(() =>
+            window.calls.some((c) => c.cmd === 'revise_implementation'),
+        );
         assert.deepEqual((await calls(page, 'revise_implementation'))[0].args, {
             flow: 40,
             note: 'Sort the units by building, then floor',
         });
+
+        // The draft the hand-over made, and Mark ready + Needs Review behind its sheet.
+        const pr = tab(page).locator('.c-own-pr');
+        await pr.getByText('Draft of c3d2e5b').waitFor();
+        assert.match(await pr.innerText(), /Open the draft pull request: done/);
+        assert.match(await pr.innerText(), /feature\/ACME-301 → develop/);
+        await pr.getByRole('button', { name: 'Mark ready + Needs Review…' }).click();
+        const readySheet = page.getByRole('dialog');
+        await readySheet.getByText('(the hand-over you tested)').waitFor();
+        assert.match(await readySheet.innerText(), /#40: draft → ready/);
+        assert.match(await readySheet.innerText(), /ACME-301: In Progress → In Review/);
+        await shot(page, join(shots, `ready-sheet-${scheme}.png`));
+        await readySheet.getByRole('button', { name: 'Approve both' }).click();
+        await page.waitForFunction(() =>
+            window.calls.some((c) => c.cmd === 'approve_ready'),
+        );
+        assert.deepEqual((await calls(page, 'approve_ready'))[0].args, {
+            flow: 40,
+            head: 'c3d2e5b1a0f9d8c7b6a5f4e3d2c1b0a9f8e7d6c5',
+        });
         await page.context().close();
+
+        // ── In review: what GitHub said, the feedback once, a revision from it, the Merge sheet ──
+        const followed = await open(`?theme=${scheme}&scenario=review`, scheme);
+        await openInbox(followed);
+        const feedbackCard = followed
+            .locator('.c-inbox-card')
+            .filter({ hasText: 'new feedback on #40' });
+        await feedbackCard.waitFor();
+        await feedbackCard.getByRole('button', { name: 'See the feedback' }).click();
+        await tab(followed).locator('.c-implement__title').getByText('In review').waitFor();
+        const own = tab(followed).locator('.c-own-pr');
+        await own.getByText('sam').first().waitFor();
+        const ownText = await own.innerText();
+        for (const part of [
+            'open, ready for review · checks 3✓ 0✗ · changes requested · can merge',
+            'Ready + Needs Review',
+            '#40: draft → ready: done',
+            'ACME-301: In Progress → In Review: done',
+            'sam asked for changes',
+            'Sort the units by floor, please.',
+            'This loop should sort first.',
+        ])
+            assert(
+                ownText.includes(part),
+                `the pull request section shows “${part}”:\n${ownText}`,
+            );
+        assert.equal(await own.getByRole('button', { name: /Mark ready/ }).count(), 0);
+        await shot(followed, join(shots, `implement-in-review-${scheme}.png`));
+        await own.getByRole('button', { name: 'Sync' }).click();
+        await followed.waitForFunction(() =>
+            window.calls.some((c) => c.cmd === 'sync_pull_request'),
+        );
+        await own
+            .getByRole('button', { name: 'Start a revision from the feedback' })
+            .click();
+        await followed.waitForFunction(() =>
+            window.calls.some((c) => c.cmd === 'revise_from_feedback'),
+        );
+        assert.deepEqual((await calls(followed, 'revise_from_feedback'))[0].args, {
+            flow: 40,
+        });
+        await own.getByRole('button', { name: 'Merge…' }).click();
+        const mergeSheet = followed.getByRole('dialog');
+        await mergeSheet.getByText('Only this sheet merges.', { exact: false }).waitFor();
+        assert.match(await mergeSheet.innerText(), /feature\/ACME-301 → develop/);
+        await mergeSheet.getByLabel('Merge method').selectOption('rebase');
+        await shot(followed, join(shots, `merge-sheet-${scheme}.png`));
+        await mergeSheet.getByRole('button', { name: 'Merge c3d2e5b' }).click();
+        await followed.waitForFunction(() =>
+            window.calls.some((c) => c.cmd === 'approve_merge'),
+        );
+        assert.deepEqual((await calls(followed, 'approve_merge'))[0].args, {
+            flow: 40,
+            head: 'c3d2e5b1a0f9d8c7b6a5f4e3d2c1b0a9f8e7d6c5',
+            method: 'rebase',
+        });
+        await followed.context().close();
 
         // ── Cut off by a quit: Resume from the card, once ────────────────────────────────────
         const cut = await open(`?theme=${scheme}&scenario=interrupted`, scheme);
         await openInbox(cut);
-        const card = cut.locator('.c-inbox-card').filter({ hasText: 'wtm quit while it was being implemented' });
+        const card = cut
+            .locator('.c-inbox-card')
+            .filter({ hasText: 'wtm quit while it was being implemented' });
         await card.waitFor();
         await shot(cut, join(shots, `inbox-interrupted-${scheme}.png`));
         await row(cut, 'ACME-301').click();
@@ -368,14 +504,19 @@ try {
             () => window.calls.filter((c) => c.cmd === 'resume_implementing').length === 1,
         );
         assert.deepEqual((await calls(cut, 'resume_implementing'))[0].args, { flow: 40 });
-        await tab(cut).getByRole('button', { name: 'Resume' }).waitFor({ state: 'detached' });
+        await tab(cut)
+            .getByRole('button', { name: 'Resume' })
+            .waitFor({ state: 'detached' });
         await cut.context().close();
 
         // ── A question about a file outside the plan waits in the Inbox ──────────────────────
         const asked = await open(`?theme=${scheme}&scenario=question`, scheme);
         await row(asked, 'ACME-301').click();
         await asked.getByRole('tab', { name: 'Implement' }).click();
-        await tab(asked).locator('.c-implement__title').getByText('Waiting for your answer').waitFor();
+        await tab(asked)
+            .locator('.c-implement__title')
+            .getByText('Waiting for your answer')
+            .waitFor();
         await tab(asked).getByText('waiting for you in the Inbox').waitFor();
         assert.match(await tab(asked).innerText(), /README\.md/);
         await shot(asked, join(shots, `implement-question-${scheme}.png`));
@@ -385,9 +526,13 @@ try {
         const none = await open(`?theme=${scheme}&scenario=none`, scheme);
         await row(none, 'ACME-301').click();
         await none.getByRole('tab', { name: 'Implement' }).click();
-        await tab(none).getByText(/This project names no implementer/).waitFor();
+        await tab(none)
+            .getByText(/This project names no implementer/)
+            .waitFor();
         assert.equal(
-            await tab(none).getByRole('button', { name: /Start implementing|Resume/ }).count(),
+            await tab(none)
+                .getByRole('button', { name: /Start implementing|Resume/ })
+                .count(),
             0,
             'nothing to start without an implementer',
         );

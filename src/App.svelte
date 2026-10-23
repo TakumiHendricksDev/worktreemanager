@@ -369,6 +369,10 @@
       // you were elsewhere is on the board when you look. Spaced out by the store; never a timer.
       if (booted && view.work && workspace.activeProjectId)
         void trackerQueue.sync(workspace.activeProjectId, 'focus');
+      // The issue's own pull request on screen is followed the same way: its checks, reviews and
+      // merge state, at most once a minute (`implement.svelte.ts`).
+      const pull = booted && view.work ? implement.shownPull() : null;
+      if (pull) void implement.syncPull(pull.key, pull.flow, 'focus');
       /*
        * Coming back to the window is looking at what is on screen.
        *

@@ -38,6 +38,10 @@ use super::approval::{Approval, ApprovalId, ApprovalSubject, Binding, review_bin
 use super::comment::{CommentPayload, CommentRequest};
 use super::env::CommandRequest;
 use super::moves::{MoveIssuePayload, MoveRequest, MovedElsewhere};
+use super::own_pr::{
+    DraftPlan, DraftPullRequestPayload, MarkReadyPayload, MergePayload, MergeRequest, ReadyRequest,
+    UpdatePullRequestPayload, pull_target,
+};
 use super::publish::{PendingReviewPayload, ReviewPayload, SubmitReviewPayload, hash_of, target};
 use super::route::{OpenPullRequestPayload, PushPayload, RoutePlan, SuggestionRoute};
 use super::state::FlowId;
@@ -110,6 +114,14 @@ pub enum OperationPayload {
     MoveIssue(MoveIssuePayload),
     /// A comment posted to an issue: a question and its answer, sent from Send to Jira.
     PostComment(CommentPayload),
+    /// The issue's pull request, opened as a draft from its task branch.
+    CreateDraftPullRequest(DraftPullRequestPayload),
+    /// The issue's pull request's title and description, as the latest hand-over says them.
+    UpdatePullRequest(UpdatePullRequestPayload),
+    /// The issue's pull request marked ready for review, at the head you approved.
+    MarkReady(MarkReadyPayload),
+    /// The issue's pull request merged, at the head you approved, from the Merge sheet.
+    Merge(MergePayload),
 }
 
 impl OperationPayload {
@@ -122,6 +134,10 @@ impl OperationPayload {
             Self::OpenPullRequest(_) => OperationKind::OpenPullRequest,
             Self::MoveIssue(_) => OperationKind::MoveIssue,
             Self::PostComment(_) => OperationKind::PostComment,
+            Self::CreateDraftPullRequest(_) => OperationKind::CreateDraftPullRequest,
+            Self::UpdatePullRequest(_) => OperationKind::UpdatePullRequest,
+            Self::MarkReady(_) => OperationKind::MarkReady,
+            Self::Merge(_) => OperationKind::Merge,
         }
     }
 
@@ -141,6 +157,10 @@ impl OperationPayload {
             ),
             Self::MoveIssue(p) => p.target(),
             Self::PostComment(p) => p.target(),
+            Self::CreateDraftPullRequest(p) => p.target(),
+            Self::UpdatePullRequest(p) => pull_target(&p.repo, p.number),
+            Self::MarkReady(p) => pull_target(&p.repo, p.number),
+            Self::Merge(p) => pull_target(&p.repo, p.number),
         }
     }
 
@@ -273,6 +293,23 @@ pub enum OperationResult {
         /// It was there before anything was sent.
         adopted: bool,
     },
+    /// A pull request no longer a draft.
+    #[serde(rename_all = "camelCase")]
+    Ready {
+        number: u64,
+        url: String,
+        /// It was ready before anything was sent.
+        adopted: bool,
+    },
+    /// A pull request merged, at this head.
+    #[serde(rename_all = "camelCase")]
+    Merged {
+        number: u64,
+        url: String,
+        head: String,
+        /// It was merged before anything was sent.
+        adopted: bool,
+    },
     /// A comment now on the issue.
     #[serde(rename_all = "camelCase")]
     Commented {
@@ -296,6 +333,8 @@ impl OperationResult {
             } => Some((*review, node_id)),
             Self::Pushed { .. }
             | Self::PullRequest { .. }
+            | Self::Ready { .. }
+            | Self::Merged { .. }
             | Self::Moved { .. }
             | Self::Commented { .. } => None,
         }
@@ -305,7 +344,12 @@ impl OperationResult {
     #[must_use]
     pub fn url(&self) -> Option<&str> {
         match self {
-            Self::Review { url, .. } | Self::PullRequest { url, .. } if !url.is_empty() => {
+            Self::Review { url, .. }
+            | Self::PullRequest { url, .. }
+            | Self::Ready { url, .. }
+            | Self::Merged { url, .. }
+                if !url.is_empty() =>
+            {
                 Some(url)
             }
             _ => None,
@@ -630,7 +674,10 @@ impl Approved {
             | ApprovalSubject::Plan(_)
             | ApprovalSubject::Design(_)
             | ApprovalSubject::Comment(_)
-            | ApprovalSubject::Services(_) => return None,
+            | ApprovalSubject::Services(_)
+            | ApprovalSubject::Draft(_)
+            | ApprovalSubject::Ready(_)
+            | ApprovalSubject::Merge(_) => return None,
         };
         Some(Publication {
             approval: self.approval,
@@ -656,7 +703,10 @@ impl Approved {
             | ApprovalSubject::Plan(_)
             | ApprovalSubject::Design(_)
             | ApprovalSubject::Comment(_)
-            | ApprovalSubject::Services(_) => None,
+            | ApprovalSubject::Services(_)
+            | ApprovalSubject::Draft(_)
+            | ApprovalSubject::Ready(_)
+            | ApprovalSubject::Merge(_) => None,
         }
     }
 
@@ -672,7 +722,10 @@ impl Approved {
             | ApprovalSubject::Plan(_)
             | ApprovalSubject::Design(_)
             | ApprovalSubject::Comment(_)
-            | ApprovalSubject::Services(_) => None,
+            | ApprovalSubject::Services(_)
+            | ApprovalSubject::Draft(_)
+            | ApprovalSubject::Ready(_)
+            | ApprovalSubject::Merge(_) => None,
         }
     }
 
@@ -692,8 +745,28 @@ impl Approved {
             | ApprovalSubject::Plan(_)
             | ApprovalSubject::Design(_)
             | ApprovalSubject::Comment(_)
-            | ApprovalSubject::Services(_) => None,
+            | ApprovalSubject::Services(_)
+            | ApprovalSubject::Draft(_)
+            | ApprovalSubject::Ready(_)
+            | ApprovalSubject::Merge(_) => None,
         }
+    }
+
+    /// A write to the issue's own pull request: a draft, Ready + Needs Review, or a merge. `None`
+    /// for anything else.
+    #[must_use]
+    pub fn into_own(self) -> Option<OwnSend> {
+        let request = match self.subject {
+            ApprovalSubject::Draft(plan) => OwnRequest::Draft(*plan),
+            ApprovalSubject::Ready(request) => OwnRequest::Ready(*request),
+            ApprovalSubject::Merge(request) => OwnRequest::Merge(*request),
+            _ => return None,
+        };
+        Some(OwnSend {
+            approval: self.approval,
+            request,
+            operations: self.operations,
+        })
     }
 
     /// A comment on an issue. `None` for anything else.
@@ -707,6 +780,40 @@ impl Approved {
             }),
             _ => None,
         }
+    }
+}
+
+/// What an approval of the issue's own pull request was of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "request", rename_all = "snake_case")]
+pub enum OwnRequest {
+    Draft(DraftPlan),
+    Ready(ReadyRequest),
+    Merge(MergeRequest),
+}
+
+/// One approval of the issue's own pull request, with exactly what it covered and the operations
+/// that send it, in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnSend {
+    pub approval: Approval,
+    pub request: OwnRequest,
+    pub operations: Vec<Operation>,
+}
+
+impl OwnSend {
+    #[must_use]
+    pub fn state(&self, activity: Option<Activity>) -> PublicationState {
+        progress(&self.operations, activity)
+    }
+
+    /// The operation to run next: the first that is not done.
+    #[must_use]
+    pub fn next(&self) -> Option<&Operation> {
+        self.operations
+            .iter()
+            .find(|op| op.state != OperationState::Done)
     }
 }
 

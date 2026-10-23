@@ -26,7 +26,8 @@ export function implementRunWords(view: ImplementView): string {
   const { state } = view.flow;
   if (state.end?.kind === 'cancelled') return 'Run stopped';
   if (state.end?.kind === 'failed') return 'Run could not finish';
-  if (state.end?.kind === 'done') return 'Run done';
+  if (state.end?.kind === 'done')
+    return state.phase === 'in_review' ? 'Merged: run done' : 'Run done';
   switch (state.hold?.kind) {
     case 'awaiting_answer':
       return 'Waiting for your answer';
@@ -63,6 +64,10 @@ export function implementRunWords(view: ImplementView): string {
         : `Fixing: round ${fixRounds(view.rounds, view.implementation?.planRevision ?? 1)}`;
     case 'ready_to_test':
       return 'Ready to test';
+    case 'publishing':
+      return 'Marking ready and moving it to review';
+    case 'in_review':
+      return 'In review';
     case 'planned':
       return 'Planned';
     case 'designing':

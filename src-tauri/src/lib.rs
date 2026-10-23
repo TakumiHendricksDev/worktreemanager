@@ -644,6 +644,14 @@ pub fn run() {
             flow::implement_commands::resume_implementing,
             flow::implement_commands::implementation_handoff,
             flow::implement_commands::revise_implementation,
+            flow::own_pr_commands::issue_pull_request,
+            flow::own_pr_commands::sync_pull_request,
+            flow::own_pr_commands::retry_pull_request_write,
+            flow::own_pr_commands::ready_sheet,
+            flow::own_pr_commands::approve_ready,
+            flow::own_pr_commands::revise_from_feedback,
+            flow::own_pr_commands::merge_sheet,
+            flow::own_pr_commands::approve_merge,
         ])
         // `build` then `run`, rather than `Builder::run`. The shorthand is exactly
         // `build(context)?.run(|_, _| {})` — an empty event callback — and this app now needs

@@ -70,6 +70,8 @@ pub mod implement;
 pub mod implement_commands;
 pub mod moves;
 pub mod outbox;
+pub mod own_pr;
+pub mod own_pr_commands;
 pub mod plan_commands;
 pub mod planner;
 pub mod publish;

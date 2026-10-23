@@ -36,6 +36,7 @@
   import { work } from '../state/work.svelte';
   import CodeText from './CodeText.svelte';
   import WorkHandoff from './WorkHandoff.svelte';
+  import WorkPullRequest from './WorkPullRequest.svelte';
   import Button from './ui/Button.svelte';
 
   const {
@@ -72,6 +73,12 @@
   const implementation = $derived(view?.implementation ?? null);
   const checks = $derived(view ? latestChecks(view.verifying, view.checks) : []);
   const progress = $derived(view?.sessions.at(-1)?.progress ?? null);
+  const published = $derived(
+    view !== null &&
+      (view.flow.state.phase === 'publishing' ||
+        view.flow.state.phase === 'in_review' ||
+        view.flow.state.end?.kind === 'done'),
+  );
 </script>
 
 <div class="c-implement">
@@ -133,8 +140,15 @@
         <p class="c-implement__progress"><CodeText text={progress} /></p>
       {/if}
 
+      <!-- Published, the pull request is what moves; before that, the hand-over is. -->
+      {#if published}
+        <WorkPullRequest {projectId} {issueKey} {view} {visible} />
+      {/if}
       {#if implementation.outcome === 'ready' && implementation.stopped}
         <WorkHandoff {projectId} {issueKey} {view} {visible} {onopenworktree} />
+      {/if}
+      {#if implementation.outcome === 'ready' && !published}
+        <WorkPullRequest {projectId} {issueKey} {view} {visible} />
       {/if}
 
       <dl class="o-facts o-facts--wide">

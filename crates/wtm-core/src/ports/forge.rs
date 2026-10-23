@@ -26,8 +26,8 @@ use std::path::Path;
 
 pub use crate::error::ForgeError;
 use crate::flow::{
-    BranchProtection, ChangedLines, ForgeAccount, Permission, PrState, PrTarget, PullRequest,
-    RemoteComment, RemoteReview, RepoSlug, ReviewEvent,
+    BranchProtection, ChangedLines, ForgeAccount, MergeMethod, Permission, PrState, PrTarget,
+    PullRequest, RemoteComment, RemoteReview, RepoSlug, ReviewEvent,
 };
 
 /// What the Work view reads from a forge.
@@ -156,6 +156,9 @@ pub struct RemotePullRequest {
     /// The branch it merges into.
     pub base: String,
     pub body: String,
+    pub draft: bool,
+    /// The commit its head is at.
+    pub head_sha: String,
 }
 
 /// Opening the follow-up pull request of a local fix, and finding one an earlier attempt opened.
@@ -186,4 +189,53 @@ pub trait PullRequestWriter: Send + Sync {
         title: &str,
         body: &str,
     ) -> Result<RemotePullRequest, ForgeError>;
+}
+
+/// The issue's own pull request: opened as a draft from its task branch, kept up to date, marked
+/// ready, and merged.
+///
+/// Only the outbox's executor holds one, for the draft the plan makes automatic and for approvals
+/// you gave — Ready + Needs Review, and a merge from the Merge sheet. No agent tool reaches it, so an
+/// agent can neither mark work ready nor merge it. Finding an earlier attempt's pull request is
+/// [`PullRequestWriter::pull_requests_from`].
+pub trait OwnPullWriter: Send + Sync {
+    /// Open a draft pull request in `repo` from its branch `head` into `base`.
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeError::Rejected`] when the forge refuses it as asked, such as when one from that head
+    /// into that base exists already.
+    fn open_draft(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        base: &str,
+        head: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<RemotePullRequest, ForgeError>;
+
+    /// Set pull request `number`'s title and description.
+    fn update(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        number: u64,
+        title: &str,
+        body: &str,
+    ) -> Result<RemotePullRequest, ForgeError>;
+
+    /// Mark draft pull request `number` ready for review.
+    fn mark_ready(&self, cwd: &Path, repo: &RepoSlug, number: u64) -> Result<(), ForgeError>;
+
+    /// Merge pull request `number` by `method`, only if its head is still `head`: the forge refuses
+    /// it otherwise ([`ForgeError::Rejected`]).
+    fn merge(
+        &self,
+        cwd: &Path,
+        repo: &RepoSlug,
+        number: u64,
+        head: &str,
+        method: MergeMethod,
+    ) -> Result<(), ForgeError>;
 }

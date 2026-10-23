@@ -327,7 +327,11 @@ impl Engine {
             OperationPayload::PushBranch(_)
             | OperationPayload::OpenPullRequest(_)
             | OperationPayload::MoveIssue(_)
-            | OperationPayload::PostComment(_) => {
+            | OperationPayload::PostComment(_)
+            | OperationPayload::CreateDraftPullRequest(_)
+            | OperationPayload::UpdatePullRequest(_)
+            | OperationPayload::MarkReady(_)
+            | OperationPayload::Merge(_) => {
                 self.failed(publication, op, "this is not a review's write");
                 Then::Stop
             }
@@ -757,6 +761,8 @@ impl Engine {
                 // An issue's move, settled by reading the issue (`moves.rs`).
             } else if self.recover_comment(op.approval, &op) {
                 // A comment on an issue, settled by reading its comments (`comments.rs`).
+            } else if self.recover_own(op.approval, &op) {
+                // The issue's own pull request: its draft, ready or merge (`own_pr.rs`).
             } else if let Ok(Some(publication)) = db.publication(op.approval) {
                 self.settle_unsent(&publication, &op);
                 // Whatever the check found, a publish that is not finished waits for you, so it is
@@ -888,9 +894,11 @@ impl Engine {
             OperationPayload::PushBranch(_)
             | OperationPayload::OpenPullRequest(_)
             | OperationPayload::MoveIssue(_)
-            | OperationPayload::PostComment(_) => {
-                OperationChange::failed("this is not a review's write")
-            }
+            | OperationPayload::PostComment(_)
+            | OperationPayload::CreateDraftPullRequest(_)
+            | OperationPayload::UpdatePullRequest(_)
+            | OperationPayload::MarkReady(_)
+            | OperationPayload::Merge(_) => OperationChange::failed("this is not a review's write"),
         };
         tracing::info!(op = %op.id, to = ?change.state, "settled an operation a crash left mid-write");
         self.change(op.id, &change).map(|op| op.state)

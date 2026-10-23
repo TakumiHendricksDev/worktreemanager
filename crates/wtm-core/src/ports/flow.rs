@@ -34,7 +34,7 @@ use crate::flow::{
 };
 use crate::flow::{
     CheckpointBy, Handoff, ImplementChange, ImplementCheckpoint, ImplementQuestion, Implementation,
-    NewImplementation, NewRound, Round,
+    NewImplementation, NewRound, PrFeedback, Round,
 };
 use crate::flow::{
     CommandRun, CommandRunChange, CommandRunId, CommandRunRefused, NewCommandRun, ServiceRecord,
@@ -57,7 +57,7 @@ use crate::flow::{
     Snapshot, SnapshotId, Step, StepChange, StepId,
 };
 use crate::flow::{MirroredPr, NewOutcome, NewReviewedHead, Outcome, ReviewClaim, ReviewedHead};
-use crate::flow::{MoveSend, NewStartJob, StartJob, StartJobChange, StartJobError};
+use crate::flow::{MoveSend, NewStartJob, OwnSend, StartJob, StartJobChange, StartJobError};
 use crate::model::ProjectId;
 
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -553,6 +553,20 @@ pub trait OutboxStore: Send + Sync {
             .collect())
     }
 
+    /// One approval of a write to the issue's own pull request.
+    fn own_send(&self, approval: ApprovalId) -> Result<Option<OwnSend>, FlowStoreError> {
+        Ok(self.approved(approval)?.and_then(Approved::into_own))
+    }
+
+    /// A flow's writes to its own pull request, oldest first.
+    fn own_sends(&self, flow: FlowId) -> Result<Vec<OwnSend>, FlowStoreError> {
+        Ok(self
+            .approvals(flow)?
+            .into_iter()
+            .filter_map(Approved::into_own)
+            .collect())
+    }
+
     /// One approval of a comment on an issue.
     fn issue_comment(&self, approval: ApprovalId) -> Result<Option<CommentSend>, FlowStoreError> {
         Ok(self.approved(approval)?.and_then(Approved::into_comment))
@@ -939,4 +953,19 @@ pub trait ImplementStore: Send + Sync {
 
     /// What the run's questions are about, oldest first.
     fn implement_questions(&self, flow: FlowId) -> Result<Vec<ImplementQuestion>, FlowStoreError>;
+
+    /// Keep each review of the issue's pull request read for the first time, and return those: a
+    /// review already kept is kept as it was first read.
+    fn keep_feedback(&self, feedback: &[PrFeedback]) -> Result<Vec<PrFeedback>, FlowStoreError>;
+
+    /// The reviews kept for a run, oldest first.
+    fn feedback(&self, flow: FlowId) -> Result<Vec<PrFeedback>, FlowStoreError>;
+
+    /// Say that revision round `round` took `reviews` in. Each review is taken in once.
+    fn feedback_revised(
+        &self,
+        flow: FlowId,
+        reviews: &[u64],
+        round: u32,
+    ) -> Result<(), FlowStoreError>;
 }
