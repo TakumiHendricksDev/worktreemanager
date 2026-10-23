@@ -20,8 +20,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
+use super::comment::CommentRequest;
 use super::env::CommandRequest;
 use super::moves::MoveRequest;
+use super::planning::{PlanApproval, plan_binding};
 use super::publish::ReviewPayload;
 use super::route::{RoutePlan, SuggestionRoute};
 use super::runtime::StartRequest;
@@ -215,6 +217,10 @@ pub enum ApprovalSubject {
     Command(Box<CommandRequest>),
     /// An issue moved to another team status, and why.
     Move(Box<MoveRequest>),
+    /// A plan to implement, and the issue as you saw it when you approved it.
+    Plan(Box<PlanApproval>),
+    /// A question and its answer, posted to the issue as a comment, in exactly the words you sent.
+    Comment(Box<CommentRequest>),
     /// Starting a review's environment: the services its blocked checks and waiting runtime roles
     /// need, then running those. Its own subject under the `command` intent, because what it allows
     /// is the same kind of thing — processes run once on this machine, pinned by the hash of exactly
@@ -392,6 +398,35 @@ impl NewApproval {
         )?;
         approval.subject = ApprovalSubject::Services(Box::new(request.clone()));
         Ok(approval)
+    }
+}
+
+impl NewApproval {
+    /// Approval to implement plan `approval.revision`, for the issue whose revision is
+    /// `issue_revision`: the two pins that make it stale when either moves on.
+    #[must_use]
+    pub fn plan(flow: FlowId, approval: &PlanApproval, issue_revision: &str) -> Self {
+        Self {
+            flow,
+            intent: ApprovalIntent::Plan,
+            binding: plan_binding(approval.revision, issue_revision),
+            subject: ApprovalSubject::Plan(Box::new(approval.clone())),
+        }
+    }
+
+    /// Approval to post exactly `request`'s text to its issue. The pin is the hash its operation is
+    /// keyed by, so an edited draft is a different approval of a different write.
+    #[must_use]
+    pub fn comment(flow: FlowId, request: &CommentRequest) -> Self {
+        Self {
+            flow,
+            intent: ApprovalIntent::Post,
+            binding: Binding::default().with(
+                Pinned::Payload,
+                super::outbox::OperationPayload::PostComment(request.payload.clone()).hash(),
+            ),
+            subject: ApprovalSubject::Comment(Box::new(request.clone())),
+        }
     }
 }
 

@@ -54,12 +54,15 @@
 pub mod brief;
 pub mod checks;
 pub mod commands;
+pub mod comments;
 pub mod env;
 pub mod findings;
 pub mod fix;
 pub mod host;
 pub mod moves;
 pub mod outbox;
+pub mod plan_commands;
+pub mod planner;
 pub mod publish;
 pub mod pull_request;
 pub mod routes;
@@ -69,9 +72,9 @@ pub mod start_commands;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -235,6 +238,8 @@ enum Signal {
     Event(AgentEvent),
     Exited(String),
     Submitted(Submission),
+    /// A planner asked a question with `flow_ask`, and the run now waits for the answer.
+    Asked(QuestionId),
 }
 
 /// A role attempt that is running, as the run tools find it.
@@ -253,6 +258,8 @@ struct Live {
     dir: FlowDir,
     /// What a writer fixing findings is held to, for a fix's role; `None` for a reviewer.
     fix: Option<Arc<fix::FixLive>>,
+    /// What a planner's turn is, for a planner; `None` for a review's role.
+    planner: Option<Arc<planner::PlannerLive>>,
     /// The project and worktree, which a check that needs services asks the gate about.
     project: String,
     worktree: String,
@@ -269,11 +276,17 @@ struct InvocationSink {
 
 impl AgentSink for InvocationSink {
     fn on_event(&self, _session: &SessionId, event: &AgentEvent) {
+        // The words a turn says are wanted too: a planner's reply in a discussion is a message,
+        // not a submission, and the role thread keeps the last one. A review ignores them.
         let wanted = matches!(
             event,
             AgentEvent::SessionReady { .. }
                 | AgentEvent::SkillsListed { .. }
+                | AgentEvent::TurnStarted { .. }
                 | AgentEvent::TurnFinished { .. }
+                | AgentEvent::ToolStarted { .. }
+                | AgentEvent::MessageDelta { .. }
+                | AgentEvent::Message { .. }
                 | AgentEvent::Failed { .. }
                 | AgentEvent::LimitReached { .. }
                 | AgentEvent::ApprovalRequested { .. }
@@ -365,6 +378,9 @@ struct StageCheckout {
 }
 
 pub struct Engine {
+    /// This engine, for the paths that are handed only `&self` and must start a thread: an answer
+    /// that resumes a planner, a worktree that became ready to plan.
+    me: Weak<Engine>,
     app: Arc<App>,
     host: Arc<dyn RoleHost>,
     clock: Arc<dyn Clock>,
@@ -418,7 +434,8 @@ impl Engine {
         notice: Arc<dyn Notice>,
         tuning: Tuning,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|me| Self {
+            me: me.clone(),
             app,
             host,
             clock,
@@ -1283,6 +1300,7 @@ impl Engine {
                     .collect(),
                 dir: ctx.dir.clone(),
                 fix: ctx.fix.clone(),
+                planner: None,
                 project: ctx.project.clone(),
                 worktree: ctx.worktree.clone(),
                 start_services: ctx.workflow.start_services,
@@ -1596,7 +1614,8 @@ impl Engine {
                         reason: format!("its session ended: {summary}"),
                     };
                 }
-                Err(RecvTimeoutError::Timeout) => {}
+                // Only a planner's turn is told of a question it asked; a review role carries on.
+                Ok(Signal::Asked(_)) | Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     return AttemptEnd::Failed {
                         status: InvocationStatus::Failed,
@@ -1841,7 +1860,8 @@ impl Engine {
                 .db()
                 .ok()
                 .and_then(|db| db.review(role.flow).ok().flatten())
-                .is_some();
+                .is_some()
+            || self.is_planning(role.flow);
         if !ours {
             return None;
         }
@@ -1868,7 +1888,10 @@ impl Engine {
                 self.note_progress(role, &progress.text);
                 Ok("Noted.".to_owned())
             }
-            (FlowCall::Ask(ask), Some(live)) => Ok(self.ask(role, &live, ask)),
+            (FlowCall::Ask(ask), Some(live)) => match &live.planner {
+                Some(planner) => self.planner_ask(role, &live, planner, ask),
+                None => Ok(self.ask(role, &live, ask)),
+            },
             (FlowCall::RunCheck { name }, Some(live)) => self.run_check(role, &live, name),
             // A run of this engine's commits only through a fix, held to the fix's files. Never
             // through the ledger's unscoped commit, which is for sessions no engine runs.
@@ -1921,6 +1944,15 @@ impl Engine {
     /// When the review has ended, is waiting on something a resume does not answer, or has nothing
     /// left to run.
     pub fn resume(self: &Arc<Self>, flow: FlowId) -> Result<(), Refusal> {
+        // An issue's run cut off while it was being planned: the planner's conversation carries on
+        // (`planner.rs`).
+        if self.is_planning(flow)
+            && self
+                .state(flow)
+                .is_ok_and(|state| state.phase == Phase::Investigating)
+        {
+            return self.resume_planner(flow);
+        }
         // An issue's run, interrupted while its worktree was made: the inbox's Resume is Start
         // Work's (`start.rs`), and a review's machinery has nothing to run for it.
         if self.is_start(flow) {
@@ -2021,11 +2053,11 @@ impl Engine {
     ///
     /// When the review has already ended.
     pub fn cancel(&self, flow: FlowId) -> Result<(), String> {
-        if self.is_start(flow) {
-            return self.cancel_start(flow);
-        }
         if let Some(run) = self.runs.lock().get(&flow) {
             run.cancel.store(true, Ordering::SeqCst);
+        }
+        if self.is_start(flow) {
+            return self.cancel_start(flow);
         }
         // A fix being written is stopped with the review, and its writer lease goes with it.
         self.stop_fix_record(flow);
@@ -2060,7 +2092,11 @@ impl Engine {
         self.quitting.store(true, Ordering::SeqCst);
         let flows: Vec<FlowId> = self.runs.lock().keys().copied().collect();
         for flow in flows {
-            self.interrupt(flow, InterruptCause::Quit);
+            if self.is_planning(flow) {
+                self.interrupt_planner(flow, InterruptCause::Quit);
+            } else {
+                self.interrupt(flow, InterruptCause::Quit);
+            }
         }
         self.shutdown_starts();
     }
@@ -2108,6 +2144,12 @@ impl Engine {
         match self.recover_starts() {
             Ok(held) => interrupted.extend(held),
             Err(error) => tracing::warn!(%error, "could not check started issues at launch"),
+        }
+        // A planner cut off mid-turn. One waiting for an answer is left as it is: it needs no
+        // process, and the answer resumes its conversation however long the app was gone.
+        match self.recover_planners() {
+            Ok(held) => interrupted.extend(held),
+            Err(error) => tracing::warn!(%error, "could not check planners at launch"),
         }
         Ok(interrupted)
     }
@@ -2383,8 +2425,9 @@ impl Engine {
 
     /// Answer a question a run asked. The first answer counts; its item is resolved with it.
     ///
-    /// A review role was told not to wait, so nothing resumes now: the answer is kept with the run
-    /// and given to the role that asked when it runs again.
+    /// A planner waits for its answers: the last one it waits for resumes its conversation
+    /// (`planner.rs`). A review role was told not to wait, so nothing resumes then: the answer is
+    /// kept with the run and given to the role that asked when it runs again.
     ///
     /// # Errors
     ///
@@ -2409,6 +2452,7 @@ impl Engine {
             .map_err(text)?;
         self.on_outlier_answer(&answered);
         self.notice.changed(answered.flow);
+        self.on_planner_answer(&answered);
         Ok(answered)
     }
 

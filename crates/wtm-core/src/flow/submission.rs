@@ -35,12 +35,31 @@ use super::review::{FindingClass, Location, Severity};
 use super::rule::RuleId;
 use super::schema::{self, SchemaProblem};
 
-/// A plan, from a planning role.
+/// A plan, from a planning role: what approving it would let a writer do.
+///
+/// Every field but the risks is required, because each is something the approval rests on. The
+/// acceptance criteria are what the work will be checked against, the verification is how, and the
+/// areas are the paths a writer may touch without asking — the scope a later checkpoint is held to.
+/// A plan that leaves one out would be approved for less than it looks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PlanReport {
     pub summary: String,
     pub steps: Vec<String>,
+    /// What "done" means, one criterion each, as the issue's acceptance criteria say it or as the
+    /// planner read them from the issue.
+    pub acceptance_criteria: Vec<String>,
+    /// How each criterion will be shown to hold: the tests, checks or manual steps.
+    pub verification: Vec<String>,
+    /// The files or directories the work expects to touch, relative to the repository root, as
+    /// paths or globs in [`super::glob`]'s dialect.
+    pub areas: Vec<String>,
+    /// Whether the work needs a design pass before implementing: substantial UI, or a change a
+    /// person should see before it is built.
+    pub design_needed: bool,
+    /// Why, or why not, in one sentence.
+    #[serde(default)]
+    pub design_reason: Option<String>,
     #[serde(default)]
     pub risks: Vec<String>,
 }
@@ -235,11 +254,16 @@ pub fn schema(kind: OutputKind) -> Value {
         OutputKind::Plan => json!({
             "type": "object",
             "properties": {
-                "summary": text(),
-                "steps": { "type": "array", "items": text(), "minItems": 1 },
+                "summary": { "type": "string", "minLength": 1, "description": "What the work is, in two or three sentences." },
+                "steps": { "type": "array", "items": text(), "minItems": 1, "description": "The implementation, in order." },
+                "acceptanceCriteria": { "type": "array", "items": text(), "minItems": 1, "description": "What done means, one criterion each." },
+                "verification": { "type": "array", "items": text(), "minItems": 1, "description": "How each criterion will be shown to hold: tests, checks, manual steps." },
+                "areas": { "type": "array", "items": text(), "minItems": 1, "description": "Files or directories the work expects to touch, relative to the repository root; globs allowed, such as src/export/**." },
+                "designNeeded": { "type": "boolean", "description": "Whether a design pass should come before implementing: substantial UI, or something a person should see first." },
+                "designReason": { "type": "string", "minLength": 1, "description": "Why, or why not, in one sentence." },
                 "risks": texts(),
             },
-            "required": ["summary", "steps"],
+            "required": ["summary", "steps", "acceptanceCriteria", "verification", "areas", "designNeeded"],
             "additionalProperties": false,
         }),
         OutputKind::Handoff => json!({
@@ -313,7 +337,12 @@ pub fn read(kind: OutputKind, payload: &Value) -> Result<Submission, Vec<SchemaP
     let typed = |e: serde_json::Error| vec![SchemaProblem::new("", e.to_string())];
     let submission = match kind {
         OutputKind::Plan => {
-            Submission::Plan(serde_json::from_value(payload.clone()).map_err(typed)?)
+            let plan: PlanReport = serde_json::from_value(payload.clone()).map_err(typed)?;
+            let problems = check_plan(&plan);
+            if !problems.is_empty() {
+                return Err(problems);
+            }
+            Submission::Plan(plan)
         }
         OutputKind::Handoff => {
             Submission::Handoff(serde_json::from_value(payload.clone()).map_err(typed)?)
@@ -328,6 +357,18 @@ pub fn read(kind: OutputKind, payload: &Value) -> Result<Submission, Vec<SchemaP
         }
     };
     Ok(submission)
+}
+
+/// What a plan's schema cannot say: each area is a place in the repository, written so a writer's
+/// scope can be checked against it later.
+fn check_plan(plan: &PlanReport) -> Vec<SchemaProblem> {
+    let mut problems = Vec::new();
+    for (index, area) in plan.areas.iter().enumerate() {
+        if let Err(why) = super::glob::check(area.trim()) {
+            problems.push(SchemaProblem::new(format!("/areas/{index}"), why));
+        }
+    }
+    problems
 }
 
 /// What the flat finding shape cannot say in the schema itself.
@@ -533,12 +574,65 @@ mod tests {
         );
     }
 
+    fn plan(extra: &Value) -> Value {
+        let mut base = json!({
+            "summary": "Export units as CSV from the list view.",
+            "steps": ["Add the button", "Write the rows"],
+            "acceptanceCriteria": ["A download starts", "Rows match the list"],
+            "verification": ["A test that reads the file back"],
+            "areas": ["src/export/**", "src/views/UnitList.svelte"],
+            "designNeeded": false,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            base[key] = value.clone();
+        }
+        base
+    }
+
     #[test]
     fn a_field_the_schema_does_not_name_is_refused_rather_than_dropped() {
         // An agent adding `approved: true` to a plan must not get it silently ignored, or a later
         // reader would wonder where the approval went.
-        let payload = json!({ "summary": "s", "steps": ["one"], "approved": true });
+        let payload = plan(&json!({ "approved": true }));
         assert_eq!(problems(OutputKind::Plan, &payload), ["/approved"]);
+    }
+
+    #[test]
+    fn a_plan_carries_its_criteria_its_verification_its_areas_and_whether_it_needs_design() {
+        let Ok(Submission::Plan(read)) = read(OutputKind::Plan, &plan(&json!({}))) else {
+            panic!("a whole plan is accepted");
+        };
+        assert_eq!(read.acceptance_criteria.len(), 2);
+        assert_eq!(read.areas, ["src/export/**", "src/views/UnitList.svelte"]);
+        assert!(!read.design_needed);
+
+        let mut thin = plan(&json!({}));
+        for field in [
+            "acceptanceCriteria",
+            "verification",
+            "areas",
+            "designNeeded",
+        ] {
+            thin.as_object_mut().unwrap().remove(field);
+        }
+        assert!(read_err_mentions(&thin, "acceptanceCriteria"));
+        assert!(read_err_mentions(&thin, "designNeeded"));
+    }
+
+    fn read_err_mentions(payload: &Value, field: &str) -> bool {
+        read(OutputKind::Plan, payload)
+            .unwrap_err()
+            .iter()
+            .any(|p| p.to_string().contains(field))
+    }
+
+    #[test]
+    fn a_plan_area_outside_the_repository_is_refused_where_it_was_written() {
+        let payload = plan(&json!({ "areas": ["src/ok", "../elsewhere", "/etc"] }));
+        assert_eq!(
+            problems(OutputKind::Plan, &payload),
+            ["/areas/1", "/areas/2"]
+        );
     }
 
     #[test]

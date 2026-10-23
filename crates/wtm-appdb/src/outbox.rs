@@ -148,7 +148,10 @@ fn approved_from(conn: &Connection, row: ApprovalRow) -> Result<Approved, FlowSt
     })
 }
 
-fn approved(conn: &Connection, approval: ApprovalId) -> Result<Option<Approved>, FlowStoreError> {
+pub(crate) fn approved(
+    conn: &Connection,
+    approval: ApprovalId,
+) -> Result<Option<Approved>, FlowStoreError> {
     let row = conn
         .query_row(
             &format!("SELECT {APPROVAL_COLUMNS} FROM approvals WHERE id = ?1"),

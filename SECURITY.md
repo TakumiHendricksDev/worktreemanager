@@ -93,11 +93,14 @@ Worth stating because it narrows the surface considerably:
   (ARCHITECTURE §6h). wtm stores no GitHub token.
   For a project whose own config names a tracker, the Work view also reads its issues and sprint
   through your own `acli`, signed in as `acli` already is, and keeps the last reading in its own
-  database; a repository's `wtm.toml` cannot name the tracker for you. The one thing it writes to
-  the tracker is an issue's status: Start Work's move to the "started" status, shown on the button
-  before you press it, and a card you drop on another board column, each one issue by key, read
-  before and after it is moved. It never comments, edits, assigns or creates, and a sync cannot
-  start an agent or move anything. wtm stores no Atlassian token.
+  database; a repository's `wtm.toml` cannot name the tracker for you. It writes two things to the
+  tracker. An issue's status: Start Work's move to the "started" status, shown on the button before
+  you press it, and a card you drop on another board column, each one issue by key, read before and
+  after it is moved. And a comment: a planner's question with your answer, only when you open Send
+  to Jira's draft and then click Post, exactly the text you posted, on that one issue, with its
+  comments read before and after so a retry or a crash never posts it twice. A planner's
+  discussion, progress and anything else an agent says are never sent. It never edits, assigns or
+  creates, and a sync cannot start an agent or move anything. wtm stores no Atlassian token.
   Preparing a review worktree, and following its pull request to a new head, fetch the pull request
   into your repository and check the review worktree out with git hooks off: any hook would run
   inside the author's tree, and once that tree is checked out the hooks directory may be the

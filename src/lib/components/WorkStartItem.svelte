@@ -9,6 +9,10 @@
    * - **A move that failed**: retry, which reads the issue again first, or leave it.
    * - **A worktree's setup that failed, or a start a quit or crash cut off**: retry setup, which runs
    *   the project's setup in the worktree that is there, or use the worktree as it is.
+   * - **Its plan**: a plan ready for your decision, or an approval the issue's edit made stale, go
+   *   to the Plan tab, where the plan is read whole before it is decided on; a planner that was cut
+   *   off or stopped is resumed in its own conversation. A plan-ready item is an approval about the
+   *   run, as a pause offer is, and is told apart by the run being held for it.
    *
    * Each reads the issue's start the way its workspace does (`startWork`), so acting here updates
    * both, and Show the issue goes to the workspace's Run section.
@@ -18,6 +22,7 @@
   import { KIND_TONE, KIND_WORDS, filedAt } from '../inbox';
   import type { InboxItem } from '../ipc/types';
   import { inbox } from '../state/inbox.svelte';
+  import { plan } from '../state/plan.svelte';
   import { startWork } from '../state/start-work.svelte';
   import { view as mainView } from '../state/view.svelte';
   import { work } from '../state/work.svelte';
@@ -32,12 +37,21 @@
   $effect(() => {
     const project = item.project;
     const key = item.issue;
-    if (project) untrack(() => void startWork.load(project, key));
+    if (project)
+      untrack(() => {
+        void startWork.load(project, key);
+        void plan.load(project, key);
+      });
   });
 
   const view = $derived(startWork.views[item.issue] ?? null);
   const busy = $derived(startWork.busy[item.issue] ?? false);
-  const error = $derived(startWork.errors[item.issue] ?? inbox.errors[item.id] ?? null);
+  const error = $derived(
+    startWork.errors[item.issue] ??
+      plan.errors[item.issue] ??
+      inbox.errors[item.id] ??
+      null,
+  );
   const job = $derived(view?.job ?? null);
   const flow = $derived(view?.flow ?? null);
   const move = $derived(
@@ -47,7 +61,34 @@
         ) ?? null)
       : null,
   );
-  const pauseOffer = $derived(item.kind === 'approval' && item.target.kind === 'flow');
+  const planned = $derived(plan.views[item.issue] ?? null);
+  /** The plan waits for your decision: the run is held for it. */
+  const planReady = $derived(
+    item.kind === 'approval' &&
+      item.target.kind === 'flow' &&
+      planned?.flow.state.hold?.kind === 'awaiting_approval',
+  );
+  /** The issue changed after its plan was approved. */
+  const planStale = $derived(
+    item.target.kind === 'approval' &&
+      planned?.standing.kind === 'stale' &&
+      planned.standing.approval === item.target.approval,
+  );
+  /** The planner was cut off or stopped part-way through, and nothing else holds it. */
+  const plannerStopped = $derived(
+    item.target.kind === 'flow' &&
+      (item.kind === 'failure' ||
+        item.kind === 'interrupted' ||
+        item.kind === 'capacity') &&
+      planned !== null &&
+      planned.flow.state.end === null &&
+      planned.flow.state.phase === 'investigating' &&
+      !planned.running &&
+      planned.flow.state.hold?.kind !== 'awaiting_answer',
+  );
+  const pauseOffer = $derived(
+    item.kind === 'approval' && item.target.kind === 'flow' && !planReady,
+  );
   const setupRemedy = $derived(
     item.target.kind === 'flow' &&
       (item.kind === 'failure' || item.kind === 'interrupted') &&
@@ -57,8 +98,8 @@
       (job.state === 'setup_failed' || job.state === 'interrupted'),
   );
 
-  function show(): void {
-    work.pickIssue(item.issue);
+  function show(tab: 'overview' | 'plan' = 'overview'): void {
+    work.pickIssue(item.issue, tab);
     mainView.show('work');
   }
 </script>
@@ -81,7 +122,19 @@
   <div class="c-inbox-card__actions">
     {#if item.project && flow}
       {@const project = item.project}
-      {#if pauseOffer && flow.state.end === null && flow.state.hold === null}
+      {#if planReady || planStale}
+        <Button variant="accent" size="sm" onclick={() => show('plan')}
+          >{planStale ? 'Show what changed' : 'Read the plan'}</Button
+        >
+      {:else if plannerStopped && planned}
+        <Button
+          variant="accent"
+          size="sm"
+          disabled={plan.busy[item.issue] ?? false}
+          onclick={() => void plan.resume(project, item.issue, planned.flow.id)}
+          >Resume planner</Button
+        >
+      {:else if pauseOffer && flow.state.end === null && flow.state.hold === null}
         <Button
           variant="accent"
           size="sm"
@@ -135,7 +188,7 @@
         >
       {/if}
     {/if}
-    <Button variant="neutral" size="sm" onclick={show}>Show the issue</Button>
+    <Button variant="neutral" size="sm" onclick={() => show()}>Show the issue</Button>
     <span class="c-inbox-card__spacer"></span>
     <Button
       variant="quiet"

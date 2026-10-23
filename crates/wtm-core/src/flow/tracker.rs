@@ -153,6 +153,19 @@ pub struct IssueDetail {
     pub sprints: Vec<Sprint>,
 }
 
+/// One comment on an issue, as the tracker lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerComment {
+    /// The tracker's id for it.
+    pub id: String,
+    /// Who wrote it, as the tracker names them: a display name, not an account id.
+    pub author: Option<String>,
+    /// Plain text. As with a description, a tracker's rich text keeps its words and loses its
+    /// formatting, and mentions may come back without the name they mentioned.
+    pub body: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SprintState {

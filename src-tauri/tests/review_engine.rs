@@ -556,7 +556,14 @@ fn a_submission_that_fails_its_schema_goes_back_to_the_agent_and_its_fixed_retry
 fn a_submission_of_a_kind_the_role_does_not_hand_in_is_refused_for_the_role_to_resubmit() {
     let h = harness(Box::new(|role, _| match role {
         "conventions" => Behaviour::Calls(vec![
-            json!({ "kind": "plan", "payload": { "summary": "s", "steps": ["a"] } }),
+            json!({ "kind": "plan", "payload": {
+                "summary": "s",
+                "steps": ["a"],
+                "acceptanceCriteria": ["b"],
+                "verification": ["c"],
+                "areas": ["src"],
+                "designNeeded": false,
+            } }),
             json!({ "kind": "findings", "payload": finding("the right kind") }),
         ]),
         _ => Behaviour::Submit(vec![finding("x")]),

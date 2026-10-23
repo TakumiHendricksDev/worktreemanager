@@ -24,15 +24,16 @@
 //! What was accepted goes into the [`Ledger`], per run and role. `flow_checkpoint` is real: an app
 //! commit, hooks off, refusing agent config.
 //!
-//! For a review run's roles the engine (`crate::flow`) answers `flow_progress`, `flow_submit`,
-//! `flow_ask` and `flow_run_check` itself: a submission is the role's result, persisted, and only
-//! one of the kind the role's recipe says it hands in is accepted; a check is one the role's config
-//! names, run by the app and recorded (`crate::flow::checks`). The ledger still keeps a copy of
-//! what it can.
+//! For a review run's roles and an issue's planner the engine (`crate::flow`) answers
+//! `flow_progress`, `flow_submit`, `flow_ask` and `flow_run_check` itself: a submission is the
+//! role's result, persisted, and only one of the kind the role hands in is accepted; a check is one
+//! the role's config names, run by the app and recorded (`crate::flow::checks`). A planner's
+//! `flow_ask` holds its run for the answer and the engine ends the turn itself
+//! (`crate::flow::planner`); a review role's is answered in place and it carries on. The ledger
+//! still keeps a copy of what it can.
 //!
-//! What they do not do yet: interrupt the turn after `flow_ask` (a review answers it in place),
-//! publish a `flow_request`, or run a check for a session that is not a review role's. Each says so
-//! in its answer rather than pretending.
+//! What they do not do yet: publish a `flow_request`, or run a check for a session that is not a
+//! review role's. Each says so in its answer rather than pretending.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -130,8 +131,9 @@ fn definition(name: &'static str) -> Value {
         ),
         ASK => (
             "Ask the person running this a question you cannot answer from the code, the issue or \
-             your brief, when the answer changes what you do next. After calling it, end your turn: \
-             the run continues with the answer as a new message, which may be hours later.",
+             your brief, when the answer changes behaviour, scope or architecture. After calling \
+             it, end your turn: the run continues with the answer as a new message in this same \
+             conversation, which may be hours later.",
             json!({
                 "type": "object",
                 "properties": {
@@ -157,7 +159,7 @@ fn definition(name: &'static str) -> Value {
                     "kind": { "type": "string", "enum": ["plan", "findings", "handoff"] },
                     "payload": {
                         "type": "object",
-                        "description": "plan: {summary, steps[], risks[]}. findings: {summary?, findings[{title, severity: minor|notable|blocking, class: confirmed_bug|rule_violation|conflict|suggestion, body, path?, line?, endLine?, verification? (confirmed_bug), rule? {id, revision} (rule_violation), between[]? (conflict), requirement?, evidence[]}]}. handoff: {summary, changed[], checks[], openQuestions[]}.",
+                        "description": "plan: {summary, steps[], acceptanceCriteria[], verification[], areas[], designNeeded, designReason?, risks[]}. findings: {summary?, findings[{title, severity: minor|notable|blocking, class: confirmed_bug|rule_violation|conflict|suggestion, body, path?, line?, endLine?, verification? (confirmed_bug), rule? {id, revision} (rule_violation), between[]? (conflict), requirement?, evidence[]}]}. handoff: {summary, changed[], checks[], openQuestions[]}.",
                     },
                 },
                 "required": ["kind", "payload"],

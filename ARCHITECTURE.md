@@ -55,7 +55,7 @@ wtm-exec     the ONLY place a process is spawned: CommandRunner, PtyHost, Servic
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
 wtm-appdb    the app's own SQLite store: work items, flows, rules, the tracker mirror, environments,
-             Start Work's jobs (§9).        impl FlowStore, RuleStore, TrackerMirror, EnvStore, StartStore
+             Start Work's jobs, plans (§9). impl FlowStore, RuleStore, TrackerMirror, EnvStore, StartStore, PlanStore
 wtm-forge    pull requests through the user's own `gh` (§6a).    impl Forge, ReviewWriter, PullRequestWriter
 wtm-tracker  issues and sprints through the user's own `acli` (§6a).  impl Tracker, TrackerWriter
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
@@ -1021,15 +1021,17 @@ because that is the consent this paragraph is about.
 
 `wtm-tracker` is the second. It reads a project's queue (its query's issues, narrowed to a board's
 active sprint when the queue names a board, with that sprint's name and goal) and one issue whole
-when it is opened, through `acli … --json`, and it makes one kind of write: moving one issue, by key,
-to a status by name (`acli jira workitem transition --key --status --yes`). `tests/acli.rs` holds
-it to exactly that list of commands; nothing comments, edits, assigns or creates. Moving is the
-port `TrackerWriter`, held only by the outbox's executor, and it is sent only for Start Work's move
-to the mapped "started" status or a card dropped on another board column, each the approval of
-that one move (§6k). It is called only while the Work view is on and only for a project whose own
-config names a tracker (`[workflow] tracker = "jira"`). A committed `wtm.toml` may carry the status
-mapping, the field names, the queue's query and `[workflow.start]`, which grant nothing, but not
-the tracker. A sync writes the mirror tables and nothing else, and the use-case that does it is
+when it is opened, and an issue's comments, through `acli … --json`, and it makes two kinds of
+write: moving one issue, by key, to a status by name (`acli jira workitem transition --key --status
+--yes`), and one comment on one issue, by key (`acli jira workitem comment create --key --body`).
+`tests/acli.rs` holds it to exactly that list of commands; nothing edits, assigns or creates. Both
+are the port `TrackerWriter`, held only by the outbox's executor. A move is sent only for Start
+Work's move to the mapped "started" status or a card dropped on another board column, each the
+approval of that one move (§6k); a comment only for Send to Jira's second click, which approves
+exactly the text posted (§6l). It is called only while the Work view is on and only for a project
+whose own config names a tracker (`[workflow] tracker = "jira"`). A committed `wtm.toml` may carry
+the status mapping, the field names, the queue's query and `[workflow.start]`, which grant nothing,
+but not the tracker. A sync writes the mirror tables and nothing else, and the use-case that does it is
 handed nothing that could start a run (`wtm_core::usecase::tracker_sync` makes that argument); it
 runs when Work opens on a project, when the window comes back into focus, on Sync, and after the
 app's own actions, never on a timer. What `acli` cannot read, such as custom fields in a search or
@@ -1652,7 +1654,7 @@ worktree add`, with the path it makes; at launch a job still creating or setting
 its run is held `Interrupted(crash)`. Resume looks at the path: a worktree there gets Retry setup,
 `run_setup`, which is also how the form adopts a worktree made elsewhere, or is used as it is; no
 worktree there is made again from the same plan. Never a second one. The run then stays in
-Preparing, which the workspace calls "Ready to plan": investigating is the planner's, a later item.
+Preparing, which the workspace calls "Ready to plan", until the planner starts (§6l).
 
 **Moving the issue is an outbox operation, read before and after** (`flow/moves.rs`). Start's move
 to the first `started` status is on by default (`[workflow.start] move_issue`), shown on the button
@@ -1674,6 +1676,69 @@ hold. An issue with no run in wtm moves only by Start: wtm writes to an issue fo
 `WTM_DEV_TRACKER_WRITES=fake` reads the real tracker and keeps its moves in a file beside its
 database, laid over every later read of the issue (`dev_tracker.rs`). A release build never reads
 the variable.
+
+## 6l. Planning: a question holds the run, and its answer resumes the conversation
+
+Once Start Work has an issue's worktree ready, the project's planner (`[workflow] planner`, a
+reviewer role whose output is a plan) investigates the issue and hands in a plan
+(`src-tauri/src/flow/planner.rs`, rules in `wtm_core::flow::planning`). The run then waits for your
+decision, and stops at "Planned, approved": implementing is a later item.
+
+**What it was given is recorded before it reads.** The issue is read whole from the tracker, fresh;
+then its sprint and goal, its parent and links as read-only context, the repository's instruction
+sources and your rules (§6i's retrieval, for the role's inputs), and the role's skills. That record
+is the context drawer, and the brief is written from it, so the drawer shows what the plan was made
+from rather than what the tracker or the repository say now. The planner reads the issue's worktree
+under the read-only profile (§6h): its conversation is resumed in that directory later, and a
+snapshot checkout would be gone by then.
+
+**A question ends the turn; nothing waits on a CLI.** `flow_ask` from a planner files the question,
+holds the run `AwaitingAnswer`, and the engine stops the turn with the CLI's own interrupt and
+closes the session. An answer may come in a minute or after a quit, a reboot or a usage reset, and
+a process held open for that long can die, keeps a sandbox and a token live with nothing to do, and
+looks busy. The provider keeps the conversation on disk either way, so the run keeps only its id,
+as the CLI reported it, and the last answer the run waits for opens a new session that continues it
+(`--resume` for Claude, `thread/resume` for Codex) with a new run token, its first turn being the
+answer. A launch leaves a run waiting for an answer alone: it needs no process, and the answer
+resumes it as it would have a minute after the question. A planner cut off mid-turn is held
+`Interrupted`, and Resume continues the same conversation.
+
+**Discuss is the same machinery for words.** A message about an open question resumes the
+conversation for one turn that may only talk, and the reply is that turn's last message, shown
+beside the question. It is the one place here a message rather than a submission is read, and it
+is shown to you and never acted on; the run keeps waiting for the answer.
+
+**An approval covers the plan and the issue, and the issue's revision is its text.** Plans are
+numbered per run and never changed (migration 13). Approve pins the plan's revision and the issue's
+(`Approval(plan, plan_rev, issue_rev)`), and keeps the issue as you saw it. The issue's revision is
+a hash of what says what the work is — summary, type, description, mapped fields, parent, links —
+and not the tracker's "updated" time, which moves on every transition, assignment and comment,
+Start Work's own move included; an approval that went stale on those would teach people to approve
+without looking. Whether it still holds is asked whenever the workspace reads the issue, and a
+change files one inbox item and shows a diff of exactly those parts. Approve itself reads the issue
+again and refuses when it changed while you were reading. Request changes resumes the planner's
+conversation with your note, and its next plan is the next revision.
+
+**Send to Jira is two clicks, and the comment is found by its text.** Answers stay in wtm. The first
+click builds a draft — the question, why it mattered, your answer; never the discussion, progress
+or anything else an agent said — and records nothing. The second click approves exactly the text
+in the box and queues one outbox operation. Its executor keeps the move's order (§6k): it lists the
+issue's comments and adopts one whose text, normalized the way Jira rewrites plain text, is this
+one; otherwise it marks the operation executing, posts, and lists them again, which settles a lost
+reply. Jira's rich text has no hidden node a marker could live in, and `acli` lists comments with a
+display name and no time, so the text — a question and its answer quoted whole — is what identifies
+the write, and the same text approved twice is the same operation. A crash leaves it executing, and
+recovery reads; it never posts again.
+
+**Tested twice, and clicked through on a fixture.** `planning.rs` drives the engine with fake agents
+and a fake tracker: the question and the resume, a relaunch before answering, Discuss, a quit
+mid-turn, the comment's two clicks with a lost reply and a crash, approval staleness and the next
+revision. `planner_real_cli.rs` runs the question and the resume against the real Claude and Codex
+CLIs and checks each reports the same conversation after the answer as before it. A debug build
+started with `WTM_DEV_TRACKER=<file.json>` reads its issues from that file, again on every read, and
+writes its moves and comments back into it (`dev_tracker.rs`), so a click-through can use an issue
+written to be ambiguous and edit it later without touching a real tracker; with
+`WTM_DEV_TRACKER_WRITES=fake`, comments stay on the machine as moves do.
 
 ## 7. Toolchain policy
 

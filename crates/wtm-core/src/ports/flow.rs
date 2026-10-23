@@ -35,6 +35,10 @@ use crate::flow::{
 use crate::flow::{
     CommandRun, CommandRunChange, CommandRunId, CommandRunRefused, NewCommandRun, ServiceRecord,
 };
+use crate::flow::{
+    CommentSend, NewPlan, NewPlanning, PlanContext, PlanDecision, PlanId, PlanRecord, Planning,
+    QuestionMessage, Speaker,
+};
 use crate::flow::{Fix, FixChange, FixId, Lease, LeaseId, LeaseRelease, NewFix, NewLease};
 use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
@@ -120,6 +124,12 @@ pub enum FlowStoreError {
     /// The work item already has a start job whose run is still open.
     #[error("work item {item} is already being started, by run {flow}")]
     StartUnderway { item: WorkItemId, flow: FlowId },
+
+    #[error("run {0} has not planned anything")]
+    UnknownPlanning(FlowId),
+
+    #[error("no plan {0}")]
+    UnknownPlan(PlanId),
 
     #[error("no start job for work item {0}")]
     UnknownStartJob(WorkItemId),
@@ -507,6 +517,20 @@ pub trait OutboxStore: Send + Sync {
             .collect())
     }
 
+    /// One approval of a comment on an issue.
+    fn issue_comment(&self, approval: ApprovalId) -> Result<Option<CommentSend>, FlowStoreError> {
+        Ok(self.approved(approval)?.and_then(Approved::into_comment))
+    }
+
+    /// A flow's comments, oldest first.
+    fn issue_comments(&self, flow: FlowId) -> Result<Vec<CommentSend>, FlowStoreError> {
+        Ok(self
+            .approvals(flow)?
+            .into_iter()
+            .filter_map(Approved::into_comment)
+            .collect())
+    }
+
     fn operation(&self, id: OperationId) -> Result<Option<Operation>, FlowStoreError>;
 
     /// Change an operation, checked against the outbox's rules. What stopped it is cleared whenever
@@ -661,4 +685,71 @@ pub trait StartStore: Send + Sync {
 
     /// A project's jobs, or every project's, oldest first.
     fn start_jobs(&self, project: Option<&ProjectId>) -> Result<Vec<StartJob>, FlowStoreError>;
+}
+
+/// An Implement run's planning: the record of it, the plans its planner handed in, what you decided
+/// about each, and the discussions of its questions.
+///
+/// A plan is append-only, and so is a decision: "approved" and "changes requested" are things that
+/// happened to a revision, and a later decision is a later row, never an edit of an earlier one.
+pub trait PlanStore: Send + Sync {
+    /// Record `planning`, or return the record the run already has: planning starts again after a
+    /// resume, an answer or a second click, and it is one record.
+    fn begin_planning(
+        &self,
+        planning: &NewPlanning,
+        at: UnixMs,
+    ) -> Result<Planning, FlowStoreError>;
+
+    fn planning(&self, flow: FlowId) -> Result<Option<Planning>, FlowStoreError>;
+
+    /// Every run's planning record, oldest first: what recovery at launch looks through.
+    fn plannings(&self) -> Result<Vec<Planning>, FlowStoreError>;
+
+    /// Keep what the planner was given, for the context drawer.
+    fn set_plan_context(
+        &self,
+        flow: FlowId,
+        context: &PlanContext,
+        at: UnixMs,
+    ) -> Result<Planning, FlowStoreError>;
+
+    /// Record a plan as its run's next revision: 1 for the first.
+    fn record_plan(&self, plan: &NewPlan, at: UnixMs) -> Result<PlanRecord, FlowStoreError>;
+
+    /// A run's plans, oldest revision first.
+    fn plans(&self, flow: FlowId) -> Result<Vec<PlanRecord>, FlowStoreError>;
+
+    /// Approve plan `plan`: `approval` and the decision that refers to it, in one transaction, so
+    /// neither exists without the other.
+    fn approve_plan(
+        &self,
+        approval: &NewApproval,
+        plan: PlanId,
+        skip_design: bool,
+        at: UnixMs,
+    ) -> Result<(Approved, PlanDecision), FlowStoreError>;
+
+    /// Ask for changes to plan `plan`.
+    fn request_plan_changes(
+        &self,
+        plan: PlanId,
+        note: &str,
+        at: UnixMs,
+    ) -> Result<PlanDecision, FlowStoreError>;
+
+    /// A run's decisions, oldest first.
+    fn plan_decisions(&self, flow: FlowId) -> Result<Vec<PlanDecision>, FlowStoreError>;
+
+    /// Add a message to a question's discussion.
+    fn discuss(
+        &self,
+        question: QuestionId,
+        from: Speaker,
+        text: &str,
+        at: UnixMs,
+    ) -> Result<QuestionMessage, FlowStoreError>;
+
+    /// A question's discussion, oldest first.
+    fn discussion(&self, question: QuestionId) -> Result<Vec<QuestionMessage>, FlowStoreError>;
 }

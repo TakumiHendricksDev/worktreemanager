@@ -1486,7 +1486,9 @@ impl wtm_core::ports::forge::Forge for FakeForge {
 /// tracker call, and a sync must ask only what it needs. As a
 /// [`TrackerWriter`](wtm_core::ports::TrackerWriter) it moves its own issues, so what a move did
 /// is read back exactly as the app would read it from the tracker, and it can lose a move's reply
-/// after making it, as a connection that drops on the way back does.
+/// after making it, as a connection that drops on the way back does. Comments are the same: posted
+/// to its own issues, listed back the way Jira rewrites plain text, and a reply can be lost.
+/// A test can edit an issue's description, as someone editing the issue in the tracker would.
 #[derive(Debug, Default)]
 pub struct FakeTracker {
     issues: Mutex<Vec<(wtm_core::flow::Issue, Vec<u64>)>>,
@@ -1494,6 +1496,11 @@ pub struct FakeTracker {
     failure: Mutex<Option<wtm_core::error::TrackerError>>,
     calls: Mutex<Vec<String>>,
     lose_move_reply: Mutex<bool>,
+    /// Descriptions a test gave, by key; an issue without one reads a fixed sentence.
+    descriptions: Mutex<BTreeMap<String, String>>,
+    /// Each issue's comments, oldest first.
+    comments: Mutex<BTreeMap<String, Vec<wtm_core::flow::TrackerComment>>>,
+    lose_comment_reply: Mutex<bool>,
 }
 
 impl FakeTracker {
@@ -1536,6 +1543,49 @@ impl FakeTracker {
     /// out.
     pub fn lose_next_move_reply(&self) {
         *self.lose_move_reply.lock() = true;
+    }
+
+    /// Someone edited `key`'s description in the tracker. Nothing in wtm is told.
+    pub fn describe(&self, key: &str, description: &str) {
+        self.descriptions
+            .lock()
+            .insert(key.to_owned(), description.to_owned());
+    }
+
+    /// Someone else commented on `key`.
+    pub fn add_comment(&self, key: &str, author: &str, body: &str) {
+        let mut comments = self.comments.lock();
+        let next = comments.values().map(Vec::len).sum::<usize>() + 1;
+        comments
+            .entry(key.to_owned())
+            .or_default()
+            .push(wtm_core::flow::TrackerComment {
+                id: (10_000 + next).to_string(),
+                author: Some(author.to_owned()),
+                body: body.to_owned(),
+            });
+    }
+
+    /// The next comment is posted and its reply is lost: the caller is told it timed out.
+    pub fn lose_next_comment_reply(&self) {
+        *self.lose_comment_reply.lock() = true;
+    }
+
+    /// `key`'s comments as the tracker holds them.
+    #[must_use]
+    pub fn comments_on(&self, key: &str) -> Vec<wtm_core::flow::TrackerComment> {
+        self.comments.lock().get(key).cloned().unwrap_or_default()
+    }
+
+    /// The comments sent, as `comment KEY`, in order.
+    #[must_use]
+    pub fn comments_sent(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .iter()
+            .filter(|call| call.starts_with("comment "))
+            .cloned()
+            .collect()
     }
 
     /// The issue's status now, as the tracker holds it.
@@ -1626,9 +1676,15 @@ impl wtm_core::ports::Tracker for FakeTracker {
             .filter(|sprint| sprint_ids.contains(&sprint.id))
             .cloned()
             .collect();
+        let description = self
+            .descriptions
+            .lock()
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| "What the issue asks for.".to_owned());
         Ok(wtm_core::flow::IssueDetail {
             issue,
-            description: Some("What the issue asks for.".to_owned()),
+            description: Some(description),
             parent: None,
             links: Vec::new(),
             updated: None,
@@ -1685,6 +1741,15 @@ impl wtm_core::ports::Tracker for FakeTracker {
         self.note(format!("transitions {key}"))?;
         Ok(Vec::new())
     }
+
+    fn comments(
+        &self,
+        _cwd: &Path,
+        key: &str,
+    ) -> Result<Vec<wtm_core::flow::TrackerComment>, wtm_core::error::TrackerError> {
+        self.note(format!("comments {key}"))?;
+        Ok(self.comments_on(key))
+    }
 }
 
 impl wtm_core::ports::TrackerWriter for FakeTracker {
@@ -1717,6 +1782,29 @@ impl wtm_core::ports::TrackerWriter for FakeTracker {
         if std::mem::take(&mut *self.lose_move_reply.lock()) {
             return Err(wtm_core::error::TrackerError::Timeout {
                 argv: format!("acli jira workitem transition --key={key}"),
+                timeout_ms: 60_000,
+            });
+        }
+        Ok(())
+    }
+
+    fn comment(
+        &self,
+        _cwd: &Path,
+        key: &str,
+        body: &str,
+    ) -> Result<(), wtm_core::error::TrackerError> {
+        self.note(format!("comment {key}"))?;
+        if !self.issues.lock().iter().any(|(issue, _)| issue.key == key) {
+            return Err(wtm_core::error::TrackerError::NotFound {
+                what: format!("issue {key}"),
+            });
+        }
+        // As Jira hands plain text back: paragraphs on lines of their own, quotes made curly.
+        self.add_comment(key, "You", &body.replace('\'', "\u{2019}"));
+        if std::mem::take(&mut *self.lose_comment_reply.lock()) {
+            return Err(wtm_core::error::TrackerError::Timeout {
+                argv: format!("acli jira workitem comment create --key={key}"),
                 timeout_ms: 60_000,
             });
         }

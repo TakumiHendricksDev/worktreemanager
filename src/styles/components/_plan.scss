@@ -1,0 +1,234 @@
+/*
+ * An issue's Plan tab (`WorkPlan`): the planner's questions, the plan it handed in, your decision,
+ * the issue's changes as a diff, and what the planner was given. The question cards are the
+ * inbox's own (`_work-inbox.scss`).
+ */
+
+.c-plan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-width: 900px;
+}
+
+.c-plan__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.c-plan__title {
+  flex: 1 1 auto;
+  font-size: var(--step-0);
+  font-weight: 600;
+}
+
+.c-plan__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.c-plan__note {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-plan__error {
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.c-plan__label {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* The issue changed after the planner read it: said before the plan is judged. */
+.c-plan__warn {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+  font-size: var(--step--1);
+}
+
+.c-plan__standing {
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-plan__decide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-plan__changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-plan__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+/* One plan revision, whole. */
+.c-plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+}
+
+.c-plan-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-plan-card__badge {
+  padding: 1px 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.c-plan-card__summary {
+  font-size: var(--step-1);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.c-plan-card__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+
+.c-plan-card__part {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.c-plan-card__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-plan-card__design {
+  font-size: var(--step--1);
+}
+
+/* What changed in the issue: each part, line by line, removed and added marked by more than hue. */
+.c-plan-diff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-plan-diff__part {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.c-plan-diff__lines {
+  margin: 0;
+  padding: var(--sp-1) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-code);
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.c-plan-diff__line {
+  padding: 0 var(--sp-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-plan-diff__line--added {
+  background: var(--ok-soft);
+}
+
+.c-plan-diff__line--removed {
+  background: var(--danger-soft);
+  text-decoration: line-through;
+  text-decoration-color: var(--danger-line);
+}
+
+.c-plan-diff__sign {
+  display: inline-block;
+  width: 1.5ch;
+  color: var(--fg-muted);
+}
+
+.c-plan-history,
+.c-plan-context {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--step--1);
+}
+
+.c-plan-history > summary,
+.c-plan-context > summary {
+  color: var(--fg-muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.c-plan-history__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  padding-left: 1.2em;
+}
+
+.c-plan-context__text {
+  max-width: 72ch;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-plan-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}

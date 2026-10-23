@@ -26,7 +26,7 @@
 
 import type { ReviewFocus } from '../inbox';
 
-export type WorkTab = 'overview' | 'reviews' | 'environment';
+export type WorkTab = 'overview' | 'plan' | 'reviews' | 'environment';
 
 /** The queue as a list beside the picked item's workspace, or the team's board in its place. */
 export type WorkLayout = 'list' | 'board';
@@ -75,14 +75,15 @@ class Work {
   }
 
   /**
-   * Show a sprint issue's workspace, on Overview: what the issue asks for comes first, and its
-   * header already says what its run is doing.
+   * Show a sprint issue's workspace, on Overview unless asked otherwise: what the issue asks for
+   * comes first, and its header already says what its run is doing. An inbox item about its plan
+   * arrives on the Plan tab.
    */
-  pickIssue(key: string): void {
+  pickIssue(key: string, tab: WorkTab = 'overview'): void {
     this.issue = key;
     this.review = null;
     this.layout = 'list';
-    this.tab = 'overview';
+    this.tab = tab;
     this.inboxOpen = false;
   }
 
