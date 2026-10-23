@@ -29,6 +29,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use serde::Serialize;
+use wtm_core::flow::RunPart;
 use wtm_core::flow::{
     BlockCause, CheckRun, CheckSpec, CheckStatus, FlowEvent, FlowId, GatedService, Hold, HoldKind,
     InboxKind, InboxTarget, InvocationId, NewApproval, NewInboxItem, NewScreenshot, PlannedCheck,
@@ -569,10 +570,9 @@ impl Engine {
             .map_err(text)?
             .ok_or_else(|| format!("run {flow} is not a review"))?;
         let project = self.app.project(review.project.as_str()).map_err(text)?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or("the project's workflow config has gone")?;
+        let Some(workflow) = self.kept_workflow(flow, RunPart::Review, Some(&project)) else {
+            return Err("the project's workflow config has gone".to_owned());
+        };
         let worktree = self
             .app
             .worktree(&project, &review.worktree)
@@ -744,10 +744,7 @@ impl Engine {
         blocked: &CheckRun,
     ) -> Result<(), String> {
         let project = self.app.project(&request.project).map_err(text)?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or("the project's workflow config has gone")?;
+        let workflow = self.run_workflow(flow, RunPart::Review, &project)?;
         let spec: CheckSpec =
             workflow.check.get(&blocked.check).cloned().ok_or_else(|| {
                 format!("`{}` is no longer in your workflow config", blocked.check)
@@ -772,6 +769,7 @@ impl Engine {
         let gated = self.gate(&request.project, &request.worktree, &spec.needs);
         let place = super::checks::CheckPlace {
             flow,
+            project: request.project.clone(),
             step: blocked.step,
             invocation: blocked.invocation,
             role: blocked.role.clone(),

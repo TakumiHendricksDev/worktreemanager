@@ -18,6 +18,14 @@
 //! the gate again first; otherwise the run files one approval to start them and run what they
 //! block. Nothing here turns "did not run" into "passed": the store refuses a pass that did not
 //! exit 0, and the Reviews tab draws a check with no record as not run.
+//!
+//! # A command is still the trust prompt's
+//!
+//! A run keeps the workflow it started with (ARCHITECTURE §6r), checks included, but a check is a
+//! command run outside every sandbox, and whether it may run is your approval's, which follows the
+//! file as it is now. So a check runs only while your config, loaded and trusted now, still declares
+//! it with the same argv: removing a check, or changing what it runs, reaches a run already under
+//! way, and nothing else about the run does.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -45,6 +53,8 @@ const FENCE: &str = "wtm_check_output";
 #[derive(Debug, Clone)]
 pub(super) struct CheckPlace {
     pub flow: FlowId,
+    /// The project whose config must still declare the check when it runs.
+    pub project: String,
     pub step: Option<StepId>,
     pub invocation: Option<InvocationId>,
     pub role: Option<String>,
@@ -79,6 +89,7 @@ impl Engine {
         };
         let place = CheckPlace {
             flow: role.flow,
+            project: live.project.clone(),
             step: Some(live.step),
             invocation: Some(live.invocation),
             role: Some(role.role.clone()),
@@ -176,6 +187,28 @@ impl Engine {
         Ok(saved)
     }
 
+    /// Whether your config, loaded now — trust prompt and all — still declares `name` to run what
+    /// `spec` runs. See the module docs.
+    fn still_declared(&self, project: &str, name: &str, spec: &CheckSpec) -> Result<(), String> {
+        let project = self
+            .app
+            .project(project)
+            .map_err(|e| format!("`{name}` was not run: your config does not load now ({e})"))?;
+        let now = project
+            .workflow
+            .as_ref()
+            .and_then(|workflow| workflow.check.get(name))
+            .map(|check| &check.run);
+        if now == Some(&spec.run) {
+            Ok(())
+        } else {
+            Err(format!(
+                "`{name}` was not run: your config no longer declares it to run what it did when \
+                 this run started"
+            ))
+        }
+    }
+
     /// Run exactly the check's argv where `place` says, and record how it came out.
     fn execute_check(
         &self,
@@ -185,6 +218,7 @@ impl Engine {
         services: Vec<GatedService>,
         note: Option<&str>,
     ) -> Result<(CheckRun, String), String> {
+        self.still_declared(&place.project, name, spec)?;
         let db = self.db()?;
         let started = self.now();
         let invocation = Invocation::new(spec.run.clone(), &place.cwd, spec.timeout_ms())

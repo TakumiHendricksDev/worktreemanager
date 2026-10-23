@@ -67,6 +67,10 @@ thiserror  = "2"
 
 # external — adapters
 toml            = "1"
+# Settings › Recipes writes into files people also edit by hand, and `toml` can only write a file
+# back as serde sees it: comments gone, keys reordered. Already in the lockfile, at this version,
+# through Tauri's build tooling, so it adds no new crate to the tree.
+toml_edit       = "0.25"
 serde_json_path = "0.7"
 # `default-features = false` is the sandbox: without the `loader` feature there is
 # no way for a template to `{% include %}` a file. `builtins` supplies the string

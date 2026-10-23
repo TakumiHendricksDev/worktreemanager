@@ -38,6 +38,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
+use wtm_core::flow::RunPart;
 use wtm_core::flow::{
     ALLOW_OUTLIERS, ContextLink, FindingId, FindingRecord, Fix, FixChange, FixId, FixScope,
     FixState, FlowEvent, FlowId, FlowKind, Hold, HoldKind, InboxKind, InboxTarget, Lease, LeaseId,
@@ -336,10 +337,9 @@ impl Engine {
             .app
             .project(review.project.as_str())
             .map_err(ErrorView::from)?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or_else(|| refused("The project's workflow config has gone."))?;
+        let workflow = self
+            .run_workflow(flow, RunPart::Review, &project)
+            .map_err(refused)?;
         let spec = workflow.role.get(&req.role).ok_or_else(|| {
             refused(format!(
                 "There is no role `{}` in your workflow config.",
@@ -520,10 +520,7 @@ impl Engine {
             .app
             .worktree(&project, &review.worktree)
             .map_err(|e| format!("the review worktree is no longer there: {e}"))?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or_else(|| "the project's workflow config has gone".to_owned())?;
+        let workflow = self.run_workflow(flow, RunPart::Review, &project)?;
         let fix = db
             .fixes(flow)
             .map_err(text)?
@@ -579,7 +576,7 @@ impl Engine {
             recipe: review.recipe.clone(),
             base: review.base.clone(),
             concurrency: None,
-            patterns: crate::knowledge::patterns(&project).0,
+            patterns: workflow.instruction_sources(),
             pull_request,
             revision: None,
             fix: Some(Arc::clone(&live)),
@@ -905,10 +902,10 @@ impl Engine {
             .find(|f| f.state == FixState::Writing)
             .ok_or("no fix of this review is being written")?;
         let project = self.app.project(review.project.as_str()).map_err(text)?;
-        let provider = project
-            .workflow
-            .as_ref()
-            .and_then(|w| w.role.get(&fix.role))
+        let provider = self
+            .run_workflow(flow, RunPart::Review, &project)?
+            .role
+            .get(&fix.role)
             .map(|spec| spec.provider)
             .ok_or_else(|| {
                 format!(

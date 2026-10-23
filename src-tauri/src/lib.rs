@@ -39,6 +39,7 @@ pub mod prototype_context;
 pub mod prototype_tools;
 pub mod prototypes;
 pub mod pty_bridge;
+pub mod recipes;
 pub mod reviews;
 pub mod run_profile;
 pub mod shell_admission;
@@ -540,6 +541,10 @@ pub fn run() {
             knowledge::save_finding_as_rule,
             knowledge::change_rule,
             knowledge::replace_rule,
+            recipes::recipe_settings,
+            recipes::check_recipes,
+            recipes::save_recipes,
+            recipes::check_recipe_skills,
             commands::close_browser,
             commands::browser_navigate,
             commands::browser_history,

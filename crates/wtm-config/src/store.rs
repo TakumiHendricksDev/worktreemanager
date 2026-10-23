@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
+use serde::Serialize;
 use toml::Value;
 use wtm_core::error::{ConfigError, ConfigLayer, DatabaseTrustDeclaration};
 use wtm_core::model::{Project, ProjectId};
@@ -41,6 +42,7 @@ use crate::sidebar::SidebarLayout;
 use crate::trust::{self, TrustStore};
 use crate::user::UserConfig;
 use crate::validate::{self, Origin};
+use crate::workflow_file::{self, EditError, WorkflowDraft, WorkflowHome};
 
 /// A resolved project plus the hashes it was resolved from.
 #[derive(Debug, Clone)]
@@ -195,6 +197,20 @@ impl FileConfigStore {
 
     /// Read every layer that exists, weakest first.
     fn read_layers(&self, repo_root: &Path) -> Result<Vec<LoadedLayer>, ConfigError> {
+        self.read_layers_as(repo_root, None)
+    }
+
+    /// [`Self::read_layers`], with `replaced`'s file read as the text beside it instead of what is
+    /// on disk: what loading would see if that text were written, before anything is.
+    fn read_layers_as(
+        &self,
+        repo_root: &Path,
+        replaced: Option<(&Path, &str)>,
+    ) -> Result<Vec<LoadedLayer>, ConfigError> {
+        let read_optional = |path: &Path| match replaced {
+            Some((at, text)) if at == path => Ok(Some(text.to_owned())),
+            _ => read_optional(path),
+        };
         let paths = self.layer_paths(repo_root)?;
         let mut out = Vec::with_capacity(4);
 
@@ -276,6 +292,29 @@ impl FileConfigStore {
         Ok(())
     }
 
+    /// Everything `load` does after the trust check: refuse what a repository may not declare,
+    /// merge, deserialize and validate.
+    fn resolve(&self, repo_root: &Path, loaded: &[LoadedLayer]) -> Result<Project, ConfigError> {
+        refuse_repository_roles(loaded)?;
+
+        // Report errors against the most specific file that contributed, since that is
+        // the one most likely to hold the mistake.
+        let origin = most_specific(loaded, |_| true);
+        // Except for `[workflow]`, whose mistakes are in the file that declares it. That is seldom
+        // the most specific one, because a repository's `wtm.toml` may not declare roles at all.
+        let workflow_origin = most_specific(loaded, |value| value.get("workflow").is_some());
+        // And `[environment]`, which a repository usually declares and your own config seldom does.
+        let environment_origin = most_specific(loaded, |value| value.get("environment").is_some());
+
+        self.finish(
+            repo_root,
+            layers::merge_all(loaded),
+            &origin,
+            &workflow_origin,
+            &environment_origin,
+        )
+    }
+
     /// Deserialize and validate a merged value.
     fn finish(
         &self,
@@ -332,6 +371,450 @@ impl FileConfigStore {
             decision: self.trust_revision.load(Ordering::Acquire),
         })
     }
+}
+
+/// Where a project's recipes and roles are written, and what a save has to bring back to be taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowFile {
+    /// Where an edit is written: the most specific home that declares recipes or roles, else the
+    /// most specific that declares `[workflow]`. `None` when nothing does, and the editor asks.
+    pub home: Option<WorkflowHome>,
+    /// Every home that declares recipes or roles, weakest first.
+    pub declaring: Vec<WorkflowHome>,
+    /// The homes that declare each role, weakest first: a role your defaults declare cannot be
+    /// deleted from a project's entry, and the editor says so before you try.
+    pub role_homes: BTreeMap<String, Vec<WorkflowHome>>,
+    /// The same for each recipe.
+    pub recipe_homes: BTreeMap<String, Vec<WorkflowHome>>,
+    /// `~/.config/wtm/config.toml`, which holds the defaults and the project homes.
+    pub user_path: PathBuf,
+    /// `<git-common-dir>/wtm.local.toml`.
+    pub local_path: PathBuf,
+    /// The project's key under `[projects]`: its root, as registered.
+    pub root_key: String,
+    /// A hash over both files as they were read. A save made from an older reading is refused, so
+    /// an edit made by hand meanwhile is not overwritten by a screen that never showed it.
+    pub revision: String,
+}
+
+impl WorkflowFile {
+    /// The file `home` lives in.
+    #[must_use]
+    pub fn path_of(&self, home: WorkflowHome) -> &Path {
+        match home {
+            WorkflowHome::Defaults | WorkflowHome::Project => &self.user_path,
+            WorkflowHome::Local => &self.local_path,
+        }
+    }
+}
+
+/// Why recipes and roles were not saved.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkflowSaveError {
+    #[error("the config changed on disk since Settings read it; reload to see it, then edit again")]
+    Stale,
+    #[error("no file declares this project's workflow yet; choose where to keep it")]
+    NoHome,
+    /// Serialized as the edit error itself, by the caller: nested, both would carry a `kind`, and
+    /// the inner one would silently win.
+    #[error(transparent)]
+    #[serde(skip_serializing)]
+    Edit(#[from] EditError),
+    /// What validation refused, with the key it is about, relative to `workflow` when it is in it.
+    #[error("{message}")]
+    Invalid {
+        key: Option<String>,
+        message: String,
+    },
+    /// The local layer declares commands you have not approved, so nothing writes to it until you
+    /// decide on them in the trust prompt.
+    #[error(
+        "{} declares commands you have not approved; approve or reject them first",
+        path.display()
+    )]
+    Untrusted { path: PathBuf },
+    #[error("{message}")]
+    Config { message: String },
+}
+
+impl From<ConfigError> for WorkflowSaveError {
+    fn from(error: ConfigError) -> Self {
+        match error {
+            ConfigError::Invalid { key, message, .. } => Self::Invalid {
+                key: key.map(|key| {
+                    key.strip_prefix("workflow.")
+                        .map_or_else(|| key.clone(), str::to_owned)
+                }),
+                message,
+            },
+            other => Self::Config {
+                message: other.to_string(),
+            },
+        }
+    }
+}
+
+/// The text of each file a workflow edit reads, as found.
+struct WorkflowTexts {
+    file: WorkflowFile,
+    user: Option<String>,
+    local: Option<String>,
+    repo: Option<String>,
+}
+
+impl FileConfigStore {
+    /// Where `repo_root`'s recipes and roles live, for Settings › Recipes.
+    ///
+    /// # Errors
+    ///
+    /// When a file cannot be read or is not TOML.
+    pub fn workflow_file(&self, repo_root: &Path) -> Result<WorkflowFile, ConfigError> {
+        Ok(self.workflow_texts(repo_root)?.file)
+    }
+
+    /// Whether `draft`, written where it would be, would load: the edit made in memory, then the
+    /// project resolved from every layer exactly as loading does, `WorkflowSpec::validate` included.
+    ///
+    /// # Errors
+    ///
+    /// The first problem, with its key when it has one.
+    pub fn check_workflow(
+        &self,
+        repo_root: &Path,
+        draft: &WorkflowDraft,
+        home: Option<WorkflowHome>,
+    ) -> Result<(), WorkflowSaveError> {
+        let texts = self.workflow_texts(repo_root)?;
+        self.edited(repo_root, &texts, draft, home).map(|_| ())
+    }
+
+    /// Write `draft` to the file that declares the workflow, keeping everything else in it.
+    ///
+    /// # Trust
+    ///
+    /// Your own config is not a trust boundary. The local layer is, when it declares commands: its
+    /// approval is bound to its bytes, and this write changes them. An edit made here changes only
+    /// recipes and roles, which run nothing (`collect_runs` and its siblings find nothing new in
+    /// them, and that is checked rather than assumed), so the approval you gave the file is carried
+    /// to the bytes written, and only when you had given it: a file you never approved is refused
+    /// rather than written. Anything else that changes the file, an editor or a `git` checkout,
+    /// changes its hash and brings the prompt back, as before.
+    ///
+    /// # Errors
+    ///
+    /// `Stale` when either file changed since `revision` was read; the edit's own refusals; what
+    /// validation refuses; `Untrusted` as above.
+    pub fn save_workflow(
+        &self,
+        repo_root: &Path,
+        draft: &WorkflowDraft,
+        revision: &str,
+        home: Option<WorkflowHome>,
+    ) -> Result<WorkflowFile, WorkflowSaveError> {
+        // The user config is also rewritten by preferences and the sidebar: one writer at a time,
+        // from the read to the rename, or one of the two would drop the other's change.
+        let _write = self.user_write.lock();
+        let texts = self.workflow_texts(repo_root)?;
+        if texts.file.revision != revision {
+            return Err(WorkflowSaveError::Stale);
+        }
+        let (home, text) = self.edited(repo_root, &texts, draft, home)?;
+        let path = texts.file.path_of(home).to_path_buf();
+        let before = match home {
+            WorkflowHome::Local => texts.local.clone(),
+            WorkflowHome::Defaults | WorkflowHome::Project => texts.user.clone(),
+        };
+
+        let approve = if home == WorkflowHome::Local {
+            self.carried_approval(&path, before.as_deref().unwrap_or_default(), &text)?
+        } else {
+            false
+        };
+
+        let io = |e: &std::io::Error| ConfigError::Io {
+            path: path.clone(),
+            message: e.to_string(),
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io(&e))?;
+        }
+        let temporary = crate::fs::unique_temp_path(&path);
+        std::fs::write(&temporary, &text).map_err(|e| io(&e))?;
+        std::fs::rename(&temporary, &path).map_err(|e| io(&e))?;
+
+        if approve {
+            let mut store = self.trust_store();
+            store.record(
+                &path,
+                &text,
+                TrustDecision::Approve,
+                Some(self.clock.now_iso()),
+            );
+            self.paths.ensure_dir()?;
+            store.save(&self.paths.trust_file)?;
+            self.trust_revision.fetch_add(1, Ordering::AcqRel);
+        }
+        self.cache.lock().clear();
+        Ok(self.workflow_file(repo_root)?)
+    }
+
+    /// Whether the local layer's approval goes with this write: `Ok(true)` when it declares
+    /// something to approve and you had approved it, `Ok(false)` when it declares nothing.
+    fn carried_approval(
+        &self,
+        path: &Path,
+        before: &str,
+        after: &str,
+    ) -> Result<bool, WorkflowSaveError> {
+        let declared = |text: &str| {
+            layers::document(text)
+                .map(|value| (declared_commands_in(&value), declared_databases_in(&value)))
+        };
+        let unreadable = |e: toml::de::Error| WorkflowSaveError::Config {
+            message: format!("{}: {}", path.display(), e.message()),
+        };
+        let was = declared(before).map_err(unreadable)?;
+        let now = declared(after).map_err(unreadable)?;
+        if now != was {
+            // Not reachable from a recipe edit, which is the point of checking: the carried
+            // approval is only honest while the commands it covers are the ones you saw.
+            return Err(WorkflowSaveError::Config {
+                message: format!(
+                    "{}: saving recipes would change the commands this file declares, so it was \
+                     not written",
+                    path.display()
+                ),
+            });
+        }
+        if was.0.is_empty() && was.1.is_empty() {
+            return Ok(false);
+        }
+        if !self.trust_store().is_approved(path, before) {
+            return Err(WorkflowSaveError::Untrusted {
+                path: path.to_path_buf(),
+            });
+        }
+        Ok(true)
+    }
+
+    /// The edited file's text, and the home it goes to, once the project it makes has resolved.
+    fn edited(
+        &self,
+        repo_root: &Path,
+        texts: &WorkflowTexts,
+        draft: &WorkflowDraft,
+        asked: Option<WorkflowHome>,
+    ) -> Result<(WorkflowHome, String), WorkflowSaveError> {
+        let file = &texts.file;
+        let home = match (file.home, asked) {
+            (Some(home), None) => home,
+            (Some(home), Some(asked)) if home == asked => home,
+            // A screen that offered a choice when there was none to make is out of date.
+            (Some(_), Some(_)) => return Err(WorkflowSaveError::Stale),
+            (None, Some(asked)) => asked,
+            (None, None) => return Err(WorkflowSaveError::NoHome),
+        };
+
+        let parse = |path: &Path, text: &Option<String>| -> Result<Value, WorkflowSaveError> {
+            layers::document(text.as_deref().unwrap_or_default()).map_err(|e| {
+                WorkflowSaveError::Config {
+                    message: format!("{}: {}", path.display(), e.message()),
+                }
+            })
+        };
+        let user = parse(&file.user_path, &texts.user)?;
+        let local = parse(&file.local_path, &texts.local)?;
+        let repo = parse(&repo_root.join(layers::REPO_FILENAME), &texts.repo)?;
+        let sections = homes(&user, &local, &file.root_key);
+
+        // What the layers beneath the home give, and where that comes from.
+        let mut base: Option<Value> = None;
+        let mut from = Vec::new();
+        for (beneath, workflow) in sections.iter().filter(|(h, _)| *h < home) {
+            if let Some(workflow) = workflow {
+                base = Some(match base {
+                    Some(base) => layers::merge(base, (*workflow).clone()),
+                    None => (*workflow).clone(),
+                });
+                from.push(format!(
+                    "{} in {}",
+                    beneath.header(&file.root_key),
+                    file.path_of(*beneath).display()
+                ));
+            }
+        }
+        // The repository sits between your project entry and the local layer. It cannot declare
+        // roles or recipes, but its workflow is still part of what the local layer merges onto.
+        if home == WorkflowHome::Local
+            && let Some(workflow) = repo.get("workflow")
+        {
+            base = Some(match base {
+                Some(base) => layers::merge(base, workflow.clone()),
+                None => workflow.clone(),
+            });
+        }
+
+        let path = file.path_of(home);
+        let before = match home {
+            WorkflowHome::Local => &texts.local,
+            WorkflowHome::Defaults | WorkflowHome::Project => &texts.user,
+        };
+        let text = workflow_file::edit(
+            before.as_deref().unwrap_or_default(),
+            &home.section(&file.root_key),
+            base.as_ref(),
+            &from.join(" and "),
+            draft,
+        )?;
+
+        let loaded = self.read_layers_as(repo_root, Some((path, &text)))?;
+        let project = self.resolve(repo_root, &loaded)?;
+        let workflow = project.workflow.unwrap_or_default();
+        if workflow.role != draft.role || workflow.recipe != draft.recipe {
+            return Err(WorkflowSaveError::Config {
+                message: format!(
+                    "{}: the edit did not load back as the recipes shown, so it was not written",
+                    path.display()
+                ),
+            });
+        }
+        if home == WorkflowHome::Defaults {
+            self.others_still_load(repo_root, path, &text)?;
+        }
+        Ok((home, text))
+    }
+
+    /// Your defaults are every project's, so an edit made to them from one project's Settings must
+    /// leave every other registered project loading that loaded before: a role deleted here may be
+    /// one another project's recipe names, or one it overrides a key of.
+    fn others_still_load(
+        &self,
+        repo_root: &Path,
+        user_path: &Path,
+        text: &str,
+    ) -> Result<(), WorkflowSaveError> {
+        for root in self.user_config()?.project_roots() {
+            if root == repo_root {
+                continue;
+            }
+            // A project that no longer resolves, or did not load already, is not this edit's doing.
+            let Ok(before) = self.read_layers(&root) else {
+                continue;
+            };
+            if self.resolve(&root, &before).is_err() {
+                continue;
+            }
+            let Ok(after) = self.read_layers_as(&root, Some((user_path, text))) else {
+                continue;
+            };
+            if let Err(error) = self.resolve(&root, &after) {
+                return Err(WorkflowSaveError::Config {
+                    message: format!(
+                        "this changes your defaults, which every project reads, and {} would no \
+                         longer load: {error}",
+                        root.display()
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn workflow_texts(&self, repo_root: &Path) -> Result<WorkflowTexts, ConfigError> {
+        let paths = self.layer_paths(repo_root)?;
+        let user = read_optional(&paths.user)?;
+        let local = read_optional(&paths.local)?;
+        let repo = read_optional(&paths.repo)?;
+        let root_key = repo_root.to_string_lossy().into_owned();
+
+        let user_value = layers::parse(
+            &paths.user,
+            ConfigLayer::User,
+            user.as_deref().unwrap_or_default(),
+        )?;
+        let local_value = layers::parse(
+            &paths.local,
+            ConfigLayer::Local,
+            local.as_deref().unwrap_or_default(),
+        )?;
+        let sections = homes(&user_value, &local_value, &root_key);
+        let declaring: Vec<WorkflowHome> = sections
+            .iter()
+            .filter(|(_, w)| w.is_some_and(workflow_file::declares_recipes))
+            .map(|(home, _)| *home)
+            .collect();
+        let mut role_homes: BTreeMap<String, Vec<WorkflowHome>> = BTreeMap::new();
+        let mut recipe_homes: BTreeMap<String, Vec<WorkflowHome>> = BTreeMap::new();
+        for (home, workflow) in &sections {
+            for (map, into) in [("role", &mut role_homes), ("recipe", &mut recipe_homes)] {
+                let ids = workflow
+                    .and_then(|w| w.get(map))
+                    .and_then(Value::as_table)
+                    .into_iter()
+                    .flat_map(|table| table.keys());
+                for id in ids {
+                    into.entry(id.clone()).or_default().push(*home);
+                }
+            }
+        }
+        let home = declaring.last().copied().or_else(|| {
+            sections
+                .iter()
+                .rev()
+                .find(|(_, w)| w.is_some())
+                .map(|(home, _)| *home)
+        });
+        // The root too: two projects with no local layer read the same files, and a reading of one
+        // must not pass for a reading of the other.
+        let revision = trust::content_hash(&format!(
+            "{root_key}\u{0}{}\u{0}{}",
+            user.as_deref().map_or("-", |t| t),
+            local.as_deref().map_or("-", |t| t)
+        ));
+        Ok(WorkflowTexts {
+            file: WorkflowFile {
+                home,
+                declaring,
+                role_homes,
+                recipe_homes,
+                user_path: paths.user,
+                local_path: paths.local,
+                root_key,
+                revision,
+            },
+            user,
+            local,
+            repo,
+        })
+    }
+}
+
+/// Each home's raw `workflow` table, weakest first.
+fn homes<'a>(
+    user: &'a Value,
+    local: &'a Value,
+    root_key: &str,
+) -> [(WorkflowHome, Option<&'a Value>); 3] {
+    let at = |value: &'a Value, path: Vec<String>| {
+        path.iter()
+            .try_fold(value, |value, key| value.get(key.as_str()))
+    };
+    [
+        (
+            WorkflowHome::Defaults,
+            at(user, WorkflowHome::Defaults.section(root_key)),
+        ),
+        (
+            WorkflowHome::Project,
+            at(user, WorkflowHome::Project.section(root_key)),
+        ),
+        (
+            WorkflowHome::Local,
+            at(local, WorkflowHome::Local.section(root_key)),
+        ),
+    ]
 }
 
 /// The most specific on-disk layer whose value satisfies `declares`, or the built-in layer.
@@ -631,24 +1114,7 @@ impl ConfigStore for FileConfigStore {
         }
 
         self.enforce_trust(&loaded)?;
-        refuse_repository_roles(&loaded)?;
-
-        // Report errors against the most specific file that contributed, since that is
-        // the one most likely to hold the mistake.
-        let origin = most_specific(&loaded, |_| true);
-        // Except for `[workflow]`, whose mistakes are in the file that declares it. That is seldom
-        // the most specific one, because a repository's `wtm.toml` may not declare roles at all.
-        let workflow_origin = most_specific(&loaded, |value| value.get("workflow").is_some());
-        // And `[environment]`, which a repository usually declares and your own config seldom does.
-        let environment_origin = most_specific(&loaded, |value| value.get("environment").is_some());
-
-        let project = self.finish(
-            repo_root,
-            layers::merge_all(&loaded),
-            &origin,
-            &workflow_origin,
-            &environment_origin,
-        )?;
+        let project = self.resolve(repo_root, &loaded)?;
 
         self.cache.lock().insert(
             repo_root.to_path_buf(),

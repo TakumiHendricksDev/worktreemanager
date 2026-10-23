@@ -30,6 +30,7 @@
   import Inspector from './lib/components/Inspector.svelte';
   import SessionSurface from './lib/components/SessionSurface.svelte';
   import SettingsDialog from './lib/components/SettingsDialog.svelte';
+  import { settingsRequest } from './lib/state/settings.svelte';
   import UsageDialog from './lib/components/UsageDialog.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
@@ -928,8 +929,13 @@
     />
   {/if}
 
-  {#if showSettings}
-    <SettingsDialog onclose={() => (showSettings = false)} />
+  {#if showSettings || settingsRequest.open}
+    <SettingsDialog
+      onclose={() => {
+        showSettings = false;
+        settingsRequest.close();
+      }}
+    />
   {/if}
   {#if showUsage}
     <UsageDialog onclose={() => (showUsage = false)} />

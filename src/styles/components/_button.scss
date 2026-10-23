@@ -150,6 +150,21 @@
 }
 
 /*
+ * An invitation to add something, drawn as the outline of where it would go: Settings › Recipes'
+ * Add a role or stage, under the last stage. Muted until hovered, because it is the least of what
+ * the screen offers until you go looking for it.
+ */
+.c-button--dashed {
+  border: 1px dashed var(--border-strong);
+  color: var(--fg-muted);
+}
+
+.c-button--dashed:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/*
  * Reads as a link because it behaves like one — it opens or navigates to something. Accent
  * coloured and underlined on hover. Padding is dropped: a link inside a sentence that
  * carries button padding pushes the line apart.

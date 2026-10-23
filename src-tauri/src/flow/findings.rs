@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
+use wtm_core::flow::RunPart;
 use wtm_core::flow::knowledge::{RuleQuery, select};
 use wtm_core::flow::{
     CheckRunId, Evidence, EvidenceKey, Field, FindingId, FindingRecord, FlowDir, FlowEvent, FlowId,
@@ -529,9 +530,9 @@ impl Engine {
             .filter(|record| finding_is_stale(record, |tree| Some(compare(tree))))
             .map(|record| record.finding.id)
             .collect();
+        let workflow = self.kept_workflow(flow, RunPart::Review, Some(&project));
         let check_paths = |check: &str| -> Vec<String> {
-            project
-                .workflow
+            workflow
                 .as_ref()
                 .and_then(|w| w.check.get(check))
                 .map(|spec| spec.paths.clone())
@@ -544,7 +545,7 @@ impl Engine {
             .filter(|run| compare(&run.tree_sha).makes_check_stale(&check_paths(&run.check)))
             .map(|run| run.id)
             .collect();
-        let affected = Self::affected_roles(&db, flow, &project, &snapshot, &mut compare)?;
+        let affected = Self::affected_roles(&db, flow, workflow.as_ref(), &snapshot, &mut compare)?;
         let (paths, complete) = match &overall {
             TreeCheck::Unchanged => (Vec::new(), true),
             TreeCheck::Changed {
@@ -577,11 +578,11 @@ impl Engine {
     fn affected_roles(
         db: &wtm_appdb::AppDb,
         flow: FlowId,
-        project: &wtm_core::model::Project,
+        workflow: Option<&wtm_core::flow::WorkflowSpec>,
         snapshot: &Snapshot,
         compare: &mut dyn FnMut(&str) -> TreeCheck,
     ) -> Result<Vec<String>, String> {
-        let Some(workflow) = project.workflow.as_ref() else {
+        let Some(workflow) = workflow else {
             return Ok(Vec::new());
         };
         let steps = db.steps(flow).map_err(text)?;
@@ -689,9 +690,7 @@ impl Engine {
         }
         self.refuse_if_written(&review.worktree_path)?;
         let project = self.app.project(review.project.as_str()).map_err(text)?;
-        let workflow = project
-            .workflow
-            .ok_or("the project's workflow config has gone")?;
+        let workflow = self.run_workflow(flow, RunPart::Review, &project)?;
         let plan = wtm_core::flow::plan(&workflow, &review.recipe, None).map_err(text)?;
         let providers: Vec<&str> = plan
             .providers(&workflow)
@@ -726,10 +725,7 @@ impl Engine {
             .map_err(text)?
             .ok_or_else(|| format!("run {flow} is not a review"))?;
         let project = self.app.project(review.project.as_str()).map_err(text)?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or("the project's workflow config has gone")?;
+        let workflow = self.run_workflow(flow, RunPart::Review, &project)?;
         let worktree = self
             .app
             .worktree(&project, &review.worktree)

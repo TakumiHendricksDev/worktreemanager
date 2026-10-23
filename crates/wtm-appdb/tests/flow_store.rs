@@ -18,7 +18,8 @@ use rusqlite::Connection;
 use wtm_appdb::AppDb;
 use wtm_core::flow::{
     Backing, End, FlowEvent, FlowId, FlowKind, FlowState, Hold, HoldKind, InterruptCause, IssueRef,
-    NewWorkItem, Phase, PullRequestRef, TransitionError, WorkItem, WorkItemId, WorkKey, WorkLink,
+    NewWorkItem, Phase, PullRequestRef, RunPart, TransitionError, WorkItem, WorkItemId, WorkKey,
+    WorkLink,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStore, FlowStoreError};
@@ -451,4 +452,62 @@ fn the_database_file_is_in_write_ahead_logging_mode() {
     // WAL is a property of the file rather than of a connection, which is why a second
     // connection can see it.
     assert_eq!(mode, "wal");
+}
+
+fn workflow(json: serde_json::Value) -> wtm_core::flow::WorkflowSpec {
+    serde_json::from_value(json).unwrap()
+}
+
+/// What a run reads is its own from its start: Settings › Recipes saving a change must reach the
+/// next run, never one under way, and recovery after a crash must read what the run started with.
+#[test]
+fn each_part_of_a_run_keeps_the_first_workflow_it_was_given_and_a_later_one_is_not_taken() {
+    let f = fixture();
+    let item = an_issue_item(&f.db);
+    let flow = f.db.start_flow(item.id, FlowKind::Implement, 1).unwrap();
+    assert_eq!(f.db.run_workflow(flow.id, RunPart::Plan).unwrap(), None);
+
+    let first = workflow(serde_json::json!({
+        "role": {
+            "correctness": {
+                "objective": "Find bugs", "provider": "codex", "model": "gpt-6",
+                "inputs": ["diff"], "fallback": ["spare"]
+            },
+            "spare": { "objective": "Find bugs", "provider": "claude", "inputs": ["diff"] }
+        },
+        "recipe": { "standard": { "stage": [{ "roles": ["correctness"] }] } }
+    }));
+    assert_eq!(
+        f.db.capture_workflow(flow.id, RunPart::Plan, &first, 2)
+            .unwrap(),
+        first
+    );
+
+    let mut edited = first.clone();
+    edited.role.get_mut("correctness").unwrap().model = Some("gpt-7".to_owned());
+    assert_eq!(
+        f.db.capture_workflow(flow.id, RunPart::Plan, &edited, 3)
+            .unwrap(),
+        first,
+        "the second capture returns the run's own"
+    );
+    assert_eq!(
+        f.db.capture_workflow(flow.id, RunPart::Implement, &edited, 4)
+            .unwrap(),
+        edited,
+        "a step that begins later keeps the config as it is then"
+    );
+    drop(f.db);
+
+    let reopened = AppDb::open(&f.path).unwrap();
+    assert_eq!(
+        reopened.run_workflow(flow.id, RunPart::Plan).unwrap(),
+        Some(first)
+    );
+    let conn = Connection::open(&f.path).unwrap();
+    assert!(
+        conn.execute("UPDATE run_workflows SET workflow = '{}'", [])
+            .is_err(),
+        "the database refuses to change what a run read"
+    );
 }

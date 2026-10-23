@@ -36,7 +36,8 @@
       | 'danger-solid'
       | 'quiet'
       | 'link'
-      | 'inline';
+      | 'inline'
+      | 'dashed';
     size?: 'sm' | 'md' | 'lg';
     /**
      * Defaults to `button`, which is the opposite of the HTML default and is the point.

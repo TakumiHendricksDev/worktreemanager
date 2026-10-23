@@ -207,8 +207,8 @@ pub use queue::{
 };
 pub use recipe::{
     CheckSpec, Fallback, ImplementSpec, KnowledgeScope, OutputKind, RecipeSpec, RoleInput,
-    RoleKind, RoleProfile, RoleProvider, RoleSpec, RuntimeDriver, SkillCatalog, SkillError,
-    SkillProblem, StageSpec, StartServices, WorkflowError, WorkflowSpec, Workspace,
+    RoleKind, RoleProfile, RoleProvider, RoleSpec, RunPart, RuntimeDriver, SkillCatalog,
+    SkillError, SkillProblem, StageSpec, StartServices, WorkflowError, WorkflowSpec, Workspace,
 };
 pub use review::{
     BlobRef, Dismissal, Finding, FindingClass, FindingId, Location, Severity, Snapshot,

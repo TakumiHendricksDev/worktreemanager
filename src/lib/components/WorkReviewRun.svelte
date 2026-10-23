@@ -91,6 +91,7 @@
     providerName,
     latestRound,
     queueLine,
+    recipeProblem,
     resumeWords,
     ruleLabel,
     runsOn,
@@ -105,7 +106,9 @@
   import { draftOf } from '../publish';
   import { codeRequests } from '../state/code-request.svelte';
   import { inbox } from '../state/inbox.svelte';
+  import { otherProvider } from '../recipes';
   import { reviewRuns } from '../state/review-runs.svelte';
+  import { settingsRequest } from '../state/settings.svelte';
   import { work, type WorkFocus } from '../state/work.svelte';
   import { workspace } from '../state/workspace.svelte';
   import CodeText from './CodeText.svelte';
@@ -150,6 +153,8 @@
   const error = $derived(reviewRuns.errors[worktreeId] ?? null);
   const problem = $derived(reviewRuns.problems[worktreeId] ?? null);
   const top = $derived(run ? headline(run, stale) : null);
+  /** A role that could not run for want of a skill: panel 9's Edit recipe and Move role. */
+  const blocked = $derived(run ? recipeProblem(run) : null);
   const groups = $derived(run ? findingGroups(run.findings) : []);
   const dismissed = $derived(run ? run.findings.filter((f) => f.dismissed !== null) : []);
   const checks = $derived(run ? checkLines(run, stale) : []);
@@ -504,8 +509,10 @@
           >
         {/if}
         {#if canResume(run) && !run.capacity}
+          <!-- Neutral beside panel 9's Edit recipe: retrying asks the same provider again, which
+               helps only once the skill is installed for it. -->
           <Button
-            variant={showRerun ? 'neutral' : 'accent'}
+            variant={showRerun || blocked ? 'neutral' : 'accent'}
             size="sm"
             disabled={busy}
             onclick={() => void reviewRuns.resume(worktreeId, run.flow.id)}
@@ -555,6 +562,36 @@
         {/if}
         {#if canRunAgain(run) && !showRerun && !moved && recipe}
           <Button size="sm" disabled={busy} onclick={start}>Run again</Button>
+        {/if}
+        {#if blocked}
+          {@const stuck = blocked}
+          <!-- Panel 9, "can't run: recipe": both open Settings › Recipes at the role. Moving it is a
+               provider change in the role's editor, checked by Apply and written by Save. -->
+          <Button
+            variant="accent"
+            size="sm"
+            disabled={busy}
+            onclick={() =>
+              settingsRequest.showRecipes({
+                project: projectId,
+                recipe: run.review.recipe,
+                role: stuck.role,
+                provider: null,
+                problem: stuck,
+              })}>Edit recipe</Button
+          >
+          <Button
+            size="sm"
+            disabled={busy}
+            onclick={() =>
+              settingsRequest.showRecipes({
+                project: projectId,
+                recipe: run.review.recipe,
+                role: stuck.role,
+                provider: otherProvider(stuck.provider),
+                problem: stuck,
+              })}>Move role to {providerName(otherProvider(stuck.provider))}</Button
+          >
         {/if}
       </div>
       {#if moved && canRereview(run, moved)}

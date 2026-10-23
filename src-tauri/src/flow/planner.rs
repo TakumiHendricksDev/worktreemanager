@@ -49,6 +49,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use serde::Serialize;
+use wtm_core::flow::RunPart;
 use wtm_core::flow::planning::standing;
 use wtm_core::flow::{
     Answer, ApprovalSubject, ContextLink, Field, Flow, FlowEvent, FlowId, FlowKind, Hold, HoldKind,
@@ -57,7 +58,7 @@ use wtm_core::flow::{
     NewStep, OutputKind, Phase, PlanApproval, PlanContext, PlanDecision, PlanDependency,
     PlanRecord, PlanReport, PlanRule, PlanStanding, PlanVerdict, Planning, Question, QuestionId,
     QuestionMessage, RoleSpec, RuleQuery, Speaker, StartJobState, Step, StepChange, StepStatus,
-    Submission, TrackerKind, Workspace,
+    Submission, TrackerKind, WorkflowSpec, Workspace,
 };
 use wtm_core::model::AgentEvent;
 use wtm_core::ports::{
@@ -132,7 +133,8 @@ pub struct QuestionThread {
 #[serde(rename_all = "camelCase")]
 pub struct PlanView {
     pub flow: Flow,
-    /// The role `[workflow] planner` names now, or `None` when the project names none.
+    /// The planner the run's planning began with, or, before it begins, the one `[workflow]
+    /// planner` names now; `None` when there is none.
     pub planner: Option<String>,
     pub planning: Option<Planning>,
     /// Oldest revision first.
@@ -182,9 +184,8 @@ impl Engine {
             .is_some()
     }
 
-    /// The planner role a project names, with its spec, when it names one.
-    fn planner_of(project: &wtm_core::model::Project) -> Option<(String, RoleSpec)> {
-        let workflow = project.workflow.as_ref()?;
+    /// The planner role a workflow names, with its spec, when it names one.
+    fn planner_of(workflow: &WorkflowSpec) -> Option<(String, RoleSpec)> {
         let id = workflow.planner.clone()?;
         let spec = workflow.role.get(&id)?.clone();
         Some((id, spec))
@@ -207,7 +208,8 @@ impl Engine {
         let project = job
             .as_ref()
             .and_then(|job| self.app.project(job.project.as_str()).ok());
-        let planner = project
+        let planner = self
+            .kept_workflow(flow, RunPart::Plan, project.as_ref())
             .as_ref()
             .and_then(Self::planner_of)
             .map(|(id, _)| id);
@@ -366,7 +368,8 @@ impl Engine {
             .ok()
             .and_then(|db| db.start_job_of(flow).ok().flatten())
             .and_then(|job| self.app.project(job.project.as_str()).ok())
-            .is_some_and(|project| Self::planner_of(&project).is_some());
+            .and_then(|project| self.kept_workflow(flow, RunPart::Plan, Some(&project)))
+            .is_some_and(|workflow| Self::planner_of(&workflow).is_some());
         if !configured {
             return;
         }
@@ -416,17 +419,18 @@ impl Engine {
             return Err("its worktree is not ready yet".into());
         }
         let project = self.app.project(job.project.as_str()).map_err(text)?;
-        let (role, spec) = Self::planner_of(&project).ok_or_else(|| {
+        // Not kept yet: planning has not begun, and a planner added since Start Work is the one it
+        // gets. Kept once it begins, below.
+        let workflow = self
+            .kept_workflow(flow, RunPart::Plan, Some(&project))
+            .unwrap_or_default();
+        let (role, spec) = Self::planner_of(&workflow).ok_or_else(|| {
             Refusal::from(
                 "this project names no planner: add `planner = \"<role>\"` to its [workflow] in \
                  your own config, naming a reviewer role whose output is `plan`",
             )
         })?;
-        let tracker = project
-            .workflow
-            .as_ref()
-            .and_then(|w| w.tracker)
-            .unwrap_or(TrackerKind::Jira);
+        let tracker = workflow.tracker.unwrap_or(TrackerKind::Jira);
         self.host.preflight(&[spec.provider.id()])?;
         db.begin_planning(
             &NewPlanning {
@@ -440,6 +444,7 @@ impl Engine {
             self.now(),
         )
         .map_err(text)?;
+        self.begin_part(flow, RunPart::Plan, &workflow)?;
         self.notice.changed(flow);
         Ok(self.spawn_planner(flow, PlanTurn::Begin)?)
     }
@@ -548,10 +553,7 @@ impl Engine {
             .app
             .worktree(&project, &planning.worktree)
             .map_err(|e| format!("the issue's worktree is no longer there: {e}"))?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or("the project's workflow config has gone")?;
+        let workflow = self.run_workflow(flow, RunPart::Plan, &project)?;
         let spec = workflow.role.get(&planning.role).cloned().ok_or_else(|| {
             format!(
                 "role `{}` is no longer in your workflow config, so the planner cannot run",
@@ -564,7 +566,7 @@ impl Engine {
             worktree_path: worktree.path.clone(),
             project_root: project.root.clone(),
             fields: workflow.fields.clone(),
-            patterns: crate::knowledge::patterns(&project).0,
+            patterns: workflow.instruction_sources(),
             spec,
             planning,
         })
