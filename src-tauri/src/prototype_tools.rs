@@ -1,5 +1,11 @@
 //! Open Design's design workflow exposed to the already-running chat agent. Tools never start
 //! another session, and deliberately offer no implementation-approval operation to the model.
+//!
+//! The same two tools are an issue's designer's, on its run's bridge and nothing else's. For a run
+//! token they act on that run's design, through the engine (`crate::flow::designer`): a designer is
+//! a headless session with no chat to own a prototype, so its run does, and what it publishes is a
+//! numbered revision of the run's design rather than a card beside a conversation. Every other run
+//! role's token is refused them, at the socket (`handoff::scope_refusal`) and again here.
 
 use crate::app::App;
 use crate::handoff::{CodeCall, Response};
@@ -8,6 +14,9 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub const PREFIX: &str = "prototype_";
+
+/// The two tools, as a designer's bridge lists them after its run tools.
+pub const NAMES: [&str; 2] = ["prototype_prepare", "prototype_publish"];
 pub const ENV: &str = "WTM_DESIGN_TOOLS";
 pub const INSTRUCTIONS: &str = "Open Design prototyping is built into this WTM chat. For an explicit prototype/design/mockup request, or a substantial change to UI layout, screens, components or user flows, call mcp__wtm__prototype_prepare before editing application source. Use the returned project evidence and Open Design charter to create the design, then call mcp__wtm__prototype_publish with the complete self-contained HTML and honest component/token reuse notes. The rendered review opens beside this conversation. For feedback, call prototype_prepare with the existing id and the user's requested revision, then publish the new revision. Stop after publishing and wait for the user's Implement this design action; a prototype, feedback, or successful generation is not implementation approval. Only a WTM implementation approval turn for the exact reviewed revision authorizes application implementation. Keep design artifacts out of the source tree: submit them through the tools. This uses your current session, model and permission mode; do not launch Open Design's CLI/daemon, another provider, or ask for another login. Backend work, investigations, trivial text fixes and nonvisual tasks continue normally without a prototype. The wait-before-editing rule is an instruction, not an additional filesystem sandbox.";
 
@@ -35,6 +44,17 @@ pub fn definitions() -> Vec<Value> {
 }
 
 pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, token: &str, call: &CodeCall) -> Response {
+    if app
+        .handoff
+        .resolve(token)
+        .is_some_and(|caller| caller.scope.flow().is_some())
+    {
+        use tauri::Manager;
+        let engine = handle
+            .try_state::<Arc<crate::flow::Engine>>()
+            .map(|engine| Arc::clone(&engine));
+        return answer_for_run(app, engine.as_deref(), token, call);
+    }
     let result = (|| -> Result<String, crate::view::ErrorView> {
         let caller = app.handoff.resolve(token).ok_or_else(|| {
             crate::prototype_context::failure("This chat is no longer registered")
@@ -80,11 +100,11 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, token: &str, call: &CodeCa
                     paths.as_deref(),
                 )?;
                 lifecycle::announce(handle, app, session, &prototype);
-                let tokens = crate::design_evidence::collect(&prototype.sources);
-                Ok(json!({"id":prototype.id,"revision":prototype.revision,"brief":prototype.brief,"feedback":prototype.feedback,"upstream":prototype.upstream,
-                    "charter":crate::prototypes::CHARTER,
-                    "hostContract":"Use supplied project sources as the visual authority. Reuse CSS tokens and markup directly where compatible. Framework components are HTML visual approximations; name their actual APIs in reuse notes for implementation. Preserve untouched areas in revisions. Produce complete self-contained HTML with inline styles/scripts, system or embedded fonts and inline/data images; no CDN, imports, network or app-source writes. Submit via prototype_publish. Do not create files in the application. Stop for explicit Implement this design approval.",
-                    "tokens":tokens,"sources":prototype.sources,"previousArtifact":old.map(|(html,reuse)|json!({"html":html,"reuse":reuse}))}).to_string())
+                Ok(prepared(
+                    &prototype,
+                    old,
+                    "Stop for explicit Implement this design approval.",
+                ))
             }
             "prototype_publish" => {
                 let prototype = lifecycle::publish(
@@ -115,5 +135,52 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, token: &str, call: &CodeCa
     match result {
         Ok(text) => Response::ok(text),
         Err(e) => Response::failed(e.message),
+    }
+}
+
+/// What `prototype_prepare` answers: the revision to publish under, the charter, and the project's
+/// evidence, read now. `stop` is the last word of the host contract: what the agent waits for.
+pub fn prepared(
+    prototype: &crate::prototypes::Prototype,
+    previous: Option<(String, String)>,
+    stop: &str,
+) -> String {
+    let tokens = crate::design_evidence::collect(&prototype.sources);
+    json!({"id":prototype.id,"revision":prototype.revision,"brief":prototype.brief,"feedback":prototype.feedback,"upstream":prototype.upstream,
+        "charter":crate::prototypes::CHARTER,
+        "hostContract":format!("Use supplied project sources as the visual authority. Reuse CSS tokens and markup directly where compatible. Framework components are HTML visual approximations; name their actual APIs in reuse notes for implementation. Preserve untouched areas in revisions. Produce complete self-contained HTML with inline styles/scripts, system or embedded fonts and inline/data images; no CDN, imports, network or app-source writes. Submit via prototype_publish. Do not create files in the application. {stop}"),
+        "tokens":tokens,"sources":prototype.sources,"previousArtifact":previous.map(|(html,reuse)|json!({"html":html,"reuse":reuse}))}).to_string()
+}
+
+/// A prototype tool called with a run token: its run's design, if the token is a designer's.
+///
+/// Without the window, so the tests can call it as the socket does. The authority is the token's,
+/// whatever the bridge chose to list: a run role that is not a designer is refused here as it is at
+/// the socket.
+pub fn answer_for_run(
+    app: &Arc<App>,
+    engine: Option<&crate::flow::Engine>,
+    token: &str,
+    call: &CodeCall,
+) -> Response {
+    let Some(caller) = app.handoff.resolve(token) else {
+        return Response::failed("this session is not registered with Worktree Manager any more");
+    };
+    let Some(role) = caller.scope.flow() else {
+        return Response::failed("the run's prototype tools are only for an issue's designer");
+    };
+    if !role.design {
+        return Response::failed(format!(
+            "this is a workflow run's {} session, and only an issue's designer has the prototype \
+             tools",
+            role.authority.as_str()
+        ));
+    }
+    let Some(engine) = engine else {
+        return Response::failed("the run's engine is not running, so nothing can be published");
+    };
+    match engine.design_tool(role, &caller.scope, call) {
+        Ok(text) => Response::ok(text),
+        Err(refusal) => Response::failed(refusal),
     }
 }

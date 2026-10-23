@@ -39,6 +39,10 @@ use crate::flow::{
     CommentSend, NewPlan, NewPlanning, PlanContext, PlanDecision, PlanId, PlanRecord, Planning,
     QuestionMessage, Speaker,
 };
+use crate::flow::{
+    Design, DesignComment, DesignDecision, DesignRevision, DesignRevisionId, NewDesign,
+    NewDesignRevision,
+};
 use crate::flow::{Fix, FixChange, FixId, Lease, LeaseId, LeaseRelease, NewFix, NewLease};
 use crate::flow::{
     Flow, FlowEvent, FlowId, FlowKind, NewWorkItem, RecordedEvent, RecordedLink, TransitionError,
@@ -130,6 +134,16 @@ pub enum FlowStoreError {
 
     #[error("no plan {0}")]
     UnknownPlan(PlanId),
+
+    #[error("run {0} has no design")]
+    UnknownDesign(FlowId),
+
+    #[error("no design revision {0}")]
+    UnknownDesignRevision(DesignRevisionId),
+
+    /// A comment or decision named a revision the run does not have.
+    #[error("run {flow} has no design revision {revision}")]
+    NoSuchRevision { flow: FlowId, revision: u32 },
 
     #[error("no start job for work item {0}")]
     UnknownStartJob(WorkItemId),
@@ -763,4 +777,72 @@ pub trait PlanStore: Send + Sync {
 
     /// A question's discussion, oldest first.
     fn discussion(&self, question: QuestionId) -> Result<Vec<QuestionMessage>, FlowStoreError>;
+}
+
+/// An Implement run's design: the record of it, the revisions its designer published, your comments
+/// on each, and what you decided about them.
+///
+/// Like a plan's, every row here is append-only except the design record's prototype, which is set
+/// once the designer has prepared one: a revision is what an approval pins, a comment is what was
+/// said about a revision, and a decision is something that happened to one.
+pub trait DesignStore: Send + Sync {
+    /// Record `design`, or return the record the run already has: a resume or a second request is
+    /// the same design, by the same role, with the same conversation.
+    fn begin_design(&self, design: &NewDesign, at: UnixMs) -> Result<Design, FlowStoreError>;
+
+    fn design(&self, flow: FlowId) -> Result<Option<Design>, FlowStoreError>;
+
+    /// Every run's design, oldest first: what recovery at launch looks through.
+    fn designs(&self) -> Result<Vec<Design>, FlowStoreError>;
+
+    /// Keep the prototype the designer prepared. Set once: every revision of a run is an artifact
+    /// of one prototype, which is what makes the history one history.
+    fn set_design_prototype(
+        &self,
+        flow: FlowId,
+        prototype: &str,
+        at: UnixMs,
+    ) -> Result<Design, FlowStoreError>;
+
+    /// Record a revision as its run's next: 1 for the first.
+    fn record_design_revision(
+        &self,
+        revision: &NewDesignRevision,
+        at: UnixMs,
+    ) -> Result<DesignRevision, FlowStoreError>;
+
+    /// A run's revisions, oldest first. Every one of them, however many came after it.
+    fn design_revisions(&self, flow: FlowId) -> Result<Vec<DesignRevision>, FlowStoreError>;
+
+    /// Comment on revision `revision` of `flow`.
+    fn comment_on_design(
+        &self,
+        flow: FlowId,
+        revision: u32,
+        text: &str,
+        at: UnixMs,
+    ) -> Result<DesignComment, FlowStoreError>;
+
+    /// A run's comments, oldest first.
+    fn design_comments(&self, flow: FlowId) -> Result<Vec<DesignComment>, FlowStoreError>;
+
+    /// Approve revision `revision`: `approval` and the decision that refers to it, in one
+    /// transaction.
+    fn approve_design(
+        &self,
+        approval: &NewApproval,
+        revision: DesignRevisionId,
+        at: UnixMs,
+    ) -> Result<(Approved, DesignDecision), FlowStoreError>;
+
+    /// Ask for changes to revision `revision`.
+    fn request_design_changes(
+        &self,
+        revision: DesignRevisionId,
+        note: &str,
+        at: UnixMs,
+    ) -> Result<DesignDecision, FlowStoreError>;
+
+    /// A run's decisions, oldest first.
+    fn design_decisions(&self, flow: FlowId) -> Result<Vec<DesignDecision>, FlowStoreError>;
 }

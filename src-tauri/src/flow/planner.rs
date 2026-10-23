@@ -272,7 +272,7 @@ impl Engine {
         })
     }
 
-    fn standing_of(
+    pub(super) fn standing_of(
         &self,
         flow: FlowId,
         plans: &[PlanRecord],
@@ -946,6 +946,7 @@ impl Engine {
                 dir: wtm_core::flow::FlowDir::new(&self.app.config.paths().flow_dir, ctx.flow),
                 fix: None,
                 planner: Some(Arc::new(PlannerLive { discussing })),
+                designer: None,
                 project: ctx.planning.project.as_str().to_owned(),
                 worktree: ctx.planning.worktree.clone(),
                 // A planner runs no checks and drives no pane: it reads, and hands in a plan.
@@ -961,6 +962,7 @@ impl Engine {
                 role: step.role.clone(),
                 authority: step.profile,
                 browser: None,
+                design: false,
             },
             provider: step.provider.id().to_owned(),
             model: step.model.clone(),
@@ -1090,7 +1092,8 @@ impl Engine {
                 }
                 // Only a plan is accepted from a planner (`on_tool`), so nothing else arrives; and
                 // a tick with nothing new is a tick.
-                Ok(Signal::Submitted(_)) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(Signal::Submitted(_) | Signal::Published(_))
+                | Err(RecvTimeoutError::Timeout) => {}
                 Ok(Signal::Asked(question)) => {
                     asked.push(question);
                     if interrupted_at.is_none() {
@@ -1734,6 +1737,8 @@ impl Engine {
             }
         }
         self.notice.changed(flow);
+        // A plan that says the work needs a design goes on to Designing, unless you skipped it.
+        self.design_after_plan(flow, subject.design_needed, skip_design);
         Ok(decision)
     }
 

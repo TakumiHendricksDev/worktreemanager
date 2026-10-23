@@ -218,6 +218,13 @@ export function runWords(run: IssueRun | null): string {
     case 'planned':
       // Held for your approval above; here, nothing waits: the plan was approved.
       return 'Planned, approved';
+    case 'designing':
+      return 'Designing';
+    case 'design_ready':
+      // Held for your approval above; here, the design was approved.
+      return 'Design approved';
+    case 'implementing':
+      return 'Implementing';
     case 'reviewing':
       return 'Reviewing';
     case 'consolidated':

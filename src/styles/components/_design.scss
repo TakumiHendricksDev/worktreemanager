@@ -1,0 +1,243 @@
+/*
+ * An issue's Design tab (`WorkDesign`): the gate in front of implementing, every design revision
+ * with its comments, and your decision on the newest. The Plan tab's shapes (`_plan.scss`), with a
+ * revision card of its own: an earlier revision stays on the page, quieter, rather than folding
+ * into a history list, because it is still something to preview and talk about.
+ */
+
+.c-design {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-width: 900px;
+}
+
+.c-design__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.c-design__title {
+  flex: 1 1 auto;
+  font-size: var(--step-0);
+  font-weight: 600;
+}
+
+.c-design__actions,
+.c-design__row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Whether implementing may start: one line, ok or waiting, never only a colour. */
+.c-design__gate {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-design__note,
+.c-design__standing {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+}
+
+.c-design__error {
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.c-design__warn {
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+  font-size: var(--step--1);
+}
+
+.c-design__label {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-design__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.c-design__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+/* One revision. The newest is the one decided on, so it is the one drawn at full strength. */
+.c-design-revision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+}
+
+.c-design-revision.is-current {
+  border-color: var(--accent);
+}
+
+.c-design-revision__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-design-revision__badge {
+  padding: 1px 7px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.c-design-revision__mark {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.c-design-revision__mark--ok {
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+}
+
+.c-design-revision__mark--warn {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+}
+
+.c-design-revision__mark--accent {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.c-design-revision__mark--muted {
+  color: var(--fg-muted);
+}
+
+.c-design-revision__brief {
+  font-size: var(--step-0);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.c-design-revision__part {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.c-design-revision__text {
+  font-size: var(--step--1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-design-revision__notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+}
+
+.c-design-revision__notes > summary {
+  color: var(--fg-muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.c-design-revision__reuse {
+  max-width: 72ch;
+  margin-top: var(--sp-2);
+}
+
+.c-design-revision__sources {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-design-revision__comments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.c-design-revision__comment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-design-revision__when {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-design-revision__add {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.c-design-revision__add > .c-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.c-design-history {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: var(--step--1);
+}
+
+.c-design-history > summary {
+  color: var(--fg-muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.c-design-history__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  padding-left: 1.2em;
+}

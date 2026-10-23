@@ -63,6 +63,13 @@ pub(crate) enum Behaviour {
     /// which is what holds a run-session place. A value with a `kind` is the whole `flow_submit`
     /// call, as a planner's plan is; anything else is a findings payload.
     Hold(Arc<AtomicBool>, Value),
+    /// A designer: `prototype_prepare` with this brief, then `prototype_publish` under the id and
+    /// revision it answered with, this HTML and these reuse notes; then end the turn.
+    Design {
+        brief: &'static str,
+        html: &'static str,
+        reuse: &'static str,
+    },
 }
 
 /// One thing a fake writer does.
@@ -112,6 +119,8 @@ pub(crate) struct Opened {
     pub(crate) turns: Arc<Mutex<Vec<String>>>,
     /// The pane its token was scoped to, for a runtime role.
     pub(crate) browser: Option<String>,
+    /// Whether its token was a designer's, with the prototype tools.
+    pub(crate) design: bool,
 }
 
 /// A runtime role's pane, as the engine asked the host for it.
@@ -203,15 +212,21 @@ impl FakeHost {
             (s.token.clone(), s.role.role.clone())
         };
         let engine = self.engine.lock().upgrade();
-        let response = wtm_app_lib::flow_tools::answer_with(
-            &self.app,
-            engine.as_deref(),
-            &token,
-            &CodeCall {
-                tool: tool.to_owned(),
-                args,
-            },
-        );
+        let call = CodeCall {
+            tool: tool.to_owned(),
+            args,
+        };
+        // The prototype tools go to their own handler, as the socket sends them (`Action::Design`).
+        let response = if tool.starts_with(wtm_app_lib::prototype_tools::PREFIX) {
+            wtm_app_lib::prototype_tools::answer_for_run(
+                &self.app,
+                engine.as_deref(),
+                &token,
+                &call,
+            )
+        } else {
+            wtm_app_lib::flow_tools::answer_with(&self.app, engine.as_deref(), &token, &call)
+        };
         let text = response.text.or(response.error).unwrap_or_default();
         self.answers.lock().push((role, response.ok, text.clone()));
         (response.ok, text)
@@ -420,6 +435,25 @@ impl FakeHost {
                 }
                 self.finish_turn(session);
             }
+            Behaviour::Design { brief, html, reuse } => {
+                self.call(session, "flow_context", json!({}));
+                let (ok, prepared) =
+                    self.call(session, "prototype_prepare", json!({ "brief": brief }));
+                if ok {
+                    let prepared: Value = serde_json::from_str(&prepared).unwrap();
+                    self.call(
+                        session,
+                        "prototype_publish",
+                        json!({
+                            "id": prepared["id"],
+                            "revision": prepared["revision"],
+                            "html": html,
+                            "reuse": reuse,
+                        }),
+                    );
+                }
+                self.finish_turn(session);
+            }
             Behaviour::ProgressThenSubmit(payload) => {
                 for line in [
                     "reading export.rs",
@@ -469,6 +503,7 @@ impl RoleHost for FakeHost {
             token: token.clone(),
             turns: Arc::clone(&turns),
             browser: spec.role.browser.clone(),
+            design: spec.role.design,
         });
         let behaviour = (self.script.lock())(&spec.role.role, attempt);
         self.app.flow_ledger.brief(&spec.role, &spec.brief);

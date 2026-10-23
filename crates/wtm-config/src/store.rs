@@ -361,7 +361,8 @@ fn most_specific(loaded: &[LoadedLayer], declares: impl Fn(&Value) -> bool) -> O
 /// config and the untracked local layer are yours, so both may declare them.
 ///
 /// `planner` names one of those roles and has it run by itself once a started issue's worktree is
-/// ready, so it is refused with them.
+/// ready, and `designer` one that runs by itself once you approve a plan that asks for a design, so
+/// both are refused with them.
 ///
 /// `forge` and `tracker` are refused for the same reason in different words: naming one is the
 /// opt-in that lets the Work view call that service through your own CLI and credentials
@@ -384,7 +385,7 @@ fn refuse_repository_roles(loaded: &[LoadedLayer]) -> Result<(), ConfigError> {
             key: Some(format!("workflow.{key}")),
             message: message.to_owned(),
         };
-        for table in ["role", "recipe", "planner"] {
+        for table in ["role", "recipe", "planner", "designer"] {
             if workflow.get(table).is_some() {
                 return Err(refuse(
                     table,
@@ -1516,6 +1517,21 @@ roles = ["conventions", "correctness"]
             ConfigError::Invalid { layer, key, .. } => {
                 assert_eq!(layer, ConfigLayer::Repo);
                 assert_eq!(key.as_deref(), Some("workflow.planner"));
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_repository_cannot_choose_the_designer_that_spends_your_account() {
+        // The designer runs by itself once you approve a plan that asks for a design: naming it is
+        // the planner's decision again.
+        let h = Harness::new();
+        h.write_repo_config("[workflow]\ndesigner = 'conventions'\n");
+        match h.store.load(&h.repo).unwrap_err() {
+            ConfigError::Invalid { layer, key, .. } => {
+                assert_eq!(layer, ConfigLayer::Repo);
+                assert_eq!(key.as_deref(), Some("workflow.designer"));
             }
             other => panic!("expected Invalid, got {other:?}"),
         }

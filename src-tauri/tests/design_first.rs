@@ -33,6 +33,8 @@ fn prototype(directory: &Path) -> Prototype {
         review: None,
         implemented_review: None,
         dismissed: false,
+        reviews: vec![],
+        flow: None,
     }
 }
 const HTML: &str = "<!doctype html><html><body><button class='btn btn-primary project-action'>Export</button></body></html>";
@@ -387,6 +389,87 @@ fn generation_and_revision_cannot_approve_implementation_or_write_application_fi
     assert!(prototypes::handoff(&design, &first).is_err());
     assert!(prototypes::publish(&mut design, &first, HTML, "late result").is_err());
     assert_eq!(std::fs::read_dir(application.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn every_published_revision_stays_addressable_but_only_the_newest_can_be_implemented() {
+    let storage = tempfile::tempdir().unwrap();
+    let root = storage.path().canonicalize().unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut design = prototype(&root.join(&id));
+    design.id = id.clone();
+    prototypes::begin(&mut design, "initial").unwrap();
+    let first = design.revision.clone();
+    prototypes::publish(&mut design, &first, HTML, "Uses Button.vue").unwrap();
+    prototypes::begin(&mut design, "Header: use PageHeader").unwrap();
+    let second = design.revision.clone();
+    let revised = HTML.replace("Export", "Export units");
+    prototypes::publish(&mut design, &second, &revised, "Uses PageHeader.vue").unwrap();
+    prototypes::begin(&mut design, "A third look").unwrap();
+
+    // Read back from disk, as a later launch would: both revisions, in order, with their briefs.
+    let restored = prototypes::load(&root, &id, "/repo", "/repo/topic").unwrap();
+    let history: Vec<(&str, &str)> = restored
+        .history()
+        .into_iter()
+        .map(|r| (r.id.as_str(), r.brief.as_str()))
+        .collect();
+    assert_eq!(
+        history,
+        [
+            (first.as_str(), "initial"),
+            (second.as_str(), "Header: use PageHeader")
+        ]
+    );
+    // The first is still there to preview after the second, and after a third was begun.
+    assert_eq!(prototypes::artifact(&restored, &first).unwrap().0, HTML);
+    assert_eq!(
+        prototypes::artifact(&restored, &second).unwrap(),
+        (revised, "Uses PageHeader.vue".to_owned())
+    );
+    // Still checked against the fingerprint it was published with.
+    std::fs::write(
+        root.join(&id).join("reviews").join(&first).join("REUSE.md"),
+        "edited later",
+    )
+    .unwrap();
+    assert!(prototypes::artifact(&restored, &first).is_err());
+    assert!(prototypes::artifact(&restored, "never-published").is_err());
+
+    // Approval is the newest revision's only.
+    let mut current = restored.clone();
+    current.review = current.reviews.last().cloned();
+    if let Some(review) = current.review.as_mut() {
+        review.opened = true;
+    }
+    assert!(prototypes::handoff(&current, &first).is_err());
+    assert!(prototypes::handoff(&current, &second).is_ok());
+}
+
+#[test]
+fn a_record_from_before_history_was_kept_starts_its_history_with_the_review_it_had() {
+    let storage = tempfile::tempdir().unwrap();
+    let mut design = prototype(storage.path());
+    prototypes::begin(&mut design, "initial").unwrap();
+    let first = design.revision.clone();
+    prototypes::publish(&mut design, &first, HTML, "Uses Button.vue").unwrap();
+    // As an older build wrote it: one review, no history.
+    let mut legacy = serde_json::to_value(&design).unwrap();
+    legacy.as_object_mut().unwrap().remove("reviews");
+    let mut legacy: Prototype = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.history().len(), 1);
+    prototypes::begin(&mut legacy, "again").unwrap();
+    let second = legacy.revision.clone();
+    prototypes::publish(&mut legacy, &second, HTML, "Uses Button.vue").unwrap();
+    assert_eq!(
+        legacy
+            .history()
+            .into_iter()
+            .map(|r| r.id.clone())
+            .collect::<Vec<_>>(),
+        [first.clone(), second]
+    );
+    assert_eq!(prototypes::artifact(&legacy, &first).unwrap().0, HTML);
 }
 
 #[test]

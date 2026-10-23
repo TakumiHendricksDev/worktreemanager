@@ -71,6 +71,9 @@ Worth stating because it narrows the surface considerably:
   sandbox frame and network-denying CSP. Design tools write only outside application
   source; the agent's wait-before-editing rule remains prompt guidance under its
   existing permission mode. See [the integration boundary](docs/open-design.md).
+  In the Work view an issue's designer uses the same two tools from a read-only run
+  session (ARCHITECTURE §6m): no other run session's token can call them, and what it
+  publishes is kept under wtm's data directory, never in the worktree.
 
   The one automatic request is the **update check**: at launch and at most daily, a GET to
   `api.github.com` for wtm's latest release, with no body and no header naming the user, the

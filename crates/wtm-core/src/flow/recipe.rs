@@ -105,6 +105,14 @@ pub struct WorkflowSpec {
     /// chooses which account a started issue spends, by itself, once its worktree is ready.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planner: Option<String>,
+    /// The role that draws a design for a planned issue, when its approved plan asks for one or you
+    /// do: a reviewer that publishes prototypes. Absent, such a run waits at "Designing" and nothing
+    /// is spent on it.
+    ///
+    /// Your own config and the local layer only, for the planner's reason: it chooses which account
+    /// a design spends, by itself, once you approve a plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub designer: Option<String>,
     /// Commands the app runs when a role asks, through `flow_run_check`.
     ///
     /// Your own config and the local layer only, like roles: a check is a command wtm runs outside
@@ -602,6 +610,9 @@ impl WorkflowSpec {
         if let Some(planner) = &self.planner {
             self.check_planner(planner)?;
         }
+        if let Some(designer) = &self.designer {
+            self.check_designer(designer)?;
+        }
         self.statuses.validate()?;
         tracker::validate_fields(&self.fields)?;
         if let Some(queue) = &self.queue {
@@ -819,6 +830,58 @@ impl WorkflowSpec {
                 format!("role.{planner}.workspace"),
                 "a planner reads the issue's worktree: its conversation is resumed there when you \
                  answer a question, and a snapshot checkout is gone by then",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The designer is a reviewer that reads the issue's worktree and publishes prototypes.
+    ///
+    /// Read-only because a design comes before anything is implemented, and its artifacts are
+    /// written by the app under its own data directory, never into the source tree. The worktree
+    /// rather than a snapshot for the planner's reason: changes you ask for resume its conversation
+    /// there, possibly hours later. Not the planner's role, because a run finds each one's step and
+    /// conversation by its role, and one role in both would continue the planner's conversation as
+    /// a designer.
+    fn check_designer(&self, designer: &str) -> Result<(), WorkflowError> {
+        let Some(role) = self.role.get(designer) else {
+            return Err(WorkflowError::new(
+                "designer",
+                format!(
+                    "there is no role `{designer}`; declare it as `[workflow.role.{designer}]`"
+                ),
+            ));
+        };
+        if self.planner.as_deref() == Some(designer) {
+            return Err(WorkflowError::new(
+                "designer",
+                format!(
+                    "`{designer}` is the planner; a designer is a role of its own, with its own \
+                     conversation"
+                ),
+            ));
+        }
+        if role.profile != RoleProfile::Reviewer {
+            return Err(WorkflowError::new(
+                "designer",
+                format!(
+                    "`{designer}` is a writer; a designer reads the project and publishes \
+                     prototypes through wtm, and nothing is written into the worktree before a \
+                     design is approved"
+                ),
+            ));
+        }
+        if role.kind == RoleKind::Runtime {
+            return Err(WorkflowError::new(
+                "designer",
+                format!("`{designer}` is a runtime role; a designer reads the code, not the app"),
+            ));
+        }
+        if role.workspace == Some(Workspace::Snapshot) {
+            return Err(WorkflowError::new(
+                format!("role.{designer}.workspace"),
+                "a designer reads the issue's worktree: its conversation is resumed there when you \
+                 ask for changes, and a snapshot checkout is gone by then",
             ));
         }
         Ok(())
@@ -1340,6 +1403,38 @@ mod tests {
         let mut spec = review_with(&json!({ "role": { "planner": fields } }));
         spec.planner = Some("planner".to_owned());
         spec
+    }
+
+    #[test]
+    fn a_designer_is_a_reviewer_of_its_own_that_reads_the_worktree() {
+        let designer = json!({
+            "objective": "Draw the screen the plan describes",
+            "provider": "claude",
+            "inputs": ["issue", "plan"],
+        });
+        let with = |fields: &serde_json::Value| {
+            let mut spec = review_with(&json!({ "role": { "designer": fields } }));
+            spec.designer = Some("designer".to_owned());
+            spec
+        };
+        with(&designer).validate().unwrap();
+
+        let mut writer = designer.clone();
+        writer["profile"] = json!("writer");
+        assert!(refusal(&with(&writer)).message.contains("writer"));
+
+        let mut snapshot = designer.clone();
+        snapshot["workspace"] = json!("snapshot");
+        assert_eq!(refusal(&with(&snapshot)).key, "role.designer.workspace");
+
+        let mut planner_too = with(&designer);
+        planner_too.planner = Some("designer".to_owned());
+        planner_too.role.get_mut("designer").unwrap().output = OutputKind::Plan;
+        assert!(refusal(&planner_too).message.contains("planner"));
+
+        let mut missing = with(&designer);
+        missing.designer = Some("nobody".to_owned());
+        assert_eq!(refusal(&missing).key, "designer");
     }
 
     #[test]

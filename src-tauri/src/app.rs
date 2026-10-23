@@ -166,6 +166,11 @@ pub struct FlowRole {
     /// name — every other pane in the worktree answers as if it did not exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<String>,
+    /// Whether this is an issue's designer, whose token may also use `prototype_prepare` and
+    /// `prototype_publish` on its run's design. `false` for every other role, whose token is refused
+    /// the prototype tools at the socket, as it is every tool its profile was built without.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub design: bool,
 }
 
 impl SessionScope {

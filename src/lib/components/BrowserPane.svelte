@@ -524,7 +524,12 @@
       </div>
 
       {#if prototype}
-        <span class="c-browser__address">Prototype review · revise in the conversation</span
+        <!-- A chat's prototype is revised in its conversation; an issue's design, which no chat
+             opened, is commented on and decided in the issue's Design tab (ARCHITECTURE §6m). -->
+        <span class="c-browser__address"
+          >{view?.openedBy
+            ? 'Prototype review · revise in the conversation'
+            : 'Design review · comment and decide in the issue’s Design tab'}</span
         >
         <Button
           variant="quiet"

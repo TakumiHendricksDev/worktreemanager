@@ -32,8 +32,8 @@ use std::fmt::Write as _;
 use wtm_core::flow::planning::plan_text;
 use wtm_core::flow::submission::{self, kind_name};
 use wtm_core::flow::{
-    CheckSpec, OutputKind, PlanContext, PlanRecord, PullRequest, Question, ReportedFinding,
-    RoleInput, RoleProvider, RoleSpec, Snapshot, TrackerKind, Workspace,
+    CheckSpec, DesignRevision, OutputKind, PlanContext, PlanRecord, PullRequest, Question,
+    ReportedFinding, RoleInput, RoleProvider, RoleSpec, Snapshot, TrackerKind, Workspace,
 };
 
 /// What a brief is written from.
@@ -66,6 +66,9 @@ pub struct BriefFacts<'a> {
     pub answers: &'a [Question],
     /// For a runtime role: how it exercises the app, the pane it drives, and what was up.
     pub runtime: Option<&'a super::runtime::RuntimeSetup>,
+    /// The issue's approved design, as [`design_section`] wrote it, when the role takes a design
+    /// and the work has one whose approval still holds.
+    pub design: Option<&'a str>,
 }
 
 /// What a runtime role is told about the running app it exercises.
@@ -263,13 +266,14 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
     for name in spec.inputs.iter().filter_map(|input| match input {
         RoleInput::Issue => Some("the issue"),
         RoleInput::Plan => Some("an approved plan"),
-        RoleInput::Design => Some("a design"),
+        RoleInput::Design if facts.design.is_none() => Some("an approved design"),
         RoleInput::Rules | RoleInput::Instructions if facts.knowledge.is_none() => {
             Some("your review rules and the repository's instructions")
         }
         RoleInput::Findings if facts.earlier.is_empty() => Some("earlier findings"),
         RoleInput::Answers if facts.answers.is_empty() => Some("answers to questions"),
         RoleInput::Diff
+        | RoleInput::Design
         | RoleInput::Instructions
         | RoleInput::Rules
         | RoleInput::Findings
@@ -282,6 +286,18 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
     }
     if let Some(knowledge) = facts.knowledge.filter(|text| !text.trim().is_empty()) {
         let _ = writeln!(out, "\n{}", knowledge.trim_end());
+    }
+    if let Some(design) = facts
+        .design
+        .filter(|_| spec.inputs.contains(&RoleInput::Design))
+    {
+        let _ = writeln!(
+            out,
+            "\n{}\nCheck the change against that design: where the user interface it builds \
+             departs from the approved revision or uses other components than its reuse notes \
+             name, that is a finding, with the revision it departs from.",
+            design.trim_end()
+        );
     }
     if let Some((from, to)) = facts.revision
         && !facts.earlier.is_empty()
@@ -787,6 +803,196 @@ pub fn planner_resume_turn(key: &str, resumed: bool) -> String {
     }
 }
 
+/// What a designer's brief is written from.
+#[derive(Debug, Clone)]
+pub struct DesignerFacts<'a> {
+    pub role: &'a str,
+    pub spec: &'a RoleSpec,
+    pub key: &'a str,
+    pub tracker: TrackerKind,
+    pub worktree_path: &'a str,
+    pub branch: Option<&'a str>,
+    /// The issue as the planner was last given it.
+    pub context: Option<&'a PlanContext>,
+    /// The plan you approved, which the design is for.
+    pub plan: &'a PlanRecord,
+    /// What you asked for, when you asked for the design yourself.
+    pub request: Option<&'a str>,
+    /// The newest revision it published, when it is revising one.
+    pub latest: Option<&'a DesignRevision>,
+    /// The repository's instructions and your rules, as `wtm_core::flow::knowledge::brief` wrote
+    /// them, when the role takes either.
+    pub knowledge: Option<&'a str>,
+}
+
+/// The brief `flow_context` hands a designer.
+///
+/// The issue and the plan are in here, inside `flow_context`'s fence, as the planner's issue is.
+/// How to design, what to publish and when to stop are the app's words around them. The design
+/// evidence — the charter, the project's tokens and component sources — is not: `prototype_prepare`
+/// hands it over, read from the worktree at that moment, as it does for a chat.
+#[must_use]
+pub fn designer_brief(facts: &DesignerFacts<'_>) -> String {
+    let spec = facts.spec;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Role `{}`: you design the user interface for {} {}, from its approved plan, as a \
+         prototype a person reviews before anything is built. You do not implement it.\n\n\
+         Objective: {}",
+        facts.role,
+        facts.tracker.as_str(),
+        facts.key,
+        spec.objective.trim()
+    );
+    if let Some(instructions) = spec.instructions.as_deref().map(str::trim)
+        && !instructions.is_empty()
+    {
+        let _ = writeln!(out, "\n{instructions}");
+    }
+    if let Some(context) = facts.context {
+        planner_issue(&mut out, context);
+    }
+    let _ = writeln!(
+        out,
+        "\nThe plan the person approved, revision {}:\n{}",
+        facts.plan.revision,
+        plan_text(&facts.plan.plan)
+    );
+    if let Some(request) = facts.request.map(str::trim).filter(|r| !r.is_empty()) {
+        let _ = writeln!(
+            out,
+            "\nThe person asked for this design themselves:\n{request}"
+        );
+    }
+    let branch = facts
+        .branch
+        .map_or_else(String::new, |branch| format!(" (branch `{branch}`)"));
+    let _ = writeln!(
+        out,
+        "\nYour working directory is the issue's worktree{branch}, at `{}`. Read the project's \
+         components, styles and screens there; your sandbox refuses every write, in the worktree \
+         too. A prototype is not written into the project: wtm keeps it, under its own data \
+         directory.",
+        facts.worktree_path
+    );
+    if !spec.skills.is_empty() {
+        let names: Vec<String> = spec
+            .skills
+            .iter()
+            .map(|skill| format!("`{}`", invocable(spec.provider, skill)))
+            .collect();
+        let _ = writeln!(out, "\nSkills for this role: {}.", names.join(", "));
+    }
+    if let Some(knowledge) = facts.knowledge.filter(|text| !text.trim().is_empty()) {
+        let _ = writeln!(out, "\n{}", knowledge.trim_end());
+        let _ = writeln!(
+            out,
+            "\nThe project's instructions say how its screens are built: design with the \
+             components and tokens they name."
+        );
+    }
+    if let Some(latest) = facts.latest {
+        let _ = writeln!(
+            out,
+            "\nYour newest revision is {}, prototype `{}`. Its reuse notes said:\n{}",
+            latest.revision,
+            latest.prototype,
+            latest.reuse.trim()
+        );
+    }
+    let _ = write!(
+        out,
+        "\nHow to design:\n\
+         1. Call `prototype_prepare` with a `brief` saying what the screens are and what they do, \
+            from the plan{}. It answers with the Open Design charter, the project's design tokens \
+            and component sources, read from the worktree now, and the `id` and `revision` to \
+            publish under. Use those sources as the visual authority.\n\
+         2. Call `prototype_publish` with that `id` and `revision`, one complete self-contained \
+            HTML document (inline styles and scripts, data images, no network), and `reuse` notes \
+            that name the project's real components and tokens it stands for — \"Header: \
+            PageHeader from src/components/PageHeader.svelte\" — and say plainly what is only an \
+            approximation. Give interactive regions stable `data-od-id` attributes.\n\
+         3. End your turn. The person reviews the revision in the issue's Design tab, comments on \
+            it, and approves it or asks for changes, which arrive as your next message in this \
+            same conversation, possibly hours later. Publishing is not approval.\n\
+         \nPublish one revision per turn. Where something is undecided, choose, and say what you \
+         chose and why in the reuse notes: `flow_ask` files a question but does not stop the \
+         design. Do not try to change files, commit or push: this session cannot, and nothing is \
+         implemented until a design is approved.",
+        if facts.latest.is_some() {
+            ", passing the `id` you published under before, so each revision is one design's \
+             history"
+        } else {
+            ""
+        }
+    );
+    out
+}
+
+/// The first turn a designer is sent.
+#[must_use]
+pub fn designer_opening_turn(key: &str) -> String {
+    format!(
+        "Start designing {key}: call `flow_context` for your brief and the approved plan, then \
+         `prototype_prepare` for the project's design evidence, and publish the first revision \
+         with `prototype_publish`. Then end your turn."
+    )
+}
+
+/// The turn that asks a designer for changes to a revision: your note and the revision's comments.
+#[must_use]
+pub fn designer_changes_turn(revision: u32, feedback: &str, resumed: bool) -> String {
+    let start = if resumed {
+        ""
+    } else {
+        "This is a new session: the conversation could not be resumed. Call `flow_context` \
+         first; it holds your brief, the plan and your newest revision. "
+    };
+    format!(
+        "{start}The person asked for changes to design revision {revision}:\n\n{}\n\nPrepare \
+         the next revision with `prototype_prepare`, passing the same `id`, change what they \
+         asked for and keep what they did not, and publish it with `prototype_publish`. Then end \
+         your turn.",
+        feedback.trim()
+    )
+}
+
+/// The turn that carries a designer on after an interruption, a failure or a limit.
+#[must_use]
+pub fn designer_resume_turn(key: &str, feedback: Option<(u32, &str)>, resumed: bool) -> String {
+    match (feedback, resumed) {
+        (Some((revision, feedback)), _) => designer_changes_turn(revision, feedback, resumed),
+        (None, true) => format!(
+            "Your design of {key} was cut off. Carry on from where you were, and publish the \
+             revision with `prototype_publish`."
+        ),
+        (None, false) => designer_opening_turn(key),
+    }
+}
+
+/// The approved design, as the implementer and a role that takes a design are given it: which
+/// revision, where its artifact is, and its reuse notes.
+///
+/// The notes are fenced, because they are a model's words about a repository, not the app's.
+#[must_use]
+pub fn design_section(approved: &DesignRevision, artifact: &str) -> String {
+    format!(
+        "The approved design: revision {} of the issue's design, drawn for plan revision {} \
+         (fingerprint {}). Its HTML is `{artifact}/prototype.html`, with its reuse notes beside it \
+         in `REUSE.md`; read it, and no other revision. The HTML is a visual approximation: build \
+         it with the project's own components, which the reuse notes name.\n<wtm_design_reuse>\n\
+         {}\n</wtm_design_reuse>",
+        approved.revision,
+        approved.plan_revision,
+        approved.fingerprint,
+        approved
+            .reuse
+            .trim()
+            .replace("</wtm_design_reuse>", "&lt;/wtm_design_reuse&gt;")
+    )
+}
+
 /// The first turn a role session is sent.
 #[must_use]
 pub fn opening_turn(role: &str) -> String {
@@ -857,6 +1063,7 @@ mod tests {
             revision: None,
             answers: &[],
             runtime: None,
+            design: None,
         });
         assert!(text.contains("`wtm:team-conventions`"), "{text}");
         assert!(text.contains("Skill tool"));
@@ -918,6 +1125,7 @@ mod tests {
             revision: None,
             answers,
             runtime: None,
+            design: None,
         };
 
         let text = brief(&facts(std::slice::from_ref(&answered)));

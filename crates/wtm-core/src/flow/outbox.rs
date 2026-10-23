@@ -628,6 +628,7 @@ impl Approved {
             | ApprovalSubject::Command(_)
             | ApprovalSubject::Move(_)
             | ApprovalSubject::Plan(_)
+            | ApprovalSubject::Design(_)
             | ApprovalSubject::Comment(_)
             | ApprovalSubject::Services(_) => return None,
         };
@@ -653,6 +654,7 @@ impl Approved {
             | ApprovalSubject::Command(_)
             | ApprovalSubject::Move(_)
             | ApprovalSubject::Plan(_)
+            | ApprovalSubject::Design(_)
             | ApprovalSubject::Comment(_)
             | ApprovalSubject::Services(_) => None,
         }
@@ -668,6 +670,7 @@ impl Approved {
             | ApprovalSubject::Route(_)
             | ApprovalSubject::Move(_)
             | ApprovalSubject::Plan(_)
+            | ApprovalSubject::Design(_)
             | ApprovalSubject::Comment(_)
             | ApprovalSubject::Services(_) => None,
         }
@@ -687,6 +690,7 @@ impl Approved {
             | ApprovalSubject::Route(_)
             | ApprovalSubject::Command(_)
             | ApprovalSubject::Plan(_)
+            | ApprovalSubject::Design(_)
             | ApprovalSubject::Comment(_)
             | ApprovalSubject::Services(_) => None,
         }
