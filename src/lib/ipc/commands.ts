@@ -26,6 +26,9 @@ import type {
   IssueText,
   PlanDecision,
   PlanView,
+  DesignComment,
+  DesignDecision,
+  DesignView,
   QuestionThread,
   CommandRunView,
   EnvironmentView,
@@ -280,6 +283,30 @@ export const commands = {
   /** Try a comment that did not post again, reading the issue first. */
   retryQuestionComment: (approval: number) =>
     invoke<void>('retry_question_comment', { approval }),
+
+  // ── designing: the issue's Design tab, its revisions, and the gate before implementing ──
+  /** An issue's design: its revisions, comments, decisions and standing. `null` before a run. */
+  issueDesign: (project: string, key: string) =>
+    invoke<DesignView | null>('issue_design', { project, key }),
+  /** Request a design for a planned issue whose plan you approved. */
+  requestDesign: (flow: number, request: string) =>
+    invoke<void>('request_design', { flow, request }),
+  /** Run the designer of a run waiting at Designing, or carry it on in its conversation. */
+  startDesigner: (flow: number) => invoke<void>('start_designer', { flow }),
+  /** Comment on one revision. */
+  commentOnDesign: (flow: number, revision: number, text: string) =>
+    invoke<DesignComment>('comment_on_design', { flow, revision, text }),
+  /** Approve the newest revision, as you saw it. */
+  approveDesign: (flow: number, revision: number, fingerprint: string) =>
+    invoke<DesignDecision>('approve_design', { flow, revision, fingerprint }),
+  /** Ask for changes: your note and the revision's comments go to the designer. */
+  requestDesignChanges: (flow: number, revision: number, note: string) =>
+    invoke<DesignDecision>('request_design_changes', { flow, revision, note }),
+  /** Open one revision, any revision, in the sandboxed review pane in the issue's worktree. */
+  previewDesignRevision: (flow: number, revision: number) =>
+    invoke<BrowserView>('preview_design_revision', { flow, revision }),
+  /** Move the run to Implementing, through the gate that wants the approved plan and design. */
+  startImplementing: (flow: number) => invoke<void>('start_implementing', { flow }),
 
   // ── reviews: pull requests in the Work view ──
   /** The project's Reviews queue, from the local store. Reads no forge. */

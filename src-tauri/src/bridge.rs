@@ -271,6 +271,10 @@ struct Offer {
     /// A runtime role's bridge: its run tools, and the browser tools that drive the one pane wtm
     /// opened for it. Read only together with `flow`.
     runtime_browser: bool,
+    /// An issue's designer's bridge: its run tools, and the two prototype tools that publish its
+    /// run's design. Read only together with `flow`, and a different flag from `design`, which is a
+    /// worktree chat's and means nothing to a run.
+    run_design: bool,
 }
 
 impl Offer {
@@ -287,6 +291,7 @@ impl Offer {
                 .as_deref()
                 .and_then(crate::flow_tools::authority_from),
             runtime_browser: on(crate::flow_tools::BROWSER_ENV),
+            run_design: on(crate::flow_tools::DESIGN_ENV),
         }
     }
 }
@@ -296,13 +301,17 @@ impl Offer {
 /// A run's bridge lists its run tools and nothing else, whatever else its environment turned on:
 /// a run's authority profile was built without delegation, browsers and prototypes, and a tool
 /// listed is a tool a model will try. It comes first so that no flag a later change adds to every
-/// session's bridge can put something back on a run's. The one addition is a runtime role's, whose
-/// own flag adds the tools that drive its pane — and only those.
+/// session's bridge can put something back on a run's. The two additions are a runtime role's,
+/// whose own flag adds the tools that drive its pane, and a designer's, whose own flag adds the
+/// prototype tools that publish its run's design — each only those.
 fn listing(offer: Offer, agents: &[(String, String)]) -> Value {
     if let Some(authority) = offer.flow {
         let mut tools = crate::flow_tools::definitions(authority);
         if offer.runtime_browser {
             tools.extend(runtime_browser_definitions());
+        }
+        if offer.run_design {
+            tools.extend(crate::prototype_tools::definitions());
         }
         return json!({ "tools": tools });
     }
@@ -321,7 +330,7 @@ fn listing(offer: Offer, agents: &[(String, String)]) -> Value {
 /// Route a `tools/call` the way [`listing`] listed it.
 fn dispatch(offer: Offer, params: &Value) -> Value {
     if let Some(authority) = offer.flow {
-        return call_flow(params, authority, offer.runtime_browser);
+        return call_flow(params, authority, offer.runtime_browser, offer.run_design);
     }
     if offer.home {
         return call_home(params);
@@ -343,10 +352,24 @@ fn runtime_browser_definitions() -> Vec<Value> {
 
 /// Forward one run tool call. A name this role's bridge did not list is refused here, before the
 /// socket — which refuses it again, from the token.
-fn call_flow(params: &Value, authority: wtm_agent::authority::Authority, browser: bool) -> Value {
+fn call_flow(
+    params: &Value,
+    authority: wtm_agent::authority::Authority,
+    browser: bool,
+    design: bool,
+) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     if browser && crate::browser_tools::RUNTIME_TOOLS.contains(&name) {
         return call_browser(
+            name,
+            params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        );
+    }
+    if design && crate::prototype_tools::NAMES.contains(&name) {
+        return call_design(
             name,
             params
                 .get("arguments")
@@ -1128,6 +1151,7 @@ mod tests {
             home: false,
             flow: None,
             runtime_browser: false,
+            run_design: false,
         }
     }
 
@@ -1170,6 +1194,78 @@ mod tests {
         "flow_run_check",
         "flow_propose_rule",
     ];
+
+    #[test]
+    fn a_designers_bridge_adds_the_two_prototype_tools_and_no_others() {
+        let names = listed_names(Offer {
+            flow: Some(wtm_agent::authority::Authority::Reviewer),
+            run_design: true,
+            ..everything()
+        });
+        assert_eq!(names[..7], RUN_TOOLS);
+        assert_eq!(names[7..], ["prototype_prepare", "prototype_publish"]);
+        for absent in [
+            TOOL,
+            SPAWN_TOOL,
+            CLOSE_TOOL,
+            LIST_TOOL,
+            "browser_open",
+            "browser_snapshot",
+        ] {
+            assert!(!names.iter().any(|n| n == absent), "lists {absent}");
+        }
+        // The flag means nothing on a bridge that is not a run's: a worktree chat's prototype tools
+        // are its own flag, and that one means nothing on a run's.
+        let worktree = listed_names(Offer {
+            design: false,
+            run_design: true,
+            ..everything()
+        });
+        assert!(
+            !worktree.iter().any(|n| n.starts_with("prototype_")),
+            "{worktree:?}"
+        );
+    }
+
+    #[test]
+    fn no_other_run_role_lists_or_reaches_a_prototype_tool() {
+        for authority in [
+            wtm_agent::authority::Authority::Reviewer,
+            wtm_agent::authority::Authority::Writer,
+        ] {
+            // A planner, a review role, a fixer, a runtime role: every run bridge but a designer's,
+            // even with a worktree chat's own prototype flag on.
+            for runtime_browser in [false, true] {
+                let offer = Offer {
+                    flow: Some(authority),
+                    runtime_browser,
+                    ..everything()
+                };
+                assert!(
+                    !listed_names(offer)
+                        .iter()
+                        .any(|n| n.starts_with(crate::prototype_tools::PREFIX)),
+                    "{authority:?}"
+                );
+                let reply = dispatch(
+                    Offer {
+                        flow: Some(authority),
+                        runtime_browser,
+                        design: true,
+                        ..Offer::default()
+                    },
+                    &json!({ "name": "prototype_publish", "arguments": {} }),
+                );
+                assert!(
+                    reply["content"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("no tool named"),
+                    "{authority:?}: {reply}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn a_reviewers_run_bridge_lists_the_run_tools_and_nothing_else_whatever_else_is_on() {

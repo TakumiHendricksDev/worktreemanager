@@ -26,7 +26,7 @@
 
 import type { ReviewFocus } from '../inbox';
 
-export type WorkTab = 'overview' | 'plan' | 'reviews' | 'environment';
+export type WorkTab = 'overview' | 'plan' | 'design' | 'reviews' | 'environment';
 
 /** The queue as a list beside the picked item's workspace, or the team's board in its place. */
 export type WorkLayout = 'list' | 'board';

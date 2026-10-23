@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::UnixMs;
 use super::comment::CommentRequest;
+use super::design::DesignApproval;
 use super::env::CommandRequest;
 use super::moves::MoveRequest;
 use super::planning::{PlanApproval, plan_binding};
@@ -82,6 +83,9 @@ pub enum Pinned {
     /// The tracker's revision of the issue, so an edited issue is noticed.
     IssueRevision,
     DesignRevision,
+    /// The hash of the fingerprints of the project files a design was drawn from, so a component
+    /// edited after you approved the design is noticed (`flow::design`).
+    Sources,
     /// The commit a branch or pull request head pointed at.
     Head,
     /// The commit a review or comment is attached to.
@@ -221,6 +225,8 @@ pub enum ApprovalSubject {
     Plan(Box<PlanApproval>),
     /// A question and its answer, posted to the issue as a comment, in exactly the words you sent.
     Comment(Box<CommentRequest>),
+    /// A design revision to implement against, as you saw it: its artifact and its sources.
+    Design(Box<DesignApproval>),
     /// Starting a review's environment: the services its blocked checks and waiting runtime roles
     /// need, then running those. Its own subject under the `command` intent, because what it allows
     /// is the same kind of thing — processes run once on this machine, pinned by the hash of exactly
@@ -411,6 +417,18 @@ impl NewApproval {
             intent: ApprovalIntent::Plan,
             binding: plan_binding(approval.revision, issue_revision),
             subject: ApprovalSubject::Plan(Box::new(approval.clone())),
+        }
+    }
+
+    /// Approval to implement against design revision `approval.revision`: the revision, its
+    /// artifact's fingerprint and its sources' (`flow::design`), any of which moving makes it stale.
+    #[must_use]
+    pub fn design(flow: FlowId, approval: &DesignApproval) -> Self {
+        Self {
+            flow,
+            intent: ApprovalIntent::Design,
+            binding: approval.binding(),
+            subject: ApprovalSubject::Design(Box::new(approval.clone())),
         }
     }
 

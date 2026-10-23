@@ -46,6 +46,8 @@
 //! a destructive command on a shared resource waits for ([`env`]). Then planning an issue: what the
 //! planner read, the plans it handed in, your decisions about them and when an approval goes stale
 //! ([`planning`]), and a question's answer sent to the tracker only when you send it ([`comment`]).
+//! Then designing it: the revisions a designer publishes, your comments and decisions, when a design
+//! approval goes stale, and the gate in front of Implementing ([`design`]).
 //! The engine, the outbox's executor
 //! and the environment's supervisor are in the app (`src-tauri/src/flow/`), because one opens
 //! sessions, one reaches the forge and the tracker, and one starts processes.
@@ -73,6 +75,7 @@ pub mod approval;
 pub mod capacity;
 pub mod comment;
 pub mod consolidate;
+pub mod design;
 pub mod env;
 pub mod event;
 pub mod fix;
@@ -118,6 +121,12 @@ pub use comment::{CommentError, CommentPayload, CommentRequest};
 pub use consolidate::{
     Evidence, EvidenceKey, FindingRecord, Merged, NewFinding, Reconciled, Source, consolidate,
     finding_is_stale, reconcile, role_is_affected,
+};
+pub use design::{
+    Blocked, Design, DesignApproval, DesignComment, DesignCommentId, DesignDecision,
+    DesignDecisionId, DesignNow, DesignOrigin, DesignRevision, DesignRevisionId, DesignStanding,
+    DesignVerdict, GateFacts, NewDesign, NewDesignRevision, Replaced, SourcePin, design_binding,
+    implementing_gate, sources_pin,
 };
 pub use env::{
     CommandRequest, CommandRun, CommandRunChange, CommandRunId, CommandRunRefused, CommandRunState,

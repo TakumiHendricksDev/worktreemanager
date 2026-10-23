@@ -2654,6 +2654,126 @@ export interface QuestionThread {
   issue: string | null;
 }
 
+/** One project file a design revision's evidence came from, with its content's fingerprint. */
+export interface SourcePin {
+  path: string;
+  fingerprint: string;
+}
+
+/** One revision a designer published, numbered within its run. `wtm_core::flow::DesignRevision`. */
+export interface DesignRevision {
+  id: number;
+  flow: number;
+  revision: number;
+  prototype: string;
+  /** The artifact's id within its prototype. */
+  review: string;
+  /** Of the artifact's HTML and reuse notes together. */
+  fingerprint: string;
+  brief: string;
+  /** What it answers: your note and the comments on the one before, as sent. */
+  feedback: string | null;
+  reuse: string;
+  sources: SourcePin[];
+  planRevision: number;
+  step: number | null;
+  invocation: number | null;
+  submittedAt: number;
+}
+
+/** A revision as the Design tab shows it: whether it still reads as published, and where it is. */
+export interface DesignRevisionView {
+  revision: DesignRevision;
+  readable: boolean;
+  /** Its sources whose content in the worktree changed since it was drawn. */
+  changedSources: string[];
+  artifact: string | null;
+}
+
+export interface DesignComment {
+  id: number;
+  flow: number;
+  revision: number;
+  text: string;
+  at: number;
+}
+
+export type DesignVerdict =
+  { kind: 'approved'; approval: number } | { kind: 'changes_requested'; note: string };
+
+export interface DesignDecision {
+  id: number;
+  flow: number;
+  revision: number;
+  verdict: DesignVerdict;
+  at: number;
+}
+
+/** Where a run's design stands. `wtm_core::flow::DesignStanding`. */
+export type DesignStanding =
+  | { kind: 'none' }
+  | {
+      kind: 'waiting';
+      revision: number;
+      /** Your approval of an earlier revision, which this one no longer lets stand. */
+      replaced: { approval: number; revision: number } | null;
+    }
+  | { kind: 'revising'; revision: number; note: string }
+  | { kind: 'approved'; approval: number; revision: number }
+  | { kind: 'stale'; approval: number; revision: number; changes: PinChange[] };
+
+/** Why a run may not start implementing yet. `wtm_core::flow::Blocked`. */
+export type ImplementBlocked =
+  | { kind: 'no_plan' }
+  | { kind: 'plan_not_approved'; revision: number }
+  | { kind: 'plan_revising'; revision: number }
+  | { kind: 'plan_stale'; revision: number }
+  | { kind: 'no_design' }
+  | { kind: 'design_not_approved'; revision: number }
+  | { kind: 'design_revising'; revision: number }
+  | { kind: 'design_stale'; revision: number };
+
+export interface Design {
+  flow: number;
+  project: string;
+  worktree: string;
+  key: string;
+  role: string;
+  /** The approved plan asked for it, or you did. */
+  origin: 'plan' | 'you';
+  request: string | null;
+  prototype: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Everything the issue's Design tab shows: `issue_design`. */
+export interface DesignView {
+  flow: { id: number; state: FlowState; startedAt: number; updatedAt: number };
+  key: string | null;
+  /** The designer role the project names now; `null` when it names none. */
+  designer: string | null;
+  design: Design | null;
+  /** Oldest first: every revision, however many came after it. */
+  revisions: DesignRevisionView[];
+  comments: DesignComment[];
+  decisions: DesignDecision[];
+  standing: DesignStanding;
+  planRevision: number | null;
+  designNeeded: boolean;
+  skipDesign: boolean;
+  /** Implementing waits for an approved design. */
+  required: boolean;
+  gate: { ready: boolean; blocked: ImplementBlocked | null; reason: string | null };
+  sessions: PlanSession[];
+  step: ReviewStep | null;
+  running: boolean;
+  canRequest: boolean;
+  canStart: boolean;
+  canDecide: boolean;
+  canImplement: boolean;
+}
+
 /** Everything the issue's Plan tab shows: `issue_plan`. */
 export interface PlanView {
   flow: { id: number; state: FlowState; startedAt: number; updatedAt: number };

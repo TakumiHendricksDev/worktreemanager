@@ -269,6 +269,13 @@ pub fn prepare_with(
                     .is_some()
                     .then(|| (crate::flow_tools::BROWSER_ENV, "on".to_owned())),
             )
+            // A designer's bridge also lists the prototype tools; its token is what holds them to
+            // its run's design.
+            .chain(
+                spec.role
+                    .design
+                    .then(|| (crate::flow_tools::DESIGN_ENV, "on".to_owned())),
+            )
             .map(|(key, value)| (key.to_owned(), value))
             .collect(),
         },
@@ -279,6 +286,13 @@ pub fn prepare_with(
                     .browser
                     .is_some()
                     .then_some(crate::browser_tools::RUNTIME_TOOLS)
+                    .into_iter()
+                    .flatten(),
+            )
+            .chain(
+                spec.role
+                    .design
+                    .then_some(crate::prototype_tools::NAMES)
                     .into_iter()
                     .flatten(),
             )

@@ -12,7 +12,10 @@
    * - **Its plan**: a plan ready for your decision, or an approval the issue's edit made stale, go
    *   to the Plan tab, where the plan is read whole before it is decided on; a planner that was cut
    *   off or stopped is resumed in its own conversation. A plan-ready item is an approval about the
-   *   run, as a pause offer is, and is told apart by the run being held for it.
+   *   run, as a pause offer is, and is told apart by the run being held for it at Planned.
+   * - **Its design**: a revision ready for your decision, or a design approval its sources made
+   *   stale, go to the Design tab, where every revision can be previewed and commented on before
+   *   it is decided on; a designer that was cut off or stopped is resumed in its own conversation.
    *
    * Each reads the issue's start the way its workspace does (`startWork`), so acting here updates
    * both, and Show the issue goes to the workspace's Run section.
@@ -22,6 +25,7 @@
   import { KIND_TONE, KIND_WORDS, filedAt } from '../inbox';
   import type { InboxItem } from '../ipc/types';
   import { inbox } from '../state/inbox.svelte';
+  import { design } from '../state/design.svelte';
   import { plan } from '../state/plan.svelte';
   import { startWork } from '../state/start-work.svelte';
   import { view as mainView } from '../state/view.svelte';
@@ -41,17 +45,12 @@
       untrack(() => {
         void startWork.load(project, key);
         void plan.load(project, key);
+        void design.load(project, key);
       });
   });
 
   const view = $derived(startWork.views[item.issue] ?? null);
   const busy = $derived(startWork.busy[item.issue] ?? false);
-  const error = $derived(
-    startWork.errors[item.issue] ??
-      plan.errors[item.issue] ??
-      inbox.errors[item.id] ??
-      null,
-  );
   const job = $derived(view?.job ?? null);
   const flow = $derived(view?.flow ?? null);
   const move = $derived(
@@ -62,11 +61,45 @@
       : null,
   );
   const planned = $derived(plan.views[item.issue] ?? null);
-  /** The plan waits for your decision: the run is held for it. */
+  /** The plan waits for your decision: the run is held for it at Planned. */
   const planReady = $derived(
     item.kind === 'approval' &&
       item.target.kind === 'flow' &&
-      planned?.flow.state.hold?.kind === 'awaiting_approval',
+      planned?.flow.state.phase === 'planned' &&
+      planned.flow.state.hold?.kind === 'awaiting_approval',
+  );
+  const designed = $derived(design.views[item.issue] ?? null);
+  /** A design revision waits for your decision: the run is held for it at Design ready. */
+  const designReady = $derived(
+    item.kind === 'approval' &&
+      item.target.kind === 'flow' &&
+      designed?.flow.state.phase === 'design_ready' &&
+      designed.flow.state.hold?.kind === 'awaiting_approval',
+  );
+  /** The approved design no longer covers what would be built. */
+  const designStale = $derived(
+    item.target.kind === 'approval' &&
+      designed?.standing.kind === 'stale' &&
+      designed.standing.approval === item.target.approval,
+  );
+  /** The designer was cut off or stopped part-way through, and nothing else holds it. */
+  const designerStopped = $derived(
+    item.target.kind !== 'approval' &&
+      (item.kind === 'failure' ||
+        item.kind === 'interrupted' ||
+        item.kind === 'capacity') &&
+      designed !== null &&
+      designed.canStart &&
+      designed.sessions.length > 0,
+  );
+  // The Design tab's refusals are the tab's, Start implementing's among them; this card shows only
+  // what its own Resume designer was refused.
+  const error = $derived(
+    startWork.errors[item.issue] ??
+      plan.errors[item.issue] ??
+      (designerStopped ? design.errors[item.issue] : undefined) ??
+      inbox.errors[item.id] ??
+      null,
   );
   /** The issue changed after its plan was approved. */
   const planStale = $derived(
@@ -87,7 +120,7 @@
       planned.flow.state.hold?.kind !== 'awaiting_answer',
   );
   const pauseOffer = $derived(
-    item.kind === 'approval' && item.target.kind === 'flow' && !planReady,
+    item.kind === 'approval' && item.target.kind === 'flow' && !planReady && !designReady,
   );
   const setupRemedy = $derived(
     item.target.kind === 'flow' &&
@@ -98,7 +131,7 @@
       (job.state === 'setup_failed' || job.state === 'interrupted'),
   );
 
-  function show(tab: 'overview' | 'plan' = 'overview'): void {
+  function show(tab: 'overview' | 'plan' | 'design' = 'overview'): void {
     work.pickIssue(item.issue, tab);
     mainView.show('work');
   }
@@ -122,7 +155,19 @@
   <div class="c-inbox-card__actions">
     {#if item.project && flow}
       {@const project = item.project}
-      {#if planReady || planStale}
+      {#if designReady || designStale}
+        <Button variant="accent" size="sm" onclick={() => show('design')}
+          >{designStale ? 'Show what changed' : 'Review the design'}</Button
+        >
+      {:else if designerStopped && designed}
+        <Button
+          variant="accent"
+          size="sm"
+          disabled={design.busy[item.issue] ?? false}
+          onclick={() => void design.start(project, item.issue, designed.flow.id)}
+          >Resume designer</Button
+        >
+      {:else if planReady || planStale}
         <Button variant="accent" size="sm" onclick={() => show('plan')}
           >{planStale ? 'Show what changed' : 'Read the plan'}</Button
         >

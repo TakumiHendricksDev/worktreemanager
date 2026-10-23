@@ -55,6 +55,11 @@ pub const ENV: &str = "WTM_FLOW_TOOLS";
 /// that drive the one pane wtm opened for the role. The token is what limits them to that pane.
 pub const BROWSER_ENV: &str = "WTM_FLOW_BROWSER";
 
+/// Set to `on` on an issue's designer's bridge, beside [`ENV`]: it then also lists
+/// `prototype_prepare` and `prototype_publish`, which act on its run's design and nothing else. The
+/// token is what holds them to that run; see `crate::prototype_tools`.
+pub const DESIGN_ENV: &str = "WTM_FLOW_DESIGN";
+
 /// What every run tool is called, and what a bridge started without [`ENV`] never forwards.
 pub const PREFIX: &str = "flow_";
 

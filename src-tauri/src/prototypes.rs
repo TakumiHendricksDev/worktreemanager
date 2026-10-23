@@ -1,5 +1,18 @@
 //! Conversation-owned prototypes. The tools write only under WTM's data root; the existing
 //! agent supplies HTML in its tool call, so no second agent, runtime or authentication is needed.
+//!
+//! An issue's designer publishes the same way, into a prototype its run owns rather than a chat
+//! (`flow`): the Work view's Design tab is where it is reviewed, and the run's own record numbers
+//! its revisions (`wtm_core::flow::design`).
+//!
+//! # Every revision stays addressable
+//!
+//! Each publication is an immutable directory under `reviews/`, and the record keeps every one it
+//! published in `reviews`, with its fingerprint and the brief it was made from. So an earlier
+//! revision can be previewed, compared and talked about after a newer one exists, and its bytes are
+//! still checked against the fingerprint it was published with. What a newer revision does take
+//! away is approval: "Implement this design" in a chat, like a run's design approval, is for the
+//! newest revision only.
 
 use crate::prototype_context::{DesignSource, failure, fingerprint};
 use crate::view::ErrorView;
@@ -33,6 +46,13 @@ pub struct Prototype {
     pub implemented_review: Option<String>,
     #[serde(default)]
     pub dismissed: bool,
+    /// Every revision published, oldest first; `review` is the newest while it stands. Absent from
+    /// a record written before history was kept, whose one review is then its whole history.
+    #[serde(default)]
+    pub reviews: Vec<DesignReview>,
+    /// The issue run whose design this is, for a designer's prototype; `None` for a chat's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +61,34 @@ pub struct DesignReview {
     pub id: String,
     pub fingerprint: String,
     pub opened: bool,
+    /// What the agent was asked to draw for this revision, as `prototype_prepare` was given it.
+    #[serde(default)]
+    pub brief: String,
+}
+
+impl Prototype {
+    /// Keep the newest review in the history before it is replaced or withdrawn: a record from
+    /// before history was kept has it only there.
+    fn keep_latest(&mut self) {
+        if let Some(latest) = &self.review
+            && !self.reviews.iter().any(|r| r.id == latest.id)
+        {
+            self.reviews.push(latest.clone());
+        }
+    }
+
+    /// Every revision published, oldest first, including a record's only review from before
+    /// history was kept.
+    #[must_use]
+    pub fn history(&self) -> Vec<&DesignReview> {
+        let mut all: Vec<&DesignReview> = self.reviews.iter().collect();
+        if let Some(latest) = &self.review
+            && !all.iter().any(|r| r.id == latest.id)
+        {
+            all.push(latest);
+        }
+        all
+    }
 }
 
 pub fn private_dir(path: &Path) -> Result<(), ErrorView> {
@@ -133,6 +181,7 @@ pub fn dismiss(prototype: &mut Prototype) -> Result<(), ErrorView> {
 }
 
 pub fn begin(prototype: &mut Prototype, feedback: &str) -> Result<(), ErrorView> {
+    prototype.keep_latest();
     prototype.revision = uuid::Uuid::new_v4().to_string();
     "generating".clone_into(&mut prototype.phase);
     prototype.review = None;
@@ -175,21 +224,27 @@ pub fn publish(
         let _ = std::fs::remove_dir_all(&pending);
     }
     result?;
-    prototype.review = Some(DesignReview {
+    let review = DesignReview {
         id: revision.to_owned(),
         fingerprint: fingerprint(&format!("{html}\0{reuse}")),
         opened: false,
-    });
+        brief: prototype.feedback.last().cloned().unwrap_or_default(),
+    };
+    prototype.keep_latest();
+    prototype.reviews.push(review.clone());
+    prototype.review = Some(review);
     "ready for review".clone_into(&mut prototype.phase);
     save(prototype)
 }
 
+/// The HTML and reuse notes of any revision this prototype published, checked against the
+/// fingerprint it was published with.
 pub fn artifact(prototype: &Prototype, review_id: &str) -> Result<(String, String), ErrorView> {
     let review = prototype
-        .review
-        .as_ref()
-        .filter(|r| r.id == review_id)
-        .ok_or_else(|| failure("The design has a newer revision. Review that revision first."))?;
+        .history()
+        .into_iter()
+        .find(|r| r.id == review_id)
+        .ok_or_else(|| failure("This prototype has no such revision"))?;
     let dir = Path::new(&prototype.directory)
         .join("reviews")
         .join(&review.id);
@@ -220,6 +275,13 @@ pub fn artifact(prototype: &Prototype, review_id: &str) -> Result<(String, Strin
 }
 
 pub fn handoff(prototype: &Prototype, review_id: &str) -> Result<String, ErrorView> {
+    // Any revision can be read; only the newest can be implemented. A newer one replaces the
+    // approval an older one would have had (ARCHITECTURE §6g).
+    if prototype.review.as_ref().is_none_or(|r| r.id != review_id) {
+        return Err(failure(
+            "The design has a newer revision. Review that revision first.",
+        ));
+    }
     let (_, reuse) = artifact(prototype, review_id)?;
     if !prototype.review.as_ref().is_some_and(|r| r.opened) {
         return Err(failure("Open the prototype before implementing it"));
@@ -255,6 +317,7 @@ pub fn handoff(prototype: &Prototype, review_id: &str) -> Result<String, ErrorVi
 }
 
 pub fn cancel(prototype: &mut Prototype) -> Result<(), ErrorView> {
+    prototype.keep_latest();
     prototype.revision = uuid::Uuid::new_v4().to_string();
     "cancelled".clone_into(&mut prototype.phase);
     prototype.review = None;

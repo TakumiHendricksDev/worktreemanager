@@ -1424,6 +1424,7 @@ fn a_writer_has_no_tool_that_pushes_and_asking_for_one_sends_nothing() {
         role: "fixer".to_owned(),
         authority: wtm_agent::authority::Authority::Writer,
         browser: None,
+        design: false,
     };
     let names: Vec<String> = wtm_app_lib::flow_tools::definitions(fixer.authority)
         .iter()

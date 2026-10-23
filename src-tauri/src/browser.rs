@@ -744,7 +744,7 @@ pub fn open_prototype(
     project: &str,
     worktree: &str,
     document: &str,
-    session: &str,
+    session: Option<&str>,
     identity: &str,
 ) -> Result<BrowserView, ErrorView> {
     for view in app.browsers.list(Some(worktree)) {
@@ -754,7 +754,8 @@ pub fn open_prototype(
             }
             return app.browsers.view_of(&view.id).ok_or_else(gone);
         }
-        if view.opened_by.as_deref() == Some(session)
+        // One review pane per prototype per opener: a chat's, or the window's for a run's design.
+        if view.opened_by.as_deref() == session
             && view
                 .prototype_id
                 .as_ref()
@@ -769,7 +770,7 @@ pub fn open_prototype(
         project,
         worktree,
         None,
-        Some(session),
+        session,
         Some((document, identity)),
         None,
     )

@@ -70,6 +70,7 @@ fn role(name: &str, authority: Authority) -> FlowRole {
         role: name.to_owned(),
         authority,
         browser: None,
+        design: false,
     }
 }
 
@@ -150,6 +151,68 @@ fn a_claude_reviewer_is_prepared_with_its_token_in_a_private_file_and_none_on_th
     assert_eq!(prepared.request.mode, None);
     // The worktree's git directories are the profile's to deny: common, its own, and its pointer.
     assert_eq!(prepared.places.git.len(), 3, "{:?}", prepared.places.git);
+}
+
+#[test]
+fn only_a_designers_session_is_prepared_with_the_prototype_tools() {
+    let h = harness();
+    let allowed = |prepared: &Prepared| -> Vec<String> {
+        let RunAuthority::Claude(run) = &prepared.profile.run else {
+            panic!("a Claude role gets a Claude profile");
+        };
+        run.settings["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let env = |prepared: &Prepared| -> serde_json::Value {
+        let file = prepared.places.session_dir.join("mcp.json");
+        let document: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        document["mcpServers"]["wtm"]["env"].clone()
+    };
+
+    let designer = h.prepare(
+        "claude",
+        FlowRole {
+            design: true,
+            ..role("designer", Authority::Reviewer)
+        },
+    );
+    assert_eq!(env(&designer)["WTM_FLOW_DESIGN"], "on");
+    let tools = allowed(&designer);
+    for tool in ["mcp__wtm__prototype_prepare", "mcp__wtm__prototype_publish"] {
+        assert!(tools.iter().any(|t| t == tool), "{tools:?}");
+    }
+    assert!(tools.iter().any(|t| t == "mcp__wtm__flow_context"));
+    // The token is a designer's, which is what the socket goes by.
+    assert!(
+        h.app
+            .handoff
+            .resolve(&designer.token)
+            .unwrap()
+            .scope
+            .flow()
+            .unwrap()
+            .design
+    );
+
+    for other in [
+        role("conventions", Authority::Reviewer),
+        role("planner", Authority::Reviewer),
+        role("fixer", Authority::Writer),
+    ] {
+        let prepared = h.prepare("claude", other.clone());
+        assert!(env(&prepared).get("WTM_FLOW_DESIGN").is_none(), "{other:?}");
+        assert!(
+            allowed(&prepared)
+                .iter()
+                .all(|t| !t.starts_with("mcp__wtm__prototype_")),
+            "{other:?}"
+        );
+    }
 }
 
 #[test]

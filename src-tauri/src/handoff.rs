@@ -1025,9 +1025,14 @@ pub(crate) fn scope_refusal(scope: &SessionScope, action: Action) -> Option<Resp
     // without — another agent, a browser, a pane the user opened, a comment thread — so each is
     // refused here, before any handler resolves the token for itself.
     if let Some(role) = scope.flow() {
-        // The one exception: a runtime role holds a pane wtm opened for it, and drives that.
-        // `browser_tools` holds such a token to that pane and to the tools that drive it.
+        // The two exceptions. A runtime role holds a pane wtm opened for it, and drives that:
+        // `browser_tools` holds such a token to that pane and to the tools that drive it. An
+        // issue's designer publishes its run's design: `prototype_tools` holds such a token to that
+        // run's prototype, and to prepare and publish.
         if action == Action::Browser && role.browser.is_some() {
+            return None;
+        }
+        if action == Action::Design && role.design {
             return None;
         }
         return (action != Action::Flow).then(|| {
@@ -1634,6 +1639,7 @@ mod tests {
                 role: "conventions".to_owned(),
                 authority,
                 browser: None,
+                design: false,
             },
         )
     }
@@ -1685,6 +1691,40 @@ mod tests {
                     "a runtime role must not reach {action:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_designers_token_reaches_the_prototype_tools_and_its_run_tools_and_nothing_else() {
+        let mut scope = run_scope(wtm_agent::authority::Authority::Reviewer);
+        if let SessionScope::Worktree {
+            flow: Some(role), ..
+        } = &mut scope
+        {
+            role.design = true;
+        }
+        for action in ALL_ACTIONS {
+            let refusal = scope_refusal(&scope, action);
+            if matches!(action, Action::Flow | Action::Design) {
+                assert!(refusal.is_none(), "a designer must reach {action:?}");
+            } else {
+                assert!(refusal.is_some(), "a designer must not reach {action:?}");
+            }
+        }
+        // And no other run role reaches the prototype tools, a runtime role with its pane included.
+        let mut runtime = run_scope(wtm_agent::authority::Authority::Reviewer);
+        if let SessionScope::Worktree {
+            flow: Some(role), ..
+        } = &mut runtime
+        {
+            role.browser = Some("browser-runtime".to_owned());
+        }
+        for other in [
+            run_scope(wtm_agent::authority::Authority::Reviewer),
+            run_scope(wtm_agent::authority::Authority::Writer),
+            runtime,
+        ] {
+            assert!(scope_refusal(&other, Action::Design).is_some(), "{other:?}");
         }
     }
 

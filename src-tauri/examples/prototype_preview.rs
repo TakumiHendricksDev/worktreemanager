@@ -28,7 +28,7 @@ fn exercise(
         "fixture",
         "fixture",
         &prototypes::review_document(html),
-        "preview-check",
+        Some("preview-check"),
         "fixture/review",
     )
     .map_err(|e| e.message)?;
@@ -78,7 +78,7 @@ fn exercise(
         "fixture",
         "failure",
         "<html><body>Missing frame</body></html>",
-        "preview-check",
+        Some("preview-check"),
         "failure/review",
     );
     if failed.is_ok()

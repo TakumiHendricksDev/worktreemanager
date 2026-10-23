@@ -1,5 +1,10 @@
 //! The UI and MCP share one conversation-scoped lifecycle. Nothing here starts a provider or
 //! changes its model, environment, permissions or credentials.
+//!
+//! An issue's designer goes through the same lifecycle with a different owner: its run, rather than
+//! a live chat ([`Owner`]). A chat's prototype is found through the chat that asks for it; a run's,
+//! through the run its token is scoped to (`crate::flow::designer`), so neither can reach the
+//! other's.
 
 use crate::app::{AgentSessionFacts, AgentStatus, App};
 use crate::commands::{AppState, Reply, blocking};
@@ -108,6 +113,18 @@ pub fn announce(handle: &tauri::AppHandle, app: &App, session: &str, prototype: 
     );
 }
 
+/// Who a prototype is prepared for: a worktree chat's session, or an issue run's designer.
+#[derive(Debug, Clone)]
+pub struct Owner {
+    pub project: String,
+    pub worktree: String,
+    pub session: String,
+    pub provider: String,
+    pub conversation: String,
+    /// The issue run whose design it is; `None` for a chat's.
+    pub flow: Option<i64>,
+}
+
 pub fn prepare(
     app: &App,
     session: &str,
@@ -116,14 +133,39 @@ pub fn prepare(
     paths: Option<&[String]>,
 ) -> Result<Prototype, ErrorView> {
     let _guard = MUTATING.lock();
-    if brief.trim().is_empty() || brief.len() > 12_000 {
-        return Err(failure("Describe the design in up to 12,000 characters"));
-    }
-    let owner = owner(app, session)?;
-    let (project, worktree) = owner
+    let facts = owner(app, session)?;
+    let (project, worktree) = facts
         .scope
         .place()
         .ok_or_else(|| failure("A prototype needs a worktree"))?;
+    let owner = Owner {
+        project: project.to_owned(),
+        worktree: worktree.to_owned(),
+        session: session.to_owned(),
+        provider: facts.provider.clone(),
+        conversation: facts.provider_session.clone(),
+        flow: None,
+    };
+    let existing = id.map(|id| record(app, session, id)).transpose()?;
+    prepare_as(app, &owner, brief, existing, paths)
+}
+
+/// Prepare a revision of `existing`, or of a new prototype, for `owner`.
+fn prepare_as(
+    app: &App,
+    owner: &Owner,
+    brief: &str,
+    existing: Option<Prototype>,
+    paths: Option<&[String]>,
+) -> Result<Prototype, ErrorView> {
+    if brief.trim().is_empty() || brief.len() > 12_000 {
+        return Err(failure("Describe the design in up to 12,000 characters"));
+    }
+    let (project, worktree, session) = (
+        owner.project.as_str(),
+        owner.worktree.as_str(),
+        owner.session.as_str(),
+    );
     let root = root_of(app, project, worktree)?;
     let storage = storage(app)?;
     if storage.starts_with(&root) {
@@ -152,8 +194,8 @@ pub fn prepare(
     } else {
         context::select(&discovery, brief)
     };
-    let mut prototype = if let Some(id) = id {
-        record(app, session, id)?
+    let mut prototype = if let Some(existing) = existing {
+        existing
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         Prototype {
@@ -164,7 +206,7 @@ pub fn prepare(
             root: root.to_string_lossy().into_owned(),
             session: session.to_owned(),
             provider: owner.provider.clone(),
-            conversation: owner.provider_session.clone(),
+            conversation: owner.conversation.clone(),
             title: brief
                 .lines()
                 .next()
@@ -182,13 +224,102 @@ pub fn prepare(
             review: None,
             implemented_review: None,
             dismissed: false,
+            reviews: vec![],
+            flow: owner.flow,
         }
     };
     prototype.sources = sources;
     session.clone_into(&mut prototype.session);
-    prototype.conversation = owner.provider_session;
+    owner.conversation.clone_into(&mut prototype.conversation);
     prototypes::begin(&mut prototype, brief)?;
     Ok(prototype)
+}
+
+/// An issue run's prototype, by id: in its worktree, and its run's, or nothing.
+pub fn run_record(
+    app: &App,
+    flow: i64,
+    project: &str,
+    worktree: &str,
+    id: &str,
+) -> Result<Prototype, ErrorView> {
+    let root = root_of(app, project, worktree)?;
+    let record = prototypes::load(&storage(app)?, id, project, worktree)?;
+    if Path::new(&record.root) != root || record.flow != Some(flow) {
+        return Err(failure("This prototype belongs to another worktree or run"));
+    }
+    Ok(record)
+}
+
+/// Prepare a revision of an issue run's design: of `id`, the run's prototype, or of a new one.
+pub fn prepare_for_run(
+    app: &App,
+    owner: &Owner,
+    brief: &str,
+    id: Option<&str>,
+    paths: Option<&[String]>,
+) -> Result<Prototype, ErrorView> {
+    let _guard = MUTATING.lock();
+    let flow = owner
+        .flow
+        .ok_or_else(|| failure("A run's design needs its run"))?;
+    let existing = id
+        .map(|id| run_record(app, flow, &owner.project, &owner.worktree, id))
+        .transpose()?;
+    prepare_as(app, owner, brief, existing, paths)
+}
+
+/// Publish a prepared revision of an issue run's design.
+pub fn publish_for_run(
+    app: &App,
+    owner: &Owner,
+    id: &str,
+    revision: &str,
+    html: &str,
+    reuse: &str,
+) -> Result<Prototype, ErrorView> {
+    let _guard = MUTATING.lock();
+    let flow = owner
+        .flow
+        .ok_or_else(|| failure("A run's design needs its run"))?;
+    let mut prototype = run_record(app, flow, &owner.project, &owner.worktree, id)?;
+    if stale(app, &prototype) {
+        return Err(failure(
+            "Project context changed during generation. Prepare a fresh revision before publishing.",
+        ));
+    }
+    prototypes::publish(&mut prototype, revision, html, reuse)?;
+    Ok(prototype)
+}
+
+/// Open the existing sandboxed review pane on one revision of `prototype`, any revision it
+/// published, in its worktree. `opened_by` is the chat that asked; a run's preview has none, and is
+/// the window's.
+pub fn show_revision(
+    handle: &tauri::AppHandle,
+    app: &Arc<App>,
+    prototype: &mut Prototype,
+    review_id: &str,
+    opened_by: Option<&str>,
+) -> Result<BrowserView, ErrorView> {
+    let (html, _) = prototypes::artifact(prototype, review_id)?;
+    let view = crate::browser::open_prototype(
+        handle,
+        app,
+        &prototype.project_id,
+        &prototype.worktree_id,
+        &prototypes::review_document(&html),
+        opened_by,
+        &format!("{}/{review_id}", prototype.id),
+    )?;
+    if let Some(review) = prototype.review.as_mut().filter(|r| r.id == review_id) {
+        review.opened = true;
+    }
+    if let Some(review) = prototype.reviews.iter_mut().find(|r| r.id == review_id) {
+        review.opened = true;
+    }
+    prototypes::save(prototype)?;
+    Ok(view)
 }
 
 pub fn publish(
@@ -219,20 +350,7 @@ pub fn preview(
 ) -> Result<BrowserView, ErrorView> {
     let _guard = MUTATING.lock();
     let mut prototype = record(app, session, id)?;
-    let (html, _) = prototypes::artifact(&prototype, review_id)?;
-    let view = crate::browser::open_prototype(
-        handle,
-        app,
-        &prototype.project_id,
-        &prototype.worktree_id,
-        &prototypes::review_document(&html),
-        session,
-        &format!("{id}/{review_id}"),
-    )?;
-    if let Some(review) = &mut prototype.review {
-        review.opened = true;
-    }
-    prototypes::save(&prototype)?;
+    let view = show_revision(handle, app, &mut prototype, review_id, Some(session))?;
     announce(handle, app, session, &prototype);
     Ok(view)
 }

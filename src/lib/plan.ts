@@ -63,6 +63,19 @@ export function planRunWords(view: PlanView): string {
   if (state.end?.kind === 'cancelled') return 'Run stopped';
   if (state.end?.kind === 'failed') return 'Run could not finish';
   if (state.end?.kind === 'done') return 'Run done';
+  // Past planning, the Design tab says where the run is; here it is said in a word.
+  switch (state.phase) {
+    case 'designing':
+      return state.hold?.kind === 'interrupted' ? 'Designer interrupted' : 'Designing';
+    case 'design_ready':
+      return state.hold?.kind === 'awaiting_approval'
+        ? 'Design ready for your approval'
+        : 'Design approved';
+    case 'implementing':
+      return 'Implementing';
+    default:
+      break;
+  }
   switch (state.hold?.kind) {
     case 'awaiting_answer':
       return view.running ? 'Planner replying to you' : 'Waiting for your answer';
@@ -106,7 +119,7 @@ export function standingWords(standing: PlanStanding): string {
     case 'approved':
       return `Revision ${standing.revision} approved${
         standing.skipDesign ? ', design skipped' : ''
-      }, for the issue as it reads now. Implementing comes with a later version of wtm.`;
+      }, for the issue as it reads now. The Design tab says whether implementing may start.`;
     case 'stale':
       return `Revision ${standing.revision} was approved, and no longer covers what it approved: ${standing.changes
         .map((c) => PIN_WORDS[c.pin] ?? c.pin)

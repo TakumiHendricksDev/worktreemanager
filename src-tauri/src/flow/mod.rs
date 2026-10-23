@@ -59,6 +59,8 @@ pub mod capacity;
 pub mod checks;
 pub mod commands;
 pub mod comments;
+pub mod design_commands;
+pub mod designer;
 pub mod env;
 pub mod findings;
 pub mod fix;
@@ -265,6 +267,8 @@ enum Signal {
     Submitted(Submission),
     /// A planner asked a question with `flow_ask`, and the run now waits for the answer.
     Asked(QuestionId),
+    /// A designer published this revision of its run's design with `prototype_publish`.
+    Published(u32),
 }
 
 /// A role attempt that is running, as the run tools find it.
@@ -285,6 +289,8 @@ struct Live {
     fix: Option<Arc<fix::FixLive>>,
     /// What a planner's turn is, for a planner; `None` for a review's role.
     planner: Option<Arc<planner::PlannerLive>>,
+    /// What a designer's turn answers, for a designer; `None` for every other role.
+    designer: Option<Arc<designer::DesignerLive>>,
     /// The project and worktree, which a check that needs services asks the gate about.
     project: String,
     worktree: String,
@@ -1436,6 +1442,7 @@ impl Engine {
                 dir: ctx.dir.clone(),
                 fix: ctx.fix.clone(),
                 planner: None,
+                designer: None,
                 project: ctx.project.clone(),
                 worktree: ctx.worktree.clone(),
                 start_services: ctx.workflow.start_services,
@@ -1523,6 +1530,13 @@ impl Engine {
             .iter()
             .filter_map(|id| Some((id.clone(), ctx.workflow.check.get(id)?.clone())))
             .collect();
+        // A role that takes a design, such as a UI consistency reviewer, is given the issue's
+        // approved revision when the work under review has one whose approval still holds.
+        let design = if spec.inputs.contains(&wtm_core::flow::RoleInput::Design) {
+            self.approved_design_for(ctx.flow)
+        } else {
+            None
+        };
         // Following a pull request to a new head, the earlier findings are what the round is for,
         // so a role is given them whatever it lists as inputs; the ones you dismissed are settled
         // and are not asked about again.
@@ -1548,6 +1562,7 @@ impl Engine {
                 .map(|(from, to)| (from.as_str(), to.as_str())),
             answers: &answers,
             runtime: setup,
+            design: design.as_deref(),
         };
         let invocation = invocation.id;
         let session_spec = RoleSession {
@@ -1558,6 +1573,7 @@ impl Engine {
                 role: step.role.clone(),
                 authority: step.profile,
                 browser: setup.and_then(|s| s.pane.as_ref()).map(|p| p.id.clone()),
+                design: false,
             },
             provider: step.provider.id().to_owned(),
             model: step.model.clone(),
@@ -1765,7 +1781,7 @@ impl Engine {
                     };
                 }
                 // Only a planner's turn is told of a question it asked; a review role carries on.
-                Ok(Signal::Asked(_)) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(Signal::Asked(_) | Signal::Published(_)) | Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     return AttemptEnd::Failed {
                         status: InvocationStatus::Failed,
@@ -1960,11 +1976,18 @@ impl Engine {
                 .ok()
                 .and_then(|db| db.review(role.flow).ok().flatten())
                 .is_some()
-            || self.is_planning(role.flow);
+            || self.is_planning(role.flow)
+            || self.is_designing(role.flow);
         if !ours {
             return None;
         }
         Some(match (call, live) {
+            // A designer's result is a published revision, and only `prototype_publish` makes one.
+            (FlowCall::Submit(_), Some(live)) if live.designer.is_some() => Err(
+                "A designer hands in its design with `prototype_publish`, not `flow_submit`: \
+                 publish the revision, then end your turn."
+                    .to_owned(),
+            ),
             (FlowCall::Submit(submission), Some(live)) => {
                 if submission.kind() != live.output {
                     return Some(Err(format!(
@@ -2043,6 +2066,14 @@ impl Engine {
     /// When the review has ended, is waiting on something a resume does not answer, or has nothing
     /// left to run.
     pub fn resume(self: &Arc<Self>, flow: FlowId) -> Result<(), Refusal> {
+        // An issue's run cut off while it was being designed: the designer's conversation carries
+        // on (`designer.rs`).
+        if self
+            .state(flow)
+            .is_ok_and(|state| state.kind == FlowKind::Implement && state.phase == Phase::Designing)
+        {
+            return self.start_designer(flow);
+        }
         // An issue's run cut off while it was being planned: the planner's conversation carries on
         // (`planner.rs`).
         if self.is_planning(flow)
@@ -2191,7 +2222,9 @@ impl Engine {
         self.quitting.store(true, Ordering::SeqCst);
         let flows: Vec<FlowId> = self.runs.lock().keys().copied().collect();
         for flow in flows {
-            if self.is_planning(flow) {
+            if self.is_designer_running(flow) {
+                self.interrupt_designer(flow, InterruptCause::Quit);
+            } else if self.is_planning(flow) {
                 self.interrupt_planner(flow, InterruptCause::Quit);
                 continue;
             }
@@ -2276,6 +2309,11 @@ impl Engine {
         match self.recover_planners() {
             Ok(held) => interrupted.extend(held),
             Err(error) => tracing::warn!(%error, "could not check planners at launch"),
+        }
+        // A designer cut off mid-turn, the same way.
+        match self.recover_designers() {
+            Ok(held) => interrupted.extend(held),
+            Err(error) => tracing::warn!(%error, "could not check designers at launch"),
         }
         Ok(interrupted)
     }
@@ -2598,7 +2636,17 @@ impl Engine {
             .ok_or_else(|| format!("no run {flow}"))
     }
 
+    /// Record `event` against `flow`. The one route into a run's state, so it is also where the gate
+    /// in front of Implementing is held: no caller, today's or a later item's, can move an issue's
+    /// run there without the plan and the design it needs approved (`designer.rs`).
     fn record(&self, flow: FlowId, event: &FlowEvent) -> Result<wtm_core::flow::FlowState, String> {
+        if let FlowEvent::Advanced {
+            to: Phase::Implementing,
+        } = event
+        {
+            self.check_implementing(flow)
+                .map_err(|blocked| format!("{flow} cannot start implementing: {blocked}"))?;
+        }
         let recorded = self.db()?.record(flow, event, self.now()).map_err(text)?;
         self.notice.changed(flow);
         Ok(recorded.state)
@@ -2648,8 +2696,14 @@ impl Engine {
     /// and says so, and the question is kept for you with that said, and its answer given to the
     /// role when it runs again.
     fn ask(&self, role: &FlowRole, live: &Live, ask: &crate::flow_tools::Ask) -> String {
-        let carry_on = "This review does not stop for answers. Choose the most reasonable reading, \
-                        say which you chose and why in the finding it affects, and carry on.";
+        let carry_on = if live.designer.is_some() {
+            "A design does not stop for answers either. Choose the most reasonable reading, say \
+             which you chose and why in the revision's reuse notes, and publish it: the person \
+             comments on the revision."
+        } else {
+            "This review does not stop for answers. Choose the most reasonable reading, say which \
+             you chose and why in the finding it affects, and carry on."
+        };
         let Ok(db) = self.db() else {
             return carry_on.to_owned();
         };

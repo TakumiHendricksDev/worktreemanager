@@ -55,7 +55,8 @@ wtm-exec     the ONLY place a process is spawned: CommandRunner, PtyHost, Servic
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
 wtm-appdb    the app's own SQLite store: work items, flows, rules, the tracker mirror, environments,
-             Start Work's jobs, plans (§9). impl FlowStore, RuleStore, TrackerMirror, EnvStore, StartStore, PlanStore
+             Start Work's jobs, plans, designs (§9). impl FlowStore, RuleStore, TrackerMirror, EnvStore,
+             StartStore, PlanStore, DesignStore
 wtm-forge    pull requests through the user's own `gh` (§6a).    impl Forge, ReviewWriter, PullRequestWriter
 wtm-tracker  issues and sprints through the user's own `acli` (§6a).  impl Tracker, TrackerWriter
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
@@ -1144,7 +1145,9 @@ CSP and browser capabilities stay unchanged; no HTTP service or file URL is need
 
 Saved reviews bind both HTML and reuse notes, source fingerprints, the exact worktree
 and provider conversation. Revisions and cancellation invalidate late results and old
-approvals. Restore reads only. **Implement this design** validates the exact reviewed
+approvals. Every revision a prototype published stays in its record and on disk, and can
+be previewed after newer ones exist, still checked against its fingerprint; only the newest
+can be implemented. Restore reads only. **Implement this design** validates the exact reviewed
 revision and current context and sends an approval turn into that same idle chat; it
 cannot start or change a provider. The tools deliberately expose no approval operation
 to the model.
@@ -1176,7 +1179,7 @@ agent for runs as for panes. It cannot say how that agent runs.
 | Codex sandbox | `read-only`, `approvalPolicy: never`, `{"type":"readOnly","networkAccess":false}` per turn | `workspace-write`, `on-request`, `approvalsReviewer: user`, `workspaceWrite` with `networkAccess: false` |
 | Network | Claude: `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`. Codex: none | Same |
 | Environment | F3's scrub (`run_profile::scrub`), and for Codex `CODEX_HOME` set last; Codex's `shell_environment_policy` excludes the same names, `GH_*` by exact name, and sets `GH_CONFIG_DIR` | Same |
-| Bridge | The run tools only; token in a 0600 file (Claude's `--mcp-config` path, Codex's home config), never argv; for Codex, `default_tools_approval_mode = "approve"` and `enabled_tools` naming the role's tools | The same plus `flow_checkpoint` |
+| Bridge | The run tools only; token in a 0600 file (Claude's `--mcp-config` path, Codex's home config), never argv; for Codex, `default_tools_approval_mode = "approve"` and `enabled_tools` naming the role's tools. An issue's designer also has `prototype_prepare` and `prototype_publish`, on its run's design only (§6m) | The same plus `flow_checkpoint` |
 | Git | Read only. Agents cannot commit, stash, update a ref or push | Same. `flow_checkpoint` is an app commit with `-c core.hooksPath=/dev/null` and `--no-verify`, refusing agent and hook config |
 
 Three of those rows are F2 correcting the first plan. `--tools` is an allowlist because the
@@ -1540,7 +1543,7 @@ itself — its step pending, its line saying "queued: Codex at 3/3 · next in li
 held exactly as long as the session. Places go to the oldest waiter that fits, which cannot starve
 anyone: a newer Claude session takes a free Claude place a Codex waiter does not want, and when the
 total is what is full every waiter wants the same thing. A run and its children — a fallback, a
-role run once elsewhere, a fix's writer, a planner — are sessions alike and draw from the same
+role run once elsewhere, a fix's writer, a planner, a designer — are sessions alike and draw from the same
 places; a native subagent runs inside its parent's session and takes none. Nothing that waits holds
 a place: a role at a limit, or waiting for its environment, has no session, which is also why a
 parent and its child cannot deadlock under a cap of one. A lowered cap ends nothing mid-turn. The
@@ -1808,6 +1811,60 @@ started with `WTM_DEV_TRACKER=<file.json>` reads its issues from that file, agai
 writes its moves and comments back into it (`dev_tracker.rs`), so a click-through can use an issue
 written to be ambiguous and edit it later without touching a real tracker; with
 `WTM_DEV_TRACKER_WRITES=fake`, comments stay on the machine as moves do.
+
+## 6m. Design: a run's revisions, and the gate in front of Implementing
+
+When you approve a plan that says the work needs a design, and you did not approve it with the
+design skipped, the issue's run moves from Planned to Designing, and the project's designer
+(`[workflow] designer`, a reviewer role of its own that reads the worktree) starts by itself
+(`src-tauri/src/flow/designer.rs`, rules in `wtm_core::flow::design`). **Request a design** in the
+issue's Design tab does the same for a plan that did not ask. Without a designer the run waits at
+Designing and nothing is spent.
+
+**A designer is a run session with two more tools.** It runs under §6h's read-only profile, in the
+issue's worktree, given the issue and the approved plan in its brief. Its token is the only run
+token that reaches `prototype_prepare` and `prototype_publish`: its bridge lists them because its
+role says `design`, and `handoff::scope_refusal` and `prototype_tools` refuse them to every other run
+token, a planner's, a review role's, a fixer's and a runtime role's included. On a designer's token
+they act on its run's design, not on a chat: prepare reads the project's component and token
+evidence from the worktree as §6g's does, and publish keeps the HTML and reuse notes under wtm's
+data directory, never in the source tree. A chat's prototype belongs to the chat; a designer is
+closed after every turn and resumed later with a new token, so its prototype belongs to its run, and
+the run's record names it. Each designer turn takes a run-session place like any role's (§6i's caps)
+and holds it until its session closes. At a usage limit it holds the run itself, as the planner
+does, and Resume designer carries on; a fallback chain is a review role's.
+
+**Every revision is the run's, numbered and kept** (migration 15). A publication is the run's next
+revision, with its artifact's fingerprint, the brief it was drawn from, the feedback it answered,
+its reuse notes and the fingerprints of the sources it drew on. Comments belong to a revision, any
+revision. The run then holds at Design ready, one inbox item says so, and the Design tab previews
+any revision in §6g's sandboxed review pane, in the issue's worktree.
+
+**An approval pins the revision, its artifact and its sources**, which are §6g's invalidation rules
+as pins: `Approval(design, revision, fingerprint, sources)`. A newer revision replaces it, an
+artifact that no longer reads back with its fingerprint makes it stale, and so does a component or
+token file edited in the worktree since the revision was drawn. Approve reads both again and refuses
+on either. Request changes sends your note and the revision's comments into the designer's
+conversation, which publishes the next revision.
+
+**Implementing has one gate, and it is in the engine's one route to a run's state.**
+`Engine::record` refuses `Advanced { to: Implementing }` for an issue's run unless
+`implementing_gate` passes: a plan approval that still covers the issue, and, when the plan asked
+for a design (and you did not skip it) or a design was started anyway, a design approval that still
+covers the newest revision. So no caller can reach Implementing around it, Start implementing in the
+Design tab included, which says why when it refuses. The approved revision and its reuse notes are
+what a role taking `design` is given (`brief::design_section`), which is how a UI consistency
+reviewer, and the implementer once it exists, works against the design you approved and no other.
+The run stops at Implementing for now: driving an implementer is the next item.
+
+**Tested, and clicked through on a fixture.** `design.rs` drives the engine with fake agents: the
+gate before and after approval, a skipped design, no designer, a design you asked for, a newer
+revision replacing an approval, every revision still addressable, a changed source making an
+approval stale, a designer refused `flow_submit`, the prototype tools refused to a planner's token,
+a UI reviewer given the approved revision and nothing before it, a designer queued under a cap of one
+and recording nothing while it waits, and a quit mid-design resumed in the same conversation. The listing and the socket are tested on
+their own (`bridge.rs`, `handoff.rs`, `flow_session.rs`), and the store's append-only rules against a
+real SQLite file (`design_store.rs`).
 
 ## 7. Toolchain policy
 

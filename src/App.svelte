@@ -60,6 +60,7 @@
   import { trackerQueue } from './lib/state/tracker.svelte';
   import { startWork } from './lib/state/start-work.svelte';
   import { plan } from './lib/state/plan.svelte';
+  import { design } from './lib/state/design.svelte';
   import { work } from './lib/state/work.svelte';
   import { worktreeRemoval } from './lib/state/worktree-removal.svelte';
   import { treePrefs } from './lib/state/tree-prefs.svelte';
@@ -432,6 +433,7 @@
     /* An issue's start: a worktree being made or a move being sent is a run changing. */
     const unlistenStarts = startWork.init();
     const unlistenPlans = plan.init();
+    const unlistenDesigns = design.init();
 
     /*
      * A macOS notification was clicked. The payload is the pane's address, attached by
@@ -559,6 +561,7 @@
       void unlistenTracker.then((off) => off());
       void unlistenStarts.then((off) => off());
       void unlistenPlans.then((off) => off());
+      void unlistenDesigns.then((off) => off());
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
       offFleet?.();

@@ -17,11 +17,13 @@
    * start is: its worktree and setup terminal, a crash's Resume, a pause, and each move of the team
    * status with what it read, including the race a tracker leaves open.
    *
-   * # Planning
+   * # Planning and design
    *
    * Once the worktree is ready the project's planner starts by itself, and the Plan tab is where it
    * is followed and decided on (`WorkPlan`): its questions, its plan, your approval, and what it was
-   * given. The Run section says where planning stands and leads there.
+   * given. The Run section says where planning stands and leads there. A plan that needs a design
+   * goes on to the Design tab (`WorkDesign`): the designer's revisions, your comments, your
+   * approval, and the gate in front of implementing.
    *
    * # Read on opening
    *
@@ -67,6 +69,7 @@
   import { plan } from '../state/plan.svelte';
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
+  import WorkDesign from './WorkDesign.svelte';
   import WorkPlan from './WorkPlan.svelte';
   import WorkReviewRun from './WorkReviewRun.svelte';
 
@@ -86,6 +89,7 @@
   const TABS: { id: WorkTab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'plan', label: 'Plan' },
+    { id: 'design', label: 'Design' },
     { id: 'reviews', label: 'Reviews' },
   ];
 
@@ -303,6 +307,15 @@
         {issueKey}
         {visible}
         onopenfile={openFile}
+      />
+    {/if}
+  {:else if work.tab === 'design'}
+    {#if workspace.activeProjectId}
+      <WorkDesign
+        projectId={workspace.activeProjectId}
+        {issueKey}
+        {visible}
+        {onopenworktree}
       />
     {/if}
   {:else if work.tab === 'reviews'}
