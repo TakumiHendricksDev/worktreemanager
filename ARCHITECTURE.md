@@ -1175,9 +1175,9 @@ agent for runs as for panes. It cannot say how that agent runs.
 | Claude settings sources | `--strict-mcp-config` **and** `--setting-sources ""`; everything else is in one `--settings` object | Same |
 | Claude sandbox | `enabled`, `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, `autoAllowBashIfSandboxed: true`; `denyWrite`: the worktree, every git dir (common, gitdir, the worktree's `.git` file), the worktree's `.claude`, `.codex`, `.cursor`, `.mcp.json` | The same without the worktree |
 | Claude reads | `denyRead` and `Read(…)` deny rules: `~/Library/Keychains`, `~/.config/gh`, `~/.ssh`, `~/.codex`, `~/.config/acli`, wtm's run-sessions folder | Same |
-| Claude tools | `--tools Read,Bash,Grep,Glob,Task`, mode `dontAsk`; plus `Skill`, `--plugin-dir` and `--add-dir` on a wtm-written plugin holding exactly the skills a role names, when it names any | `--tools Read,Edit,Write,Bash,Grep,Glob,Task`, mode `acceptEdits`, `Edit`/`Write` deny rules on every git dir and agent config; skills the same way |
+| Claude tools | `--tools Read,Bash,Grep,Glob,Task`, mode `dontAsk`; plus `Skill`, `--plugin-dir` and `--add-dir` on a wtm-written plugin holding copies of exactly the skills a role names, when it names any, with no allow rule for them | `--tools Read,Edit,Write,Bash,Grep,Glob,Task`, mode `acceptEdits`, `Edit`/`Write` deny rules on every git dir and agent config; skills the same way |
 | Claude allow rules | The role's run tools by full name (`mcp__wtm__flow_…`). Never Bash | Same |
-| Codex home | Its own `CODEX_HOME`: `auth.json` linked to the sign-in, a generated `config.toml` with `features.apps = false`, the repository and worktree `trust_level = "untrusted"`, the bridge as the only server | Same |
+| Codex home | Its own `CODEX_HOME`: `auth.json` linked to the sign-in, a generated `config.toml` with `features.apps = false` and `features.skill_mcp_dependency_install = false`, the repository and worktree `trust_level = "untrusted"`, the bridge as the only server, and copies of exactly the skills the role names in its `skills/` | Same |
 | Codex sandbox | `read-only`, `approvalPolicy: never`, `{"type":"readOnly","networkAccess":false}` per turn | `workspace-write`, `on-request`, `approvalsReviewer: user`, `workspaceWrite` with `networkAccess: false` |
 | Network | Claude: `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`. Codex: none | Same |
 | Environment | F3's scrub (`run_profile::scrub`), and for Codex `CODEX_HOME` set last; Codex's `shell_environment_policy` excludes the same names, `GH_*` by exact name, and sets `GH_CONFIG_DIR` | Same |
@@ -1250,7 +1250,14 @@ that refuse unknown fields, so a malformed `flow_submit` comes back as an error 
   `GH_CONFIG_DIR` over an inherited one.
 - A Codex run lists the user's personal skills from `~/.agents/skills` beside the repository's,
   even with a home of its own (measured on 0.160.1). They are instructions, not tools, and the
-  sandbox decides what any of them can do, but they are not only the role's.
+  sandbox decides what any of them can do, but they are not only the role's. A skill the
+  repository ships in `.agents/skills` is listed twice in a Codex run, once from the repository
+  and once as the run home's copy of it.
+- A role's skill gets its own folder and nothing beside it. A plugin skill that reaches outside
+  that folder — `${CLAUDE_PLUGIN_ROOT}/scripts`, a sibling skill — finds nothing there, and a
+  plugin manifest's own `skills` paths are not read, only its `skills/` folder.
+- `RoleSpec.plugins` is not wired, and a whole plugin cannot be loaded into a run: naming one of
+  its skills is how a role uses a plugin.
 
 Two rows were added when the review engine (§6i) first ran roles against the real CLIs, and both
 were found by a run failing rather than by reading:
@@ -1259,7 +1266,8 @@ were found by a run failing rather than by reading:
   its hooks — a project skill is in Claude's `initialize` list with the default sources and gone
   with none, and `--add-dir` does not bring it back. `--plugin-dir` does, as `<plugin>:<skill>`,
   without loading anything else. So `flow_session` copies a role's named skills, from the checkout
-  it reads and then the user's own, into a plugin named `wtm` under the flow's directory, and the
+  it reads, then the user's own, then an installed plugin's (below), into a plugin named `wtm`
+  under the flow's directory, and the
   role invokes `wtm:<skill>` with the `Skill` tool. The directory is an `--add-dir` too, because
   under `dontAsk` a Read outside the working directories is refused, and a skill's own files would
   be unreadable to the role it was copied for.
@@ -1268,6 +1276,52 @@ were found by a run failing rather than by reading:
   rejected, and it ended its turns with nothing handed in. The run's own server is now approved by
   name in its home's config, as Claude's allow rules already named its tools, and `enabled_tools`
   keeps it to the role's own.
+
+**Skills from installed plugins, for both providers.** A role names a skill; it does not name
+where the skill lives. `flow_session` looks for `<name>/SKILL.md` in the session's checkout, then
+in your own folders, then in your installed Claude plugins, and copies the first it finds:
+`.claude/skills` and Claude's own `skills/` for a Claude role; `.agents/skills`, `.claude/skills`,
+`~/.agents/skills`, Codex's own `skills/` and Claude's for a Codex one, each provider's own folders
+first. The installed plugins are Claude Code's record, `plugins/installed_plugins.json`: a `user`
+install applies everywhere, a `local` or `project` one only when its `projectPath` is the
+checkout, the worktree or the main checkout, an install with a scope this build does not know is
+skipped, and so is a plugin on the CLI's `blocklist.json`. `wtm_agent::run_skills` is the order and
+the scopes as code, and `App::skill_homes` is where a test points them at plugins of its own.
+
+There were two ways to give a Claude run a plugin's skill, and the measurement (Claude Code
+2.1.296, under the run's own flags) chose between them:
+
+- **`--plugin-dir` on the plugin's install path, rejected.** It ran the plugin's `SessionStart`
+  hook before any turn, outside the sandbox, and listed every skill, command and agent the plugin
+  has. `--strict-mcp-config` did keep its MCP server out, but a hook is a command run as you, and
+  a plugin's other skills are not the role's.
+- **A copy of the named skill folder, chosen.** Hooks, servers, agents and commands live beside a
+  plugin's `skills/`, not in it, so the copy has none of them, and the session lists only
+  `wtm:<name>`. It is the mechanism a repository's skill already used, so a skill's origin changes
+  nothing about the session it lands in.
+
+The copy is not byte for byte. A skill's frontmatter can carry `hooks`, which run while the skill
+is active, as you: a copied skill's `PreToolUse` hook wrote into a folder the run's sandbox denied
+to Bash in the same turn. And it can carry `allowed-tools`, a pre-allow, which a run never grants
+Bash. Both keys are dropped. That is also what lets the role use the skill: Claude runs a skill
+whose frontmatter is instructions alone without asking, and asks before one carrying either key,
+which `dontAsk` refuses and `acceptEdits` turns into a prompt nobody is there to answer. There is
+deliberately no `Skill(wtm:<name>)` allow rule: it would admit a copy that still carried hooks,
+where leaving it out keeps the CLI's refusal as a second wall. The copy's `name` is set to its
+folder and a missing `description` is supplied, because Codex lists a skill by its frontmatter
+name and refuses one without a description (codex-cli 0.160.1). And it leaves out
+`agents/openai.yaml`, Codex's account of how to offer a skill: with `allow_implicit_invocation:
+false` a skill was in `skills/list`, so the run's skill check passed, and absent from what the
+model was told it had in the same session — and a run role naming the skill is the explicit
+invocation that policy waits for. That file's `dependencies` can also name an MCP server for Codex
+to install, which is why the run's home turns `skill_mcp_dependency_install` off for every skill,
+the repository's own included.
+
+`src-tauri/tests/plugin_skills_real_cli.rs` holds all of this to the real CLIs with a fixture
+plugin that ships every one of those things, each hook and server touching a marker if it runs:
+both list the named skill and nothing else from either plugin, Claude's `initialize` lists none of
+its agents, and with `WTM_REAL_CLI_TURNS=1` both invoke the skill and read its own files while no
+marker appears.
 
 ## 6i. Review runs: an engine, its holds, and one notification owner
 

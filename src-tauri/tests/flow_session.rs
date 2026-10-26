@@ -1,11 +1,14 @@
 //! A workflow run's role session, prepared against a real repository, answered at the socket, and
 //! checked against the real CLIs' sandboxes.
 //!
-//! Three things are protected here, each a place where a run session's authority could leak in a way
+//! Four things are protected here, each a place where a run session's authority could leak in a way
 //! the pure profile tests in `wtm-agent` cannot see:
 //!
 //! - **What lands on disk.** The bridge token goes in a 0600 file in a 0700 directory, never on the
 //!   argv, and a link planted where that file goes is replaced rather than written through.
+//! - **Which skills a role gets.** Exactly the ones it names, copied from an installed plugin only
+//!   when that install is for this repository or for everyone, and never the rest of the plugin:
+//!   not its other skills, its hooks, its servers, its agents or its commands.
 //! - **What the socket answers.** A run token reaches its run tools and nothing else, a reviewer
 //!   cannot checkpoint, and a writer's checkpoint is a real commit that refuses agent config.
 //! - **What the CLI does with the profile.** The canary is the only proof a profile's sandbox
@@ -36,19 +39,27 @@ use wtm_config::AppPaths;
 use wtm_core::model::ProjectId;
 use wtm_testkit::GitFixture;
 
+mod common;
+use common::plugins::FixtureHomes;
+
 struct Harness {
     app: Arc<App>,
     fixture: GitFixture,
     project: String,
     worktree: PathBuf,
     worktree_id: String,
+    /// Where a role's named skills come from. Never your own: your plugins are not this test's.
+    plugins: FixtureHomes,
     _data: tempfile::TempDir,
 }
 
 fn harness() -> Harness {
     let fixture = GitFixture::new();
     let data = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let app = Arc::new(App::with_paths(AppPaths::rooted(data.path())).unwrap());
+    let plugins = FixtureHomes::new(data.path());
+    let mut app = App::with_paths(AppPaths::rooted(data.path())).unwrap();
+    app.skill_homes = Some(plugins.homes.clone());
+    let app = Arc::new(app);
     let root = app.register(fixture.root()).unwrap();
     let project = ProjectId::from_root(&root).to_string();
     let path = fixture.add_worktree("acme-wt", "task/ACME-1");
@@ -60,6 +71,7 @@ fn harness() -> Harness {
         worktree: path,
         worktree_id: linked.id.as_str().to_owned(),
         fixture,
+        plugins,
         _data: data,
     }
 }
@@ -250,6 +262,175 @@ fn a_codex_role_gets_a_home_of_its_own_with_only_the_sign_in_linked() {
         prepared.request.scrub.values().get("CODEX_HOME"),
         Some(&home.to_string_lossy().into_owned())
     );
+}
+
+/// Every file under `dir`, relative to it, in order.
+fn files(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else {
+                out.push(
+                    path.strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if dir.exists() {
+        walk(dir, dir, &mut out);
+    }
+    out.sort();
+    out
+}
+
+fn skill_rules(prepared: &Prepared) -> Vec<String> {
+    let RunAuthority::Claude(run) = &prepared.profile.run else {
+        panic!("a Claude role gets a Claude profile");
+    };
+    run.settings["permissions"]["allow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|rule| rule.as_str())
+        .filter(|rule| rule.starts_with("Skill("))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn claude_skills_dir(prepared: &Prepared) -> PathBuf {
+    let RunAuthority::Claude(run) = &prepared.profile.run else {
+        panic!("a Claude role gets a Claude profile");
+    };
+    PathBuf::from(
+        run.skills
+            .as_deref()
+            .expect("a role with skills gets a plugin"),
+    )
+}
+
+#[test]
+fn a_claude_role_gets_the_plugin_skill_it_names_and_nothing_else_that_plugin_ships() {
+    let mut h = harness();
+    let root = h.fixture.root().to_path_buf();
+    h.plugins.install(
+        "team-tools",
+        "local",
+        Some(&root),
+        &["team-review", "team-lint"],
+    );
+    let mut spec = h.spec("claude", role("conventions", Authority::Reviewer));
+    spec.skills = vec!["/team-review".to_owned()];
+    let prepared = flow_session::prepare(&h.app, &spec).unwrap();
+
+    let dir = claude_skills_dir(&prepared);
+    assert_eq!(
+        files(&dir),
+        [
+            ".claude-plugin/plugin.json",
+            "skills/team-review/SKILL.md",
+            "skills/team-review/checklist.md",
+        ],
+        "no hooks, servers, agents, commands, Codex metadata or unnamed skill"
+    );
+    let skill = std::fs::read_to_string(dir.join("skills/team-review/SKILL.md")).unwrap();
+    assert!(skill.starts_with("---\nname: team-review\n"), "{skill}");
+    assert!(
+        !skill.contains("hooks:") && !skill.contains("allowed-tools"),
+        "{skill}"
+    );
+    assert_eq!(
+        skill_rules(&prepared),
+        Vec::<String>::new(),
+        "no rule admits a skill: one that kept its hooks would still have to ask"
+    );
+}
+
+#[test]
+fn only_a_plugin_installed_for_this_repository_its_worktree_or_everyone_and_not_blocked_gives_skills()
+ {
+    let mut h = harness();
+    let worktree = h.worktree.clone();
+    h.plugins.install(
+        "worktree-tools",
+        "local",
+        Some(&worktree),
+        &["worktree-review"],
+    );
+    h.plugins
+        .install("shared-tools", "user", None, &["shared-review"]);
+    h.plugins.install(
+        "elsewhere-tools",
+        "local",
+        Some(Path::new("/somewhere/else")),
+        &["elsewhere-review"],
+    );
+    h.plugins
+        .install("blocked-tools", "user", None, &["blocked-review"]);
+    h.plugins.block("blocked-tools");
+
+    let mut spec = h.spec("claude", role("conventions", Authority::Reviewer));
+    spec.skills = [
+        "worktree-review",
+        "shared-review",
+        "elsewhere-review",
+        "blocked-review",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let prepared = flow_session::prepare(&h.app, &spec).unwrap();
+
+    let copied: Vec<String> = files(&claude_skills_dir(&prepared).join("skills"))
+        .into_iter()
+        .filter(|file| file.ends_with("SKILL.md"))
+        .collect();
+    assert_eq!(
+        copied,
+        ["shared-review/SKILL.md", "worktree-review/SKILL.md"]
+    );
+}
+
+#[test]
+fn a_codex_role_finds_its_named_skills_in_the_runs_own_home_and_loses_one_it_no_longer_names() {
+    let mut h = harness();
+    h.plugins
+        .install("team-tools", "user", None, &["team-review"]);
+    // A repository's Claude skill, with no frontmatter, which Codex alone would neither find nor
+    // accept.
+    let naming = h.worktree.join(".claude/skills/naming");
+    std::fs::create_dir_all(&naming).unwrap();
+    std::fs::write(
+        naming.join("SKILL.md"),
+        "# Naming\n\nFunctions are snake_case.\n",
+    )
+    .unwrap();
+
+    let mut spec = h.spec("codex", role("correctness", Authority::Reviewer));
+    spec.skills = vec!["team-review".to_owned(), "naming".to_owned()];
+    let prepared = flow_session::prepare(&h.app, &spec).unwrap();
+    let skills = prepared.places.codex_home().join("skills");
+    assert_eq!(
+        files(&skills),
+        [
+            "naming/SKILL.md",
+            "team-review/SKILL.md",
+            "team-review/checklist.md"
+        ],
+        "and no `agents/openai.yaml`, which would hide the skill from the model"
+    );
+    assert_eq!(
+        std::fs::read_to_string(skills.join("naming/SKILL.md")).unwrap(),
+        "---\nname: naming\ndescription: \"Naming\"\n---\n# Naming\n\nFunctions are snake_case.\n"
+    );
+
+    spec.skills = Vec::new();
+    flow_session::prepare(&h.app, &spec).unwrap();
+    assert_eq!(files(&skills), Vec::<String>::new());
 }
 
 #[test]
