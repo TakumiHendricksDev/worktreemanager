@@ -584,6 +584,21 @@ impl Engine {
         self.runs.lock().contains_key(&flow)
     }
 
+    /// Whether `flow`, a review, is finished and waiting on nobody: a new review of the same work
+    /// may take its place, and the old one is kept as done.
+    ///
+    /// A review of a teammate's pull request is not settled once a fix of it is ready, because the
+    /// fix waits for a route you approve and starting over would walk away from it. A fix of your
+    /// own work waits for nothing: it is already on your branch, and reviewing it again is how you
+    /// check it.
+    fn is_settled(&self, flow: FlowId, state: &Flow) -> bool {
+        !self.is_running(flow)
+            && state.state.hold.is_none()
+            && (state.state.phase == Phase::Consolidated
+                || (state.state.phase == Phase::FixReady
+                    && state.state.kind == FlowKind::ReviewMine))
+    }
+
     // ═══════════════════════════════ starting ═══════════════════════════════
 
     /// Start a review of a worktree with a recipe. Returns the flow, which is an existing one when
@@ -665,10 +680,7 @@ impl Engine {
                     .flow(existing)
                     .map_err(text)?
                     .ok_or_else(|| Refusal::from(format!("flow {existing} has gone")))?;
-                let superseded = !self.is_running(existing)
-                    && open.state.hold.is_none()
-                    && open.state.phase == Phase::Consolidated;
-                if !superseded {
+                if !self.is_settled(existing, &open) {
                     // Running, or waiting on you: the click focuses it rather than starting a
                     // second review of the same work.
                     return Ok(existing);

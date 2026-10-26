@@ -437,7 +437,6 @@ export function canStopFix(view: ReviewRunView): boolean {
   return view.flow.state.end === null && view.flow.state.phase === 'fixing';
 }
 
-/** Whether a new run of the same worktree would start rather than focus this one. */
 /**
  * The skill problem that stopped a finished review's role: "can't run: recipe". Its Edit recipe and
  * Move role buttons open Settings › Recipes at that role.
@@ -451,11 +450,19 @@ export function recipeProblem(view: ReviewRunView): SkillProblem | null {
   );
 }
 
+/**
+ * Whether a new run of the same worktree would start rather than focus this one. A fix of your own
+ * work counts as settled: it waits for no route, so reviewing the fix is the next thing to do. One
+ * of a teammate's pull request waits for the route you approve, and starting over would leave it.
+ */
 export function canRunAgain(view: ReviewRunView): boolean {
   const { state } = view.flow;
   return (
     state.end !== null ||
-    (!view.running && state.hold === null && state.phase === 'consolidated')
+    (!view.running &&
+      state.hold === null &&
+      (state.phase === 'consolidated' ||
+        (state.phase === 'fix_ready' && view.pullRequest === null)))
   );
 }
 

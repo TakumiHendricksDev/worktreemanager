@@ -1509,6 +1509,20 @@ reviewer lease, since no review thread outlives its process. The run moves Conso
 FixReady, which the review lifecycle already had for this, and a rerun or a re-review is refused
 from FixReady: the worktree now holds your commits on top of their head.
 
+**Your own work is fixed by the same writer, and its fix has nowhere to go.** A review of your own
+work (`FlowKind::ReviewMine`) reaches the same Consolidated → Fixing → FixReady, from Fix findings
+in the Reviews tab, with the same lease, scope and commits. What differs is the end: the review
+worktree *is* your worktree, so the app's commits land on your own branch and there is no route to
+approve and nothing to send. It starts from a clean tree at what was reviewed, which includes
+committing what the review read uncommitted: a review reads the working tree, so a commit of exactly
+that moves the head and not the tree, and the start accepts it (`tree_changes` between the
+snapshot's tree and `HEAD` is empty). The fix is measured from the commit the writer started on,
+not the head the review read, since the commits you made in between are not its work. FixReady has
+nothing to wait for here, so reviewing again takes its place (`Engine::is_settled`) and keeps the
+fixed review as done; a teammate's, which waits for its route, is never replaced that way. A review
+that an issue's implementation is still reading is not fixed from here at all: its implementer
+fixes what it finds, in rounds the run bounds, and a second writer would race it for the worktree.
+
 **The app commits, and only the fix's files.** The writer cannot commit (§6h); `flow_checkpoint`
 asks the app to, and the engine answers it for a fix's writer. The scope is the files the picked
 findings name, so a finding about the whole change cannot be fixed this way. Before every commit the

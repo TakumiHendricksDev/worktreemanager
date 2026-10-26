@@ -1,0 +1,59 @@
+/*
+ * The sheet for fixing a review of your own work (`WorkFixSheet.svelte`): the findings and the
+ * writer to pick, and later the diff to read.
+ *
+ * Nothing here is indented past a radio, as the outcome sheet's parts are, because this sheet has
+ * no options to choose between. The diff's own pieces are `_local-fix.scss`'s, which a teammate's
+ * fix is read with too.
+ */
+
+.c-fix-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.c-fix-sheet__picks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: 0;
+  border: 0;
+}
+
+.c-fix-sheet__pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.c-fix-sheet__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+/* On the label's text only: on the label itself, the weight and size reach the select too. */
+.c-fix-sheet__label {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  font-weight: 600;
+}
+
+.c-fix-sheet__note {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* In the dialog's foot, beside its buttons: it takes the space they do not. */
+.c-fix-sheet__summary {
+  flex: 1 1 280px;
+  align-self: center;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}

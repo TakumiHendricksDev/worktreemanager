@@ -10,8 +10,8 @@
 //!
 //! Each test is one property a person would notice if it broke: roles of a stage running together,
 //! a retry after a timeout, a malformed submission bounced back to the agent, a limit pausing the
-//! run until its reset, a quit leaving an honest Interrupted record. The real CLIs have their own
-//! test, `review_real_cli.rs`.
+//! run until its reset, a quit leaving an honest Interrupted record, a writer fixing the findings
+//! of your own work on your own branch. The real CLIs have their own test, `review_real_cli.rs`.
 
 #![allow(clippy::unwrap_used, clippy::too_many_lines)]
 
@@ -22,21 +22,23 @@ use std::sync::atomic::Ordering;
 use serde_json::{Value, json};
 use wtm_app_lib::app::App;
 use wtm_app_lib::flow::findings::Rerun;
+use wtm_app_lib::flow::fix::StartFix;
 use wtm_app_lib::flow::host::RoleHost;
 use wtm_app_lib::flow::{Engine, FlowView, Notice, StartReview, Tuning};
 use wtm_config::AppPaths;
 use wtm_core::flow::{
-    CheckStatus, FlowId, Hold, InboxItem, InboxKind, InboxState, InboxTarget, InterruptCause,
-    InvocationStatus, NewRule, Phase, RoleProvider, RuleDraft, RuleKind, RuleScope, SkillProblem,
-    StepStatus, Submission,
+    CheckStatus, End, Field, FixBounds, FixState, FlowId, FlowKind, Hold, ImplementChange,
+    ImplementOutcome, ImplementScope, InboxItem, InboxKind, InboxState, InboxTarget,
+    InterruptCause, InvocationStatus, NewImplementation, NewRule, Phase, RoleProvider, RuleDraft,
+    RuleKind, RuleScope, SkillProblem, StepStatus, Submission,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::clock::Clock;
-use wtm_core::ports::{InboxStore, RuleStore};
+use wtm_core::ports::{FlowStore, ImplementStore, InboxStore, RuleStore};
 use wtm_testkit::{FakeClock, GitFixture};
 
 mod common;
-use common::agents::{Behaviour, FakeHost, Heard, Script};
+use common::agents::{Act, Behaviour, FakeHost, Heard, Script};
 
 // ═══════════════════════════════ the harness ═══════════════════════════════
 
@@ -148,6 +150,14 @@ needs = ["web"]
 id = "web"
 start = ["sh", "-c", "exit 0"]
 health = { command = ["true"] }
+
+[defaults.workflow.role.fixer]
+objective = "Fix the findings you are given"
+provider = "claude"
+profile = "writer"
+output = "handoff"
+inputs = ["findings"]
+timeout_ms = 60000
 
 [defaults.workflow.role.checker]
 objective = "Run the checks"
@@ -1729,4 +1739,242 @@ fn stopping_a_review_settles_everything_it_had_asked_of_you() {
     h.engine.cancel(flow).unwrap();
 
     assert!(h.engine.inbox(None).unwrap().is_empty());
+}
+
+// ═══════════════════════════════ fixing your own work ═══════════════════════════════
+
+/// Reviewers that report one thing in `src/export.rs`, and a writer that fixes it and commits.
+fn reviewers_and_a_writer() -> Script {
+    Box::new(|role, _| match role {
+        "fixer" => Behaviour::Acts(vec![
+            Act::Write(
+                "src/export.rs",
+                "fn export() { /* handles an empty export */ }\n",
+            ),
+            Act::Checkpoint("Handle the empty export"),
+            Act::Handoff("The export no longer assumes it has rows."),
+        ]),
+        _ => Behaviour::Submit(vec![finding("The export assumes it has rows")]),
+    })
+}
+
+impl Harness {
+    /// Commit `src/draft.rs` exactly as the review read it, uncommitted: the head moves and the
+    /// tree does not.
+    fn commit_the_draft_as_reviewed(&self) {
+        self.commit("src/draft.rs", "// not yet committed\n");
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        self.fixture
+            .git_in(&self.worktree_path, args)
+            .trim()
+            .to_owned()
+    }
+
+    fn fix_everything(
+        &self,
+        flow: FlowId,
+        view: &FlowView,
+    ) -> Result<wtm_core::flow::FixId, String> {
+        self.engine
+            .start_fix(
+                flow,
+                &StartFix {
+                    findings: view.findings.iter().map(|f| f.finding.id).collect(),
+                    role: "fixer".to_owned(),
+                },
+            )
+            .map_err(|e| e.message)
+    }
+
+    fn fix_ready(&self, flow: FlowId) -> FlowView {
+        self.until(flow, "the fix was ready", |v| {
+            v.flow.state.phase == Phase::FixReady && !v.running
+        })
+    }
+}
+
+#[test]
+fn a_writer_fixes_the_findings_of_your_own_work_and_the_app_commits_it_on_your_branch() {
+    let h = harness(reviewers_and_a_writer());
+    let flow = h.start("pair");
+    let reviewed = h.consolidated(flow);
+    assert!(
+        reviewed.pull_request.is_none(),
+        "a review of your own work has no pull request to send a fix to"
+    );
+
+    // The review read `src/draft.rs` uncommitted. Committing it as it was moves the head and not a
+    // byte of the tree, so what the roles found still describes the worktree.
+    h.commit_the_draft_as_reviewed();
+    let started_on = h.git(&["rev-parse", "HEAD"]);
+    assert_ne!(
+        started_on,
+        reviewed.snapshot.as_ref().unwrap().head_sha,
+        "the head moved since the review read it"
+    );
+
+    h.fix_everything(flow, &reviewed).unwrap();
+    let view = h.fix_ready(flow);
+
+    let fix = view.fixes.last().unwrap();
+    assert_eq!(fix.state, FixState::Ready);
+    assert_eq!(
+        fix.base_sha, started_on,
+        "measured from where the writer started: the commit you made is not its work"
+    );
+    let head = fix.head_sha.clone().unwrap();
+    assert_eq!(h.git(&["rev-parse", "HEAD"]), head, "on your own branch");
+    assert_eq!(
+        h.git(&["log", "-1", "--format=%s"]),
+        "Handle the empty export",
+        "the writer's message, committed by the app"
+    );
+    assert_eq!(
+        h.git(&["diff", "--name-only", &started_on, &head]),
+        "src/export.rs",
+        "only the finding's file"
+    );
+    assert!(view.leases.is_empty(), "the writer gave the worktree back");
+
+    let brief = h.briefs("fixer").pop().unwrap();
+    assert!(brief.contains("own worktree"), "{brief}");
+    assert!(brief.contains("`fix/export`"), "{brief}");
+    assert!(
+        !brief.contains("teammate") && !brief.contains("the pull request's head"),
+        "a brief for your own work says nothing of a pull request: {brief}"
+    );
+
+    let ready = view
+        .inbox
+        .iter()
+        .find(|i| i.kind == InboxKind::ReviewReady && i.title.starts_with("Your fix is ready"))
+        .unwrap_or_else(|| panic!("no item about the fix: {:#?}", view.inbox));
+    assert!(ready.body.contains("`fix/export`"), "{}", ready.body);
+    assert!(
+        !ready.body.contains("choose where it goes"),
+        "there is nowhere to choose: {}",
+        ready.body
+    );
+
+    let diff = h.engine.fix_diff(flow).unwrap();
+    assert_eq!(diff.files.len(), 1);
+    assert_eq!(diff.files[0].path, "src/export.rs");
+    assert!(diff.uncommitted.is_empty());
+}
+
+#[test]
+fn a_fix_of_your_own_work_starts_only_from_what_was_reviewed_and_says_how_to_get_back_to_it() {
+    let h = harness(reviewers_and_a_writer());
+    let flow = h.start("pair");
+    let reviewed = h.consolidated(flow);
+
+    // `src/draft.rs` is still uncommitted: the writer's diff would not be its alone.
+    let dirty = h.fix_everything(flow, &reviewed).unwrap_err();
+    assert!(dirty.contains("changes nobody committed"), "{dirty}");
+    assert!(dirty.contains("src/draft.rs"), "{dirty}");
+    assert!(
+        dirty.contains("committing it exactly as it was reviewed keeps these findings"),
+        "a review reads uncommitted work, so the way back is said: {dirty}"
+    );
+
+    // Committed differently from what was read: these findings may not describe it.
+    h.commit("src/draft.rs", "// changed since the review\n");
+    let moved = h.fix_everything(flow, &reviewed).unwrap_err();
+    assert!(
+        moved.contains("neither the head this review read"),
+        "{moved}"
+    );
+    assert!(
+        moved.ends_with("Run the review again first."),
+        "it is your review to run again, not a pull request to re-review: {moved}"
+    );
+
+    let view = h.view(flow);
+    assert!(view.fixes.is_empty(), "nothing was recorded");
+    assert!(view.leases.is_empty(), "no worktree was taken");
+    assert_eq!(view.flow.state.phase, Phase::Consolidated);
+}
+
+#[test]
+fn reviewing_a_fix_again_takes_the_place_of_the_review_it_fixed_and_keeps_that_one_as_done() {
+    let h = harness(reviewers_and_a_writer());
+    let flow = h.start("pair");
+    let reviewed = h.consolidated(flow);
+    h.commit_the_draft_as_reviewed();
+    h.fix_everything(flow, &reviewed).unwrap();
+    h.fix_ready(flow);
+
+    // The fix waits for no route, so a click on Run again starts a review of the fix rather than
+    // focusing the one that is still open at FixReady.
+    let again = h.start("pair");
+
+    assert_ne!(again, flow, "a new review, not the old one focused");
+    let old = h.view(flow);
+    assert_eq!(old.flow.state.end, Some(End::Done));
+    assert_eq!(old.fixes.last().unwrap().state, FixState::Ready, "kept");
+    h.consolidated(again);
+}
+
+#[test]
+fn an_implementation_that_is_still_open_fixes_its_own_review_and_once_it_hands_over_you_may() {
+    let h = harness(reviewers_and_a_writer());
+    let flow = h.start("pair");
+    let reviewed = h.consolidated(flow);
+    h.commit_the_draft_as_reviewed();
+
+    // This review is the one an issue's implementer reads, and its fix loop writes for it.
+    let db = h.app.appdb.get().unwrap();
+    let item = db.flow(flow).unwrap().unwrap().work_item;
+    let implementing = db.start_flow(item, FlowKind::Implement, 1_000).unwrap().id;
+    db.begin_implementation(
+        &NewImplementation {
+            flow: implementing,
+            project: ProjectId::from_root(h.fixture.root()),
+            worktree: h.worktree.clone(),
+            key: "ACME-12".to_owned(),
+            role: "fixer".to_owned(),
+            recipe: "pair".to_owned(),
+            base_sha: h.git(&["rev-parse", "HEAD"]),
+            plan_revision: 1,
+            scope: ImplementScope::default(),
+            bounds: FixBounds::default(),
+        },
+        1_000,
+    )
+    .unwrap();
+    db.change_implementation(
+        implementing,
+        &ImplementChange {
+            review_flow: Some(flow),
+            ..ImplementChange::default()
+        },
+        1_001,
+    )
+    .unwrap();
+
+    let refused = h.fix_everything(flow, &reviewed).unwrap_err();
+    assert!(refused.contains("still open"), "{refused}");
+    assert!(
+        refused.contains("its implementer fixes what the review finds"),
+        "{refused}"
+    );
+    assert!(h.view(flow).fixes.is_empty(), "nothing was recorded");
+
+    db.change_implementation(
+        implementing,
+        &ImplementChange {
+            outcome: Field::Set(ImplementOutcome::Ready),
+            ..ImplementChange::default()
+        },
+        1_002,
+    )
+    .unwrap();
+
+    h.fix_everything(flow, &reviewed).unwrap();
+    assert_eq!(
+        h.fix_ready(flow).fixes.last().unwrap().state,
+        FixState::Ready
+    );
 }

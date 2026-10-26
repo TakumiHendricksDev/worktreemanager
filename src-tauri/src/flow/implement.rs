@@ -1999,10 +1999,7 @@ impl Engine {
                     .flow(existing)
                     .map_err(text)?
                     .ok_or_else(|| format!("flow {existing} has gone"))?;
-                let done = !self.is_running(existing)
-                    && open.state.hold.is_none()
-                    && open.state.phase == Phase::Consolidated;
-                if !done {
+                if !self.is_settled(existing, &open) {
                     return Err(format!(
                         "a review of this issue's worktree (run {existing}) is still open; let it \
                          finish or stop it, then Resume"

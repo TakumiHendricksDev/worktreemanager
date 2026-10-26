@@ -441,11 +441,14 @@ pub fn brief(facts: &BriefFacts<'_>) -> String {
     out
 }
 
-/// The brief `flow_context` hands a writer fixing findings of a teammate's pull request.
+/// The brief `flow_context` hands a writer fixing findings of a teammate's pull request, or of the
+/// person's own work.
 ///
 /// Facts as a review's brief is, and the same fence: the findings' text is a reviewer's words about
-/// someone else's code. What differs is what the role may do — change the files those findings
-/// name, and nothing else — and that its commits are the app's, through `flow_checkpoint`.
+/// code. What differs is what the role may do — change the files those findings name, and nothing
+/// else — and that its commits are the app's, through `flow_checkpoint`. Of the person's own work
+/// the commits land on their branch, so the brief says that rather than that a decision about a
+/// destination follows.
 #[must_use]
 pub fn fix_brief(facts: &BriefFacts<'_>, fix: &super::fix::FixLive) -> String {
     let spec = facts.spec;
@@ -474,14 +477,27 @@ pub fn fix_brief(facts: &BriefFacts<'_>, fix: &super::fix::FixLive) -> String {
             pr.base.branch
         );
     }
-    let _ = writeln!(
-        out,
-        "- Your working directory is the review worktree at `{}`, at the pull request's head \
-         `{}` or a fix made on top of it. It may already hold edits from an earlier attempt of \
-         yours: look at `git status` and carry on from them.",
-        facts.worktree_path,
-        facts.snapshot.head_sha.chars().take(10).collect::<String>()
-    );
+    let head = facts.snapshot.head_sha.chars().take(10).collect::<String>();
+    if fix.own {
+        let _ = writeln!(
+            out,
+            "- Your working directory is the person's own worktree at `{}`{}, as the review read \
+             it: at `{head}` or a fix made on top of it. It may already hold edits from an \
+             earlier attempt of yours: look at `git status` and carry on from them.",
+            facts.worktree_path,
+            facts
+                .branch
+                .map_or_else(String::new, |branch| format!(", on `{branch}`")),
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "- Your working directory is the review worktree at `{}`, at the pull request's head \
+             `{head}` or a fix made on top of it. It may already hold edits from an earlier \
+             attempt of yours: look at `git status` and carry on from them.",
+            facts.worktree_path,
+        );
+    }
     let _ = writeln!(out, "\nFix exactly these findings:");
     for record in &fix.findings {
         let finding = &record.finding;
@@ -516,8 +532,12 @@ pub fn fix_brief(facts: &BriefFacts<'_>, fix: &super::fix::FixLive) -> String {
     );
     let _ = write!(
         out,
-        "\nDo not push, open pull requests or post anything: where this fix goes is the person's \
-         decision, made after reading its diff."
+        "\nDo not push, open pull requests or post anything.{}",
+        if fix.own {
+            " The commits stay on the person's branch for them to read."
+        } else {
+            " Where this fix goes is the person's decision, made after reading its diff."
+        }
     );
     let fenced = facts.knowledge.map(str::trim).filter(|k| !k.is_empty());
     if let Some(knowledge) = fenced {

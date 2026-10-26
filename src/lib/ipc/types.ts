@@ -1926,7 +1926,10 @@ export interface LocalFix {
   role: string;
   findings: number[];
   scope: { paths: string[] };
-  /** The head the review read, which the fix is measured from. */
+  /**
+   * Where the fix is measured from: the head the review read, for a teammate's pull request; the
+   * commit the writer started on, for your own work.
+   */
   baseSha: string;
   headSha: string | null;
   /** What a route's approval pins as the diff it covers. */

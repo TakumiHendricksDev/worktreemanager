@@ -35,6 +35,14 @@
    * Staleness is asked again whenever the window's reading of the pull request names a new head,
    * which it reads on focus.
    *
+   * # Your own work
+   *
+   * Without `pullRequest`, a finished review offers Fix findings: a writer role fixes the findings
+   * you pick, in this worktree, and wtm commits it on your branch (`WorkFixSheet`). Nothing leaves
+   * the Mac and nothing needs approving, so the fix is simply ready, and the run offers to read what
+   * changed and to review it again, which starts a new review of the worktree as it now stands. A
+   * teammate's pull request fixes from its outcome sheet instead, and ends in a route.
+   *
    * # Blocked on the environment
    *
    * A check that needs services which were not answering is drawn blocked, never passed or
@@ -75,7 +83,7 @@
     outcomeLine,
     short,
   } from '../pr-review';
-  import { fixToSend, leaseLine } from '../local-fix';
+  import { canFixFindings, fixToSend, isOwnReview, leaseLine } from '../local-fix';
   import {
     canResume,
     canRunAgain,
@@ -116,6 +124,7 @@
   import Button from './ui/Button.svelte';
   import WorkCapacity from './WorkCapacity.svelte';
   import WorkFinding from './WorkFinding.svelte';
+  import WorkFixSheet from './WorkFixSheet.svelte';
   import WorkPrOutcome from './WorkPrOutcome.svelte';
   import WorkPublication from './WorkPublication.svelte';
   import WorkRoute from './WorkRoute.svelte';
@@ -168,6 +177,8 @@
   const routes = $derived(prReview?.routes ?? []);
   const lease = $derived(run ? leaseLine(run.leases) : null);
   let finishing = $state(false);
+  /** The sheet for fixing your own work's findings, and which of its two moments is open. */
+  let fixSheet = $state<'pick' | 'read' | null>(null);
   const showRerun = $derived(
     run !== undefined &&
       run !== null &&
@@ -538,6 +549,23 @@
             >Stop fix</Button
           >
         {/if}
+        {#if isOwnReview(run) && fixToSend(run)}
+          <Button
+            size="sm"
+            variant="accent"
+            disabled={busy}
+            onclick={() => (fixSheet = 'read')}>Read what changed…</Button
+          >
+        {/if}
+        {#if canFixFindings(run)}
+          <Button
+            variant={showRerun || blocked || fixToSend(run) ? 'neutral' : 'accent'}
+            size="sm"
+            disabled={busy}
+            title="A writer role fixes the findings you pick, in this worktree, and wtm commits it on your branch"
+            onclick={() => (fixSheet = 'pick')}>Fix findings…</Button
+          >
+        {/if}
         {#if canRereview(run, moved)}
           <Button
             variant="accent"
@@ -561,7 +589,9 @@
           >
         {/if}
         {#if canRunAgain(run) && !showRerun && !moved && recipe}
-          <Button size="sm" disabled={busy} onclick={start}>Run again</Button>
+          <Button size="sm" disabled={busy} onclick={start}
+            >{isOwnReview(run) && fixToSend(run) ? 'Review the fix' : 'Run again'}</Button
+          >
         {/if}
         {#if blocked}
           {@const stuck = blocked}
@@ -926,6 +956,17 @@
     onpreviewroute={(request) => reviewRuns.previewRoute(run.flow.id, request)}
     onapproveroute={(request, hash) =>
       reviewRuns.approveRoute(worktreeId, run.flow.id, request, hash)}
+  />
+{/if}
+
+{#if fixSheet && run}
+  <WorkFixSheet
+    view={run}
+    mode={fixSheet}
+    onclose={() => (fixSheet = null)}
+    onstart={(request) => reviewRuns.startFix(worktreeId, run.flow.id, request)}
+    ondiff={() => reviewRuns.fixDiff(run.flow.id)}
+    onreview={start}
   />
 {/if}
 

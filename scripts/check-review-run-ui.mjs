@@ -9,7 +9,11 @@
  * capacity card under a usage pause (Wait and resume, Run this role once elsewhere with its model
  * picker, the usage line saying "unknown" without figures), a role queued for a run-session place,
  * and a fallback's handover opened under its row. Plus the run inbox, Run Review's request, and
- * Resume's.
+ * Resume's. Plus fixing your own work: Fix findings offers only the findings that name a file, picks
+ * what a review would publish, refuses with the app's words where the click was, and sends exactly
+ * the picks and the writer; while the writer runs the run says it holds the worktree and offers
+ * Stop fix; a ready fix says it is on your branch, opens on its diff, and Review the fix starts a
+ * new review.
  *
  * No Tauri, no CLI, no credits. What it proves is the readout's words and wiring against the shapes
  * `review_run` returns; the engine behind them is `src-tauri/tests/review_engine.rs`'s.
@@ -69,6 +73,7 @@ const worktrees = [
   wt('skill', 'fix/skill'),
   wt('blocked-role', 'fix/blocked-role'),
   wt('runtime', 'fix/runtime'),
+  wt('fixable', 'fix/fixable'),
 ];
 const findings = (n) => ({ kind: 'findings', payload: { findings: Array.from({ length: n }, (_, i) => ({
   title: 'Finding ' + i, severity: 'notable', class: 'suggestion', body: 'x' })) } });
@@ -223,6 +228,47 @@ const runs = {
     ],
   }),
 };
+// A review of your own work whose findings can be fixed: two in files, a suggestion, one about the
+// change as a whole, and one dismissed. The writer roles are what the config has.
+runs[id('fixable')] = run(12, 'fixable', { phase: 'consolidated' }, done2, ended, [], false, {
+  writers: [
+    { id: 'fixer', provider: 'claude', model: 'sonnet', objective: 'Fix the findings you are given' },
+    { id: 'fixer-codex', provider: 'codex', model: null, objective: 'Fix the findings you are given' },
+  ],
+  findings: [
+    record(121, 12, { kind: 'confirmed_bug', verification: 'ran the export with no rows' },
+      'The export assumes it has rows', 'An empty export raises on the first row.',
+      at('src/export.rs', 3), [{ source: source('correctness', 'codex', 62), reported: reported('The export assumes it has rows', 'confirmed_bug') }],
+      { severity: 'blocking' }),
+    record(122, 12, { kind: 'rule_violation', rule: 14, revision: 2 }, 'Confirmation uses BaseModal instead of AppDialog',
+      'AppDialog carries the focus trap this flow needs.', at('src/ExportModal.vue', 12),
+      [{ source: source('conventions', 'claude', 61), reported: reported('Confirmation uses BaseModal', 'rule_violation', { rule: { id: 14, revision: 2 } }) }]),
+    record(123, 12, { kind: 'suggestion' }, 'Name the export job', 'A named job is easier to find in logs.',
+      at('src/jobs.rs', 1), [{ source: source('correctness', 'codex', 62, 1), reported: reported('Name the export job', 'suggestion') }],
+      { severity: 'minor' }),
+    record(124, 12, { kind: 'conflict', between: ['R-21', 'REVIEW.md §Naming'] }, 'R-21 and REVIEW.md disagree about file names',
+      'R-21 says kebab-case; REVIEW.md says snake_case.', null,
+      [{ source: source('conventions', 'claude', 61, 2), reported: reported('R-21 and REVIEW.md disagree', 'conflict', { between: ['R-21', 'REVIEW.md §Naming'] }) }]),
+    record(125, 12, { kind: 'suggestion' }, 'Prefer f-strings', 'Consistency.', at('src/old.py', 3),
+      [{ source: source('correctness', 'codex', 62, 2), reported: reported('Prefer f-strings', 'suggestion') }],
+      { severity: 'minor', dismissed: { reason: 'the module predates f-strings on purpose', at: 1 } }),
+  ],
+});
+/** The fix the mocked writer makes, as the app records it, and the diff it reads by. */
+const FIX_HEAD = 'f1a2b3c4d5e6f708090a0b0c0d0e0f1011121314';
+const writerFix = (state, request) => ({ id: 1, flow: 12, step: 120, role: request.role, findings: request.findings,
+  scope: { paths: ['src/ExportModal.vue', 'src/export.rs'] }, baseSha: 'b5d7e49c72700c346df25b998291aa4487d293f3',
+  headSha: state === 'ready' ? FIX_HEAD : null, diffHash: state === 'ready' ? 'sha256:7c0d1e2f3a4b5c6d' : null,
+  state, detail: null, asked: [], allowed: [], startedAt: 1, endedAt: state === 'writing' ? null : 2 });
+window.refuseFix = null;
+window.finishFix = () => {
+  const r = runs[id('fixable')];
+  r.flow.state = { ...r.flow.state, phase: 'fix_ready' };
+  r.fixes = [writerFix('ready', { role: r.fixes[0].role, findings: r.fixes[0].findings })];
+  r.leases = [];
+  // This harness mocks no events, so the window is told what the flow:changed event would tell it.
+  return window.harness.reviewRuns.load('/x/webapp', id('fixable'));
+};
 /** A real PNG, 16 by 10 and green, so the screenshot draws as an image rather than a broken one. */
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAKCAIAAAAy3EnLAAAAE0lEQVR4nGPQ6w4nCTGMahiaGgCjyKoB4OYs+gAAAABJRU5ErkJggg==';
 const staleness = {
@@ -278,6 +324,21 @@ mockIPC((cmd, args) => {
         throw { kind: 'billing', message: "Workflow runs won't start until Claude Code is signed in with a claude.ai subscription.", detail: { providers: ['claude'] } };
       return structuredClone({ ...runs[id('running')], review: { ...runs[id('running')].review, worktree: a.request.worktree, recipe: a.request.recipe } });
     case 'review_screenshot': return PNG;
+    case 'start_local_fix': {
+      if (window.refuseFix) throw { kind: 'refused', message: window.refuseFix, detail: null };
+      const r = Object.values(runs).find((x) => x.flow.id === a.flow);
+      r.flow.state = { ...r.flow.state, phase: 'fixing' };
+      r.fixes = [writerFix('writing', a.request)];
+      r.leases = [{ id: 1, worktree: r.review.worktreePath, flow: a.flow, kind: 'writer', holder: a.request.role,
+        acquiredAt: 1, releasedAt: null, releasedWhy: null }];
+      return structuredClone(r);
+    }
+    case 'local_fix_diff': return {
+      fix: runs[id('fixable')].fixes[0], base: 'b5d7e49c72700c346df25b998291aa4487d293f3', head: FIX_HEAD,
+      hash: 'sha256:7c0d1e2f3a4b5c6d',
+      files: [{ path: 'src/ExportModal.vue', added: 4, removed: 2 }, { path: 'src/export.rs', added: 3, removed: 1 }],
+      patch: 'diff --git a/src/export.rs b/src/export.rs\\n--- a/src/export.rs\\n+++ b/src/export.rs\\n@@ -1,1 +1,3 @@\\n-fn export() { for row in rows() { write(row[0]) } }\\n+fn export() {\\n+    for row in rows() { write(row.first()) }\\n+}\\n',
+      truncated: false, uncommitted: [], outliers: [] };
     // Settings › Recipes, which panel 9's Edit recipe and Move role open on the role.
     case 'recipe_settings': return {
       file: { home: 'local', declaring: ['local'], roleHomes: {}, recipeHomes: {}, userPath: '/u/config.toml',
@@ -324,7 +385,8 @@ const { workspace } = await import('/src/lib/state/workspace.svelte.ts');
 const { work } = await import('/src/lib/state/work.svelte.ts');
 const { view } = await import('/src/lib/state/view.svelte.ts');
 const { codeRequests } = await import('/src/lib/state/code-request.svelte.ts');
-window.harness = { emit, workspace, work, view, codeRequests };
+const { reviewRuns } = await import('/src/lib/state/review-runs.svelte.ts');
+window.harness = { emit, workspace, work, view, codeRequests, reviewRuns };
 mount(App, { target: document.getElementById('app') });`;
 
 const server = await createServer({
@@ -835,6 +897,105 @@ try {
         );
         assert(await panel(page).getByRole('button', { name: 'Check again' }).isVisible());
         await shot(page, join(shots, `billing-${scheme}.png`));
+
+        // ── Your own work: Fix findings ──────────────────────────────────────────────────────
+        await pick(page, 'fixable');
+        const fixButton = panel(page).getByRole('button', { name: 'Fix findings…' });
+        await fixButton.waitFor();
+        assert.equal(
+            await panel(page).getByRole('button', { name: /Finish review|choose where it goes/ }).count(),
+            0,
+            'your own work has no outcome sheet: that is a teammate’s pull request',
+        );
+        await fixButton.click();
+        const sheet = page.getByRole('dialog', { name: 'Fix findings' });
+        await sheet.waitFor();
+        const picks = sheet.locator('.c-fix-sheet__pick');
+        assert.equal(await picks.count(), 3, 'a file-bearing finding each: not the whole-change one, not the dismissed');
+        assert.deepEqual(
+            await picks.evaluateAll((rows) => rows.map((row) => row.querySelector('input').checked)),
+            [true, true, false],
+            'a bug and a rule violation are picked; a suggestion is not, as for a published review',
+        );
+        let sheetText = await sheet.innerText();
+        assert(sheetText.includes('src/export.rs:3'), sheetText);
+        assert(sheetText.includes('Name the export job'), sheetText);
+        assert(!sheetText.includes('f-strings'), 'a dismissed finding is not offered');
+        assert(sheetText.includes('name no file to hold a writer to'), sheetText);
+        const writerSelect = sheet.getByRole('combobox', { name: 'Writer' });
+        assert.equal(await writerSelect.inputValue(), 'fixer');
+        assert.deepEqual(
+            await writerSelect.locator('option').allTextContents(),
+            ['fixer · claude sonnet', 'fixer-codex · codex'],
+        );
+        await shot(page, join(shots, `fix-pick-${scheme}.png`));
+        const startFix = sheet.getByRole('button', { name: 'Start the fix' });
+        for (const box of await picks.locator('input').all()) await box.uncheck();
+        assert(await startFix.isDisabled(), 'nothing picked, nothing to start');
+        for (const box of await picks.locator('input').all()) await box.check();
+
+        // The app's refusal is shown where the click was, and nothing changed.
+        await page.evaluate(() => {
+            window.refuseFix =
+                'The review worktree has changes nobody committed (src/draft.rs). A fix starts from a clean tree.';
+        });
+        await writerSelect.selectOption('fixer-codex');
+        await startFix.click();
+        await sheet.getByRole('alert').waitFor();
+        assert((await sheet.getByRole('alert').innerText()).includes('changes nobody committed'));
+        assert(await sheet.isVisible(), 'the sheet stays up so nothing picked is lost');
+        assert.equal(await panel(page).getByRole('button', { name: 'Stop fix' }).count(), 0);
+        await page.evaluate(() => (window.refuseFix = null));
+        await writerSelect.selectOption('fixer');
+
+        // Start sends exactly the picks and the writer, and closes the sheet.
+        await picks.nth(2).locator('input').check();
+        await startFix.click();
+        await sheet.waitFor({ state: 'detached' });
+        assert.deepEqual((await calls(page, 'start_local_fix')).at(-1).args, {
+            flow: 12,
+            request: { findings: [121, 122, 123], role: 'fixer' },
+        });
+        text = await readout(page, 'Fixing', 'fixer is fixing 3 findings');
+        assert(!text.includes(' of #'), 'there is no pull request to name');
+        assert(text.includes('wtm commits for it on your branch'), text);
+        assert(text.includes('holds the review worktree as its writer'), text);
+        assert(await panel(page).getByRole('button', { name: 'Stop fix' }).isVisible());
+        assert.equal(
+            await panel(page).getByRole('button', { name: 'Fix findings…' }).count(),
+            0,
+            'the writer has the worktree: a second fix cannot start',
+        );
+        await shot(page, join(shots, `fix-writing-${scheme}.png`));
+
+        // Ready: it is on your branch, so what is offered is reading it and reviewing it again.
+        await page.evaluate(() => window.finishFix());
+        text = await readout(page, 'Fix ready', 'Fix of 3 findings committed as f1a2b3c');
+        assert(text.includes('It is on your branch and nothing has left this Mac'), text);
+        for (const name of ['Read what changed…', 'Fix findings…', 'Review the fix'])
+            assert(await panel(page).getByRole('button', { name }).isVisible(), name);
+        assert.equal(await panel(page).getByRole('button', { name: 'Stop fix' }).count(), 0);
+        assert.equal(
+            await panel(page).getByRole('button', { name: /Finish review|choose where it goes/ }).count(),
+            0,
+        );
+        await shot(page, join(shots, `fix-ready-${scheme}.png`));
+
+        // Reading it shows the files and the patch, and Review the fix starts a review.
+        await panel(page).getByRole('button', { name: 'Read what changed…' }).click();
+        const diff = page.getByRole('dialog', { name: 'What the fix changed' });
+        await diff.locator('.c-local-fix__file').first().waitFor();
+        sheetText = await diff.innerText();
+        assert(sheetText.includes('src/export.rs') && sheetText.includes('+3'), sheetText);
+        assert(sheetText.includes('fixer fixed 3 findings as f1a2b3c on b5d7e49'), sheetText);
+        assert(sheetText.includes('+    for row in rows() { write(row.first()) }'), sheetText);
+        assert.deepEqual((await calls(page, 'local_fix_diff')).at(-1).args, { flow: 12 });
+        await shot(page, join(shots, `fix-read-${scheme}.png`));
+        await diff.getByRole('button', { name: 'Review the fix' }).click();
+        await diff.waitFor({ state: 'detached' });
+        assert.deepEqual((await calls(page, 'start_review')).at(-1).args, {
+            request: { project: '/x/webapp', worktree: '/x/webapp-wt/fixable', recipe: 'standard' },
+        });
 
         // ── Run Review sends the recipe picked ───────────────────────────────────────────────
         await pick(page, 'webapp');

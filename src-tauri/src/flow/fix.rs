@@ -1,5 +1,13 @@
-//! Local fixes of a teammate's pull request: the writer lease, the writer's run, and the app's
-//! commits of what it wrote.
+//! Local fixes of a finished review's findings, whether of a teammate's pull request or of your own
+//! work: the writer lease, the writer's run, and the app's commits of what it wrote.
+//!
+//! # Two kinds of review, one writer
+//!
+//! A teammate's pull request is fixed in its review worktree and the fix leaves by a route you
+//! approve (`routes.rs`). Your own work has nowhere to send a fix to: the review worktree *is* your
+//! worktree, so the app's commits land on your own branch and the fix is done when you have read
+//! them. Everything else is shared, because what a writer may touch and who may commit for it do
+//! not depend on whose code it is.
 //!
 //! # In order
 //!
@@ -102,6 +110,11 @@ pub struct FixLive {
     pub worktree: PathBuf,
     /// The pull request's number, for commit messages and items.
     pub number: Option<u64>,
+    /// Whether this is a fix of your own work, whose commits land on your own branch, rather than
+    /// of a teammate's pull request, whose fix leaves by a route you approve.
+    pub own: bool,
+    /// The branch the review worktree is on, for what an item says of where the commits went.
+    pub branch: Option<String>,
 }
 
 /// One file of a fix's diff.
@@ -306,9 +319,19 @@ impl Engine {
             .flow(flow)
             .map_err(|e| reviews::store_error(&e))?
             .ok_or_else(|| refused(format!("no run {flow}")))?;
-        if self.pull_request_item(&state).is_none() {
+        let own = state.state.kind == FlowKind::ReviewMine;
+        if !own && self.pull_request_item(&state).is_none() {
             return Err(refused(
-                "Local fixes are for a review of a teammate's pull request.",
+                "Local fixes are for a review of your own work or of a teammate's pull request.",
+            ));
+        }
+        // An issue's implementer reads the review it asked for and fixes what it finds itself, in
+        // rounds the run bounds; a second writer here would race it for the worktree and spend its
+        // rounds. Once it has handed over, the review is yours like any other.
+        if own && self.reviewing_for(flow).is_some() {
+            return Err(refused(
+                "This review is part of an issue's implementation, which is still open: its \
+                 implementer fixes what the review finds. Fix findings once it has handed over.",
             ));
         }
         if let Some(end) = &state.state.end {
@@ -364,8 +387,14 @@ impl Engine {
         if !dirty.is_empty() {
             return Err(refused(format!(
                 "The review worktree has changes nobody committed ({}). A fix starts from a clean \
-                 tree, so its diff is the writer's alone: commit or discard them first.",
-                listed(&dirty)
+                 tree, so its diff is the writer's alone: commit or discard them first.{}",
+                listed(&dirty),
+                if own {
+                    " A review reads uncommitted work too, so committing it exactly as it was \
+                     reviewed keeps these findings."
+                } else {
+                    ""
+                }
             )));
         }
         let head = self
@@ -376,16 +405,31 @@ impl Engine {
             .map(|c| c.as_str().to_owned())
             .unwrap_or_default();
         let fixes = db.fixes(flow).map_err(|e| reviews::store_error(&e))?;
+        // Your own work is reviewed as it stands, uncommitted files included, so committing what
+        // was reviewed moves the head without changing a byte of it. Its tree is the same one, and
+        // that is what the findings are about.
+        let reviewed_as_committed = own
+            && self
+                .app
+                .git
+                .tree_changes(&worktree.path, &snapshot.tree_sha, &head)
+                .is_ok_and(|changed| !changed.truncated && changed.paths.is_empty());
         let ours = head == snapshot.head_sha
+            || reviewed_as_committed
             || fixes
                 .iter()
                 .any(|fix| fix.head_sha.as_deref() == Some(head.as_str()));
         if !ours {
             return Err(refused(format!(
                 "The review worktree is at {}, which is neither the head this review read ({}) \
-                 nor a fix wtm made. Re-review the pull request first.",
+                 nor a fix wtm made. {} first.",
                 short(&head),
-                short(&snapshot.head_sha)
+                short(&snapshot.head_sha),
+                if own {
+                    "Run the review again"
+                } else {
+                    "Re-review the pull request"
+                }
             )));
         }
         self.host
@@ -423,7 +467,14 @@ impl Engine {
                         role: req.role.clone(),
                         findings: req.findings.clone(),
                         scope,
-                        base_sha: snapshot.head_sha.clone(),
+                        // A teammate's fix is measured from the head the review read, so a second
+                        // one carries the first. Yours is measured from where the writer starts:
+                        // the commits you made since the review are not its work.
+                        base_sha: if own {
+                            head.clone()
+                        } else {
+                            snapshot.head_sha.clone()
+                        },
                     },
                     now,
                 )
@@ -545,10 +596,11 @@ impl Engine {
             .into_iter()
             .filter(|record| fix.findings.contains(&record.finding.id))
             .collect();
-        let pull_request = db
-            .flow(flow)
-            .ok()
-            .flatten()
+        let record = db.flow(flow).ok().flatten();
+        let own = record
+            .as_ref()
+            .is_some_and(|state| state.state.kind == FlowKind::ReviewMine);
+        let pull_request = record
             .filter(|state| state.state.kind == FlowKind::ReviewPr)
             .and_then(|state| db.mirrored_pr(state.work_item).ok().flatten())
             .map(|mirror| mirror.pull_request);
@@ -558,6 +610,8 @@ impl Engine {
             findings,
             worktree: worktree.path.clone(),
             number: pull_request.as_ref().map(|pr| pr.number),
+            own,
+            branch: worktree.branch().map(|b| b.as_str().to_owned()),
         });
         let changed = self
             .app
@@ -715,22 +769,38 @@ impl Engine {
                 notes.join(" "),
             )
         } else {
-            (
-                format!("Your local fix{number} is ready: read the diff"),
-                format!(
-                    "`{}` fixed {} finding{} and the app committed it as {}. Nothing has left \
-                     this Mac: read the diff, then choose where it goes.{}",
-                    step.role,
-                    fix.findings.len(),
-                    if fix.findings.len() == 1 { "" } else { "s" },
-                    short(&head),
-                    if notes.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {}", notes.join(" "))
-                    }
-                ),
-            )
+            let fixed = format!(
+                "`{}` fixed {} finding{} and the app committed it as {}.",
+                step.role,
+                fix.findings.len(),
+                if fix.findings.len() == 1 { "" } else { "s" },
+                short(&head),
+            );
+            let after = if notes.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", notes.join(" "))
+            };
+            if live.own {
+                (
+                    "Your fix is ready: read what it changed".to_owned(),
+                    format!(
+                        "{fixed} It is on {}, and nothing has left this Mac. Read the diff, then \
+                         review it again, or fix more.{after}",
+                        live.branch
+                            .as_deref()
+                            .map_or_else(|| "your branch".to_owned(), |b| format!("`{b}`")),
+                    ),
+                )
+            } else {
+                (
+                    format!("Your local fix{number} is ready: read the diff"),
+                    format!(
+                        "{fixed} Nothing has left this Mac: read the diff, then choose where it \
+                         goes.{after}"
+                    ),
+                )
+            }
         };
         self.file(&NewInboxItem {
             flow,

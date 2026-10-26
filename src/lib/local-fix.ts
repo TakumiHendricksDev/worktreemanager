@@ -1,6 +1,6 @@
 /**
- * Local fixes of a teammate's pull request, in the Work view's words: what the writer is doing,
- * whether its fix is ready, where a fix can go, and how far a route got.
+ * Local fixes of a review's findings, in the Work view's words: what the writer is doing, whether
+ * its fix is ready, where a fix can go, and how far a route got.
  *
  * Pure, as `publish.ts` and `pr-review.ts` are, and for their reason: the maps are keyed by the
  * Rust enums' unions, so a route or a state the engine gains and this file does not name is a type
@@ -16,6 +16,7 @@
 
 import type {
   Attention,
+  FindingRecord,
   FixState,
   LocalFix,
   Operation,
@@ -53,6 +54,36 @@ export const FIX_STATE_WORDS: Record<FixState, string> = {
   failed: 'Did not finish',
   cancelled: 'Stopped',
 };
+
+/**
+ * Whether the review is of your own work, which has no pull request to send a fix to: the writer's
+ * commits land on your own branch, and reading them is the end of it.
+ */
+export function isOwnReview(view: ReviewRunView): boolean {
+  return view.pullRequest === null;
+}
+
+/** Findings a fix can be held to: the ones still standing that name a file. */
+export function fixableFindings(view: ReviewRunView): FindingRecord[] {
+  return view.findings.filter((f) => f.dismissed === null && f.location !== null);
+}
+
+/**
+ * Whether Fix findings is the thing to offer on a review of your own work: it has finished, is
+ * waiting on nobody, and has a finding a writer could be held to. A fix that is ready offers it
+ * again, for what is left. A teammate's pull request fixes from its outcome sheet instead.
+ */
+export function canFixFindings(view: ReviewRunView): boolean {
+  const { state } = view.flow;
+  return (
+    isOwnReview(view) &&
+    !view.running &&
+    state.end === null &&
+    state.hold === null &&
+    (state.phase === 'consolidated' || state.phase === 'fix_ready') &&
+    fixableFindings(view).length > 0
+  );
+}
 
 /** The run's current fix, if it has one. */
 export function currentFix(view: ReviewRunView): LocalFix | null {
@@ -231,13 +262,19 @@ export function routeActions(view: RouteSendView): { retry: boolean; leave: bool
   };
 }
 
-/** The Reviews tab's headline for a run that is fixing or has fixed. `null` for any other. */
+/**
+ * The Reviews tab's headline for a run that is fixing or has fixed. `null` for any other.
+ *
+ * Of a teammate's pull request a fix waits for a route; of your own work it is already committed,
+ * so the words say where it is and what to do next.
+ */
 export function fixHeadline(
   view: ReviewRunView,
 ): { eyebrow: string; title: string; prose: string; tone: RunTone } | null {
   const { state } = view.flow;
   const fix = currentFix(view);
   if (!fix || state.end !== null) return null;
+  const own = isOwnReview(view);
   const number = view.pullRequest ? `#${view.pullRequest.number}` : 'the pull request';
   const count = fix.findings.length === 1 ? '1 finding' : `${fix.findings.length} findings`;
   const files = fix.scope.paths.map((path) => `\`${path}\``).join(', ');
@@ -255,8 +292,12 @@ export function fixHeadline(
     }
     return {
       eyebrow: 'Fixing',
-      title: `\`${fix.role}\` is fixing ${count} of ${number}`,
-      prose: `It may change only ${files}. It cannot commit or push: wtm commits for it, after checking the files, and nothing leaves this Mac until you approve where it goes. The review worktree is its alone meanwhile.`,
+      title: own
+        ? `\`${fix.role}\` is fixing ${count}`
+        : `\`${fix.role}\` is fixing ${count} of ${number}`,
+      prose: own
+        ? `It may change only ${files}. It cannot commit or push: wtm commits for it on your branch, after checking the files, and nothing leaves this Mac. The worktree is its alone meanwhile, so leave it be until it is done.`
+        : `It may change only ${files}. It cannot commit or push: wtm commits for it, after checking the files, and nothing leaves this Mac until you approve where it goes. The review worktree is its alone meanwhile.`,
       tone: 'info',
     };
   }
@@ -265,9 +306,11 @@ export function fixHeadline(
     case 'ready':
       return fix.headSha && fix.headSha !== fix.baseSha
         ? {
-            eyebrow: 'Local fix ready',
+            eyebrow: own ? 'Fix ready' : 'Local fix ready',
             title: `Fix of ${count} committed as ${short(fix.headSha)}`,
-            prose: `Read its diff, then choose where it goes: a follow-up pull request, suggestions on ${number}, or a push to their branch. Nothing has left this Mac.${fix.detail ? ` ${fix.detail}` : ''}`,
+            prose: own
+              ? `It is on your branch and nothing has left this Mac. Read what changed, then review it again to see whether the findings are gone, or fix what is left.${fix.detail ? ` ${fix.detail}` : ''}`
+              : `Read its diff, then choose where it goes: a follow-up pull request, suggestions on ${number}, or a push to their branch. Nothing has left this Mac.${fix.detail ? ` ${fix.detail}` : ''}`,
             tone: 'ok',
           }
         : {

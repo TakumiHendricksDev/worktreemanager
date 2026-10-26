@@ -93,7 +93,8 @@ Worth stating because it narrows the surface considerably:
   to an integration branch, never to someone's branch without write access or to a fork whose
   author did not allow maintainer edits, and re-read before pushing so a branch that moved stops it.
   No agent tool can publish, push or approve; run sessions have no `gh` credentials either
-  (ARCHITECTURE §6h). wtm stores no GitHub token.
+  (ARCHITECTURE §6h). wtm stores no GitHub token. The same writer fixes the findings of a review of
+  your own work, under the same limits, with its commits on your own branch and nothing sent.
   Implementing an issue works the same way (ARCHITECTURE §6n): the writer starts only once you have
   approved the plan, and the design when the plan needs one; it edits only the issue's worktree and
   cannot commit or push; wtm commits for it, with git hooks off, only files the approved plan covers,
