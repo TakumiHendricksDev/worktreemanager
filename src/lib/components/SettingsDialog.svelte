@@ -2,7 +2,8 @@
   /**
    * Settings.
    *
-   * Four sections, and a fifth, Knowledge, while the Work view is on: the open project's review
+   * Four sections, and two more while the Work view is on: Recipes, the open project's review
+   * recipes and roles, written back to the config file that declares them, and Knowledge, its review
    * rules, which live in the app's database rather than the config file. Three of the four are
    * preferences that already existed in
    * `~/.config/wtm/config.toml` with no way to reach it from the app — `ui.opener` was written
@@ -50,29 +51,37 @@
   import Icon from './ui/Icon.svelte';
   import TextInput from './ui/TextInput.svelte';
   import KnowledgeSettings from './KnowledgeSettings.svelte';
+  import RecipeSettings from './RecipeSettings.svelte';
+  import { settingsRequest } from '../state/settings.svelte';
 
-  type Section = 'appearance' | 'general' | 'notifications' | 'knowledge' | 'advanced';
+  type Section =
+    'appearance' | 'general' | 'notifications' | 'recipes' | 'knowledge' | 'advanced';
   const SECTIONS: { id: Section; label: string }[] = [
     { id: 'appearance', label: 'Appearance' },
     { id: 'general', label: 'General' },
     { id: 'notifications', label: 'Notifications' },
+    { id: 'recipes', label: 'Recipes' },
     { id: 'knowledge', label: 'Knowledge' },
     { id: 'advanced', label: 'Advanced' },
   ];
+  const PROJECT_SECTIONS: Section[] = ['recipes', 'knowledge'];
   const { onclose }: { onclose: () => void } = $props();
-  let section = $state<Section>('appearance');
+  // Taken once, as the dialog opens: see `state/settings.svelte.ts`.
+  const recipesTarget = settingsRequest.takeRecipes();
+  let section = $state<Section>(recipesTarget ? 'recipes' : 'appearance');
 
   /*
-   * Knowledge is the current project's review rules, part of the Work view, so it is offered only
-   * while Work is turned on and a project is open. Turning Work off with the section showing moves
+   * Recipes and Knowledge are the current project's, part of the Work view, so they are offered
+   * only while Work is turned on and a project is open. Turning Work off with one showing moves
    * Settings back to General, where the switch is, rather than leaving a tab that no longer exists.
    */
   const knowledgeProject = $derived(view.workEnabled ? workspace.activeProject : null);
   const sections = $derived(
-    SECTIONS.filter((s) => s.id !== 'knowledge' || knowledgeProject !== null),
+    SECTIONS.filter((s) => !PROJECT_SECTIONS.includes(s.id) || knowledgeProject !== null),
   );
   $effect(() => {
-    if (section === 'knowledge' && knowledgeProject === null) section = 'general';
+    if (PROJECT_SECTIONS.includes(section) && knowledgeProject === null)
+      section = 'general';
   });
 
   const MODES: { value: ThemeChoice; label: string }[] = [
@@ -277,7 +286,7 @@
   }
 </script>
 
-<Dialog title="Settings" {onclose} wide workspace={section === 'knowledge'}>
+<Dialog title="Settings" {onclose} wide workspace={PROJECT_SECTIONS.includes(section)}>
   {#snippet body()}
     <div
       class="c-tabs"
@@ -633,6 +642,14 @@
             in System Settings → Notifications.
           </p>
         {/if}
+      </div>
+    {:else if section === 'recipes' && knowledgeProject}
+      <div class="c-settings__panel c-settings__panel--fill">
+        <RecipeSettings
+          projectId={knowledgeProject.id}
+          projectName={knowledgeProject.name}
+          target={recipesTarget?.project === knowledgeProject.id ? recipesTarget : null}
+        />
       </div>
     {:else if section === 'knowledge' && knowledgeProject}
       <div class="c-settings__panel c-settings__panel--fill">

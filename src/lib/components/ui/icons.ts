@@ -60,6 +60,7 @@ export type IconName =
   | 'home'
   | 'inbox'
   | 'locate'
+  | 'lock'
   | 'star'
   | 'star-outline'
   | 'plus'
@@ -190,6 +191,13 @@ export const icons: Record<IconName, IconSpec> = {
     stroke:
       'M8 2 A6 6 0 1 1 8 14 A6 6 0 1 1 8 2 Z M6.25 6.5 A1.75 1.75 0 1 1 9.1 7.85 ' +
       'C8.45 8.35 8 8.75 8 9.6 M8 11.4 V11.6',
+  },
+  /**
+   * A padlock: enforced, not asked for. Settings › Recipes' notice that a role's authority comes
+   * from its profile when the session starts, not from what its prompt says.
+   */
+  lock: {
+    stroke: 'M3.5 7.25 H12.5 V13.75 H3.5 Z M5.5 7.25 V5 A2.5 2.5 0 0 1 10.5 5 V7.25',
   },
   /** Two bars: waiting, and it will go on by itself. A run paused for usage. */
   pause: { stroke: 'M6 4 V12 M10 4 V12' },

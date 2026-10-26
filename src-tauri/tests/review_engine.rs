@@ -764,6 +764,80 @@ fn quitting_mid_review_interrupts_it_keeps_finished_results_and_sends_nothing_ag
     assert!(needs_you(&view).is_empty());
 }
 
+/// Settings › Recipes made editing a recipe a click, so an edit must not reach a run already under
+/// way: a role resumed after a quit runs as configured when its review started. The next review
+/// reads the edit.
+#[test]
+fn an_edit_to_the_config_reaches_the_next_review_and_never_one_already_started() {
+    let h = harness(Box::new(|role, _| match role {
+        "correctness" => Behaviour::Silent,
+        _ => Behaviour::Submit(vec![finding("kept across the quit")]),
+    }));
+    let flow = h.start("pair");
+    h.until(flow, "correctness running", |v| {
+        Harness::statuses(v, "correctness") == [InvocationStatus::Running]
+            && Harness::step(v, "conventions").status == StepStatus::Done
+    });
+    h.engine.shutdown();
+
+    // Edited while the review waits: the role's objective rewritten, and the other role gone.
+    let config = h.data.path().join("config.toml");
+    let edited = ROLES
+        .replace(
+            "objective = \"Find bugs the change introduces\"",
+            "objective = \"An objective written after the review started\"",
+        )
+        .replace(
+            "[[defaults.workflow.recipe.pair.stage]]\nroles = [\"conventions\", \"correctness\"]",
+            "[[defaults.workflow.recipe.pair.stage]]\nroles = [\"correctness\"]",
+        );
+    assert_ne!(edited, ROLES);
+    std::fs::write(&config, edited).unwrap();
+
+    h.host.rescript(Box::new(|_, _| {
+        Behaviour::Submit(vec![finding("after the resume")])
+    }));
+    let relaunched = engine_for(&h.app, &h.host, &h.clock, &h.heard);
+    relaunched.resume(flow).unwrap();
+    let view = relaunched_consolidated(&relaunched, flow);
+    assert_eq!(titles(&view, "correctness"), ["after the resume"]);
+    let resumed = h.briefs("correctness");
+    assert_eq!(resumed.len(), 2);
+    assert!(
+        resumed[1].contains("Find bugs the change introduces")
+            && !resumed[1].contains("written after the review started"),
+        "the resumed role reads the objective its review started with:\n{}",
+        resumed[1]
+    );
+
+    // A review started now is a new run, and reads the config as it is.
+    std::fs::write(h.worktree_path.join("src/export.rs"), "fn export() { 1 }\n").unwrap();
+    let next = relaunched
+        .start(&StartReview {
+            project: h.project.clone(),
+            worktree: h.worktree.clone(),
+            recipe: "pair".to_owned(),
+            base: None,
+        })
+        .unwrap();
+    assert_ne!(next, flow);
+    let view = relaunched_consolidated(&relaunched, next);
+    assert_eq!(
+        view.steps
+            .iter()
+            .map(|s| s.role.as_str())
+            .collect::<Vec<_>>(),
+        ["correctness"],
+        "the new review has the edited recipe's one role"
+    );
+    assert!(
+        h.briefs("correctness")
+            .last()
+            .unwrap()
+            .contains("written after the review started")
+    );
+}
+
 fn relaunched_consolidated(engine: &Engine, flow: FlowId) -> FlowView {
     for _ in 0..4_000 {
         let view = engine.view(flow).unwrap();
@@ -1274,6 +1348,45 @@ fn a_check_a_role_asks_for_is_run_by_the_app_and_only_an_exit_of_zero_reads_as_p
         3,
         "a check ran against the whole tree"
     );
+}
+
+/// A run keeps its workflow, but a check is a command, and whether it may run follows your config
+/// as it is now: one changed after the review started is not run with the argv the review kept.
+#[test]
+fn a_check_whose_command_changed_after_the_review_started_is_not_run() {
+    let h = harness(Box::new(|_, _| Behaviour::Silent));
+    let flow = h.start("checks");
+    h.until(flow, "the checker running", |v| {
+        Harness::statuses(v, "checker") == [InvocationStatus::Running]
+    });
+    h.engine.shutdown();
+
+    let config = h.data.path().join("config.toml");
+    let edited = ROLES.replace(
+        "[defaults.workflow.check.passes]\nrun = [\"true\"]",
+        "[defaults.workflow.check.passes]\nrun = [\"sh\", \"-c\", \"echo changed\"]",
+    );
+    assert_ne!(edited, ROLES);
+    std::fs::write(&config, edited).unwrap();
+
+    h.host.rescript(Box::new(|_, _| {
+        Behaviour::CheckThenSubmit(vec!["passes"], finding("x"))
+    }));
+    let relaunched = engine_for(&h.app, &h.host, &h.clock, &h.heard);
+    relaunched.resume(flow).unwrap();
+    let view = relaunched_consolidated(&relaunched, flow);
+    assert!(
+        view.checks.iter().all(|c| c.check != "passes"),
+        "neither argv ran: {:?}",
+        view.checks
+    );
+    let answers = h.host.answers.lock().clone();
+    let (_, ok, text) = answers
+        .iter()
+        .find(|(_, _, text)| text.contains("`passes` was not run"))
+        .cloned()
+        .unwrap();
+    assert!(!ok && text.contains("no longer declares it"), "{text}");
 }
 
 #[test]

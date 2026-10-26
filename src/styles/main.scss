@@ -109,8 +109,10 @@
 @use 'components/preflight';
 @use 'components/progress';
 @use 'components/queue';
+@use 'components/recipes';
 @use 'components/remove';
 @use 'components/review';
+@use 'components/role-form';
 @use 'components/rule-form';
 @use 'components/schema-form';
 @use 'components/sidebar';

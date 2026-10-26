@@ -25,6 +25,7 @@ import type {
   ReviewStep,
   RoleProvider,
   Screenshot,
+  SkillProblem,
   StepStatus,
 } from './ipc/types';
 import { isWtmError } from './ipc/types';
@@ -245,13 +246,13 @@ export function headline(
         ? {
             eyebrow: "Can't run: recipe",
             title: `\`/${problem.skill}\` isn't available to ${provider} here`,
-            prose: `The \`${problem.role}\` role names the skill, but ${provider}'s skill list for this worktree doesn't include it. Providers don't share skills, so wtm checks each role against its own. Change the role's \`skills\` or \`provider\` in your config, then retry it. ${kept}`,
+            prose: `The \`${problem.role}\` role names the skill, but ${provider}'s skill list for this worktree doesn't include it. Providers don't share skills, so wtm checks each role against its own. Edit the recipe to change the role's skills or provider, then Run again: a review keeps the recipe it started with, so Retry asks ${provider} again, which helps once the skill is installed for it. ${kept}`,
             tone: 'danger',
           }
         : {
             eyebrow: "Can't run: recipe",
             title: `${provider} never listed its skills`,
-            prose: `The \`${problem.role}\` role names skills, and ${provider} did not say which it has, so wtm could not check them. ${kept}`,
+            prose: `The \`${problem.role}\` role names skills, and ${provider} did not say which it has, so wtm could not check them. Edit the recipe, then Run again: a review keeps the recipe it started with. ${kept}`,
             tone: 'danger',
           };
     }
@@ -437,6 +438,19 @@ export function canStopFix(view: ReviewRunView): boolean {
 }
 
 /** Whether a new run of the same worktree would start rather than focus this one. */
+/**
+ * The skill problem that stopped a finished review's role: "can't run: recipe". Its Edit recipe and
+ * Move role buttons open Settings › Recipes at that role.
+ */
+export function recipeProblem(view: ReviewRunView): SkillProblem | null {
+  const { state } = view.flow;
+  if (state.end !== null || state.phase !== 'consolidated') return null;
+  return (
+    view.steps.find((s) => s.status === 'failed' && s.skillProblem !== null)
+      ?.skillProblem ?? null
+  );
+}
+
 export function canRunAgain(view: ReviewRunView): boolean {
   const { state } = view.flow;
   return (

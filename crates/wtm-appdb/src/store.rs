@@ -17,7 +17,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use wtm_core::flow::{
     End, Flow, FlowEvent, FlowId, FlowKind, FlowState, IssueRef, NewWorkItem, PullRequestRef,
-    RecordedEvent, RecordedLink, UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink,
+    RecordedEvent, RecordedLink, RunPart, UnixMs, WorkItem, WorkItemId, WorkKey, WorkLink,
+    WorkflowSpec,
 };
 use wtm_core::model::ProjectId;
 use wtm_core::ports::{FlowStore, FlowStoreError};
@@ -288,6 +289,37 @@ impl FlowStore for AppDb {
         rows.map(|row| row.map_err(storage)?.into_flow()).collect()
     }
 
+    fn run_workflow(
+        &self,
+        flow: FlowId,
+        part: RunPart,
+    ) -> Result<Option<WorkflowSpec>, FlowStoreError> {
+        let conn = self.conn.lock();
+        run_workflow(&conn, flow, part)
+    }
+
+    fn capture_workflow(
+        &self,
+        flow: FlowId,
+        part: RunPart,
+        workflow: &WorkflowSpec,
+        at: UnixMs,
+    ) -> Result<WorkflowSpec, FlowStoreError> {
+        let conn = self.conn.lock();
+        if load_flow(&conn, flow)?.is_none() {
+            return Err(FlowStoreError::UnknownFlow(flow));
+        }
+        let json = serde_json::to_string(workflow).map_err(storage)?;
+        // `OR IGNORE`: a run that already has one keeps it, which is the whole point of the table.
+        conn.execute(
+            "INSERT OR IGNORE INTO run_workflows (flow_id, part, workflow, captured_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![flow.0, part.as_str(), json, at],
+        )
+        .map_err(storage)?;
+        run_workflow(&conn, flow, part)?.ok_or(FlowStoreError::UnknownFlow(flow))
+    }
+
     fn events(&self, flow: FlowId) -> Result<Vec<RecordedEvent>, FlowStoreError> {
         let conn = self.conn.lock();
         if load_flow(&conn, flow)?.is_none() {
@@ -488,6 +520,23 @@ pub(crate) fn json<T: Serialize>(value: &T) -> Result<String, FlowStoreError> {
 
 pub(crate) fn from_json<T: DeserializeOwned>(text: &str) -> Result<T, FlowStoreError> {
     serde_json::from_str(text).map_err(storage)
+}
+
+fn run_workflow(
+    conn: &Connection,
+    flow: FlowId,
+    part: RunPart,
+) -> Result<Option<WorkflowSpec>, FlowStoreError> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT workflow FROM run_workflows WHERE flow_id = ?1 AND part = ?2",
+            params![flow.0, part.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    json.map(|json| serde_json::from_str(&json).map_err(storage))
+        .transpose()
 }
 
 pub(crate) fn storage(error: impl std::fmt::Display) -> FlowStoreError {

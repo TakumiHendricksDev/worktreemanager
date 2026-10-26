@@ -41,13 +41,15 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use wtm_core::flow::RunPart;
 use wtm_core::flow::{
     ApprovalSubject, Blocked, Design, DesignApproval, DesignComment, DesignDecision, DesignNow,
     DesignOrigin, DesignRevision, DesignStanding, DesignVerdict, Field, Flow, FlowEvent, FlowId,
     FlowKind, GateFacts, Hold, HoldKind, InboxKind, InboxTarget, InterruptCause, Invocation,
     InvocationChange, InvocationStatus, NewApproval, NewDesign, NewDesignRevision, NewInboxItem,
     NewInvocation, NewStep, OutputKind, Phase, PlanApproval, PlanRecord, PlanStanding, PlanVerdict,
-    RoleSpec, SourcePin, Step, StepChange, StepStatus, TrackerKind, Workspace, implementing_gate,
+    RoleSpec, SourcePin, Step, StepChange, StepStatus, TrackerKind, WorkflowSpec, Workspace,
+    implementing_gate,
 };
 use wtm_core::model::AgentEvent;
 use wtm_core::ports::{
@@ -215,9 +217,8 @@ impl Engine {
             .any(|((of, _), live)| *of == flow && live.designer.is_some())
     }
 
-    /// The designer role a project names, with its spec, when it names one.
-    fn designer_of(project: &wtm_core::model::Project) -> Option<(String, RoleSpec)> {
-        let workflow = project.workflow.as_ref()?;
+    /// The designer role a workflow names, with its spec, when it names one.
+    fn designer_of(workflow: &WorkflowSpec) -> Option<(String, RoleSpec)> {
         let id = workflow.designer.clone()?;
         let spec = workflow.role.get(&id)?.clone();
         Some((id, spec))
@@ -419,7 +420,8 @@ impl Engine {
         let project = planning
             .as_ref()
             .and_then(|p| self.app.project(p.project.as_str()).ok());
-        let designer = project
+        let designer = self
+            .kept_workflow(flow, RunPart::Design, project.as_ref())
             .as_ref()
             .and_then(Self::designer_of)
             .map(|(id, _)| id);
@@ -658,7 +660,11 @@ impl Engine {
             .map_err(text)?
             .ok_or("only a planned issue's run designs")?;
         let project = self.app.project(planning.project.as_str()).map_err(text)?;
-        let configured = Self::designer_of(&project);
+        // Kept as designing begins, below, so a designer configured since Start Work is the one.
+        let workflow = self
+            .kept_workflow(flow, RunPart::Design, Some(&project))
+            .unwrap_or_default();
+        let configured = Self::designer_of(&workflow);
         // A plan that asked for a design moves on without a designer: the run waits at Designing,
         // where nothing can be implemented, rather than at Planned, where the gate would be the
         // only thing saying so. A request of yours has nothing to wait for and is refused.
@@ -688,6 +694,7 @@ impl Engine {
             self.now(),
         )
         .map_err(text)?;
+        self.begin_part(flow, RunPart::Design, &workflow)?;
         self.record(
             flow,
             &FlowEvent::Advanced {
@@ -721,8 +728,11 @@ impl Engine {
             .map_err(text)?
             .ok_or("only a planned issue's run designs")?;
         let project = self.app.project(planning.project.as_str()).map_err(text)?;
+        let workflow = self
+            .kept_workflow(flow, RunPart::Design, Some(&project))
+            .unwrap_or_default();
         let (role, spec) =
-            Self::designer_of(&project).ok_or_else(|| Refusal::from(no_designer()))?;
+            Self::designer_of(&workflow).ok_or_else(|| Refusal::from(no_designer()))?;
         self.host.preflight(&[spec.provider.id()])?;
         let origin = match self.approved_plan(flow)? {
             Some((_, subject, _)) if subject.design_needed && !subject.skip_design => {
@@ -759,6 +769,7 @@ impl Engine {
             self.now(),
         )
         .map_err(text)?;
+        self.begin_part(flow, RunPart::Design, &workflow)?;
         self.settle(
             flow,
             &[
@@ -856,10 +867,7 @@ impl Engine {
             .app
             .worktree(&project, &design.worktree)
             .map_err(|e| format!("the issue's worktree is no longer there: {e}"))?;
-        let workflow = project
-            .workflow
-            .clone()
-            .ok_or("the project's workflow config has gone")?;
+        let workflow = self.run_workflow(flow, RunPart::Design, &project)?;
         let spec = workflow.role.get(&design.role).cloned().ok_or_else(|| {
             format!(
                 "role `{}` is no longer in your workflow config, so the designer cannot run",
@@ -876,7 +884,7 @@ impl Engine {
             tracker: planning.tracker,
             branch: worktree.branch().map(|b| b.as_str().to_owned()),
             worktree_path: worktree.path.clone(),
-            patterns: crate::knowledge::patterns(&project).0,
+            patterns: workflow.instruction_sources(),
             spec,
             design,
         })

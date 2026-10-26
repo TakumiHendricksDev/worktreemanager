@@ -602,6 +602,36 @@ impl RoleSpec {
     }
 }
 
+/// Which part of a run a kept `[workflow]` belongs to.
+///
+/// A run reads the workflow it started with, but an issue's run is several steps that begin days
+/// apart — planning, designing, implementing — and one that has not begun yet must still see the
+/// config as it is when it does: a planner added after Start Work is the planner the issue gets,
+/// and an implementer configured after the plan was approved is the one that runs. So each part
+/// keeps its own copy, taken as it begins. A review keeps one, as it starts; an implementation's
+/// review is given its issue's implementing copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunPart {
+    Review,
+    Plan,
+    Design,
+    Implement,
+}
+
+impl RunPart {
+    /// The stored spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Review => "review",
+            Self::Plan => "plan",
+            Self::Design => "design",
+            Self::Implement => "implement",
+        }
+    }
+}
+
 /// A config mistake in `[workflow]`, with the key it is about.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize)]
 #[error("workflow.{key}: {message}")]

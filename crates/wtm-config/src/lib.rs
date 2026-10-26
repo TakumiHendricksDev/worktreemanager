@@ -14,6 +14,8 @@
 //!   a load-time error naming a file and a key.
 //! - [`fs`] — the real, read-only `FileStore`.
 //! - [`store`] — [`FileConfigStore`], the `ConfigStore` port.
+//! - [`workflow_file`] — writing recipes and roles back to the file that declares them, with
+//!   `toml_edit`, for Settings › Recipes.
 //!
 //! # This crate depends on the domain alone
 //!
@@ -34,6 +36,7 @@ pub mod store;
 pub mod trust;
 pub mod user;
 pub mod validate;
+pub mod workflow_file;
 
 pub use briefs::{Brief, BriefMeta};
 pub use fs::{RealFileStore, absolutize, parse_dotenv, unique_temp_path};
@@ -42,7 +45,8 @@ pub use layers::{BUILT_IN_DEFAULTS, LOCAL_FILENAME, LayerPaths, REPO_FILENAME};
 pub use paths::AppPaths;
 pub use sessions::{SessionRecord, SessionStore};
 pub use sidebar::{SidebarGroup, SidebarLayout};
-pub use store::{ExecutionRevision, FileConfigStore};
+pub use store::{ExecutionRevision, FileConfigStore, WorkflowFile, WorkflowSaveError};
 pub use trust::{TrustStore, content_hash};
 pub use user::{PaletteDef, Theme, UserConfig};
 pub use validate::check_forbidden;
+pub use workflow_file::{EditError, WorkflowDraft, WorkflowHome};
