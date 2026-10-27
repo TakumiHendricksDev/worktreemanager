@@ -389,6 +389,16 @@ pub fn render_transcript(events: &[AgentEvent], max: usize) -> String {
     };
     for event in events {
         match event {
+            // The whole copy of a reply that was already printed. Codex sends one after the deltas
+            // of every message, and `Reply` drops it only when nothing came between. Anything can:
+            // every event below flushes, printed or not, and Codex 0.160's
+            // `turn/moderationMetadata` arrived there as a `Raw` and printed the reply twice.
+            AgentEvent::Message { text }
+                if reply.text().is_empty()
+                    && lines
+                        .last()
+                        .and_then(|line| line.strip_prefix("Assistant: "))
+                        == Some(text.trim()) => {}
             AgentEvent::MessageDelta { .. } | AgentEvent::Message { .. } => reply.absorb(event),
             other => {
                 flush(&mut reply, &mut lines);
@@ -2933,6 +2943,35 @@ mod tests {
         assert!(text.contains("User: the latest question"));
         assert!(!text.contains("first question"));
         assert!(text.starts_with("[…earlier text cut]"));
+    }
+
+    #[test]
+    fn a_streamed_reply_cut_off_from_its_whole_copy_is_printed_once() {
+        // Codex's order: the deltas, an event this prints nothing for, then the whole message.
+        let events = vec![
+            AgentEvent::UserEcho {
+                text: "what did it print?".to_owned(),
+            },
+            AgentEvent::MessageDelta {
+                text: "It printed ".to_owned(),
+            },
+            AgentEvent::MessageDelta {
+                text: "hello.".to_owned(),
+            },
+            AgentEvent::Raw {
+                provider: "codex".to_owned(),
+                event: "turn/somethingNew".to_owned(),
+                payload: json!({}),
+            },
+            AgentEvent::Message {
+                text: "It printed hello.".to_owned(),
+            },
+        ];
+        let text = render_transcript(&events, 10_000);
+        assert_eq!(
+            text,
+            "User: what did it print?\n\nAssistant: It printed hello."
+        );
     }
 
     #[test]

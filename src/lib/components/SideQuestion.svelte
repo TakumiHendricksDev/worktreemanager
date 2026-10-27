@@ -17,8 +17,18 @@
   );
   const answer = $derived.by(() => {
     let text = '';
+    let streamed = '';
     for (const event of side.events) {
-      if (event.kind === 'message_delta' || event.kind === 'message') text += event.text;
+      if (event.kind === 'message_delta') {
+        text += event.text;
+        streamed += event.text;
+      } else if (event.kind === 'message') {
+        // Codex sends every message whole after its deltas, which read a Codex answer out twice.
+        // Matched on the text, as `AgentTranscript` does.
+        const repeat = streamed.trim() !== '' && streamed.trim() === event.text.trim();
+        if (!repeat) text += event.text;
+        streamed = '';
+      }
     }
     return text;
   });

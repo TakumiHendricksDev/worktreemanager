@@ -852,13 +852,19 @@ impl CodexProtocol {
             // `item/autoApprovalReview/started` opens the auto-reviewer's bracket around the
             // `guardianWarning` above, which is what says the verdict. Drawn, it was counted among
             // the "N steps" beside it.
+            //
+            // `turn/moderationMetadata` is a block of moderation category flags, all false on an
+            // ordinary turn. On codex-cli 0.160.1 one arrives between the final answer's last
+            // delta and that answer's `item/completed`, and drawn, its row cut the streamed answer
+            // off from its whole copy, so every Codex turn ended with the answer shown twice.
             "thread/started"
             | "thread/status/changed"
             | "thread/settings/updated"
             | "mcpServer/startupStatus/updated"
             | "remoteControl/status/changed"
             | "account/updated"
-            | "item/autoApprovalReview/started" => return Vec::new(),
+            | "item/autoApprovalReview/started"
+            | "turn/moderationMetadata" => return Vec::new(),
             // The server settled one of its own requests — an interrupted turn cancels whatever it
             // was waiting on, observed on 0.154.0 right after `turn/completed`. A card still open
             // for it would offer buttons whose answer the server no longer wants, and keep the

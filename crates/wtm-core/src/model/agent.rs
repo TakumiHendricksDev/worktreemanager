@@ -264,7 +264,13 @@ pub enum AgentEvent {
     MessageDelta {
         text: String,
     },
-    /// A complete assistant message, for providers that only report whole ones.
+    /// A complete assistant message.
+    ///
+    /// Not only for providers that never stream, which is what this once said and what every reader
+    /// of it assumed. Claude sends one for a reply that did not stream, but Codex sends one after the
+    /// [`MessageDelta`](AgentEvent::MessageDelta)s of every message, with the same text. A reader
+    /// that folds deltas has to drop that copy, and has to recognise it by its text: other events
+    /// can arrive between the last delta and the copy.
     Message {
         text: String,
     },

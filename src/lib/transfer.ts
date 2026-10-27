@@ -61,10 +61,11 @@ function clamp(text: string): string {
 /**
  * Fold the event log into alternating speaker lines.
  *
- * Streaming deltas are concatenated into the message they belong to, and a complete `message` event
- * replaces the deltas that preceded it — the same "the deltas already showed this" rule
- * `AgentTranscript` applies, expressed here as: a `message` closes the open assistant run whether or
- * not deltas built one.
+ * Streaming deltas are concatenated into the message they belong to. A complete `message` that
+ * repeats them is dropped: Codex sends one after the deltas of every message, and keeping both put
+ * every Codex reply into the prompt twice. Matched on the text, as `AgentTranscript` does, rather
+ * than letting a `message` discard whatever streamed before it, because Claude's whole message is a
+ * reply that did not stream, and the deltas before it belong to a different one.
  *
  * Everything that is not a user or assistant *message* is dropped: no reasoning, no tool calls, no
  * diffs. Not for size — for usefulness. A tool call is a thing that already happened to the
@@ -90,8 +91,11 @@ function fold(events: AgentEvent[]): Line[] {
     } else if (event.kind === 'message_delta') {
       streaming = (streaming ?? '') + event.text;
     } else if (event.kind === 'message') {
+      const repeat = streaming !== null && streaming.trim() === event.text.trim();
       flush();
-      if (event.text.trim()) lines.push({ speaker: 'Assistant', text: event.text.trim() });
+      if (!repeat && event.text.trim()) {
+        lines.push({ speaker: 'Assistant', text: event.text.trim() });
+      }
     }
   }
   flush();

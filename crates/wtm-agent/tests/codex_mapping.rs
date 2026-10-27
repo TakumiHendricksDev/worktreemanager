@@ -1095,6 +1095,55 @@ fn a_real_turns_lines_produce_a_transcript_and_not_a_wall_of_raw_rows() {
 }
 
 #[test]
+fn moderation_metadata_between_a_streamed_answer_and_its_whole_copy_draws_nothing() {
+    // Captured from codex-cli 0.160.1: the final answer of a turn that had run a command first,
+    // with ids shortened. Every other field is verbatim.
+    //
+    // `turn/moderationMetadata` arrived after the last delta and *before* the answer's
+    // `item/completed`. Drawn as a `Raw` row, it sat between the streamed answer and its whole copy,
+    // and the transcript only recognised the copy when the row above it was the streamed answer, so
+    // every Codex turn ended with its answer shown twice.
+    const WIRE: &[&str] = &[
+        r#"{"method":"item/started","params":{"item":{"type":"agentMessage","id":"msg_0f46","text":"","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null},"threadId":"01a179f2-1876","turnId":"01a179f2-1a6f","startedAtMs":1793047279047},"emittedAtMs":1793047279047}"#,
+        r#"{"method":"item/agentMessage/delta","params":{"threadId":"01a179f2-1876","turnId":"01a179f2-1a6f","itemId":"msg_0f46","delta":"It"},"emittedAtMs":1793047279049}"#,
+        r#"{"method":"item/agentMessage/delta","params":{"threadId":"01a179f2-1876","turnId":"01a179f2-1a6f","itemId":"msg_0f46","delta":" printed"},"emittedAtMs":1793047279049}"#,
+        r#"{"method":"item/agentMessage/delta","params":{"threadId":"01a179f2-1876","turnId":"01a179f2-1a6f","itemId":"msg_0f46","delta":" “"},"emittedAtMs":1793047279049}"#,
+        r#"{"method":"item/agentMessage/delta","params":{"threadId":"01a179f2-1876","turnId":"01a179f2-1a6f","itemId":"msg_0f46","delta":"hello"},"emittedAtMs":1793047279201}"#,
+        r#"{"method":"item/agentMessage/delta","params":{"threadId":"01a179f2-1876","turnId":"01a179f2-1a6f","itemId":"msg_0f46","delta":".”"},"emittedAtMs":1793047279201}"#,
+        r#"{"method":"turn/moderationMetadata","params":{"threadId":"01a179f2-1876","turnId":"01a179f2-1a6f","metadata":{"prompt":{},"generation":{},"tool_call":{},"tool_response":{}}},"emittedAtMs":1793047279228}"#,
+        r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_0f46","text":"It printed “hello.”","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null},"threadId":"01a179f2-1876","turnId":"01a179f2-1a6f","completedAtMs":1793047279229},"emittedAtMs":1793047279229}"#,
+    ];
+
+    let mut driver = ready_driver();
+    let produced: Vec<AgentEvent> = WIRE
+        .iter()
+        .flat_map(|line| driver.on_line(line))
+        .filter_map(|step| match step {
+            Step::Emit(event) => Some(event),
+            _ => None,
+        })
+        .collect();
+
+    let delta = |text: &str| AgentEvent::MessageDelta {
+        text: text.to_owned(),
+    };
+    assert_eq!(
+        produced,
+        vec![
+            delta("It"),
+            delta(" printed"),
+            delta(" “"),
+            delta("hello"),
+            delta(".”"),
+            AgentEvent::Message {
+                text: "It printed “hello.”".to_owned()
+            },
+        ],
+        "the whole copy follows its deltas with nothing drawn between them"
+    );
+}
+
+#[test]
 fn lifecycle_chatter_draws_nothing_while_an_unknown_method_still_does() {
     // The distinction the two arms encode: "we recognise this and there is nothing to say" versus
     // "we do not recognise this". Collapsing them would make a genuinely new event vanish, which

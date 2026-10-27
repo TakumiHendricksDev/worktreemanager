@@ -124,6 +124,8 @@
     const patches = new Map<string, Extract<Row, { kind: 'patch' }>>();
     const approvals = new Map<string, Extract<Row, { kind: 'approval' }>>();
     let agenda: Extract<Row, { kind: 'agenda' }> | null = null;
+    /** Text streamed since the last whole message or user turn. See the `message` case. */
+    let streamed = '';
 
     /** The assistant or thinking row a delta should append to, or null when a new one is needed. */
     function openAssistant(): Extract<Row, { kind: 'assistant' }> | null {
@@ -147,6 +149,7 @@
           break;
 
         case 'user_echo':
+          streamed = '';
           if (isWtmNotice(event.text)) {
             out.push({ key: `u${index}`, kind: 'wtm', ...readWtmNotice(event.text) });
           } else {
@@ -155,21 +158,30 @@
           break;
 
         case 'message_delta': {
+          streamed += event.text;
           const open = openAssistant();
           if (open) open.text += event.text;
           else out.push({ key: `a${index}`, kind: 'assistant', text: event.text });
           break;
         }
 
-        case 'message':
-          // A whole message from a provider that does not stream. When deltas already built a run
-          // this is the same text arriving twice — the Codex adapter drops the duplicate at
-          // source, and appending only when there is no open run is what keeps a
-          // whole-message-only provider working without special-casing it here.
-          if (!openAssistant()) {
+        case 'message': {
+          // A whole message. Claude sends one only when nothing streamed, but Codex sends one for
+          // every message, after the deltas that already drew it, so a copy of what just streamed
+          // is dropped. Two checks, because either alone misses a case:
+          //
+          // - The open run, the original rule: the copy arrives right under the row its deltas
+          //   built, even if its text is not character-for-character what streamed.
+          // - The text: something can be drawn between the last delta and the copy. Codex 0.160
+          //   sent `turn/moderationMetadata` there, drawn as a raw row until the adapter learned
+          //   it, and every Codex turn ended with its answer shown twice.
+          const repeat = streamed.trim() !== '' && streamed.trim() === event.text.trim();
+          streamed = '';
+          if (!repeat && !openAssistant()) {
             out.push({ key: `a${index}`, kind: 'assistant', text: event.text });
           }
           break;
+        }
 
         case 'reasoning_delta': {
           const open = openThinking();
