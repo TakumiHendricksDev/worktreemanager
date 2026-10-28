@@ -31,6 +31,8 @@
     open,
     agents,
     skills,
+    asking,
+    place,
     ontoggle,
     onchange,
     onmove,
@@ -42,8 +44,12 @@
     steps: readonly RecipeStep[];
     open: boolean;
     agents: readonly AgentOption[];
-    /** What this step's agent finds on disk, or null while it is being read. */
+    /** This step's agent's skills, or null before anything has been read. */
     skills: AgentSkill[] | null;
+    /** Whether the agent's own CLI is still being asked, plugins and all. */
+    asking: boolean;
+    /** Where the skills were asked about, for the help line: a worktree's name, say. */
+    place: string;
     ontoggle: () => void;
     onchange: (patch: Partial<RecipeStep>) => void;
     onmove: (by: -1 | 1) => void;
@@ -90,17 +96,25 @@
   const continuable = $derived(canContinue(steps, index));
 
   let query = $state('');
+  /** What was typed, without the slash someone types out of habit — names are stored without it. */
+  const typed = $derived(query.trim().replace(/^\//, ''));
   const listed = $derived(commandsFor(step.agent, skills ?? []));
+  /** A plugin's skill is `plugin:skill`, which says where it came from better than any scope. */
+  const scopeOf = (name: string, scope: string | null) =>
+    name.includes(':') ? 'plugin' : (scope ?? '');
   const shown = $derived(
-    query.trim() === ''
-      ? listed.map((s) => ({ value: s.name, detail: s.description ?? '', scope: s.scope }))
-      : matchSkills(listed, query.trim()).map((s) => ({
+    typed === ''
+      ? listed.map((s) => ({
+          value: s.name,
+          detail: s.description ?? '',
+          scope: scopeOf(s.name, s.scope),
+        }))
+      : matchSkills(listed, typed.toLowerCase()).map((s) => ({
           value: s.value,
           detail: s.detail,
-          scope: listed.find((l) => l.name === s.value)?.scope ?? null,
+          scope: scopeOf(s.value, listed.find((l) => l.name === s.value)?.scope ?? null),
         })),
   );
-  const typed = $derived(query.trim().replace(/^\//, ''));
 
   function chooseAgent(agent: string) {
     // A different provider's model, effort and mode mean nothing to this one, and continuing a
@@ -324,22 +338,15 @@
                   />
                 </div>
                 <div class="c-skill__list" role="listbox" aria-label="Skills">
-                  {#if skills === null}
-                    <p class="c-skill__empty">Reading skills…</p>
+                  {#if asking}
+                    <p class="c-skill__note">
+                      Asking {agentLabel(step.agent)} for its skills, plugins included…
+                    </p>
                   {/if}
-                  {#if typed !== '' && !listed.some((s) => s.name === typed)}
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={step.skill === typed}
-                      class="c-skill__opt"
-                      class:is-selected={step.skill === typed}
-                      onclick={() => onchange({ skill: typed })}
-                    >
-                      <span class="c-skill__name">/{typed}</span>
-                      <span class="c-skill__desc">Use this name — a plugin’s, say</span>
-                      <span class="c-skill__scope"></span>
-                    </button>
+                  {#if skills === null}
+                    <p class="c-skill__note">Reading skills…</p>
+                  {:else if typed !== '' && shown.length === 0}
+                    <p class="c-skill__note">No skill matches “{typed}”.</p>
                   {/if}
                   {#each shown as option (option.value)}
                     <button
@@ -348,19 +355,38 @@
                       aria-selected={step.skill === option.value}
                       class="c-skill__opt"
                       class:is-selected={step.skill === option.value}
+                      title={option.detail || undefined}
                       onclick={() => onchange({ skill: option.value })}
                     >
                       <span class="c-skill__name">/{option.value}</span>
                       <span class="c-skill__desc">{option.detail}</span>
-                      <span class="c-skill__scope">{option.scope ?? ''}</span>
+                      <span class="c-skill__scope">{option.scope}</span>
                     </button>
                   {/each}
+                  {#if typed !== '' && !listed.some((s) => s.name === typed)}
+                    <!-- Last, after the real matches: a name the agent did not report is the
+                         exception, and putting it first made it the thing the eye landed on. -->
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={step.skill === typed}
+                      class="c-skill__opt c-skill__opt--typed"
+                      class:is-selected={step.skill === typed}
+                      onclick={() => onchange({ skill: typed })}
+                    >
+                      <span class="c-skill__name">/{typed}</span>
+                      <span class="c-skill__desc"
+                        >Use it as typed — {agentLabel(step.agent)} didn’t list it</span
+                      >
+                    </button>
+                  {/if}
                 </div>
               </div>
               <p class="c-field__help">
-                Read from {agentLabel(step.agent)}’s skill folders and this repository’s. A
-                plugin’s skills aren’t listed; type the name. A skill missing when the
-                recipe runs fails this step.
+                {asking
+                  ? `Showing the skill folders while ${agentLabel(step.agent)} answers.`
+                  : `Listed by ${agentLabel(step.agent)} for ${place}, plugins included.`}
+                A skill missing when the recipe runs fails this step.
               </p>
             </div>
             <Field

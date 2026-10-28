@@ -461,21 +461,49 @@ pub async fn set_recipe_offers(
     .await
 }
 
-/// The skills an agent would find on disk, for the step editor's list.
+/// How long the step editor waits for an agent's CLI to list its own commands, in milliseconds.
 ///
-/// The provider's own seed — the list a fresh pane's `/` menu starts from — read for the
-/// repository's root, or the home directory when Settings has no repository in view. A plugin's
-/// skills are not on that list, which is why the editor also takes a name typed by hand.
+/// Claude answers `initialize` in a second or two and Codex once its thread is open; twenty seconds
+/// covers a cold start with MCP servers to launch. Past it the editor keeps the list it read from
+/// disk, which is never worse than not asking.
+const PROBE_TIMEOUT_MS: u64 = 20_000;
+
+/// Where the step editor asks about skills: the worktree in view, its repository, or home.
+///
+/// The worktree first, because that is the answer that matches what a step will see when it runs
+/// there. Claude enables plugins per directory — a plugin installed for one checkout through its
+/// `.claude/settings.local.json` is absent from the repository's main checkout — so asking from the
+/// root would leave out exactly the skills someone installed for the work they are doing.
+fn skills_dir(app: &App, project_id: Option<&str>, worktree_id: Option<&str>) -> PathBuf {
+    if let Some(project) = project_id.and_then(|id| app.project(id).ok()) {
+        if let Some(worktree) = worktree_id.and_then(|id| app.worktree(&project, id).ok()) {
+            return worktree.path;
+        }
+        return project.root;
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
+/// The skills an agent would find on disk, for the step editor's first paint.
+///
+/// The provider's own seed — the list a fresh pane's `/` menu starts from. It cannot see a plugin's
+/// skills, which is what [`probe_agent_skills`] is for; this is what shows while that answer is on
+/// its way, and what stays if it never comes.
 #[tauri::command]
-pub async fn agent_skills(agent: String, project_id: Option<String>) -> Reply<Vec<AgentSkill>> {
+pub async fn agent_skills(
+    app: AppState<'_>,
+    agent: String,
+    project_id: Option<String>,
+    worktree_id: Option<String>,
+) -> Reply<Vec<AgentSkill>> {
+    let app = Arc::clone(&app);
     blocking(move || {
         let Some(entry) = wtm_agent::entry(&agent) else {
             return Ok(Vec::new());
         };
-        let cwd = project_id
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .unwrap_or_default();
+        let cwd = skills_dir(&app, project_id.as_deref(), worktree_id.as_deref());
         let req = wtm_agent::SessionRequest {
             cwd: cwd.to_string_lossy().into_owned(),
             ..wtm_agent::SessionRequest::default()
@@ -483,6 +511,137 @@ pub async fn agent_skills(agent: String, project_id: Option<String>) -> Reply<Ve
         Ok(entry.provider.seed_skills(&req))
     })
     .await
+}
+
+/// Collects the skill lists a probe session reports, and notices when its process goes.
+struct Listing {
+    tx: parking_lot::Mutex<Option<std::sync::mpsc::Sender<Vec<AgentSkill>>>>,
+}
+
+impl wtm_agent::session::AgentSink for Listing {
+    fn on_event(&self, _session: &wtm_core::model::SessionId, event: &wtm_core::model::AgentEvent) {
+        if let wtm_core::model::AgentEvent::SkillsListed { skills } = event
+            && let Some(tx) = self.tx.lock().as_ref()
+        {
+            let _ = tx.send(skills.clone());
+        }
+    }
+
+    fn on_exit(
+        &self,
+        _session: &wtm_core::model::SessionId,
+        _outcome: &wtm_core::model::ExitOutcome,
+    ) {
+        // Dropping the sender ends the wait at once, rather than at the deadline.
+        self.tx.lock().take();
+    }
+
+    fn on_ready(&self, _session: &wtm_core::model::SessionId) {}
+}
+
+/// Every command an agent's own CLI reports for a directory — its plugins' skills included — or
+/// `None` if it did not answer in time.
+///
+/// # Asked, not read
+///
+/// A plugin's skills are in no directory wtm reads, and which plugins are on for which directory is
+/// layered across three settings files and a per-checkout install record. The CLI has already worked
+/// that out, and answers without a turn and without a model call: Claude to `initialize`, Codex
+/// with `skills/list` once its thread is open, Cursor with `available_commands_update`. So this opens
+/// a session the way a pane does — the same handshake a pane's `/` menu learns its list from — waits
+/// for that answer, and closes it. No prompt is ever sent.
+///
+/// The session is wtm-agent's own, never registered with the app: no pane, no resume entry, no
+/// handoff token and no MCP servers, because none of them has anything to do with a list.
+#[tauri::command]
+pub async fn probe_agent_skills(
+    app: AppState<'_>,
+    agent: String,
+    project_id: Option<String>,
+    worktree_id: Option<String>,
+) -> Reply<Option<Vec<AgentSkill>>> {
+    let app = Arc::clone(&app);
+    blocking(move || {
+        let cwd = skills_dir(&app, project_id.as_deref(), worktree_id.as_deref());
+        probe_skills(&app, &agent, &cwd).map_err(|message| ErrorView::new("exec", message))
+    })
+    .await
+}
+
+/// [`probe_agent_skills`] for a directory: open, wait for the CLI's own list, close.
+///
+/// `Ok(None)` for an agent this machine cannot run, or a CLI that did not answer in time.
+///
+/// # Errors
+///
+/// When the CLI could not be started at all.
+pub fn probe_skills(
+    app: &App,
+    agent: &str,
+    cwd: &std::path::Path,
+) -> Result<Option<Vec<AgentSkill>>, String> {
+    let Some(entry) = wtm_agent::entry(agent) else {
+        return Ok(None);
+    };
+    let Some(executable) = app.agent_executable(entry) else {
+        return Ok(None);
+    };
+    let req = wtm_agent::SessionRequest {
+        cwd: cwd.to_string_lossy().into_owned(),
+        executable: Some(executable.to_string_lossy().into_owned()),
+        ..wtm_agent::SessionRequest::default()
+    };
+    // The session reports the disk seed first, as it opens, and the CLI's own answer after it.
+    let seeded = !entry.provider.seed_skills(&req).is_empty();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let sink: Arc<dyn wtm_agent::session::AgentSink> = Arc::new(Listing {
+        tx: parking_lot::Mutex::new(Some(tx)),
+    });
+    let session = wtm_agent::AgentSession::open(
+        entry.provider,
+        &req,
+        Arc::clone(&app.pipe) as Arc<dyn wtm_core::ports::pipe::PipeHost>,
+        &sink,
+        crate::commands::SHELL_TIMEOUT_MS,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let answer = listed(app.clock.as_ref(), &rx, usize::from(seeded));
+    if let Err(error) = session.close() {
+        tracing::debug!(%error, agent, "could not close a skills probe");
+    }
+    Ok(answer)
+}
+
+/// The list after the first `skip`, or `None` if the session ended or the deadline passed first.
+///
+/// Polled against the [`Clock`](wtm_core::ports::clock::Clock) port for `turns::wait_until`'s
+/// reason: `recv_timeout`'s own deadline would bring the system clock back in.
+fn listed(
+    clock: &dyn wtm_core::ports::clock::Clock,
+    rx: &std::sync::mpsc::Receiver<Vec<AgentSkill>>,
+    skip: usize,
+) -> Option<Vec<AgentSkill>> {
+    let deadline = clock.monotonic_ms() + PROBE_TIMEOUT_MS;
+    let mut seen = 0;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(skills) => {
+                seen += 1;
+                if seen > skip {
+                    return Some(skills);
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if clock.monotonic_ms() >= deadline {
+                    return None;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
 }
 
 // ─────────────────────────────── running ───────────────────────────────

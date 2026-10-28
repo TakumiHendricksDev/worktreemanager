@@ -187,23 +187,48 @@
   }
 
   /**
-   * Skills per agent, read once each while Settings is open. `asked` is a plain set so the effect
-   * that fills `skills` does not also depend on it and run again for its own write.
+   * Skills per agent, for the worktree in view: what is on disk at once, then what the agent's own
+   * CLI reports, which replaces it.
+   *
+   * Two reads because the second is the only one with a plugin's skills in it, and takes a few
+   * seconds — it opens the CLI the way a pane does and asks, without a turn. The disk list is what
+   * the picker shows meanwhile, and what stays if the CLI cannot be asked. Read once per agent while
+   * Settings is open; `asked` is a plain set so the effect that fills `skills` does not also depend
+   * on it and run again for its own write.
    */
   let skills = $state<Record<string, AgentSkill[] | null>>({});
+  let asking = $state<Record<string, boolean>>({});
   const asked = new Set<string>();
+  /** Where skills are asked about: the worktree being looked at, which is where plugins are on. */
+  const place = $derived(
+    workspace.selected?.dirname ?? workspace.activeProject?.name ?? 'your home directory',
+  );
   $effect(() => {
+    const projectId = workspace.activeProjectId;
+    const worktreeId = workspace.selectedWorktreeId;
     for (const step of draft?.steps ?? []) {
       if (step.kind !== 'skill' || asked.has(step.agent)) continue;
       const agent = step.agent;
       asked.add(agent);
+      asking[agent] = true;
       commands
-        .agentSkills(agent, workspace.activeProjectId)
+        .agentSkills(agent, projectId, worktreeId)
         .then((list) => {
-          skills[agent] = list;
+          // Not over an answer from the CLI that happened to arrive first.
+          if (asking[agent]) skills[agent] = list;
         })
         .catch(() => {
-          skills[agent] = [];
+          skills[agent] ??= [];
+        });
+      commands
+        .probeAgentSkills(agent, projectId, worktreeId)
+        .then((list) => {
+          if (list !== null) skills[agent] = list;
+        })
+        .catch(() => {})
+        .finally(() => {
+          asking[agent] = false;
+          skills[agent] ??= [];
         });
     }
   });
@@ -416,6 +441,8 @@
               open={openStep === index}
               {agents}
               skills={skills[step.agent] ?? null}
+              asking={asking[step.agent] ?? false}
+              {place}
               ontoggle={() => (openStep = openStep === index ? -1 : index)}
               onchange={(patch) => patchStep(index, patch)}
               onmove={(by) => move(index, by)}

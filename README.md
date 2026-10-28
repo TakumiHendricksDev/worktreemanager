@@ -411,7 +411,9 @@ reply. Prompts can use `{{worktree.branch}}`, `{{worktree.name}}`, `{{worktree.p
 `{{project.name}}`, `{{project.path}}`, the New Worktree form's values as `{{form.<field>}}`, and
 `{{previous.reply}}`. A variable the run has no value for is sent empty and named on the run.
 
-Make them in **Settings › Recipes**. Run one from a worktree's right-click menu, **Run recipe ›**.
+Make them in **Settings › Recipes**. A skill step's list is the agent's own answer for the
+worktree you are looking at, plugins included (a plugin's skill is `plugin:skill`), asked the way a
+pane's `/` menu asks, without a turn. Run one from a worktree's right-click menu, **Run recipe ›**.
 Each step opens as an ordinary pane titled after the step, and the next step starts when that
 step's turn ends. A strip above the panes shows the steps; click one to bring its pane forward, or
 **Stop recipe** to interrupt the current step and skip the rest. One recipe runs per worktree at a

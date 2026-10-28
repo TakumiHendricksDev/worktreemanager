@@ -289,6 +289,7 @@ pub fn run() {
             recipes::delete_recipe,
             recipes::set_recipe_offers,
             recipes::agent_skills,
+            recipes::probe_agent_skills,
             recipes::preview_recipe,
             recipes::start_recipe,
             recipes::stop_recipe,

@@ -46,6 +46,8 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebvie
  if(command==='delete_recipe'){state.recipes=state.recipes.filter(r=>r.id!==args.id);return all();}
  if(command==='set_recipe_offers'){if(args.recipes.length)state.offers[args.action]=args.recipes;else delete state.offers[args.action];return all();}
  if(command==='agent_skills')return args.agent==='codex'?[{name:'repo-check',description:'A repository skill',scope:'repo'}]:[{name:'code-review',description:'Review the current diff',scope:'skill'}];
+ // The CLI's own answer arrives later and has what the disk list cannot: a plugin's skills.
+ if(command==='probe_agent_skills'){await new Promise((r)=>setTimeout(r,400));return args.agent==='codex'?[{name:'repo-check',description:'A repository skill',scope:'repo'},{name:'acme-tools:implement',description:'Implement a planned change end to end, with a long description that has to truncate',scope:'skill'}]:[{name:'code-review',description:'Review the current diff',scope:'skill'}];}
  if(command==='agent_capability')return capability(args.agentId);
  if(command==='list_agents')return [{id:'claude',label:'Claude Code',blurb:'',available:true,offered:true,detail:null,model:null,effort:null,mode:null},{id:'codex',label:'Codex',blurb:'',available:true,offered:true,detail:null,model:null,effort:null,mode:null}];
  if(command==='preview_recipe')return state.recipes.find(r=>r.id===args.recipeId).steps.map((s,i)=>({text:(s.kind==='skill'?'/'+s.skill+' '+s.args:s.prompt).replace('{{form.ticket}}',args.vars['form.ticket']??''),getsPrevious:i>0&&s.previousReply,missing:[]}));
@@ -220,10 +222,38 @@ try {
     await page.getByRole('button', { name: 'Discard', exact: true }).click();
     await page.locator('.c-recipe__status', { hasText: 'Saved' }).waitFor();
 
-    // The skill picker lists what the agent has, and takes a name typed by hand.
+    // The skill picker shows the disk list at once, then the CLI's own answer with a plugin's
+    // skills in it, asked from the worktree in view.
     await stepCard(page, 'Review').click();
     await page.getByRole('option', { name: /repo-check/ }).waitFor();
-    await page.locator('#recipe-step-2-skill-search').fill('plugin-skill');
+    await page.getByRole('option', { name: /acme-tools:implement/ }).waitFor();
+    assert(
+        (await callsOf(page, 'probe_agent_skills')).some((c) => c.args.agent === 'codex'),
+        "the step's own agent was asked for its list",
+    );
+    const list = page.locator('#recipe-step-2-edit .c-skill__list');
+    const before = (await list.boundingBox()).height;
+    // A leading slash, as people type it, still finds the namespaced plugin skill.
+    const search = page.locator('#recipe-step-2-skill-search');
+    await search.fill('/implement');
+    await page.getByRole('option', { name: /acme-tools:implement/ }).waitFor();
+    assert.equal(
+        (await list.boundingBox()).height,
+        before,
+        'narrowing the matches does not shrink the list and move everything below it',
+    );
+    const row = page.getByRole('option', { name: /acme-tools:implement/ });
+    const [name, desc] = await Promise.all([
+        row.locator('.c-skill__name').boundingBox(),
+        row.locator('.c-skill__desc').boundingBox(),
+    ]);
+    assert(
+        name.x + name.width <= desc.x + 0.5,
+        'a long name never runs under its description',
+    );
+    await shoot(page, 'skill-search-dark');
+    await search.fill('plugin-skill');
+    await page.getByText('No skill matches “plugin-skill”.').waitFor();
     await page.getByRole('option', { name: /\/plugin-skill/ }).click();
     await page.getByRole('button', { name: 'Save recipe' }).click();
     await page.locator('.c-recipe__status', { hasText: 'Saved' }).waitFor();

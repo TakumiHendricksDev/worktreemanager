@@ -754,9 +754,18 @@ export const commands = {
   /** Replace what an action offers, in order. An empty list turns its question off. */
   setRecipeOffers: (action: string, recipes: string[]) =>
     invoke<RecipesState>('set_recipe_offers', { action, recipes }),
-  /** The skills an agent would find on disk, for the step editor. Plugins are not on it. */
-  agentSkills: (agent: string, projectId: string | null) =>
-    invoke<AgentSkill[]>('agent_skills', { agent, projectId }),
+  /**
+   * The skills an agent would find on disk in a worktree (or its repository, or home), for the
+   * step editor's first paint. A plugin's skills are not on it; `probeAgentSkills` has them.
+   */
+  agentSkills: (agent: string, projectId: string | null, worktreeId: string | null) =>
+    invoke<AgentSkill[]>('agent_skills', { agent, projectId, worktreeId }),
+  /**
+   * Every command the agent's own CLI reports for that place, plugins included, asked without a
+   * turn. Takes a few seconds; null when the CLI is not installed or did not answer in time.
+   */
+  probeAgentSkills: (agent: string, projectId: string | null, worktreeId: string | null) =>
+    invoke<AgentSkill[] | null>('probe_agent_skills', { agent, projectId, worktreeId }),
   /** Each step's text as it would be sent if the recipe started now in this worktree. */
   previewRecipe: (
     recipeId: string,
