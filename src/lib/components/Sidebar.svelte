@@ -164,6 +164,8 @@
   // ─────────────────────────────── focus and selection ───────────────────────────────
 
   function pick(worktreeId: string) {
+    const projectId = workspace.activeProjectId;
+    if (projectId && worktreeRemoval.isRemoving(projectId, worktreeId)) return;
     workspace.select(worktreeId);
     onselectworktree?.();
   }
@@ -392,7 +394,7 @@
     const epoch = ++menuEpoch;
     const origin = navItems().find((row) => row.dataset.nav === `row:${worktreeId}`);
     const projectId = workspace.activeProjectId;
-    if (!projectId) return;
+    if (!projectId || worktreeRemoval.isRemoving(projectId, worktreeId)) return;
     let target;
     try {
       target = await resolveWorktreeTarget(projectId, worktreeId);
@@ -683,6 +685,8 @@
     selected={worktree.id === workspace.selectedWorktreeId}
     favorite={workspace.isFavorite(worktree.id)}
     dragging={dragging?.kind === 'row' && dragging.id === worktree.id}
+    removing={workspace.activeProjectId !== null &&
+      worktreeRemoval.isRemoving(workspace.activeProjectId, worktree.id)}
     controls={detailId}
     onselect={() => pick(worktree.id)}
     onfavorite={() => workspace.toggleFavorite(worktree.id)}

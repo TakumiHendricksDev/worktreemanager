@@ -30,7 +30,9 @@
     type ProgressEvent,
   } from '../ipc/types';
   import { listen } from '@tauri-apps/api/event';
+  import { untrack } from 'svelte';
   import { workspace } from '../state/workspace.svelte';
+  import { worktreeRemoval } from '../state/worktree-removal.svelte';
   import ReviewPanel from './ReviewPanel.svelte';
   import RemoveWorktreeDialog from './RemoveWorktreeDialog.svelte';
   import SchemaForm from './SchemaForm.svelte';
@@ -82,6 +84,20 @@
   let acting = $state(false);
 
   const removable = $derived(outcome && 'worktree' in outcome ? outcome.worktree : null);
+  const removing = $derived(
+    removable !== null && worktreeRemoval.isRemoving(projectId, removable.id),
+  );
+
+  /**
+   * A removal confirmed here carries on after its dialog closes, so this screen learns how it went
+   * by watching it stop. If the worktree went with it, there is nothing left here to offer.
+   */
+  let wasRemoving = false;
+  $effect(() => {
+    const now = removing;
+    if (wasRemoving && !now) untrack(closeIfGone);
+    wasRemoving = now;
+  });
 
   /**
    * What the run is doing, as it does it.
@@ -314,12 +330,16 @@
   }
 
   function removeIt() {
-    if (!removable || acting) return;
+    if (!removable || acting || removing) return;
     confirmingRemove = true;
   }
 
   function onRemoveClosed() {
     confirmingRemove = false;
+    closeIfGone();
+  }
+
+  function closeIfGone() {
     const id = removable?.id;
     void workspace.refreshWorktrees().then(() => {
       if (id && !workspace.worktrees.some((w) => w.id === id)) onclose();
@@ -506,12 +526,13 @@
             <Button
               variant="neutral"
               onclick={retrySetup}
-              disabled={acting || confirmingRemove}>Re-run setup</Button
+              disabled={acting || confirmingRemove || removing}>Re-run setup</Button
             >
             <Button
               variant="danger-outline"
               onclick={removeIt}
-              disabled={acting || confirmingRemove}>Remove the worktree</Button
+              disabled={acting || confirmingRemove || removing}
+              >{removing ? 'Removing…' : 'Remove the worktree'}</Button
             >
           </div>
         {/if}

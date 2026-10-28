@@ -55,8 +55,7 @@
      * a round trip: every pane but the active one is `display: none` rather than unmounted. An
      * unmount no longer loses a dock shell's history — Rust replays it on the next attach — but
      * it does cost a repaint of up to a mebibyte, which a worktree switch should not. Defaults to true — a terminal that is on screen
-     * for its whole life, like the create pane's or the remove dialog's, has nothing to
-     * declare.
+     * for its whole life, like the create pane's, has nothing to declare.
      */
     active?: boolean;
     onexit?: (exit: PtyExit) => void;

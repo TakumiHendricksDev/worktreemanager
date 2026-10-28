@@ -22,6 +22,7 @@
     group,
     next,
     dragging = false,
+    removing = false,
     controls = 'worktree-detail',
     onselect,
     onfavorite,
@@ -47,6 +48,11 @@
     next: string | null;
     /** This row is the one being dragged. */
     dragging?: boolean;
+    /**
+     * Its removal is under way. The row stays where it was until the worktree is gone, but it takes
+     * no clicks, drags, menus or arrow keys: everything they lead to is being torn down.
+     */
+    removing?: boolean;
     /** The panel this row controls. Null while the create pane is on screen. */
     controls?: string | null;
     onselect: () => void;
@@ -95,6 +101,7 @@
 <div
   class="c-worktree-tab"
   class:is-dragging={dragging}
+  class:is-removing={removing}
   role="presentation"
   data-row={worktree.id}
   data-slot="row"
@@ -107,13 +114,15 @@
     aria-selected={selected}
     aria-level={level}
     aria-controls={controls ?? undefined}
+    aria-disabled={removing || undefined}
     tabindex={selected ? 0 : -1}
     class="c-worktree-tab__button"
     class:is-selected={selected}
-    data-nav={`row:${worktree.id}`}
-    onclick={onselect}
-    onpointerdown={onpress}
-    oncontextmenu={onmenu}
+    class:is-removing={removing}
+    data-nav={removing ? undefined : `row:${worktree.id}`}
+    onclick={removing ? undefined : onselect}
+    onpointerdown={removing ? undefined : onpress}
+    oncontextmenu={removing ? (event) => event.preventDefault() : onmenu}
   >
     <span class="c-worktree-tab__line">
       {#if identity.key}<span class="c-worktree-tab__key">{identity.key}</span>{/if}
@@ -140,7 +149,18 @@
       whatever a session in it needs. `Inspector` still reports the full staged/unstaged breakdown,
       which is a panel you open on purpose.
     -->
-    {#if status || worktree.dirty || worktree.prunable}
+    {#if removing}
+      <!--
+        Instead of the flags, not beside them: a session's state and a dirty tree are both about a
+        worktree that is going, and the one fact left worth reading is that it is going. The dot and
+        the word are Home's for the same thing (`jobState`), so the two lists say it alike.
+      -->
+      <span class="c-worktree-tab__line c-worktree-tab__flags">
+        <span class="c-status--muted" title="Removing this worktree">
+          <SessionDot status="starting" />&nbsp;removing…
+        </span>
+      </span>
+    {:else if status || worktree.dirty || worktree.prunable}
       <span class="c-worktree-tab__line c-worktree-tab__flags">
         {#if status}
           <!--
@@ -176,9 +196,10 @@
   <button
     class="c-worktree-tab__star"
     class:is-on={favorite}
-    tabindex={selected ? 0 : -1}
+    tabindex={selected && !removing ? 0 : -1}
     aria-pressed={favorite}
     title={favorite ? 'Remove from favorites' : 'Add to favorites'}
+    disabled={removing}
     onclick={onfavorite}
   >
     <Icon name={favorite ? 'star' : 'star-outline'} size={14} />

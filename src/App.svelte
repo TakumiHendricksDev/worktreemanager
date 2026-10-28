@@ -92,6 +92,16 @@
    * finishes, and a dialog reading the active one would spend its last frames naming that instead.
    */
   let removingProject = $state<Project | null>(null);
+  /**
+   * The worktree on screen is being removed. Its view gives way to a note saying so: the sessions in
+   * it are already ended, and anything opened there now would start in a directory that is about to
+   * go. The rest of the window stays usable, which is the point of not waiting in the dialog.
+   */
+  const selectedRemoving = $derived(
+    workspace.activeProjectId !== null &&
+      workspace.selected !== null &&
+      worktreeRemoval.isRemoving(workspace.activeProjectId, workspace.selected.id),
+  );
   let showSettings = $state(false);
   let showUsage = $state(false);
   let showInspector = $state(false);
@@ -688,6 +698,21 @@
           </p>
           <Button variant="accent" size="lg" onclick={addProject}>Add a repository</Button>
         </div>
+      {:else if workspace.selected && selectedRemoving}
+        <div class="c-placeholder" role="status">
+          <h2 class="c-placeholder__title">Removing {workspace.selected.dirname}…</h2>
+          <div
+            class="c-progress is-indeterminate c-placeholder__progress"
+            role="progressbar"
+            aria-label="Removal progress"
+          >
+            <div class="c-progress__fill"></div>
+          </div>
+          <p class="c-placeholder__prose">
+            Its sessions are closed and the project's teardown steps are running. It leaves
+            the list when they finish, and you can carry on in other worktrees meanwhile.
+          </p>
+        </div>
       {:else if workspace.selected}
         <Detail
           worktree={workspace.selected}
@@ -731,13 +756,15 @@
         unmounts is a transcript that is gone. Mounted here it survives all of them, and is merely
         hidden while the create pane owns the screen.
       -->
-      <SessionSurface visible={booted && view.current === 'worktree'} />
+      <SessionSurface
+        visible={booted && view.current === 'worktree' && !selectedRemoving}
+      />
       <DatabaseSurface
-        visible={booted && view.current === 'database'}
+        visible={booted && view.current === 'database' && !selectedRemoving}
         onsessions={() => view.show('worktree')}
       />
       <CodeSurface
-        visible={booted && view.current === 'code'}
+        visible={booted && view.current === 'code' && !selectedRemoving}
         onsessions={() => view.show('worktree')}
       />
       {#if view.homeMounted}

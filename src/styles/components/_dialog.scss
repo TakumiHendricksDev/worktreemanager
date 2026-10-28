@@ -126,12 +126,3 @@
 .c-dialog__form {
   display: contents;
 }
-
-/* A live terminal inside a dialog, where the height has to be fixed or the panel grows as
-   output arrives. */
-.c-dialog__terminal {
-  height: 200px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  overflow: hidden;
-}

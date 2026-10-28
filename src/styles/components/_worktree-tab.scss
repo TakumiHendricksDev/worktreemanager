@@ -22,6 +22,12 @@
   opacity: 0.5;
 }
 
+/* A row whose worktree is being removed stays in place, dimmed, until the worktree is gone. Its
+   `removing…` line is what says so; this is only the look. */
+.c-worktree-tab.is-removing {
+  opacity: 0.6;
+}
+
 .c-worktree-tab__button {
   display: flex;
   flex-direction: column;
@@ -44,6 +50,16 @@
 
   &.is-selected {
     background: var(--bg-active);
+  }
+
+  /* It takes no clicks, so the hover must not promise one. A selected row keeps its background:
+     it is still the worktree on screen. */
+  &.is-removing {
+    cursor: default;
+  }
+
+  &.is-removing:hover:not(.is-selected) {
+    background: none;
   }
 }
 
@@ -85,6 +101,12 @@
 .c-worktree-tab:hover .c-worktree-tab__star,
 .c-worktree-tab:focus-within .c-worktree-tab__star {
   opacity: 1;
+}
+
+/* Except on a row being removed, where the star is disabled: an empty outline revealed on hover
+   would offer a toggle that does nothing. A starred row keeps its star, which is a fact, not an offer. */
+.c-worktree-tab.is-removing .c-worktree-tab__star:not(.is-on) {
+  opacity: 0;
 }
 
 .c-worktree-tab__line {

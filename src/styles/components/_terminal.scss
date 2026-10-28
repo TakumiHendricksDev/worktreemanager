@@ -24,9 +24,8 @@
  * No minimum height. This had `min-height: 180px`, and a shell pane is a tile a split can make as
  * short as a tenth of the surface — below the floor the screen stopped shrinking with the pane, the
  * pane clipped it, and the observer never fired because the grid's own box never changed. So the
- * bottom rows sat under the pane's edge for as long as the tile stayed short. The two callers that
- * need a size of their own set it on their wrapper: `.c-new-worktree__terminal` a floor,
- * `.c-dialog__terminal` a fixed height.
+ * bottom rows sat under the pane's edge for as long as the tile stayed short. A caller that needs a
+ * size of its own sets it on its wrapper, as `.c-new-worktree__terminal` sets a floor.
  */
 .c-terminal__screen {
   display: flex;

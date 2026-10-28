@@ -9,12 +9,15 @@
    * Preflight runs on open and again when the branch checkbox changes, because "this branch has
    * commits not in the base" only matters if you are deleting it. Nothing here mutates until
    * Remove is pressed.
+   *
+   * Remove closes the dialog rather than waiting in it: teardown can take minutes, and this is
+   * the decision, not the work. `worktreeRemoval.run` carries the removal on and reports how it
+   * ended — see the note there.
    */
   import { commands } from '../ipc/commands';
   import { errorMessage, type Preflight, type Worktree } from '../ipc/types';
-  import { fleet } from '../state/fleet.svelte';
   import { sessions } from '../state/sessions.svelte';
-  import Terminal from './Terminal.svelte';
+  import { worktreeRemoval } from '../state/worktree-removal.svelte';
   import Button from './ui/Button.svelte';
   import Choice from './ui/Choice.svelte';
   import Dialog from './ui/Dialog.svelte';
@@ -31,10 +34,7 @@
   let preflight = $state<Preflight[]>([]);
   let loading = $state(true);
   let preflightReady = $state(false);
-  let busy = $state(false);
   let error = $state<string | null>(null);
-  let done = $state<string | null>(null);
-  let session = $state<string | null>(null);
   const acknowledged = $state<string[]>([]);
 
   const affected = $derived(
@@ -47,8 +47,7 @@
   const warns = $derived(preflight.filter((p) => p.severity === 'warn'));
 
   const canRemove = $derived(
-    !busy &&
-      !loading &&
+    !loading &&
       preflightReady &&
       errors.every((p) => p.overridable && (force || acknowledged.includes(p.id))),
   );
@@ -84,113 +83,68 @@
     if (!on && index !== -1) acknowledged.splice(index, 1);
   }
 
-  async function remove() {
+  function remove() {
     if (!canRemove) return;
-    busy = true;
-    error = null;
-    try {
-      const outcome = await commands.removeWorktree({
-        projectId,
-        worktreeId: worktree.id,
-        deleteBranch,
-        force,
-        acknowledged: [...acknowledged],
-      });
-
-      if (outcome.kind === 'teardown_failed') {
-        session = outcome.session;
-        error =
-          'A teardown step failed, so nothing was removed. ' +
-          outcome.warnings.map((w) => w.message).join(' ');
-        return;
-      }
-
-      done =
-        `Removed ${worktree.dirname}` +
-        (outcome.branchDeleted ? ` and deleted ${worktree.branch}.` : '.');
-      if (outcome.warnings.length > 0) {
-        done += ' ' + outcome.warnings.map((w) => w.message).join(' ');
-      }
-      await fleet.removed(projectId, worktree.id);
-    } catch (e) {
-      error = errorMessage(e);
-    } finally {
-      busy = false;
-    }
+    void worktreeRemoval.run(
+      { projectId, worktree },
+      { deleteBranch, force, acknowledged: [...acknowledged] },
+    );
+    onclose();
   }
 </script>
 
-<Dialog
-  title={done ? 'Removed' : 'Remove this worktree?'}
-  {onclose}
-  closeDisabled={busy}
-  wide
->
+<Dialog title="Remove this worktree?" {onclose} wide>
   {#snippet body()}
-    {#if done}
-      <p class="c-status--ok">{done}</p>
+    <p>
+      This ends the worktree’s agents, shells and browser panes before running teardown.
+      {#if affected.length > 0}{affected.length} open {affected.length === 1
+          ? 'pane will close'
+          : 'panes will close'}.{/if}
+    </p>
+    <p class="c-remove__target"><code>{worktree.path}</code></p>
+    {#if worktree.branch}
+      <p class="c-remove__sub">on <code>{worktree.branch}</code></p>
     {:else}
-      <p>
-        This ends the worktree’s agents, shells and browser panes before running teardown.
-        {#if affected.length > 0}{affected.length} open {affected.length === 1
-            ? 'pane will close'
-            : 'panes will close'}.{/if}
-      </p>
-      <p class="c-remove__target"><code>{worktree.path}</code></p>
-      {#if worktree.branch}
-        <p class="c-remove__sub">on <code>{worktree.branch}</code></p>
-      {:else}
-        <p class="c-remove__sub c-status--muted">detached HEAD</p>
-      {/if}
-
-      <Choice
-        checked={deleteBranch}
-        disabled={busy || !worktree.branch}
-        onchange={(on) => (deleteBranch = on)}
-      >
-        Also delete the branch
-        {#if worktree.branch}<code>{worktree.branch}</code>{/if}
-      </Choice>
-
-      {#if loading}
-        <p class="c-status--muted">Checking…</p>
-      {:else}
-        <PreflightList
-          items={[...errors, ...warns]}
-          acknowledged={force ? errors.map((e) => e.id) : acknowledged}
-          overrideLabel="Remove anyway"
-          disabled={force || busy}
-          onacknowledge={toggleAck}
-        />
-      {/if}
-
-      <Choice size="sm" checked={force} disabled={busy} onchange={(on) => (force = on)}>
-        Force — discard uncommitted and untracked files
-      </Choice>
-
-      <p class="c-note">
-        The project's teardown steps run first, so containers are stopped and root-owned
-        files are handed back before git touches the directory.
-      </p>
-
-      {#if error}
-        <p class="c-status--danger">{error}</p>
-      {/if}
+      <p class="c-remove__sub c-status--muted">detached HEAD</p>
     {/if}
 
-    {#if session}
-      <div class="c-dialog__terminal"><Terminal {session} /></div>
+    <Choice
+      checked={deleteBranch}
+      disabled={!worktree.branch}
+      onchange={(on) => (deleteBranch = on)}
+    >
+      Also delete the branch
+      {#if worktree.branch}<code>{worktree.branch}</code>{/if}
+    </Choice>
+
+    {#if loading}
+      <p class="c-status--muted">Checking…</p>
+    {:else}
+      <PreflightList
+        items={[...errors, ...warns]}
+        acknowledged={force ? errors.map((e) => e.id) : acknowledged}
+        overrideLabel="Remove anyway"
+        disabled={force}
+        onacknowledge={toggleAck}
+      />
+    {/if}
+
+    <Choice size="sm" checked={force} onchange={(on) => (force = on)}>
+      Force — discard uncommitted and untracked files
+    </Choice>
+
+    <p class="c-note">
+      The project's teardown steps run first, so containers are stopped and root-owned files
+      are handed back before git touches the directory.
+    </p>
+
+    {#if error}
+      <p class="c-status--danger">{error}</p>
     {/if}
   {/snippet}
 
   {#snippet footer()}
-    {#if done}
-      <Button variant="accent" onclick={onclose}>Close</Button>
-    {:else}
-      <Button variant="neutral" onclick={onclose} disabled={busy}>Cancel</Button>
-      <Button variant="danger-solid" onclick={remove} disabled={!canRemove}>
-        {busy ? 'Removing…' : 'Remove'}
-      </Button>
-    {/if}
+    <Button variant="neutral" onclick={onclose}>Cancel</Button>
+    <Button variant="danger-solid" onclick={remove} disabled={!canRemove}>Remove</Button>
   {/snippet}
 </Dialog>
