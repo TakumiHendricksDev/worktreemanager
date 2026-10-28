@@ -21,6 +21,14 @@ use serde::{Deserialize, Serialize};
 use wtm_core::error::ConfigError;
 
 use crate::sidebar::SidebarLayout;
+use wtm_core::model::recipe::Recipe;
+
+/// A recipe in the file that could not be read, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeProblem {
+    pub id: String,
+    pub message: String,
+}
 
 /// Which theme the window uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -186,6 +194,19 @@ pub struct UserConfig {
     /// Project-config defaults applied to every repository.
     #[serde(default)]
     pub defaults: Option<toml::Value>,
+    /// Recipes, keyed by id. See [`wtm_core::model::recipe`].
+    ///
+    /// Held as raw TOML and parsed one recipe at a time by [`recipes`](Self::recipes), for the
+    /// reason palettes are not validated here: this file is hand-edited, and one step with a typo
+    /// must cost that recipe, not every registered repository and preference beside it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub recipes: BTreeMap<String, toml::Value>,
+    /// Which recipes each action offers, keyed by action id, in the order the question lists them.
+    ///
+    /// Keyed by a string rather than an enum so an action added by a newer build survives a write
+    /// from this one, the same promise `extra` makes for whole tables.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub recipe_offers: BTreeMap<String, toml::Value>,
     /// Anything this version does not know about, preserved across writes.
     #[serde(flatten)]
     pub extra: BTreeMap<String, toml::Value>,
@@ -306,6 +327,98 @@ impl UserConfig {
         changed
     }
 
+    /// Every recipe that parses, with its id, and why each of the others does not.
+    ///
+    /// Sorted by name, which is how Settings and the menus list them; the table order in the file
+    /// is alphabetical by id, which nobody chose.
+    #[must_use]
+    pub fn recipes(&self) -> (Vec<Recipe>, Vec<RecipeProblem>) {
+        let mut recipes = Vec::new();
+        let mut problems = Vec::new();
+        for (id, value) in &self.recipes {
+            match value.clone().try_into::<Recipe>() {
+                Ok(mut recipe) => {
+                    recipe.id.clone_from(id);
+                    recipes.push(recipe);
+                }
+                Err(e) => problems.push(RecipeProblem {
+                    id: id.clone(),
+                    message: e.message().to_owned(),
+                }),
+            }
+        }
+        recipes.sort_by_key(|r| r.name.to_lowercase());
+        (recipes, problems)
+    }
+
+    /// Store `recipe` under its id, replacing whatever was there.
+    ///
+    /// # Errors
+    ///
+    /// Only if the recipe cannot be expressed as TOML, which a recipe built from strings cannot fail.
+    pub fn set_recipe(&mut self, recipe: &Recipe) -> Result<(), String> {
+        let value = toml::Value::try_from(recipe).map_err(|e| e.to_string())?;
+        self.recipes.insert(recipe.id.clone(), value);
+        Ok(())
+    }
+
+    /// Delete a recipe and every action's offer of it. Returns whether it existed.
+    pub fn remove_recipe(&mut self, id: &str) -> bool {
+        let existed = self.recipes.remove(id).is_some();
+        let actions: Vec<String> = self.recipe_offers.keys().cloned().collect();
+        for action in actions {
+            let kept: Vec<String> = self
+                .recipe_offers(&action)
+                .into_iter()
+                .filter(|r| r != id)
+                .collect();
+            self.set_recipe_offers(&action, &kept);
+        }
+        existed
+    }
+
+    /// The recipe ids `action` offers, in order. Anything that is not a string is ignored.
+    #[must_use]
+    pub fn recipe_offers(&self, action: &str) -> Vec<String> {
+        self.recipe_offers
+            .get(action)
+            .and_then(toml::Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Every action's binding, for Settings.
+    #[must_use]
+    pub fn all_recipe_offers(&self) -> BTreeMap<String, Vec<String>> {
+        self.recipe_offers
+            .keys()
+            .map(|action| (action.clone(), self.recipe_offers(action)))
+            .collect()
+    }
+
+    /// Replace what `action` offers. An empty list removes the key, so an action nobody bound
+    /// leaves no trace in the file.
+    pub fn set_recipe_offers(&mut self, action: &str, ids: &[String]) {
+        let mut seen = Vec::new();
+        for id in ids {
+            if !seen.contains(id) {
+                seen.push(id.clone());
+            }
+        }
+        if seen.is_empty() {
+            self.recipe_offers.remove(action);
+        } else {
+            self.recipe_offers.insert(
+                action.to_owned(),
+                toml::Value::Array(seen.into_iter().map(toml::Value::String).collect()),
+            );
+        }
+    }
+
     /// Read a dotted preference key.
     ///
     /// Deliberately stringly-typed at this boundary: the `ConfigStore` port keeps UI
@@ -406,6 +519,90 @@ mod tests {
             reloaded.project_roots(),
             vec![PathBuf::from("/Users/dev/repo")]
         );
+    }
+
+    #[test]
+    fn a_recipe_round_trips_through_disk_as_flat_tables_someone_could_write_by_hand() {
+        use wtm_core::model::recipe::{Conversation, RecipeStep, StepRun};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let recipe = Recipe {
+            id: "review".to_owned(),
+            name: "Review".to_owned(),
+            steps: vec![
+                RecipeStep {
+                    name: "Correctness".to_owned(),
+                    agent: "claude".to_owned(),
+                    model: Some("opus".to_owned()),
+                    run: StepRun::Skill {
+                        skill: "code-review".to_owned(),
+                        args: "high".to_owned(),
+                    },
+                    ..RecipeStep::default()
+                },
+                RecipeStep {
+                    name: "Follow up".to_owned(),
+                    agent: "claude".to_owned(),
+                    run: StepRun::Prompt {
+                        prompt: "Fix what you found.".to_owned(),
+                    },
+                    conversation: Conversation::Continue,
+                    ..RecipeStep::default()
+                },
+            ],
+            ..Recipe::default()
+        };
+        let mut config = UserConfig::default();
+        config.set_recipe(&recipe).unwrap();
+        config.set_recipe_offers("worktree.created", &["review".to_owned()]);
+        config.save(&path).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("kind = \"skill\""), "{text}");
+        assert!(text.contains("skill = \"code-review\""), "{text}");
+
+        let (recipes, problems) = UserConfig::load(&path).unwrap().recipes();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(recipes, vec![recipe]);
+    }
+
+    #[test]
+    fn a_broken_recipe_costs_only_itself_and_a_step_without_a_kind_is_read_from_what_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[ui]\ntheme = 'dark'\n\
+             [recipes.good]\nname = 'Good'\n\
+             [[recipes.good.steps]]\nname = 'Look'\nagent = 'codex'\nskill = 'review'\n\
+             [recipes.bad]\nname = 3\n",
+        )
+        .unwrap();
+
+        let config = UserConfig::load(&path).unwrap();
+        assert_eq!(config.ui.theme, Theme::Dark);
+        let (recipes, problems) = config.recipes();
+        assert_eq!(recipes.len(), 1);
+        assert!(matches!(
+            &recipes[0].steps[0].run,
+            wtm_core::model::recipe::StepRun::Skill { skill, .. } if skill == "review"
+        ));
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].id, "bad");
+    }
+
+    #[test]
+    fn deleting_a_recipe_takes_it_out_of_every_action_that_offered_it() {
+        let mut config = UserConfig::default();
+        config.set_recipe_offers("worktree.created", &["a".to_owned(), "b".to_owned()]);
+        config.set_recipe_offers("project.added", &["a".to_owned()]);
+        config.remove_recipe("a");
+        assert_eq!(
+            config.recipe_offers("worktree.created"),
+            vec!["b".to_owned()]
+        );
+        assert!(!config.recipe_offers.contains_key("project.added"));
     }
 
     #[test]

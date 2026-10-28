@@ -79,7 +79,13 @@ export type IconName =
   | 'mic'
   | 'more'
   | 'more-vertical'
-  | 'warn';
+  | 'warn'
+  | 'recipe'
+  | 'play'
+  | 'stop'
+  | 'trash'
+  | 'copy'
+  | 'link';
 
 export interface IconSpec {
   /** Drawn with `stroke: currentColor; fill: none`. */
@@ -302,4 +308,22 @@ export const icons: Record<IconName, IconSpec> = {
       'M12.6 3.4 L11.72 4.28 M4.28 11.72 L3.4 12.6',
   },
   'theme-dark': { stroke: 'M13 10.1 A5.6 5.6 0 0 1 5.9 3 A5.75 5.75 0 1 0 13 10.1 Z' },
+  /*
+   * A recipe: numbered marks down the left and lines of unequal length beside them — an ordered
+   * list, which is what a recipe is. Not a chef's hat or a book, which would need detail the
+   * 16-grid cannot hold at this stroke.
+   */
+  recipe: { stroke: 'M3 3.5 H5 M3 8 H5 M3 12.5 H5 M7.5 3.5 H13 M7.5 8 H13 M7.5 12.5 H11' },
+  play: { stroke: 'M5 3.5 L12 8 L5 12.5 Z' },
+  stop: { stroke: 'M4.5 4.5 H11.5 V11.5 H4.5 Z' },
+  trash: {
+    stroke: 'M3 4.5 H13 M6.5 4.5 V3 H9.5 V4.5 M4.5 4.5 L5.25 13.5 H10.75 L11.5 4.5',
+  },
+  copy: { stroke: 'M5.5 5.5 H12.5 V12.5 H5.5 Z M3.5 10.5 V3.5 H10.5' },
+  /* Two links of a chain: this step is handed what the one before it said. */
+  link: {
+    stroke:
+      'M6.5 9.5 L9.5 6.5 M7 4.5 L8.5 3 A2.5 2.5 0 0 1 13 7.5 L11.5 9 ' +
+      'M9 11.5 L7.5 13 A2.5 2.5 0 0 1 3 8.5 L4.5 7',
+  },
 };

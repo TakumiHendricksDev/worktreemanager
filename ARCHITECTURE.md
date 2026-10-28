@@ -980,6 +980,38 @@ revision and current context and sends an approval turn into that same idle chat
 cannot start or change a provider. The tools deliberately expose no approval operation
 to the model.
 
+## 6h. Recipes, and the actions that offer them
+
+A recipe is an ordered list of steps, each an agent, a model, effort and mode, and a skill or a
+prompt. The shape and its rules (`Recipe::problems`, variable filling, which recipes an action
+offers) are pure and live in `wtm-core::model::recipe`; storage is `wtm-config`; running is
+`src-tauri/src/recipes.rs`. It is deliberately smaller than the Work view's review recipes on the
+`work-tab` branch — no parallel roles, no authority profiles — and uses different keys
+(`[recipes.*]`, `[recipe_offers]`) so neither build rejects the other's config.
+
+**Only the user's own config declares them.** A recipe is prompts that agents act on with the modes
+the recipe names, and a checked-in `wtm.toml` deciding what your agents are told is the trust
+problem repository-declared MCP servers already are. The recipe tables are kept as raw TOML in
+`UserConfig` and parsed one recipe at a time, so a typo costs that recipe rather than the whole
+file.
+
+**A step opens like a hand-opened pane, not like a delegation.** `handoff::open_pane` caps a mode
+at the asking session's, because a model chose it. A recipe step's mode was chosen by the person
+in Settings, so the runner builds the same `session_request_for` request a pane's picker does, and
+keeps the repository's `offers_agent` refusal. The pane is announced with a `recipe-…` run id and
+tiled, not hidden behind a rail, and its turn is watched through `turns::wait_until` with Stop as
+the stop condition. It does not go through `turns::send`, whose message log draws Home's wires
+between sessions. The loop's side effects sit behind a small `Host` trait so its order is tested
+without a window or a CLI.
+
+**Actions offer; people run.** The registry of actions is in the frontend (`src/lib/recipes.ts`)
+because everything about one is about the window: where the question appears, and what it knows
+that the backend does not, like the New Worktree form's values. The backend stores bindings by an
+opaque action id. Nothing ever starts a recipe without a click, and an action with nothing bound
+renders nothing. The window may supply only `form.*` and `action.*` variables; where a run is
+(`worktree.*`, `project.*`) is the backend's to say. One run per worktree at a time: two would be
+two writers in one checkout.
+
 ## 7. Toolchain policy
 
 **Pinned to an exact version** (`1.97.1`) rather than the floating `stable` channel, so `cargo build`

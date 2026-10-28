@@ -87,6 +87,24 @@
   }
 }
 
+/*
+ * Settings: nearly the whole window.
+ *
+ * It was a 600px dialog with a tab strip until recipes needed a list beside an editor, and a sheet
+ * that resized as you moved between sections would be a layout that jumps under the pointer. So the
+ * whole of Settings is this size, and the sections that are a column of preferences keep a readable
+ * width inside it (`c-settings__column`). The surface is `--bg` rather than `--bg-elevated` because
+ * it holds cards of its own, which need something darker to sit on.
+ */
+.c-dialog--sheet {
+  width: min(1240px, calc(100vw - 3rem));
+  height: min(900px, calc(100vh - 3rem));
+  max-height: none;
+  overflow: hidden;
+  background: var(--bg);
+  border-color: var(--border-strong);
+}
+
 /* For a dialog that shows a live transcript rather than a question. */
 .c-dialog--wide {
   width: min(600px, calc(100vw - 4rem));

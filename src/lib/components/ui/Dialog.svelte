@@ -102,8 +102,11 @@
      * top of the window instead of sitting in its middle, and keep everything else: the scrim,
      * Escape, the focus trap and hiding native browser views. `palette` is Go to File's size;
      * `finder` is Find in Files', which needs room for a result list and a preview.
+     *
+     * `sheet` is Settings: nearly the whole window, with no header of its own, because the body
+     * draws a section nav and its own heading — a title bar above that would say "Settings" twice.
      */
-    shape?: 'dialog' | 'palette' | 'finder';
+    shape?: 'dialog' | 'palette' | 'finder' | 'sheet';
     body: Snippet;
     footer?: Snippet;
   } = $props();
@@ -222,6 +225,7 @@
     class:c-dialog--wide={wide}
     class:c-dialog--palette={shape === 'palette'}
     class:c-dialog--finder={shape === 'finder'}
+    class:c-dialog--sheet={shape === 'sheet'}
     role="dialog"
     aria-modal="true"
     aria-label={title}

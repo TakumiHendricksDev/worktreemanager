@@ -401,6 +401,58 @@ You can hand work off too: a saved plan has **→ ‹Agent›**, which asks anot
 says. It offers **Continue on ‹another agent›**, which opens a new pane seeded with a summary of the
 conversation so far. The old pane stays resumable.
 
+### Recipes
+
+A recipe is agent work you line up once and run whenever you want it: steps that run one after
+another, each on the agent, model, effort and mode you pick, each running either a skill (sent as
+`/name args`, as the composer sends it) or a prompt. A step can carry on the previous step's
+conversation (same agent only) or start a new session, and can be handed the previous step's final
+reply. Prompts can use `{{worktree.branch}}`, `{{worktree.name}}`, `{{worktree.path}}`,
+`{{project.name}}`, `{{project.path}}`, the New Worktree form's values as `{{form.<field>}}`, and
+`{{previous.reply}}`. A variable the run has no value for is sent empty and named on the run.
+
+Make them in **Settings › Recipes**. Run one from a worktree's right-click menu, **Run recipe ›**.
+Each step opens as an ordinary pane titled after the step, and the next step starts when that
+step's turn ends. A strip above the panes shows the steps; click one to bring its pane forward, or
+**Stop recipe** to interrupt the current step and skip the rest. One recipe runs per worktree at a
+time.
+
+**Settings › Actions** binds recipes to moments in wtm. An action never runs a recipe by itself:
+when it happens it asks, with the first recipe preselected, and an action with nothing bound
+behaves exactly as it always has.
+
+| Action | Where it asks |
+| --- | --- |
+| Worktree created | On the New Worktree finished screen. The form's values are `{{form.*}}` |
+| Setup failed | Beside **Re-run setup**. Adds `{{action.outcome}}` and `{{action.exit_code}}` |
+| Removing a worktree | In the Remove dialog. The recipe runs first; the dialog comes back when it finishes, and nothing is removed until you press Remove |
+| Repository added | A notice at the bottom right, for the main checkout |
+
+Recipes live in your own `~/.config/wtm/config.toml`, never a repository's `wtm.toml`:
+
+```toml
+[recipes.review]
+name = "Review"
+
+[[recipes.review.steps]]
+name = "Correctness"
+agent = "claude"
+model = "opus"
+mode = "plan"
+prompt = "Review the changes on {{worktree.branch}} for correctness bugs. Change nothing."
+
+[[recipes.review.steps]]
+name = "Second opinion"
+agent = "codex"
+skill = "review"
+previous_reply = true
+
+[recipe_offers]
+"worktree.created" = ["review"]
+```
+
+A recipe that can't be read is listed in Settings with the reason, and the rest still load.
+
 ### wtm's MCP tools
 
 Every session gets an MCP server called `wtm`:
@@ -932,8 +984,9 @@ the guarantee no longer depends on the data.
 ## Settings
 
 **⌘, or the gear in the title bar.** Changes apply as you make them; there is no OK button. The
-exceptions are the `PATH` override, which has a Save button and takes effect after a restart, and
-the transcription key.
+exceptions are the `PATH` override, which has a Save button and takes effect after a restart, the
+transcription key, and recipes, which save with **Save recipe** so a half-written one can never be
+offered or run.
 
 | Section | What is in it |
 | --- | --- |
@@ -941,6 +994,8 @@ the transcription key.
 | General | Whether ⌘↵ or ↵ sends a message. Which tool **Open in …** defaults to. Whether agent sessions are restored when wtm opens. The automatic update check. **Agent coordination**: whether agents may use browser panes, and session awareness (beta). **Dictation**: on or off, hold-to-talk or tap, and words to listen for |
 | Notifications | Whether wtm notifies you when a session needs attention, and what macOS says about it |
 | Advanced | The `PATH` override, and the Deepgram key, kept in the macOS Keychain. Plus read-only diagnostics: the PATH wtm actually resolved and where it came from, the config directory, and which of the common tools it can find |
+| Recipes | Your [recipes](#recipes): their steps, which repositories they run in, and templates to start from |
+| Actions | Which recipes each action offers, in order, with a preview of the question it asks |
 
 Advanced is where to look first when a project's commands work in your terminal and not in
 wtm. See [the PATH problem](#the-path-problem).

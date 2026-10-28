@@ -1,0 +1,208 @@
+/*
+ * "Run a recipe in feature-x?" — the question an action asks, and its smaller form in the Remove
+ * dialog.
+ *
+ * A card with a border rather than a banner with a fill: it is an offer, not a warning, and it sits
+ * among content (the New Worktree steps, a notice stack) where a filled block would read as an error.
+ */
+
+.c-offer {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+}
+
+.c-offer--toast {
+  box-shadow: var(--shadow-lg);
+}
+
+.c-offer__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.c-offer__icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.c-offer__titles {
+  min-width: 0;
+}
+
+.c-offer__question {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.c-offer__sub {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+/* Indented to the question's text, so the choices read as its answers. */
+.c-offer__choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4) var(--sp-3) calc(var(--sp-4) + 28px + var(--sp-3));
+}
+
+.c-offer--toast .c-offer__choices {
+  padding-left: var(--sp-4);
+}
+
+.c-offer__choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease);
+
+  &:hover {
+    border-color: var(--border-strong);
+  }
+
+  &.is-selected {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  > input {
+    margin: 3px 0 0;
+    accent-color: var(--accent);
+  }
+}
+
+.c-offer__name {
+  font-size: var(--step--1);
+  font-weight: 500;
+}
+
+.c-offer__steps {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+}
+
+.c-offer__sep {
+  color: var(--fg-subtle);
+}
+
+/* What it will send: each step's text with its variables filled in, as the agent will read it. */
+.c-offer__sent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 var(--sp-4) var(--sp-3) calc(var(--sp-4) + 28px + var(--sp-3));
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-code);
+  font-size: var(--step--2);
+}
+
+.c-offer__line {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: var(--sp-2);
+}
+
+.c-offer__number {
+  color: var(--fg-subtle);
+  font-weight: 600;
+}
+
+.c-offer__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+
+  > code {
+    color: var(--fg);
+    font-size: var(--step--2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+
+.c-offer__more {
+  align-self: flex-start;
+  padding: 0 4px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+.c-offer__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.c-offer__spacer {
+  flex: 1 1 auto;
+}
+
+/* In the Remove dialog: smaller, because the dialog's own question is the removal. */
+.c-before {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.c-before__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg);
+  font-weight: 500;
+
+  > svg {
+    color: var(--accent);
+  }
+}
+
+.c-before__text {
+  color: var(--fg-muted);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+.c-before__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.c-before__select {
+  width: auto;
+}

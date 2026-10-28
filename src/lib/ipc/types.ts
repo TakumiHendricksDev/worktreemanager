@@ -1012,6 +1012,91 @@ export interface SpawnedSession {
 }
 
 /**
+ * One step of a recipe, as the editor holds it. Mirrors `recipes::StepView`.
+ *
+ * Carries both `skill`/`args` and `prompt` whatever `kind` says, so flipping the editor between
+ * "A skill" and "A prompt" does not throw away what was typed in the other. Only the chosen half
+ * is stored.
+ */
+export interface RecipeStep {
+  name: string;
+  /** A catalogue id: `claude`, `codex`, `cursor`. */
+  agent: string;
+  /** Null is the provider's own default, as a pane opened with nothing picked would get. */
+  model: string | null;
+  effort: string | null;
+  mode: string | null;
+  kind: 'skill' | 'prompt';
+  skill: string;
+  args: string;
+  prompt: string;
+  conversation: 'new' | 'continue';
+  previousReply: boolean;
+  onFailure: 'stop' | 'continue';
+}
+
+/** Mirrors `recipes::RecipeView`. An empty `id` is a recipe not saved yet. */
+export interface Recipe {
+  id: string;
+  name: string;
+  description: string;
+  /** Repository roots it is limited to. Empty means every repository. */
+  repositories: string[];
+  steps: RecipeStep[];
+}
+
+/** Everything Settings shows about recipes. Mirrors `recipes::RecipesView`. */
+export interface RecipesState {
+  recipes: Recipe[];
+  /** Recipes in the config file that could not be read, by id. */
+  problems: { id: string; message: string }[];
+  /** Action id → the recipe ids it offers, in order. */
+  offers: Record<string, string[]>;
+}
+
+/** One step's text as it would be sent now. Mirrors `recipes::PreviewStep`. */
+export interface RecipePreviewStep {
+  text: string;
+  getsPrevious: boolean;
+  missing: string[];
+}
+
+export type RecipeRunStatus = 'running' | 'done' | 'failed' | 'stopped';
+export type RecipeStepStatus =
+  'pending' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped';
+
+/** Mirrors `recipes::RunStepView`. */
+export interface RecipeRunStep {
+  name: string;
+  agent: string;
+  model: string | null;
+  mode: string | null;
+  status: RecipeStepStatus;
+  /** The step's live session, once it has one; a continuing step shares its predecessor's. */
+  session: string | null;
+  error: string | null;
+  startedMs: number | null;
+  endedMs: number | null;
+}
+
+/** A recipe running, or run, in a worktree. Emitted as `recipe:run`. Mirrors `recipes::RunView`. */
+export interface RecipeRun {
+  id: string;
+  recipeId: string;
+  recipeName: string;
+  projectId: string;
+  worktreeId: string;
+  /** The action that offered it, or null for a run started from a menu. */
+  action: string | null;
+  status: RecipeRunStatus;
+  startedMs: number;
+  endedMs: number | null;
+  /** Variables a step used that this run had no value for. */
+  missing: string[];
+  steps: RecipeRunStep[];
+}
+
+/**
  * One prompt one agent session sent another, and what came of it. Mirrors `messages::Exchange`.
  *
  * Announced on `agent:message` when it is sent and again when it settles, as the whole record both

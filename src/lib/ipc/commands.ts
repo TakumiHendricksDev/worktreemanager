@@ -23,6 +23,11 @@ import type {
   AgentExchange,
   AgentOption,
   AgentSession,
+  AgentSkill,
+  Recipe,
+  RecipePreviewStep,
+  RecipeRun,
+  RecipesState,
   BackgroundTask,
   Brief,
   BrowserAvailability,
@@ -734,6 +739,53 @@ export const commands = {
    * `notifications_not_allowed` at once when macOS will not ask an unsigned build at all.
    */
   requestNotificationPermission: () => invoke<boolean>('request_notification_permission'),
+
+  // ── recipes ──
+  /** Every recipe in `config.toml`, the ones that could not be read, and every action's offers. */
+  listRecipes: () => invoke<RecipesState>('list_recipes'),
+  /**
+   * Validate and store a recipe; an empty id is assigned from its name. Rejects with every problem
+   * at once rather than storing a recipe an action could offer half-written.
+   */
+  saveRecipe: (recipe: Recipe) =>
+    invoke<{ id: string; all: RecipesState }>('save_recipe', { recipe }),
+  /** Delete a recipe and every action's offer of it. */
+  deleteRecipe: (id: string) => invoke<RecipesState>('delete_recipe', { id }),
+  /** Replace what an action offers, in order. An empty list turns its question off. */
+  setRecipeOffers: (action: string, recipes: string[]) =>
+    invoke<RecipesState>('set_recipe_offers', { action, recipes }),
+  /** The skills an agent would find on disk, for the step editor. Plugins are not on it. */
+  agentSkills: (agent: string, projectId: string | null) =>
+    invoke<AgentSkill[]>('agent_skills', { agent, projectId }),
+  /** Each step's text as it would be sent if the recipe started now in this worktree. */
+  previewRecipe: (
+    recipeId: string,
+    projectId: string,
+    worktreeId: string,
+    vars: Record<string, string>,
+  ) =>
+    invoke<RecipePreviewStep[]>('preview_recipe', {
+      recipeId,
+      projectId,
+      worktreeId,
+      vars,
+    }),
+  /**
+   * Start a recipe. Resolves as soon as the run is recorded; its steps arrive as `recipe:run`.
+   * `vars` may only set `form.*` and `action.*` — where the run is, the backend says.
+   */
+  startRecipe: (args: {
+    recipeId: string;
+    projectId: string;
+    worktreeId: string;
+    action: string | null;
+    vars: Record<string, string>;
+  }) => invoke<RecipeRun>('start_recipe', args),
+  /** Interrupt the running step and skip the rest. The panes stay. */
+  stopRecipe: (run: string) => invoke<void>('stop_recipe', { run }),
+  recipeRuns: () => invoke<RecipeRun[]>('recipe_runs'),
+  /** Forget a finished run, which takes its strip off the worktree. */
+  dismissRecipeRun: (run: string) => invoke<void>('dismiss_recipe_run', { run }),
 
   // ── open in ──
   /**

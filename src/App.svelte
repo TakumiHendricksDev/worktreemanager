@@ -21,6 +21,8 @@
   import HomeShellPermissions from './lib/components/HomeShellPermissions.svelte';
   import RunShellDialog from './lib/components/RunShellDialog.svelte';
   import { shellRuns } from './lib/state/shell-runs.svelte';
+  import { recipes } from './lib/state/recipes.svelte';
+  import { settingsView } from './lib/state/settings-view.svelte';
   import FleetTree from './lib/components/FleetTree.svelte';
   import HomeAgent from './lib/components/HomeAgent.svelte';
   import HomeSurface from './lib/components/HomeSurface.svelte';
@@ -102,7 +104,6 @@
       workspace.selected !== null &&
       worktreeRemoval.isRemoving(workspace.activeProjectId, workspace.selected.id),
   );
-  let showSettings = $state(false);
   let showUsage = $state(false);
   let showInspector = $state(false);
   /**
@@ -119,6 +120,7 @@
   /** The message log Home draws its wires from. Same contract as `offSessions`. */
   let offFleet: (() => void) | null = null;
   let offShellRuns: (() => void) | null = null;
+  let offRecipes: (() => void) | null = null;
 
   /**
    * The one navigation recipe. Notification clicks and toast clicks both land here, because
@@ -285,6 +287,8 @@
       booted = true;
       offShellRuns = await shellRuns.init();
       if (gone) offShellRuns();
+      offRecipes = await recipes.init();
+      if (gone) offRecipes();
 
       // Last, and not awaited: a network round trip must not hold up a window that is otherwise
       // ready, and nothing above depends on its answer.
@@ -316,7 +320,7 @@
      * item emits an event instead — the same route `pty_bridge.rs` uses for progress. The
      * listener is unconditional because a platform with no menu simply never fires it.
      */
-    const unlistenSettings = listen('wtm:settings', () => (showSettings = true));
+    const unlistenSettings = listen('wtm:settings', () => settingsView.show());
     /* Check for Updates… from the same menu, by the same route. Always runs and always answers. */
     const unlistenUpdates = listen('wtm:check-updates', () => void updates.check(true));
     /* Go › Home from the same menu, by the same route: AppKit keeps ⇧⌘H for itself. */
@@ -412,7 +416,7 @@
        */
       if (isLinux && event.ctrlKey && event.key === ',' && !inTextEntry(event.target)) {
         event.preventDefault();
-        showSettings = true;
+        settingsView.show();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -448,6 +452,7 @@
       void unlistenUsage.then((off) => off());
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
+      offRecipes?.();
       offFleet?.();
       offWindows?.();
       offSessions?.();
@@ -522,7 +527,7 @@
     onaddproject={addProject}
     onremoveproject={() => (removingProject = workspace.activeProject)}
     onusage={() => (showUsage = true)}
-    onsettings={() => (showSettings = true)}
+    onsettings={() => settingsView.show()}
   />
 
   <div
@@ -800,8 +805,8 @@
     />
   {/if}
 
-  {#if showSettings}
-    <SettingsDialog onclose={() => (showSettings = false)} />
+  {#if settingsView.open}
+    <SettingsDialog onclose={() => settingsView.close()} />
   {/if}
   {#if showUsage}
     <UsageDialog onclose={() => (showUsage = false)} />

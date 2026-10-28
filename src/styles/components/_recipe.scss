@@ -1,0 +1,340 @@
+/*
+ * Settings › Recipes: the list of recipes, and the editor beside it.
+ *
+ * Two columns inside the Settings sheet. Below the width where both fit, the list goes and a picker
+ * at the top of the editor takes its place (`c-recipe__switch`), because a recipe being edited is the
+ * thing that must not be squeezed — the list is only how you get to it.
+ */
+
+.c-recipe-list {
+  flex: 0 0 256px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.c-recipe-list__top {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+}
+
+.c-recipe-list__items {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 var(--sp-2) var(--sp-3);
+}
+
+.c-recipe-list__problem {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--step--2);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-recipe-list__foot {
+  padding: var(--sp-3);
+  border-top: 1px solid var(--border);
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+.c-recipe-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &.is-selected {
+    background: var(--bg-elevated);
+    border-color: var(--border-strong);
+  }
+}
+
+.c-recipe-item__name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--step--1);
+  font-weight: 500;
+}
+
+/* "Unsaved" — a dot rather than a word, because the save bar already says it in words. */
+.c-recipe-item__dirty {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.c-recipe-item__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+}
+
+/* Always its own line, so a wrap never starts a line with a stray separator. */
+.c-recipe-item__on {
+  flex-basis: 100%;
+}
+
+/*
+ * Which agent runs a step, in two letters. Tinted by role rather than by brand colour: the point is
+ * that Claude and Codex are told apart at a glance in a row of steps, not that either is on-brand.
+ */
+.c-agent-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.c-agent-mark--claude {
+  border-color: var(--warn-line);
+}
+
+.c-agent-mark--codex {
+  border-color: var(--info-line);
+}
+
+.c-recipe {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.c-recipe__scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--sp-5) var(--sp-5) var(--sp-6);
+}
+
+.c-recipe__inner {
+  max-width: 820px;
+}
+
+.c-recipe__switch {
+  display: none;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+/*
+ * The name and description are edited where they are read, as a title and a line under it, rather
+ * than in labelled fields above the steps. A border appears on hover and focus so they still read as
+ * editable without looking like a form.
+ */
+.c-recipe__name,
+.c-recipe__desc {
+  display: block;
+  width: 100%;
+  margin-left: -9px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: none;
+  transition: border-color var(--dur-fast) var(--ease);
+
+  &:hover {
+    border-color: var(--border);
+  }
+
+  &:focus-visible {
+    outline: none;
+    border-color: var(--border-focus);
+    background: var(--bg-input);
+  }
+}
+
+.c-recipe__name {
+  font-size: var(--step-2);
+  font-weight: 600;
+}
+
+.c-recipe__desc {
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-recipe__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  margin: var(--sp-4) 0 var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+  font-size: var(--step--1);
+
+  > dt {
+    color: var(--fg-muted);
+  }
+
+  > dd {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+    margin: 0;
+  }
+}
+
+/* The facts' pickers sit in a line of text, so they take the text's size rather than a field's. */
+.c-recipe__facts .c-select {
+  width: auto;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: var(--step--1);
+}
+
+.c-recipe__steps-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.c-recipe__steps-head .c-section-heading {
+  margin: 0;
+}
+
+.c-recipe__flow {
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+}
+
+.c-recipe__savebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.c-recipe__status {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+
+  &.is-dirty {
+    color: var(--fg);
+  }
+
+  &.is-dirty::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: var(--sp-2);
+    border-radius: 50%;
+    background: var(--accent);
+    vertical-align: middle;
+  }
+}
+
+.c-recipe__empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 480px;
+  margin: var(--sp-6) auto;
+  padding: 0 var(--sp-5);
+}
+
+.c-recipe__empty-title {
+  font-size: var(--step-1);
+}
+
+.c-recipe__empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* A removable token: a repository a recipe is limited to, or an action that offers it. */
+.c-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: var(--step--2);
+}
+
+.c-chip--plain {
+  padding-right: 8px;
+}
+
+.c-chip__remove {
+  display: inline-flex;
+  padding: 1px;
+  border-radius: 50%;
+  color: var(--fg-subtle);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+}
+
+@container settings (max-width: 980px) {
+  .c-recipe-list {
+    flex-basis: 208px;
+  }
+}
+
+@container settings (max-width: 880px) {
+  .c-recipe-list {
+    display: none;
+  }
+
+  .c-recipe__switch {
+    display: flex;
+  }
+
+  .c-recipe__scroll {
+    padding: var(--sp-4);
+  }
+}

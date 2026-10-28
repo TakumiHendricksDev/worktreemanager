@@ -2,6 +2,15 @@
   /**
    * Settings.
    *
+   * A sheet nearly the size of the window, with the sections down the left. It was a 600px dialog
+   * with a tab strip, which held four sections of preferences comfortably and could not hold a recipe
+   * list beside a recipe editor at all. Making only Recipes bigger would have had the panel jump in
+   * size as you moved between sections, so the whole of Settings is the sheet, and the four original
+   * sections keep a readable width in a column inside it.
+   *
+   * Recipes and Actions are their own components (`RecipeSettings`, `RecipeActionSettings`); what
+   * follows is about the original four.
+   *
    * Four sections. Three of them are preferences that already existed in
    * `~/.config/wtm/config.toml` with no way to reach it from the app — `ui.opener` was written
    * only as a side effect of using the split button, and `exec.path` was file-only despite
@@ -38,6 +47,11 @@
   import { restoreSessions } from '../state/restore-sessions.svelte';
   import { sessionAwareness } from '../state/session-awareness.svelte';
   import { workspace } from '../state/workspace.svelte';
+  import { recipes } from '../state/recipes.svelte';
+  import { settingsView, type SettingsSection } from '../state/settings-view.svelte';
+  import { RECIPE_ACTIONS } from '../recipes';
+  import RecipeActionSettings from './RecipeActionSettings.svelte';
+  import RecipeSettings from './RecipeSettings.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import Choice from './ui/Choice.svelte';
@@ -48,14 +62,69 @@
 
   const { onclose }: { onclose: () => void } = $props();
 
-  type Section = 'appearance' | 'general' | 'notifications' | 'advanced';
-  const SECTIONS: { id: Section; label: string }[] = [
-    { id: 'appearance', label: 'Appearance' },
-    { id: 'general', label: 'General' },
-    { id: 'notifications', label: 'Notifications' },
-    { id: 'advanced', label: 'Advanced' },
+  type Section = SettingsSection;
+  const SECTIONS: { id: Section; label: string; lede: string }[] = [
+    {
+      id: 'appearance',
+      label: 'Appearance',
+      lede: 'The palette, light or dark, and how dense Home’s tree is.',
+    },
+    {
+      id: 'general',
+      label: 'General',
+      lede: 'How messages send, where worktrees open, and what agents may use.',
+    },
+    {
+      id: 'notifications',
+      label: 'Notifications',
+      lede: 'When wtm tells you a session needs you.',
+    },
+    {
+      id: 'advanced',
+      label: 'Advanced',
+      lede: 'The PATH, the transcription key, and what wtm can see on this machine.',
+    },
+    {
+      id: 'recipes',
+      label: 'Recipes',
+      lede: 'Steps that run one after another, each on the agent, model and mode you pick.',
+    },
+    {
+      id: 'actions',
+      label: 'Actions',
+      lede: 'Moments in wtm that can offer recipes. Each one asks first.',
+    },
   ];
-  let section = $state<Section>('appearance');
+  /** The section is the store's, so a link elsewhere can open Settings at Recipes or Actions. */
+  const section = $derived(settingsView.section);
+  const current = $derived(SECTIONS.find((s) => s.id === section) ?? SECTIONS[0]!);
+  const asking = $derived(
+    RECIPE_ACTIONS.filter((a) =>
+      (recipes.offers[a.id] ?? []).some((id) => recipes.byId(id) !== undefined),
+    ).length,
+  );
+
+  /** Whether the recipe editor holds changes that leaving would throw away. */
+  let recipeDirty = $state(false);
+  let confirmLeave = $state<(() => void) | null>(null);
+
+  /** Run `then`, or ask first when it would leave unsaved recipe changes behind. */
+  function guard(then: () => void) {
+    if (recipeDirty) confirmLeave = then;
+    else then();
+  }
+
+  function goTo(id: Section) {
+    if (id === section) return;
+    guard(() => {
+      settingsView.focus = null;
+      settingsView.section = id;
+    });
+  }
+
+  function requestClose() {
+    guard(onclose);
+  }
 
   const MODES: { value: ThemeChoice; label: string }[] = [
     { value: 'system', label: 'Follow the system' },
@@ -239,6 +308,15 @@
 
   let sectionTabs: HTMLElement | undefined;
 
+  /*
+   * Focus the open section's tab. `Dialog` focuses its first control, which is the Appearance tab
+   * whichever section Settings opened at — so "Edit recipes…" would open at Recipes with the focus
+   * ring on Appearance. This effect is the parent's, so it runs after Dialog's and wins.
+   */
+  $effect(() => {
+    sectionTabs?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
+  });
+
   function onSectionKey(event: KeyboardEvent, current: Section) {
     const ids = SECTIONS.map((s) => s.id);
     const at = ids.indexOf(current);
@@ -250,7 +328,7 @@
     else return;
     event.preventDefault();
     const id = ids[Math.min(Math.max(next, 0), ids.length - 1)];
-    if (id) section = id;
+    if (id) goTo(id);
     // Query this strip only: the sidebar also uses `.c-tabs`, and a document-wide
     // `[aria-selected="true"]` would steal focus from Settings if both were mounted.
     queueMicrotask(() => {
@@ -259,291 +337,344 @@
   }
 </script>
 
-<Dialog title="Settings" {onclose} wide>
+<Dialog title="Settings" onclose={requestClose} shape="sheet">
   {#snippet body()}
-    <div
-      class="c-tabs"
-      role="tablist"
-      aria-label="Settings sections"
-      bind:this={sectionTabs}
-    >
-      {#each SECTIONS as tab (tab.id)}
-        <button
-          role="tab"
-          class="c-tabs__tab"
-          class:is-active={section === tab.id}
-          aria-selected={section === tab.id}
-          tabindex={section === tab.id ? 0 : -1}
-          onclick={() => (section = tab.id)}
-          onkeydown={(event) => onSectionKey(event, tab.id)}
+    <div class="c-settings" data-od-id="settings-sheet">
+      <nav class="c-settings__nav" aria-label="Settings" data-od-id="settings-nav">
+        <h2 class="c-settings__title">Settings</h2>
+        <div
+          class="c-settings__tabs"
+          role="tablist"
+          aria-label="Settings sections"
+          aria-orientation="vertical"
+          bind:this={sectionTabs}
         >
-          {tab.label}
-        </button>
-      {/each}
-    </div>
+          {#each SECTIONS as tab (tab.id)}
+            {#if tab.id === 'recipes'}
+              <!-- A label for the eye only: each tab already says what it is. -->
+              <span class="c-settings__group" aria-hidden="true">Agents</span>
+            {/if}
+            <button
+              role="tab"
+              class="c-settings__link"
+              class:is-selected={section === tab.id}
+              aria-selected={section === tab.id}
+              aria-controls="settings-panel"
+              tabindex={section === tab.id ? 0 : -1}
+              onclick={() => goTo(tab.id)}
+              onkeydown={(event) => onSectionKey(event, tab.id)}
+            >
+              {tab.label}
+              {#if tab.id === 'recipes' && recipes.recipes.length > 0}
+                <span class="c-badge c-settings__count">{recipes.recipes.length}</span>
+              {:else if tab.id === 'actions' && asking > 0}
+                <span class="c-badge c-settings__count">{asking} asking</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+        <p class="c-settings__foot">
+          Recipes are saved to <code>~/.config/wtm/config.toml</code>. A repository’s
+          <code>wtm.toml</code> can’t declare them.
+        </p>
+      </nav>
 
-    {#if section === 'appearance'}
-      <div class="o-stack o-stack--loose c-settings__panel">
-        <div class="o-stack">
-          <h3 class="c-section-heading">Palette</h3>
-          <div class="c-settings__palettes">
-            {#each theme.all as option (option.id)}
-              <button
-                class="c-palette"
-                class:is-selected={theme.palette === option.id}
-                disabled={option.error !== null}
-                title={option.error ?? undefined}
-                aria-pressed={theme.palette === option.id}
-                onclick={() => theme.setPalette(option.id)}
-              >
-                <!--
+      <div
+        class="c-settings__main"
+        id="settings-panel"
+        role="tabpanel"
+        aria-label={current.label}
+      >
+        <header class="c-settings__head">
+          <div class="c-settings__heading">
+            <h2 class="c-settings__name">{current.label}</h2>
+            <p class="c-settings__lede">{current.lede}</p>
+          </div>
+          <Button
+            variant="quiet"
+            icon="md"
+            title="Close (Esc)"
+            ariaLabel="Close"
+            onclick={requestClose}
+          >
+            <Icon name="close" />
+          </Button>
+        </header>
+        <div class="c-settings__body">
+          {#if section === 'recipes'}
+            <RecipeSettings ondirty={(dirty) => (recipeDirty = dirty)} />
+          {:else if section === 'actions'}
+            <RecipeActionSettings />
+          {:else}
+            <div class="c-settings__column">
+              {#if section === 'appearance'}
+                <div class="o-stack o-stack--loose c-settings__panel">
+                  <div class="o-stack">
+                    <h3 class="c-section-heading">Palette</h3>
+                    <div class="c-settings__palettes">
+                      {#each theme.all as option (option.id)}
+                        <button
+                          class="c-palette"
+                          class:is-selected={theme.palette === option.id}
+                          disabled={option.error !== null}
+                          title={option.error ?? undefined}
+                          aria-pressed={theme.palette === option.id}
+                          onclick={() => theme.setPalette(option.id)}
+                        >
+                          <!--
                   `data-palette` on the swatch, not just on `<html>`. The palette rules are
                   plain attribute selectors, so the custom properties resolve here too and a
                   Clay chip is Clay while the app is still Pine. A custom palette has no
                   rule to match, so it carries its values inline instead — the same six
                   properties, the same ramp, resolved the same way.
                 -->
-                <span
-                  class="c-palette__chips"
-                  data-palette={option.id}
-                  use:paintSwatch={option.custom ? option.id : ''}
-                >
-                  <span class="c-palette__chip c-palette__chip--bg"></span>
-                  <span class="c-palette__chip c-palette__chip--surface"></span>
-                  <span class="c-palette__chip c-palette__chip--brand"></span>
-                </span>
-                <span class="c-palette__name">{option.name}</span>
-                {#if theme.palette === option.id}
-                  <span class="c-palette__tick"><Icon name="check" size={12} /></span>
-                {/if}
-              </button>
-            {/each}
-          </div>
-          {#if theme.customPalettes.some((p) => p.error)}
-            <p class="c-field__help c-status--warn">
-              A palette in your config could not be used. Hover it for the reason.
-            </p>
-          {:else}
-            <p class="c-field__help">
-              Define your own in <code>~/.config/wtm/config.toml</code> under
-              <code>[ui.palettes]</code>. See the README.
-            </p>
-          {/if}
-        </div>
+                          <span
+                            class="c-palette__chips"
+                            data-palette={option.id}
+                            use:paintSwatch={option.custom ? option.id : ''}
+                          >
+                            <span class="c-palette__chip c-palette__chip--bg"></span>
+                            <span class="c-palette__chip c-palette__chip--surface"></span>
+                            <span class="c-palette__chip c-palette__chip--brand"></span>
+                          </span>
+                          <span class="c-palette__name">{option.name}</span>
+                          {#if theme.palette === option.id}
+                            <span class="c-palette__tick"
+                              ><Icon name="check" size={12} /></span
+                            >
+                          {/if}
+                        </button>
+                      {/each}
+                    </div>
+                    {#if theme.customPalettes.some((p) => p.error)}
+                      <p class="c-field__help c-status--warn">
+                        A palette in your config could not be used. Hover it for the reason.
+                      </p>
+                    {:else}
+                      <p class="c-field__help">
+                        Define your own in <code>~/.config/wtm/config.toml</code> under
+                        <code>[ui.palettes]</code>. See the README.
+                      </p>
+                    {/if}
+                  </div>
 
-        <div class="o-stack">
-          <h3 class="c-section-heading">Mode</h3>
-          {#each MODES as mode (mode.value)}
-            <Choice
-              type="radio"
-              name="wtm-mode"
-              checked={theme.choice === mode.value}
-              onchange={() => theme.set(mode.value)}
-            >
-              {mode.label}
-            </Choice>
-          {/each}
-        </div>
-        <div class="o-stack">
-          <h3 class="c-section-heading">Home tree density</h3>
-          {#each ['standard', 'compact'] as density}
-            <Choice
-              type="radio"
-              name="wtm-tree-density"
-              checked={treePrefs.density === density}
-              onchange={() => void treePrefs.set(density as TreeDensity)}
-            >
-              {density === 'standard' ? 'Standard' : 'Compact'}
-            </Choice>
-          {/each}
-          {#if treePrefs.error}<p class="c-field__help c-status--danger">
-              {treePrefs.error}
-            </p>{/if}
-        </div>
-      </div>
-    {:else if section === 'general'}
-      <div class="o-stack o-stack--loose c-settings__panel">
-        <div class="o-stack">
-          <h3 class="c-section-heading">Send a message with</h3>
-          {#each SEND_KEYS as option (option.value)}
-            <Choice
-              type="radio"
-              name="wtm-send-key"
-              checked={composerPrefs.sendKey === option.value}
-              onchange={() => void composerPrefs.setSendKey(option.value)}
-            >
-              {option.label}
-            </Choice>
-          {/each}
-          <!-- The selected option's consequence rather than a static sentence, because what this
+                  <div class="o-stack">
+                    <h3 class="c-section-heading">Mode</h3>
+                    {#each MODES as mode (mode.value)}
+                      <Choice
+                        type="radio"
+                        name="wtm-mode"
+                        checked={theme.choice === mode.value}
+                        onchange={() => theme.set(mode.value)}
+                      >
+                        {mode.label}
+                      </Choice>
+                    {/each}
+                  </div>
+                  <div class="o-stack">
+                    <h3 class="c-section-heading">Home tree density</h3>
+                    {#each ['standard', 'compact'] as density}
+                      <Choice
+                        type="radio"
+                        name="wtm-tree-density"
+                        checked={treePrefs.density === density}
+                        onchange={() => void treePrefs.set(density as TreeDensity)}
+                      >
+                        {density === 'standard' ? 'Standard' : 'Compact'}
+                      </Choice>
+                    {/each}
+                    {#if treePrefs.error}<p class="c-field__help c-status--danger">
+                        {treePrefs.error}
+                      </p>{/if}
+                  </div>
+                </div>
+              {:else if section === 'general'}
+                <div class="o-stack o-stack--loose c-settings__panel">
+                  <div class="o-stack">
+                    <h3 class="c-section-heading">Send a message with</h3>
+                    {#each SEND_KEYS as option (option.value)}
+                      <Choice
+                        type="radio"
+                        name="wtm-send-key"
+                        checked={composerPrefs.sendKey === option.value}
+                        onchange={() => void composerPrefs.setSendKey(option.value)}
+                      >
+                        {option.label}
+                      </Choice>
+                    {/each}
+                    <!-- The selected option's consequence rather than a static sentence, because what this
                setting really decides is which key gets you a newline. -->
-          <p class="c-field__help">
-            {SEND_KEYS.find((o) => o.value === composerPrefs.sendKey)?.help}
-          </p>
-        </div>
+                    <p class="c-field__help">
+                      {SEND_KEYS.find((o) => o.value === composerPrefs.sendKey)?.help}
+                    </p>
+                  </div>
 
-        <Field
-          id="settings-opener"
-          label="Open worktrees in"
-          help="The tool the Open in… button runs. Picking a different one from that button changes this too."
-        >
-          <select
-            id="settings-opener"
-            class="c-select"
-            value={workspace.preferredOpener ?? ''}
-            onchange={chooseOpener}
-            disabled={workspace.openers.length === 0}
-          >
-            {#each workspace.openers as opener (opener.id)}
-              <option value={opener.id} disabled={!opener.available}>
-                {opener.label}{opener.available ? '' : '  (not installed)'}
-              </option>
-            {/each}
-          </select>
-        </Field>
+                  <Field
+                    id="settings-opener"
+                    label="Open worktrees in"
+                    help="The tool the Open in… button runs. Picking a different one from that button changes this too."
+                  >
+                    <select
+                      id="settings-opener"
+                      class="c-select"
+                      value={workspace.preferredOpener ?? ''}
+                      onchange={chooseOpener}
+                      disabled={workspace.openers.length === 0}
+                    >
+                      {#each workspace.openers as opener (opener.id)}
+                        <option value={opener.id} disabled={!opener.available}>
+                          {opener.label}{opener.available ? '' : '  (not installed)'}
+                        </option>
+                      {/each}
+                    </select>
+                  </Field>
 
-        <div class="o-stack">
-          <h3 class="c-section-heading">Sessions</h3>
-          <Choice
-            type="checkbox"
-            checked={restoreSessions.enabled}
-            onchange={(enabled) => void restoreSessions.setEnabled(enabled)}
-          >
-            Restore agent sessions when wtm opens
-          </Choice>
-          <p class="c-field__help">
-            Every agent pane, Home's included, picks its conversation up again in the
-            background as wtm opens, a couple at a time. Nothing is sent to them: a turn the
-            quit stopped says so, and queued messages wait for you. Turned off, panes come
-            back in place and each worktree's agents resume when you first open it. Applies
-            from the next launch.
-          </p>
-        </div>
+                  <div class="o-stack">
+                    <h3 class="c-section-heading">Sessions</h3>
+                    <Choice
+                      type="checkbox"
+                      checked={restoreSessions.enabled}
+                      onchange={(enabled) => void restoreSessions.setEnabled(enabled)}
+                    >
+                      Restore agent sessions when wtm opens
+                    </Choice>
+                    <p class="c-field__help">
+                      Every agent pane, Home's included, picks its conversation up again in
+                      the background as wtm opens, a couple at a time. Nothing is sent to
+                      them: a turn the quit stopped says so, and queued messages wait for
+                      you. Turned off, panes come back in place and each worktree's agents
+                      resume when you first open it. Applies from the next launch.
+                    </p>
+                  </div>
 
-        <div class="o-stack">
-          <h3 class="c-section-heading">Updates</h3>
-          <Choice
-            type="checkbox"
-            checked={updates.enabled}
-            onchange={(enabled) => void updates.setEnabled(enabled)}
-          >
-            Check for updates automatically
-          </Choice>
-          <p class="c-field__help">
-            At launch and at most once a day, wtm asks api.github.com for the latest
-            release. The request carries nothing about you, this machine or your projects.
-            Installing always waits for you to click. Check for Updates… in the Worktree
-            Manager menu works either way.
-          </p>
-        </div>
+                  <div class="o-stack">
+                    <h3 class="c-section-heading">Updates</h3>
+                    <Choice
+                      type="checkbox"
+                      checked={updates.enabled}
+                      onchange={(enabled) => void updates.setEnabled(enabled)}
+                    >
+                      Check for updates automatically
+                    </Choice>
+                    <p class="c-field__help">
+                      At launch and at most once a day, wtm asks api.github.com for the
+                      latest release. The request carries nothing about you, this machine or
+                      your projects. Installing always waits for you to click. Check for
+                      Updates… in the Worktree Manager menu works either way.
+                    </p>
+                  </div>
 
-        <div class="o-stack">
-          <h3 class="c-section-heading">Agent coordination</h3>
-          <Choice
-            type="checkbox"
-            checked={browserTools.enabled}
-            onchange={(enabled) => void browserTools.setEnabled(enabled)}
-          >
-            Agents may use browser panes
-          </Choice>
-          <p class="c-field__help">
-            Agents in a worktree can open browser panes there, read pages as an outline,
-            click and type in them, take screenshots, and read the comments you leave in a
-            pane’s comment mode. Every pane also has its own Agents toggle. Applies to
-            sessions started after the change.
-          </p>
-          <Choice
-            type="checkbox"
-            checked={sessionAwareness.enabled}
-            onchange={(enabled) => void sessionAwareness.setEnabled(enabled)}
-          >
-            Share worktree session awareness <span class="c-badge c-badge--accent"
-              >Beta</span
-            >
-          </Choice>
-          <p class="c-field__help">
-            When another agent session in the same worktree opens, closes, changes state, or
-            receives its first prompt, wtm adds one short coordination note to this
-            session’s next user turn. It shares only the provider, working/waiting/idle
-            state, and a shortened first-prompt label. It does not inspect replies, tool
-            output, or files, never shares full transcripts or session ids, and never
-            crosses into another worktree. Sessions opened while the beta is enabled can
-            refresh the same snapshot with <code>list_sessions</code>. wtm never interrupts
-            a running agent or starts a turn by itself.
-          </p>
-        </div>
+                  <div class="o-stack">
+                    <h3 class="c-section-heading">Agent coordination</h3>
+                    <Choice
+                      type="checkbox"
+                      checked={browserTools.enabled}
+                      onchange={(enabled) => void browserTools.setEnabled(enabled)}
+                    >
+                      Agents may use browser panes
+                    </Choice>
+                    <p class="c-field__help">
+                      Agents in a worktree can open browser panes there, read pages as an
+                      outline, click and type in them, take screenshots, and read the
+                      comments you leave in a pane’s comment mode. Every pane also has its
+                      own Agents toggle. Applies to sessions started after the change.
+                    </p>
+                    <Choice
+                      type="checkbox"
+                      checked={sessionAwareness.enabled}
+                      onchange={(enabled) => void sessionAwareness.setEnabled(enabled)}
+                    >
+                      Share worktree session awareness <span class="c-badge c-badge--accent"
+                        >Beta</span
+                      >
+                    </Choice>
+                    <p class="c-field__help">
+                      When another agent session in the same worktree opens, closes, changes
+                      state, or receives its first prompt, wtm adds one short coordination
+                      note to this session’s next user turn. It shares only the provider,
+                      working/waiting/idle state, and a shortened first-prompt label. It
+                      does not inspect replies, tool output, or files, never shares full
+                      transcripts or session ids, and never crosses into another worktree.
+                      Sessions opened while the beta is enabled can refresh the same
+                      snapshot with <code>list_sessions</code>. wtm never interrupts a
+                      running agent or starts a turn by itself.
+                    </p>
+                  </div>
 
-        <!--
+                  <!--
           Dictation. Off unless turned on, and the one control here that asks first — see
           `toggleDictation` for why this section breaks the applies-immediately rule.
         -->
-        <div class="o-stack">
-          <h3 class="c-section-heading">Dictation</h3>
-          <Choice
-            type="checkbox"
-            checked={dictation.enabled === 'on'}
-            onchange={(on) => void toggleDictation(on)}
-          >
-            Dictate prompts with the microphone
-          </Choice>
-          <p class="c-field__help">
-            The only feature that sends anything of yours off this machine: audio goes to {DESTINATION}
-            to be transcribed. Needs SoX and a key, both set up under Advanced.
-          </p>
+                  <div class="o-stack">
+                    <h3 class="c-section-heading">Dictation</h3>
+                    <Choice
+                      type="checkbox"
+                      checked={dictation.enabled === 'on'}
+                      onchange={(on) => void toggleDictation(on)}
+                    >
+                      Dictate prompts with the microphone
+                    </Choice>
+                    <p class="c-field__help">
+                      The only feature that sends anything of yours off this machine: audio
+                      goes to {DESTINATION}
+                      to be transcribed. Needs SoX and a key, both set up under Advanced.
+                    </p>
 
-          {#if dictation.enabled === 'on'}
-            {#if dictation.status !== null && dictation.status.missing.length > 0}
-              <Banner variant="warn">
-                Dictation needs {dictation.status.missing.join(' and ')}, which
-                {dictation.status.missing.length === 1 ? 'is' : 'are'} not on your PATH.
-                {#snippet action()}
-                  <code class="u-mono">brew install sox</code>
-                {/snippet}
-              </Banner>
-            {:else if dictation.status !== null && !dictation.status.keySet}
-              <Banner variant="warn">
-                No transcription key yet — add one under Advanced.
-              </Banner>
-            {/if}
+                    {#if dictation.enabled === 'on'}
+                      {#if dictation.status !== null && dictation.status.missing.length > 0}
+                        <Banner variant="warn">
+                          Dictation needs {dictation.status.missing.join(' and ')}, which
+                          {dictation.status.missing.length === 1 ? 'is' : 'are'} not on your PATH.
+                          {#snippet action()}
+                            <code class="u-mono">brew install sox</code>
+                          {/snippet}
+                        </Banner>
+                      {:else if dictation.status !== null && !dictation.status.keySet}
+                        <Banner variant="warn">
+                          No transcription key yet — add one under Advanced.
+                        </Banner>
+                      {/if}
 
-            <Field
-              id="settings-dictate-mode"
-              label="Microphone button"
-              help="Hold cannot outlive the press, which is why it is the default."
-            >
-              <select
-                id="settings-dictate-mode"
-                class="c-select"
-                value={dictation.mode}
-                onchange={(e) =>
-                  void dictation.setMode(
-                    (e.currentTarget as HTMLSelectElement).value as DictateMode,
-                  )}
-              >
-                <option value="hold">Hold to talk</option>
-                <option value="tap">Tap to start, tap to stop</option>
-              </select>
-            </Field>
+                      <Field
+                        id="settings-dictate-mode"
+                        label="Microphone button"
+                        help="Hold cannot outlive the press, which is why it is the default."
+                      >
+                        <select
+                          id="settings-dictate-mode"
+                          class="c-select"
+                          value={dictation.mode}
+                          onchange={(e) =>
+                            void dictation.setMode(
+                              (e.currentTarget as HTMLSelectElement).value as DictateMode,
+                            )}
+                        >
+                          <option value="hold">Hold to talk</option>
+                          <option value="tap">Tap to start, tap to stop</option>
+                        </select>
+                      </Field>
 
-            <Field
-              id="settings-dictate-keyterms"
-              label="Words to listen for"
-              help="Comma separated. Terms the transcriber should expect — the fix for “SDK” coming back as “S D K”."
-            >
-              <TextInput
-                id="settings-dictate-keyterms"
-                value={dictation.keyterms}
-                placeholder="SDK, ChatGPT, Tauri, argv, PTY"
-                onblur={(e) =>
-                  void dictation.setKeyterms((e.currentTarget as HTMLInputElement).value)}
-              />
-            </Field>
-          {/if}
-        </div>
-      </div>
-    {:else if section === 'notifications'}
-      <div class="o-stack o-stack--loose c-settings__panel">
-        <!--
+                      <Field
+                        id="settings-dictate-keyterms"
+                        label="Words to listen for"
+                        help="Comma separated. Terms the transcriber should expect — the fix for “SDK” coming back as “S D K”."
+                      >
+                        <TextInput
+                          id="settings-dictate-keyterms"
+                          value={dictation.keyterms}
+                          placeholder="SDK, ChatGPT, Tauri, argv, PTY"
+                          onblur={(e) =>
+                            void dictation.setKeyterms(
+                              (e.currentTarget as HTMLInputElement).value,
+                            )}
+                        />
+                      </Field>
+                    {/if}
+                  </div>
+                </div>
+              {:else if section === 'notifications'}
+                <div class="o-stack o-stack--loose c-settings__panel">
+                  <!--
           The permanent home for a preference that is otherwise only ever offered once, by a toast on
           the first focus after something was missed — so this is also the recovery path for anyone who
           answered "Not now" and later wanted them.
@@ -552,145 +683,178 @@
           blur exception: that one saves on blur because every `set_pref` rewrites the whole config
           file and a keystroke-level save would do it dozens of times, where this is one click.
         -->
-        <Choice
-          type="checkbox"
-          checked={attention.pref === 'on'}
-          onchange={() =>
-            void (attention.pref === 'on' ? attention.disable() : attention.enable())}
-        >
-          Notify me when a session needs attention
-        </Choice>
-        <p class="c-field__help">
-          Only while wtm is in the background — a session in the window says so itself, in
-          the pane and in the sidebar. Nothing is ever sent about the worktree you are
-          looking at.
-        </p>
-        {#if attention.blocked === 'unavailable'}
-          <!-- Not the System Settings advice below: an unsigned build is not listed there, so that
+                  <Choice
+                    type="checkbox"
+                    checked={attention.pref === 'on'}
+                    onchange={() =>
+                      void (attention.pref === 'on'
+                        ? attention.disable()
+                        : attention.enable())}
+                  >
+                    Notify me when a session needs attention
+                  </Choice>
+                  <p class="c-field__help">
+                    Only while wtm is in the background — a session in the window says so
+                    itself, in the pane and in the sidebar. Nothing is ever sent about the
+                    worktree you are looking at.
+                  </p>
+                  {#if attention.blocked === 'unavailable'}
+                    <!-- Not the System Settings advice below: an unsigned build is not listed there, so that
                sentence would send someone looking for a switch that does not exist. -->
-          <p class="c-field__help c-status--warn">
-            This build of wtm isn't code-signed, and macOS won't deliver notifications for
-            an unsigned app — it isn't listed in System Settings → Notifications either. A
-            session that needs you still shows in the sidebar and on the dock icon.
-          </p>
-        {:else if attention.blocked}
-          <!-- Said rather than swallowed: a preference that is on and silent is indistinguishable
+                    <p class="c-field__help c-status--warn">
+                      This build of wtm isn't code-signed, and macOS won't deliver
+                      notifications for an unsigned app — it isn't listed in System Settings
+                      → Notifications either. A session that needs you still shows in the
+                      sidebar and on the dock icon.
+                    </p>
+                  {:else if attention.blocked}
+                    <!-- Said rather than swallowed: a preference that is on and silent is indistinguishable
                from a broken app, and the fix is somewhere wtm cannot reach. -->
-          <p class="c-field__help c-status--warn">
-            macOS is not delivering wtm's notifications. Turn them on for Worktree Manager
-            in System Settings → Notifications.
-          </p>
-        {/if}
-      </div>
-    {:else}
-      <div class="o-stack o-stack--loose c-settings__panel">
-        {#if loadError}
-          <p class="c-status--danger">{loadError}</p>
-        {/if}
-        <Field
-          id="settings-path"
-          label="PATH override"
-          help="Leave empty to use the PATH probed from your login shell. Takes effect when wtm restarts."
-          errors={[pathError]}
-        >
-          <TextInput
-            id="settings-path"
-            bind:value={pathOverride}
-            mono
-            placeholder="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-            oninput={() => (pathSaved = false)}
-          />
-        </Field>
-        <div class="c-settings__row">
-          <Button variant="neutral" size="sm" onclick={commitPath}>Save PATH</Button>
-          {#if pathSaved}
-            <span class="c-status--ok">Saved — restart wtm to use it.</span>
-          {/if}
-        </div>
+                    <p class="c-field__help c-status--warn">
+                      macOS is not delivering wtm's notifications. Turn them on for Worktree
+                      Manager in System Settings → Notifications.
+                    </p>
+                  {/if}
+                </div>
+              {:else}
+                <div class="o-stack o-stack--loose c-settings__panel">
+                  {#if loadError}
+                    <p class="c-status--danger">{loadError}</p>
+                  {/if}
+                  <Field
+                    id="settings-path"
+                    label="PATH override"
+                    help="Leave empty to use the PATH probed from your login shell. Takes effect when wtm restarts."
+                    errors={[pathError]}
+                  >
+                    <TextInput
+                      id="settings-path"
+                      bind:value={pathOverride}
+                      mono
+                      placeholder="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                      oninput={() => (pathSaved = false)}
+                    />
+                  </Field>
+                  <div class="c-settings__row">
+                    <Button variant="neutral" size="sm" onclick={commitPath}
+                      >Save PATH</Button
+                    >
+                    {#if pathSaved}
+                      <span class="c-status--ok">Saved — restart wtm to use it.</span>
+                    {/if}
+                  </div>
 
-        <!--
+                  <!--
           The transcription key.
 
           Beside the PATH override because both are machine-level setup rather than taste, and both
           are things you set once. It is blank on every open even when a key is stored: nothing
           reads a key back out of the backend, which is the point rather than an omission.
         -->
-        <Field
-          id="settings-dictate-key"
-          label="Transcription key"
-          help={dictation.status?.keySet === true
-            ? 'A key is stored in your keychain. Type a new one to replace it, or save an empty field to remove it.'
-            : `A Deepgram API key, kept in your keychain and sent only to ${DESTINATION}.`}
-          errors={[keyError]}
-        >
-          <TextInput
-            id="settings-dictate-key"
-            bind:value={dictateKey}
-            mono
-            placeholder={dictation.status?.keySet === true ? '••••••••' : 'Paste a key'}
-            oninput={() => (keySaved = false)}
-            onblur={commitKey}
-          />
-        </Field>
-        <div class="c-settings__row">
-          <Button variant="neutral" size="sm" onclick={commitKey} disabled={keyBusy}
-            >Save key</Button
-          >
-          {#if dictation.status?.keySet === true}
-            <Button
-              variant="quiet"
-              size="sm"
-              onclick={() => {
-                keyError = null;
-                confirmRemoveKey = true;
-              }}
-              disabled={keyBusy}
-            >
-              Remove
-            </Button>
-          {/if}
-          {#if keySaved}
-            <span class="c-status--ok">Saved to your keychain.</span>
+                  <Field
+                    id="settings-dictate-key"
+                    label="Transcription key"
+                    help={dictation.status?.keySet === true
+                      ? 'A key is stored in your keychain. Type a new one to replace it, or save an empty field to remove it.'
+                      : `A Deepgram API key, kept in your keychain and sent only to ${DESTINATION}.`}
+                    errors={[keyError]}
+                  >
+                    <TextInput
+                      id="settings-dictate-key"
+                      bind:value={dictateKey}
+                      mono
+                      placeholder={dictation.status?.keySet === true
+                        ? '••••••••'
+                        : 'Paste a key'}
+                      oninput={() => (keySaved = false)}
+                      onblur={commitKey}
+                    />
+                  </Field>
+                  <div class="c-settings__row">
+                    <Button
+                      variant="neutral"
+                      size="sm"
+                      onclick={commitKey}
+                      disabled={keyBusy}>Save key</Button
+                    >
+                    {#if dictation.status?.keySet === true}
+                      <Button
+                        variant="quiet"
+                        size="sm"
+                        onclick={() => {
+                          keyError = null;
+                          confirmRemoveKey = true;
+                        }}
+                        disabled={keyBusy}
+                      >
+                        Remove
+                      </Button>
+                    {/if}
+                    {#if keySaved}
+                      <span class="c-status--ok">Saved to your keychain.</span>
+                    {/if}
+                  </div>
+
+                  {#if doctor}
+                    <div class="o-stack">
+                      <h3 class="c-section-heading">Diagnostics</h3>
+                      <dl class="o-facts">
+                        <dt>PATH in use</dt>
+                        <dd><code>{doctor.resolvedPath}</code></dd>
+                        <dt>Source</dt>
+                        <dd>{doctor.pathSource}</dd>
+                        <dt>Config</dt>
+                        <dd><code>{doctor.configDir}</code></dd>
+                      </dl>
+                    </div>
+
+                    <div class="o-stack">
+                      <h3 class="c-section-heading">Tools on that PATH</h3>
+                      <dl class="o-facts">
+                        {#each doctor.tools as tool (tool.name)}
+                          <dt>{tool.name}</dt>
+                          <dd>
+                            {#if tool.path}
+                              <code>{tool.path}</code>
+                            {:else}
+                              <span class="c-status--muted">not found</span>
+                            {/if}
+                          </dd>
+                        {/each}
+                      </dl>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
           {/if}
         </div>
-
-        {#if doctor}
-          <div class="o-stack">
-            <h3 class="c-section-heading">Diagnostics</h3>
-            <dl class="o-facts">
-              <dt>PATH in use</dt>
-              <dd><code>{doctor.resolvedPath}</code></dd>
-              <dt>Source</dt>
-              <dd>{doctor.pathSource}</dd>
-              <dt>Config</dt>
-              <dd><code>{doctor.configDir}</code></dd>
-            </dl>
-          </div>
-
-          <div class="o-stack">
-            <h3 class="c-section-heading">Tools on that PATH</h3>
-            <dl class="o-facts">
-              {#each doctor.tools as tool (tool.name)}
-                <dt>{tool.name}</dt>
-                <dd>
-                  {#if tool.path}
-                    <code>{tool.path}</code>
-                  {:else}
-                    <span class="c-status--muted">not found</span>
-                  {/if}
-                </dd>
-              {/each}
-            </dl>
-          </div>
-        {/if}
       </div>
-    {/if}
-  {/snippet}
-
-  {#snippet footer()}
-    <Button variant="neutral" onclick={onclose}>Done</Button>
+    </div>
   {/snippet}
 </Dialog>
+
+{#if confirmLeave}
+  {@const then = confirmLeave}
+  <Dialog title="Discard unsaved changes?" onclose={() => (confirmLeave = null)}>
+    {#snippet body()}
+      <p>
+        The recipe you’re editing has changes that aren’t saved. Leaving throws them away.
+      </p>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="neutral" onclick={() => (confirmLeave = null)}>Keep editing</Button>
+      <Button
+        variant="danger-solid"
+        onclick={() => {
+          confirmLeave = null;
+          recipeDirty = false;
+          then();
+        }}>Discard</Button
+      >
+    {/snippet}
+  </Dialog>
+{/if}
 
 {#if confirmDictation}
   <Dialog title="Turn on dictation" onclose={() => (confirmDictation = false)}>

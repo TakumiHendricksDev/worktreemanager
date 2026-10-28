@@ -28,6 +28,7 @@
   import Dialog from './ui/Dialog.svelte';
   import Field from './ui/Field.svelte';
   import TextInput from './ui/TextInput.svelte';
+  import { recipes } from '../state/recipes.svelte';
   import { workspace } from '../state/workspace.svelte';
 
   const { onclose }: { onclose: () => void } = $props();
@@ -60,6 +61,24 @@
     }
   }
 
+  /**
+   * Ask about the recipes "Repository added" offers, in the main checkout, once the repository is
+   * selected and usable. Not while its config waits on a trust decision: a recipe step opens agents
+   * through that config, and the trust banner is the question that has to be answered first.
+   */
+  function offerRecipes() {
+    const project = workspace.activeProject;
+    const main = workspace.worktrees.find((w) => w.isMain);
+    if (!project?.usable || !main) return;
+    recipes.offer({
+      action: 'project.added',
+      projectId: project.id,
+      worktreeId: main.id,
+      place: `the main checkout of ${project.name}`,
+      vars: {},
+    });
+  }
+
   async function onsubmit(event: Event) {
     event.preventDefault();
     const trimmed = path.trim().replace(/\/+$/, '');
@@ -71,6 +90,7 @@
       // `~` is expanded in Rust, which actually knows HOME.
       await workspace.addProject(trimmed);
       onclose();
+      offerRecipes();
     } catch (e) {
       error = errorMessage(e);
     } finally {

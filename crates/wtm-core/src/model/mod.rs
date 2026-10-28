@@ -11,6 +11,7 @@
 //! - [`agent`] — what an agent session reports, normalized across providers.
 //! - [`limits`] — what a provider *account* has left, which outlives any one session.
 //! - [`files`] — what git lists inside one worktree, for the Code tab.
+//! - [`recipe`] — agent work a person lines up once and runs when a moment asks.
 //!
 //! Note that [`plan`] owns the name `Plan` and has since v0.1, for the create pipeline's
 //! preview. An agent's plan is an `Agenda` while it is still moving and a `Brief` once it is a
@@ -23,6 +24,7 @@ pub mod limits;
 pub mod naming;
 pub mod plan;
 pub mod project;
+pub mod recipe;
 pub mod value;
 pub mod worktree;
 

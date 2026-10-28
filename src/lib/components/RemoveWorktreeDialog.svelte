@@ -16,11 +16,13 @@
    */
   import { commands } from '../ipc/commands';
   import { errorMessage, type Preflight, type Worktree } from '../ipc/types';
+  import { recipes } from '../state/recipes.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { worktreeRemoval } from '../state/worktree-removal.svelte';
   import Button from './ui/Button.svelte';
   import Choice from './ui/Choice.svelte';
   import Dialog from './ui/Dialog.svelte';
+  import Icon from './ui/Icon.svelte';
   import PreflightList from './ui/PreflightList.svelte';
 
   const {
@@ -83,6 +85,40 @@
     if (!on && index !== -1) acknowledged.splice(index, 1);
   }
 
+  /*
+   * "Removing a worktree" can offer recipes — a wrap-up that says what would be lost, say. Choosing
+   * one runs it *instead of* removing for now: the dialog closes, the recipe runs, and this dialog
+   * comes back when it finishes so the removal gets a second look with the answer on screen. Nothing
+   * here ever removes after a recipe on its own.
+   */
+  const offered = $derived(
+    recipes.isRunningIn(worktree.id)
+      ? []
+      : recipes.offeredFor('worktree.removing', projectId),
+  );
+  let picked = $state<string | null>(null);
+  const pick = $derived(offered.find((r) => r.id === picked) ?? offered[0] ?? null);
+  let starting = $state(false);
+
+  async function runFirst() {
+    if (!pick || starting) return;
+    starting = true;
+    try {
+      await recipes.start({
+        recipeId: pick.id,
+        projectId,
+        worktreeId: worktree.id,
+        action: 'worktree.removing',
+        then: () => void worktreeRemoval.request({ projectId, worktree }),
+      });
+      onclose();
+    } catch {
+      // Said in a notice by `recipes.start`; the dialog stays so Remove is still one click away.
+    } finally {
+      starting = false;
+    }
+  }
+
   function remove() {
     if (!canRemove) return;
     void worktreeRemoval.run(
@@ -137,6 +173,43 @@
       The project's teardown steps run first, so containers are stopped and root-owned files
       are handed back before git touches the directory.
     </p>
+
+    {#if pick}
+      <div class="c-before" data-od-id="remove-offer">
+        <p class="c-before__head">
+          <Icon name="recipe" />
+          {offered.length === 1 ? `Run ${pick.name} first?` : 'Run a recipe first?'}
+        </p>
+        <p class="c-before__text">
+          Removing a worktree offers {offered.length === 1 ? 'this' : 'these'}. It runs
+          first; this dialog comes back when it finishes, and nothing is removed until you
+          press Remove.
+        </p>
+        <div class="c-before__actions">
+          {#if offered.length > 1}
+            <select
+              class="c-select c-before__select"
+              aria-label="Recipe to run first"
+              value={pick.id}
+              onchange={(e) => (picked = (e.currentTarget as HTMLSelectElement).value)}
+            >
+              {#each offered as recipe (recipe.id)}
+                <option value={recipe.id}>{recipe.name}</option>
+              {/each}
+            </select>
+          {/if}
+          <Button
+            variant="neutral"
+            size="sm"
+            disabled={starting}
+            onclick={() => void runFirst()}
+          >
+            <Icon name="play" size={12} />
+            {starting ? 'Starting…' : `Run ${pick.name} first`}
+          </Button>
+        </div>
+      </div>
+    {/if}
 
     {#if error}
       <p class="c-status--danger">{error}</p>

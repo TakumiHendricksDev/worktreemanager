@@ -17,6 +17,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import { commands } from '../ipc/commands';
+  import { isRecipeRun } from '../recipes';
   import { errorMessage, type AgentAttachment } from '../ipc/types';
   import { commandsFor } from '../agent-commands';
   import { HOME_AGENT } from '../home';
@@ -148,6 +149,8 @@
     if (provider === null) return sessions.labelOf(pane);
     return sessions.options.find((o) => o.id === provider)?.label ?? provider;
   });
+  /** A recipe step's own title, "Plan · Implementation", or null for every other pane. */
+  const recipeStep = $derived(isRecipeRun(pane.run) ? pane.agentTitle : null);
   /**
    * Who the composer talks to, in a sentence. Home's pane is the Home agent; `label` stays the CLI's
    * name for what is about the CLI itself — its skills, its limits, the session a restored pane held.
@@ -1310,6 +1313,10 @@
       <h2 class="c-pane__title">
         {#if atHome}
           {HOME_AGENT} <span class="c-pane__cli">· {label}</span>
+        {:else if recipeStep}
+          <!-- "Plan · Implementation" first: with three steps of one recipe tiled side by side, the
+               CLI's name is the one thing they all share. -->
+          {recipeStep} <span class="c-pane__cli">· {label}</span>
         {:else}
           {label}
         {/if}

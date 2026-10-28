@@ -105,8 +105,13 @@
 @use 'components/preflight';
 @use 'components/progress';
 @use 'components/queue';
+@use 'components/recipe';
+@use 'components/recipe-actions';
+@use 'components/recipe-offer';
+@use 'components/recipe-step';
 @use 'components/remove';
 @use 'components/review';
+@use 'components/run-strip';
 @use 'components/schema-form';
 @use 'components/sidebar';
 @use 'components/sidebar-group';

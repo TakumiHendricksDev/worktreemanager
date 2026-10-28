@@ -27,6 +27,7 @@
   import { workspace } from '../state/workspace.svelte';
   import { STATUS_WORD } from '../status';
   import AgentsDialog from './AgentsDialog.svelte';
+  import RecipeRunStrip from './RecipeRunStrip.svelte';
   import AgentTree from './AgentTree.svelte';
   import PlanViewer from './PlanViewer.svelte';
   import SessionTree from './SessionTree.svelte';
@@ -231,6 +232,7 @@
 
 <div class="c-surface" class:is-hidden={!visible} role="region" aria-label="Sessions">
   {#if activeId}
+    <RecipeRunStrip worktreeId={activeId} />
     <AgentTree worktreeId={activeId} onbrowse={() => (browsingAgents = true)} />
   {/if}
   {#if poppedOut.length > 0}

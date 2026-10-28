@@ -144,3 +144,11 @@
     transform: translateY(4px);
   }
 }
+
+/*
+ * A recipe question in the stack (`RecipeOffer`, variant `toast`). The card draws itself; the item
+ * only has to take pointer events, which the list as a whole gives up.
+ */
+.c-toasts__offer {
+  pointer-events: auto;
+}

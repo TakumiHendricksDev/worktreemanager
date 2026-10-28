@@ -1,12 +1,153 @@
 /*
- * The Settings dialog's own layout, and the palette picker.
+ * The Settings sheet's own layout, and the palette picker.
  *
- * The picker is the only genuinely new shape in the app: a grid of buttons, each previewing
- * a palette it is not currently wearing. Everything else in here is spacing.
+ * The sheet is a nav down the left and a section beside it, each section with its heading above a
+ * body that scrolls on its own — so the heading and the nav stay put while a long recipe scrolls.
+ * The picker is the other genuinely new shape: a grid of buttons, each previewing a palette it is
+ * not currently wearing. Everything else in here is spacing.
  */
 
+.c-settings {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  // Recipes and Actions fold their two columns into one below a width, and it is the sheet's width
+  // that matters there, not the window's.
+  container: settings / inline-size;
+}
+
+.c-settings__nav {
+  flex: 0 0 196px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: var(--sp-4) var(--sp-2);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+}
+
+.c-settings__title {
+  padding: 0 var(--sp-2) var(--sp-3);
+  font-size: var(--step-1);
+  font-weight: 600;
+}
+
+.c-settings__tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-settings__group {
+  padding: var(--sp-3) var(--sp-2) var(--sp-1);
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.c-settings__link {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 6px var(--sp-2);
+  border-radius: var(--r-md);
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  &.is-selected {
+    background: var(--bg-active);
+    color: var(--fg);
+    font-weight: 500;
+  }
+}
+
+.c-settings__count {
+  margin-left: auto;
+  padding: 0 6px;
+}
+
+.c-settings__foot {
+  margin-top: auto;
+  padding: var(--sp-2);
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+  line-height: 1.5;
+}
+
+.c-settings__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.c-settings__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.c-settings__heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.c-settings__name {
+  font-size: var(--step-2);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.c-settings__lede {
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
+.c-settings__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+/*
+ * The four original sections, in a column of their own width. Stretched to the sheet, a help
+ * paragraph ran to 140 characters a line, which is a line nobody reads to the end of.
+ */
+.c-settings__column {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--sp-5);
+
+  > * {
+    max-width: 640px;
+  }
+}
+
 .c-settings__panel {
-  padding-top: var(--sp-3);
+  padding-top: 0;
+}
+
+@container settings (max-width: 880px) {
+  .c-settings__nav {
+    flex-basis: 150px;
+  }
 }
 
 .c-settings__row {

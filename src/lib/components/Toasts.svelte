@@ -14,8 +14,11 @@
    * this component used to select the worktree itself and never switched projects, which is
    * exactly the bug the shared recipe closed.
    */
+  import { actionById } from '../recipes';
   import { attention, type Toast } from '../state/attention.svelte';
+  import { recipes } from '../state/recipes.svelte';
   import type { PaneStatus } from '../status';
+  import RecipeOffer from './RecipeOffer.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
   import SessionDot from './ui/SessionDot.svelte';
@@ -30,6 +33,8 @@
       paneId: string;
     }) => void;
   } = $props();
+
+  const askAction = $derived(recipes.ask ? actionById(recipes.ask.action) : undefined);
 
   /** Which dot a card shows. `ask` and `notice` have no session behind them and render none. */
   const DOT: Record<Exclude<Toast['kind'], 'ask' | 'notice'>, PaneStatus> = {
@@ -54,6 +59,26 @@
   there, it sits over the Send button.
 -->
 <ul class="c-toasts" aria-live="polite" aria-label="Session alerts">
+  <!--
+    A recipe question from an action with no screen of its own — a repository just added. In this
+    list rather than beside it so the two stack instead of overlapping, and first because the list
+    runs bottom-up: it sits nearest the corner, under whatever notices arrive after it.
+  -->
+  {#if recipes.ask && askAction}
+    {@const ask = recipes.ask}
+    <li class="c-toasts__offer">
+      <RecipeOffer
+        action={askAction}
+        projectId={ask.projectId}
+        worktreeId={ask.worktreeId}
+        place={ask.place}
+        vars={ask.vars}
+        variant="toast"
+        onstarted={() => (recipes.ask = null)}
+        ondismiss={() => (recipes.ask = null)}
+      />
+    </li>
+  {/if}
   {#each attention.toasts as toast (toast.id)}
     <li class="c-toast c-toast--{toast.kind}">
       {#if toast.kind === 'ask'}

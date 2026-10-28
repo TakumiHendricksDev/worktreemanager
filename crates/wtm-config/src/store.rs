@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 use toml::Value;
 use wtm_core::error::{ConfigError, ConfigLayer, DatabaseTrustDeclaration};
+use wtm_core::model::recipe::Recipe;
 use wtm_core::model::{Project, ProjectId};
 use wtm_core::ports::clock::Clock;
 use wtm_core::ports::config::{ConfigStore, LayerProvenance, TrustDecision};
@@ -39,7 +40,7 @@ use crate::layers::{self, LayerPaths, LoadedLayer};
 use crate::paths::AppPaths;
 use crate::sidebar::SidebarLayout;
 use crate::trust::{self, TrustStore};
-use crate::user::UserConfig;
+use crate::user::{RecipeProblem, UserConfig};
 use crate::validate::{self, Origin};
 
 /// A resolved project plus the hashes it was resolved from.
@@ -160,6 +161,50 @@ impl FileConfigStore {
         }
         self.save_user_config(&config)?;
         Ok(stored)
+    }
+
+    /// Every recipe in the user config, and the ones that could not be read.
+    ///
+    /// Inherent rather than on the [`ConfigStore`] port for the sidebar's reason: no use-case runs a
+    /// recipe — the composition root does, through the same session machinery as a pane.
+    pub fn recipes(&self) -> Result<(Vec<Recipe>, Vec<RecipeProblem>), ConfigError> {
+        Ok(self.user_config()?.recipes())
+    }
+
+    /// Every action's binding to recipes.
+    pub fn recipe_offers(&self) -> Result<BTreeMap<String, Vec<String>>, ConfigError> {
+        Ok(self.user_config()?.all_recipe_offers())
+    }
+
+    /// Write `recipe` under its id. The caller validates; this only stores.
+    pub fn save_recipe(&self, recipe: &Recipe) -> Result<(), ConfigError> {
+        let _write = self.user_write.lock();
+        let mut config = self.user_config()?;
+        config
+            .set_recipe(recipe)
+            .map_err(|message| ConfigError::Io {
+                path: self.paths.config_file.clone(),
+                message: format!("serialize recipe: {message}"),
+            })?;
+        self.save_user_config(&config)
+    }
+
+    /// Delete a recipe, and every action's offer of it.
+    pub fn delete_recipe(&self, id: &str) -> Result<(), ConfigError> {
+        let _write = self.user_write.lock();
+        let mut config = self.user_config()?;
+        if config.remove_recipe(id) {
+            self.save_user_config(&config)?;
+        }
+        Ok(())
+    }
+
+    /// Replace the recipes `action` offers.
+    pub fn set_recipe_offers(&self, action: &str, ids: &[String]) -> Result<(), ConfigError> {
+        let _write = self.user_write.lock();
+        let mut config = self.user_config()?;
+        config.set_recipe_offers(action, ids);
+        self.save_user_config(&config)
     }
 
     /// Take one worktree out of `repo_root`'s layout, for when the worktree itself is removed.

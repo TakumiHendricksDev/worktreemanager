@@ -1,0 +1,112 @@
+/*
+ * The recipe running in a worktree, on one line above its panes.
+ *
+ * Metrics taken from the agent rail (`_agent-tree.scss`), which it sits directly above, so the two
+ * bands read as one family: same height, same type size, same chip shape. One line always, for the
+ * rail's reason — a row this band gains is a row every pane below it loses.
+ */
+
+.c-run-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: var(--step--2);
+}
+
+.c-run-strip__heading {
+  flex: 0 0 auto;
+  color: var(--fg-subtle);
+  font-weight: 600;
+}
+
+.c-run-strip__name {
+  flex: 0 0 auto;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.c-run-strip__steps {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.c-run-strip__sep {
+  color: var(--fg-subtle);
+}
+
+.c-run-strip__step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 3px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--fg-muted);
+  white-space: nowrap;
+
+  &:hover:enabled {
+    border-color: var(--border-strong);
+    color: var(--fg);
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+
+  &.is-current {
+    border-color: var(--accent);
+    color: var(--fg);
+  }
+
+  // Not reached yet, or never will be: dashed, the way an unfilled slot is drawn.
+  &.is-pending {
+    border-style: dashed;
+    color: var(--fg-subtle);
+  }
+
+  &.is-failed {
+    border-color: var(--danger-line);
+    color: var(--danger);
+  }
+}
+
+.c-run-strip__done {
+  display: inline-flex;
+  color: var(--ok);
+}
+
+.c-run-strip__word {
+  color: var(--fg-muted);
+}
+
+.c-run-strip__missing {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--warn);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-run-strip__time {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &.is-failed {
+    color: var(--danger);
+  }
+}

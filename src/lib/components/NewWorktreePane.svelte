@@ -33,6 +33,8 @@
   import { untrack } from 'svelte';
   import { workspace } from '../state/workspace.svelte';
   import { worktreeRemoval } from '../state/worktree-removal.svelte';
+  import { actionById, type RecipeAction } from '../recipes';
+  import RecipeOffer from './RecipeOffer.svelte';
   import ReviewPanel from './ReviewPanel.svelte';
   import RemoveWorktreeDialog from './RemoveWorktreeDialog.svelte';
   import SchemaForm from './SchemaForm.svelte';
@@ -49,6 +51,16 @@
     onclose: () => void;
   } = $props();
 
+  /*
+   * The two moments this pane can ask about recipes. Looked up once: the registry is static, and an
+   * action that offers nothing in this repository renders nothing, so the finished screen is exactly
+   * what it was before recipes existed.
+   */
+  const CREATED = actionById('worktree.created') as RecipeAction;
+  const SETUP_FAILED = actionById('worktree.setup_failed') as RecipeAction;
+  /** "Not now" on either question, for the rest of this pane's life. */
+  let offerDismissed = $state(false);
+
   /** A preview costs a lookup command, so wait for typing to settle. */
   const PREVIEW_DEBOUNCE_MS = 400;
 
@@ -57,6 +69,12 @@
   let form = $state<Form | null>(null);
   let loadError = $state<string | null>(null);
   const values = $state<Record<string, string>>({});
+  /** The form as it was submitted, as `{{form.<key>}}` variables. */
+  const formVars = $derived(
+    Object.fromEntries(
+      Object.entries(values).map(([key, value]) => [`form.${key}`, value]),
+    ),
+  );
 
   let preview = $state<Preview | null>(null);
   let previewError = $state<string | null>(null);
@@ -303,6 +321,8 @@
     const worktree = outcome && 'worktree' in outcome ? outcome.worktree : null;
     if (!worktree || acting) return;
     acting = true;
+    // A retry that succeeds is a worktree created, and its question has not been answered yet.
+    offerDismissed = false;
     runError = null;
     phase = 'running';
     notes = [];
@@ -535,6 +555,34 @@
               >{removing ? 'Removing…' : 'Remove the worktree'}</Button
             >
           </div>
+          {#if !offerDismissed}
+            <RecipeOffer
+              action={SETUP_FAILED}
+              {projectId}
+              worktreeId={outcome.worktree.id}
+              place={outcome.worktree.dirname}
+              vars={{
+                ...formVars,
+                'action.outcome': outcome.outcome.kind,
+                'action.exit_code':
+                  outcome.outcome.kind === 'failed' ? String(outcome.outcome.code) : '',
+              }}
+              onstarted={onclose}
+              ondismiss={() => (offerDismissed = true)}
+            />
+          {/if}
+        {/if}
+
+        {#if outcome?.kind === 'created' && !offerDismissed}
+          <RecipeOffer
+            action={CREATED}
+            {projectId}
+            worktreeId={outcome.worktree.id}
+            place={outcome.worktree.dirname}
+            vars={formVars}
+            onstarted={onclose}
+            ondismiss={() => (offerDismissed = true)}
+          />
         {/if}
 
         {#if runError}

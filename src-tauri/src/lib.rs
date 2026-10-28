@@ -33,6 +33,7 @@ pub mod prototype_context;
 pub mod prototype_tools;
 pub mod prototypes;
 pub mod pty_bridge;
+pub mod recipes;
 pub mod shell_admission;
 pub mod shell_commands;
 pub mod shell_control;
@@ -283,6 +284,16 @@ pub fn run() {
             commands::list_actions,
             commands::set_config_trust,
             commands::get_pref,
+            recipes::list_recipes,
+            recipes::save_recipe,
+            recipes::delete_recipe,
+            recipes::set_recipe_offers,
+            recipes::agent_skills,
+            recipes::preview_recipe,
+            recipes::start_recipe,
+            recipes::stop_recipe,
+            recipes::recipe_runs,
+            recipes::dismiss_recipe_run,
             commands::set_pref,
             commands::doctor,
             commands::list_palettes,

@@ -914,6 +914,8 @@ pub struct App {
     pub home: crate::home::Registry,
     pub shell_admission: crate::shell_admission::Registry,
     pub shell_runs: crate::shell_runs::Registry,
+    /// Recipe runs since launch that have not been dismissed. See [`crate::recipes`].
+    pub recipes: crate::recipes::Registry,
     pub shell_creation: parking_lot::Mutex<()>,
     /// How many worktree creations are running, by project id. See [`CreateGuard`].
     creating: Arc<parking_lot::Mutex<BTreeMap<String, usize>>>,
@@ -1040,6 +1042,7 @@ impl App {
             home: crate::home::Registry::default(),
             shell_admission: crate::shell_admission::Registry::default(),
             shell_runs: crate::shell_runs::Registry::default(),
+            recipes: crate::recipes::Registry::default(),
             shell_creation: parking_lot::Mutex::new(()),
             creating: Arc::default(),
             dictation: crate::dictate::Dictation::default(),
