@@ -27,7 +27,7 @@
   flex-direction: column;
   gap: var(--sp-3);
   color: var(--fg);
-  line-height: 1.65;
+  line-height: 1.6;
   /* A model quotes paths, URLs and identifiers with no spaces in them, and one long token would
      otherwise push the whole pane sideways. */
   overflow-wrap: anywhere;
@@ -39,17 +39,43 @@
   margin: 0;
 }
 
+/*
+ * A measure for the prose, and only the prose.
+ *
+ * `_transcript.scss` records why the transcript has no measure: a cap of `82ch` on the whole column
+ * squeezed the diffs, command output and code that needed the width, and left a wide pane half
+ * empty. That argument is about those blocks, and they keep the full width here. What gets the
+ * measure is the running text — paragraphs, lists, headings, quotes — which at the full width of a
+ * wide pane ran to two hundred characters a line, the wall of text this exists to end.
+ */
+.c-markdown > p,
+.c-markdown > ul,
+.c-markdown > ol,
+.c-markdown > blockquote,
+.c-markdown__heading {
+  max-width: 80ch;
+}
+
+/*
+ * One look for a section title, however the model wrote it.
+ *
+ * `markdown.ts` turns a paragraph that is only a bold label into a heading, so `**What changed:**`
+ * and `## What changed` arrive here as the same thing. The negative bottom margin binds a title to
+ * the block under it: at the full block gap a heading sat as far from its own section as from the
+ * one before, and read as belonging to neither.
+ */
 .c-markdown__heading {
   font-size: var(--step-0);
   font-weight: 600;
   line-height: 1.35;
   color: var(--fg);
+  margin-bottom: calc(var(--sp-1) * -1);
 }
 
 /* The gap already separates blocks; this is the extra air a new section wants above it, and only
    when something precedes it. */
 .c-markdown__heading:not(:first-child) {
-  margin-top: var(--sp-2);
+  margin-top: var(--sp-3);
 }
 
 /*
@@ -65,19 +91,53 @@
 .c-markdown ul,
 .c-markdown ol {
   margin: 0;
-  /* Room for the marker without a hanging indent that fights the transcript's left rule. */
-  padding-left: var(--sp-5);
+  /* Room for the marker without a hanging indent that fights the transcript's left rule. In `em`, so
+     the indent tracks the text a marker sits beside rather than the spacing scale. */
+  padding-left: 1.5em;
 }
 
 /* The spacing a `gap` would have given, applied to the item instead. `margin-top` on every item and
-   not `li + li`, because a sibling combinator would be a third compound part. The first item's
-   margin is harmless: its parent list is itself a gapped child of `.c-markdown`. */
+   not `li + li`, because a sibling combinator would be a third compound part. The first item's is
+   taken back below, so a list starts exactly one block gap after whatever precedes it. */
 .c-markdown li {
-  margin-top: var(--sp-1);
+  margin-top: calc(var(--sp-1) * 1.5);
+  padding-left: 0.2em;
+}
+
+.c-markdown li:first-child {
+  margin-top: 0;
 }
 
 .c-markdown li::marker {
   color: var(--fg-subtle);
+}
+
+/* Numbers a step stronger than bullets, because a number carries an order the reader may be
+   following, and in tabular figures so a list that reaches 10 does not shift its text over. */
+.c-markdown__ol > li::marker {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+/* A bulleted list inside an item. Set explicitly because the class arrives from the renderer's own
+   count of depth; see `flow` in `Markdown.svelte`. */
+.c-markdown__list--nested {
+  list-style-type: circle;
+}
+
+/*
+ * What an item holds below its own line: a nested list, a fenced example, a second paragraph.
+ *
+ * One wrapper for all of them, so each starts at the item's text rather than at its marker and is
+ * spaced from it and from its siblings the same way. They used to sit directly in the `<li>`, where
+ * a fenced block met the line above it with no space at all.
+ */
+.c-markdown__item-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
 }
 
 /* An inline literal: a name, a flag, a path. Tinted rather than boxed — a border on something this
@@ -98,78 +158,111 @@
  * pane is a summary; the terminal is where the whole thing lives.
  */
 .c-markdown__block {
-  position: relative;
+  min-width: 0;
+  overflow: hidden;
   background: var(--bg-code);
   border-radius: var(--r-md);
   border: 1px solid var(--border);
 }
 
+/*
+ * The block's own header: the language on the left, Copy and Run on the right.
+ *
+ * They used to be positioned over the code, which meant the code had to start below a tall empty
+ * band to stay clear of them. A bar costs one short row and never covers a line.
+ */
+.c-markdown__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 28px;
+  padding: 0 var(--sp-1) 0 var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Code at the size the eye reads it in an editor. It was `--step--2`, eleven pixels, the size of
+   the transcript's machinery rows, for what is often the answer. */
 .c-markdown__block pre {
   margin: 0;
-  padding: var(--sp-6) var(--sp-3) var(--sp-3);
+  padding: var(--sp-3);
   font-family: var(--font-mono);
-  font-size: var(--step--2);
+  font-size: var(--step--1);
   line-height: 1.55;
   overflow-x: auto;
   max-height: 24lh;
   overflow-y: auto;
+  /* `.c-markdown` breaks long tokens anywhere for prose; code keeps its lines and scrolls. */
+  overflow-wrap: normal;
 }
 
 .c-markdown__actions {
-  position: absolute;
-  top: var(--sp-1);
-  right: var(--sp-1);
   display: flex;
   gap: var(--sp-1);
 }
 
-/* The language, where a highlighter's theme would otherwise be doing the telling. Positioned rather
-   than in flow so it cannot push the first line of code down and misalign a pasted diff. */
+/* The language, where a highlighter's theme would otherwise be doing the telling. */
 .c-markdown__lang {
-  position: absolute;
-  top: var(--sp-1);
-  left: var(--sp-2);
   font-family: var(--font-mono);
   font-size: var(--step--2);
   color: var(--fg-subtle);
-  pointer-events: none;
 }
 
 /*
- * Tables are usually written for a document wider than an agent pane. Below the width at which two
- * useful columns can coexist, the table keeps that reading width and this wrapper scrolls; above it,
- * cells wrap normally so a verbose answer does not become one enormous horizontal line.
+ * A table, sized to what it holds.
+ *
+ * It used to stretch to the full pane, so a two-column result on a wide window was two words a
+ * screen apart. Now the wrapper fits the table and the table fits its content, up to the pane's
+ * width, past which cells wrap. Where even whole words cannot fit — many columns in a narrow pane —
+ * the wrapper scrolls sideways inside the message rather than widening the pane.
+ *
+ * `overflow-wrap: break-word` undoes the block's `anywhere` for cells, and that is what keeps words
+ * whole. `anywhere` lowers a cell's minimum width to one character, so a narrow pane broke "ID" into
+ * "I" over "D" and "default" into "defa" over "ult" rather than scroll. `break-word` still breaks a
+ * single token too long for any column, without letting that become the table's plan.
  */
 .c-markdown__table {
+  width: fit-content;
   max-width: 100%;
   overflow-x: auto;
+  overflow-wrap: break-word;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
 }
 
 .c-markdown__table table {
-  width: 100%;
-  min-width: 28rem;
   border-collapse: collapse;
   font-size: var(--step--1);
   line-height: 1.5;
   text-align: left;
 }
 
+/* A floor under each column, so one long column cannot starve the rest down to a word a line. */
 .c-markdown__table th,
 .c-markdown__table td {
-  padding: var(--sp-2) var(--sp-3);
+  padding: calc(var(--sp-2) - 1px) var(--sp-3);
   vertical-align: top;
+  min-width: 7ch;
 }
 
+/* The header rule a step stronger than the row rules, so the eye finds where the data starts. */
 .c-markdown__table th {
   background: var(--bg-code);
   font-weight: 600;
   color: var(--fg);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-strong);
 }
 
 .c-markdown__table td {
   border-top: 1px solid var(--border);
+}
+
+/* Following one row across a wide table is the hard part of reading one. On the row, not its
+   cells: `tr:hover > td` would be a third compound part, and a row's background shows through cells
+   that have none of their own. */
+.c-markdown__table tr:hover {
+  background: var(--bg-hover);
 }
 
 .c-markdown__cell--center {
@@ -183,7 +276,7 @@
 .c-markdown blockquote {
   margin: 0;
   padding-left: var(--sp-3);
-  border-left: 2px solid var(--border);
+  border-left: 2px solid var(--border-strong);
   color: var(--fg-muted);
 }
 

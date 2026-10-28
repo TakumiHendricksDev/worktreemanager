@@ -720,6 +720,42 @@ fn always_this_session_passes_back_the_clis_own_suggestion() {
 }
 
 #[test]
+fn a_write_carries_its_file_and_contents_and_an_edit_only_its_file() {
+    // The card renders a Markdown file it is asked to write, which needs the contents as themselves;
+    // reading them back out of the preview text would mean parsing a string written for people. An
+    // edit's strings are fragments, so it names its file and offers no contents to render.
+    let mut d = driver();
+    let write = d.on_line(
+        r##"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"/tmp/worktree/notes.md","content":"# Notes\n\n| a | b |\n|---|---|\n| 1 | 2 |"},"tool_use_id":"toolu_1"}}"##,
+    );
+    let AgentEvent::ApprovalRequested {
+        request: ApprovalRequest::FileChange { path, content, .. },
+        ..
+    } = events(&write)[0].clone()
+    else {
+        panic!("expected a file change");
+    };
+    assert_eq!(path.as_deref(), Some("/tmp/worktree/notes.md"));
+    assert_eq!(
+        content.as_deref(),
+        Some("# Notes\n\n| a | b |\n|---|---|\n| 1 | 2 |")
+    );
+
+    let edit = d.on_line(
+        r#"{"type":"control_request","request_id":"r2","request":{"subtype":"can_use_tool","tool_name":"Edit","input":{"file_path":"/tmp/worktree/notes.md","old_string":"a","new_string":"b"},"tool_use_id":"toolu_2"}}"#,
+    );
+    let AgentEvent::ApprovalRequested {
+        request: ApprovalRequest::FileChange { path, content, .. },
+        ..
+    } = events(&edit)[0].clone()
+    else {
+        panic!("expected a file change");
+    };
+    assert_eq!(path.as_deref(), Some("/tmp/worktree/notes.md"));
+    assert_eq!(content, None);
+}
+
+#[test]
 fn an_edited_allow_is_honoured_here_because_this_provider_has_the_verb_for_it() {
     // The asymmetry the `ApprovalAnswer` union exists for. Codex refuses this answer; Claude Code's
     // allow can carry a replacement payload, so the edited input is what runs.

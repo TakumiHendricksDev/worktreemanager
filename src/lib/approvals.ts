@@ -44,7 +44,7 @@ export function summarize(request: ApprovalRequest): ApprovalSummary {
     case 'command':
       return { kind: 'command', line: firstLine(request.command) };
     case 'file_change': {
-      const file = firstFile(request.unified_diff);
+      const file = request.path ?? firstFile(request.unified_diff);
       return { kind: 'change', line: file ?? firstLine(request.reason ?? 'A file change') };
     }
     case 'permissions':

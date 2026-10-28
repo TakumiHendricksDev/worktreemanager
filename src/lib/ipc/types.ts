@@ -844,7 +844,15 @@ export interface UserInputQuestion {
 /** Something a session needs a human to decide before it can continue. */
 export type ApprovalRequest =
   | { kind: 'command'; command: string; cwd: string | null; reason: string | null }
-  | { kind: 'file_change'; unified_diff: string; reason: string | null }
+  | {
+      kind: 'file_change';
+      unified_diff: string;
+      reason: string | null;
+      /** The file the change is to, when the provider names one. */
+      path: string | null;
+      /** The file's whole new contents, when the change replaces it rather than patching it. */
+      content: string | null;
+    }
   | { kind: 'permissions'; summary: string; items: string[] }
   | { kind: 'plan_review'; markdown: string; path: string | null }
   | { kind: 'tool_input'; tool: string; prompt: string }

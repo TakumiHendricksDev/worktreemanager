@@ -31,6 +31,45 @@
   color: var(--fg);
 }
 
+/* The question and, when the body can be shown two ways, the switch between them. */
+.c-approval__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/*
+ * The file a write is to: its name, then its folder relative to the worktree.
+ *
+ * The name first and in the text colour because it is what the reader is checking; the folder
+ * truncates rather than wraps, since its end is the least telling part. The full path is the
+ * tooltip.
+ */
+.c-approval__file {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+}
+
+.c-approval__file-name {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.c-approval__file-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
 .c-approval__body {
   font-family: var(--font-mono);
   font-size: var(--step--2);

@@ -175,6 +175,7 @@
       resolve: (text: string) => resolveRef(text, index),
       open: (ref: CodeRef) =>
         codeRequests.open(pane.projectId, pane.worktreeId, ref.path, ref.line),
+      root: index.root,
     };
   });
 
@@ -1627,6 +1628,7 @@
             <div id="approval-{pane.id}" class="c-pane__approval" bind:this={approvalNode}>
               <ApprovalCard
                 request={blocking.request}
+                root={codeLink?.root}
                 focusOnMount={pinned}
                 reading={reading && plan !== null}
                 onread={() => (reading = !reading)}
@@ -1662,6 +1664,8 @@
               </p>
               <ApprovalCard
                 request={relayed.approval.request}
+                root={workspace.worktrees.find((w) => w.id === relayed.pane.worktreeId)
+                  ?.path}
                 focusOnMount={pinned}
                 onanswer={(answer) =>
                   void sessions.answerAndKeep(

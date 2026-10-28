@@ -30,7 +30,9 @@ export type Span =
   | { kind: 'strong'; spans: Span[] }
   | { kind: 'em'; spans: Span[] }
   | { kind: 'strike'; spans: Span[] }
-  | { kind: 'link'; href: string; spans: Span[] };
+  | { kind: 'link'; href: string; spans: Span[] }
+  /** `[label](path)`: a file in the worktree, never an anchor. See `FILE_TARGET`. */
+  | { kind: 'file'; target: string; spans: Span[] };
 
 /** One bullet: its own line, plus anything indented underneath it. */
 export interface ListItem {
@@ -60,11 +62,27 @@ const ORDERED = /^(\s*)(\d{1,9})[.)][ \t]+(.*)$/;
  * Link schemes that may reach the DOM.
  *
  * Matched to what `open_url` in Rust will actually accept, so a rendered link is one that works
- * rather than one that fails silently on click. Anything else — `javascript:`, `data:`, a bare
- * relative path — falls back to plain text: an anchor is never built, so there is no href to
- * neutralise later.
+ * rather than one that fails silently on click. Anything else — `javascript:`, `data:` — falls back
+ * to plain text: an anchor is never built, so there is no href to neutralise later. A path is the
+ * one other target with a meaning here, and it gets a span of its own; see `FILE_TARGET`.
  */
 const SAFE_HREF = /^https?:\/\/\S/i;
+
+/**
+ * A link target that names a file rather than a page: `apps/views.py`, `views.py:42`, `/abs/x.md`.
+ *
+ * Models link the files they cite this way constantly — about one Claude reply in eight on one
+ * machine over a month — and before this every one of them showed as the raw `[label](target)`
+ * source, because the only targets accepted were web pages. It becomes a `file` span, which
+ * `Markdown.svelte` turns into the Code tab's button when the path resolves in the worktree and
+ * plain text when it does not; it is never an `href`, so the safety argument at `SAFE_HREF` is
+ * untouched.
+ *
+ * Anything that looks like a scheme is refused, with one exception: a colon followed by a digit is
+ * a line number (`views.py:42`), not a scheme. Only the start is checked here; whether a space may
+ * appear depends on how the target was written, which `readLink` knows.
+ */
+const FILE_TARGET = /^(?![a-z][a-z0-9+.-]*:(?!\d))[^\s#?]/i;
 
 /** A bare URL in running text. Trailing punctuation is left to the sentence, not eaten by the link. */
 const BARE_URL = /^https?:\/\/[^\s<>[\]()]*[^\s<>[\]().,;:!?'"]/i;
@@ -170,10 +188,57 @@ function blocks(lines: string[]): Block[] {
       text.push(run.trim());
       i += 1;
     }
-    out.push({ kind: 'paragraph', spans: inline(text.join('\n')) });
+    const spans = inline(text.join('\n'));
+    out.push(sectionLabel(spans) ?? { kind: 'paragraph', spans });
   }
 
   return out;
+}
+
+/** The longest bold line still read as a title rather than as an emphasised sentence. */
+const LABEL_CHARS = 60;
+
+/**
+ * A paragraph that is only a bold label — `**What changed:**` — as the heading it is standing in for.
+ *
+ * Models title a section two ways, and on one machine over a month Claude wrote the bold label in
+ * 1,108 replies against `## heading` in 162. Rendered literally, the same kind of title had two
+ * looks, and the label's lacked the heading's air above it, so a reply's sections ran together.
+ *
+ * Narrow on purpose. The whole paragraph has to be one bold run, optionally followed by a colon;
+ * short; one line; and not ending a sentence. `**Done.**` is a sentence said loudly and
+ * `**Note:** the rest…` is a lead-in, and both stay paragraphs.
+ */
+function sectionLabel(spans: Span[]): Block | null {
+  const [first, ...rest] = spans;
+  if (first?.kind !== 'strong') return null;
+  if (!rest.every((span) => span.kind === 'text' && /^\s*:?\s*$/.test(span.text)))
+    return null;
+
+  const words = plain(first.spans).trim();
+  if (words.replace(/:$/, '').trim() === '') return null;
+  if (words.length > LABEL_CHARS || words.includes('\n')) return null;
+  if (/[.!?]$/.test(words)) return null;
+
+  // The colon belongs to the label's sentence, not to a heading, which says "this section" alone.
+  const last = first.spans.at(-1);
+  const spansOut =
+    last?.kind === 'text'
+      ? [
+          ...first.spans.slice(0, -1),
+          { kind: 'text' as const, text: last.text.replace(/\s*:\s*$/, '') },
+        ]
+      : first.spans;
+  return { kind: 'heading', level: 2, spans: spansOut };
+}
+
+/** The visible text of a run of spans. */
+function plain(spans: Span[]): string {
+  return spans
+    .map((span) =>
+      span.kind === 'text' || span.kind === 'code' ? span.text : plain(span.spans),
+    )
+    .join('');
 }
 
 /** Read a GitHub-style table headed by a row and its delimiter row. */
@@ -357,7 +422,30 @@ function readList(lines: string[], from: number): [Block, number] {
       if (item && (item[1] ?? '').length <= indent) break;
 
       const child = leadingSpaces(run) > indent;
-      if (child && (broken || startsBlock(run))) {
+      /*
+       * A fenced block under an item belongs to it through its closing fence, whatever its lines
+       * look like.
+       *
+       * The check below sees one line at a time, so it took the opening fence as a child and then
+       * met the command inside it — a plain line, no blank before it — and ended the item there. The
+       * command fell out as a paragraph, the *closing* fence opened a new block, and everything after
+       * it, the rest of the reply, rendered as code. Twelve replies on one machine in a month.
+       */
+      if (child && FENCE.test(run)) {
+        const marker = FENCE.exec(run)?.[2] ?? '```';
+        nested.push(deindent(run, indent + 2));
+        i += 1;
+        while (i < lines.length) {
+          const body = lines[i] ?? '';
+          nested.push(deindent(body, indent + 2));
+          i += 1;
+          if (isFenceEnd(body, marker[0] ?? '`', marker.length)) break;
+        }
+        continue;
+      }
+      // Once a child block has started, an indented line goes on with it, as the sentence after a
+      // fenced example does. Ending the item there put that sentence outside its list.
+      if (child && (broken || startsBlock(run) || nested.length > 0)) {
         nested.push(deindent(run, indent + 2));
       } else if (startsBlock(run)) {
         break;
@@ -427,7 +515,7 @@ function inline(source: string): Span[] {
       const link = readLink(source, i);
       if (link) {
         flush();
-        out.push(link.span);
+        out.push(...link.spans);
         i = link.next;
         continue;
       }
@@ -474,8 +562,8 @@ function inline(source: string): Span[] {
   return out;
 }
 
-/** `[label](href)`, or null when it is just a bracket. */
-function readLink(source: string, at: number): { span: Span; next: number } | null {
+/** `[label](href)` as the spans it stands for, or null when it is just a bracket. */
+function readLink(source: string, at: number): { spans: Span[]; next: number } | null {
   let depth = 0;
   let close = -1;
   for (let i = at; i < source.length; i += 1) {
@@ -497,13 +585,33 @@ function readLink(source: string, at: number): { span: Span; next: number } | nu
   const end = source.indexOf(')', close + 2);
   if (end === -1) return null;
 
-  const href = source.slice(close + 2, end).trim();
+  const written = source.slice(close + 2, end).trim();
   const label = source.slice(at + 1, close);
+  const next = end + 1;
+  // `<…>` is how CommonMark writes a target with spaces in it, and models use it for exactly that:
+  // a note under a folder with a space in its name.
+  const angled = /^<([^<>]*)>$/.exec(written);
+  const href = angled ? (angled[1] ?? '').trim() : written;
+
+  if (SAFE_HREF.test(href)) {
+    return { spans: [{ kind: 'link', href, spans: inline(label) }], next };
+  }
+  if (label.trim() === '') return null;
+  if (FILE_TARGET.test(href) && (angled !== null || !/\s/.test(href))) {
+    return { spans: [{ kind: 'file', target: href, spans: inline(label) }], next };
+  }
+  /*
+   * A link into a page wtm does not have: `#local_…`, or a bare `#`.
+   *
+   * Models carry these over from surfaces where they meant something. Here there is nowhere for one
+   * to go, and the brackets and the id were what made the sentence around it look broken, so it is
+   * the words alone. About a hundred of these in a month of one machine's replies.
+   */
+  if (href.startsWith('#')) return { spans: inline(label), next };
+
   // Not a scheme the app can open, so no anchor is built at all — the source shows through as the
   // text it is. See `SAFE_HREF`.
-  if (!SAFE_HREF.test(href)) return null;
-
-  return { span: { kind: 'link', href, spans: inline(label) }, next: end + 1 };
+  return null;
 }
 
 /** A paired delimiter such as `**`, or null when this position does not open one. */

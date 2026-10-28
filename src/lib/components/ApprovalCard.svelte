@@ -50,6 +50,7 @@
     request,
     reading = false,
     focusOnMount = true,
+    root,
     onread,
     onanswer,
   }: {
@@ -58,10 +59,56 @@
     reading?: boolean;
     /** False when mounting the inline card would pull a reader away from older transcript rows. */
     focusOnMount?: boolean;
+    /** The worktree the request belongs to, absolute and without a trailing slash, so a file the
+        card names can be shown relative to it. Absent where there is none, as at Home. */
+    root?: string;
     /** Toggle that panel. The pane owns it, so it can sit beside the card rather than over it. */
     onread?: () => void;
     onanswer: (answer: ApprovalAnswer) => void;
   } = $props();
+
+  const uid = $props.id();
+
+  /**
+   * A whole-file write of a Markdown file, which the card shows rendered.
+   *
+   * A model writing notes, a plan or a list of questions writes Markdown, and as source a table in
+   * one is rows of pipes: the report that asked for this showed a five-column questions file as a
+   * wall of `|`. Only a whole-file write qualifies. An edit's strings are fragments of a file, and
+   * rendering half a table would be worse than showing it.
+   */
+  const markdownWrite = $derived(
+    request.kind === 'file_change' &&
+      typeof request.content === 'string' &&
+      typeof request.path === 'string' &&
+      /\.(md|markdown|mdx)$/i.test(request.path)
+      ? { path: request.path, content: request.content }
+      : null,
+  );
+
+  /** Rendered first: the source is one click away, and the rendering is what the file is for. */
+  let view = $state<'preview' | 'raw'>('preview');
+
+  const VIEWS = [
+    { id: 'preview', label: 'Preview' },
+    { id: 'raw', label: 'Raw' },
+  ] as const;
+
+  /** Left and right move between the two, as they do on Settings' tab strip. */
+  function onViewKey(event: KeyboardEvent) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    view = view === 'preview' ? 'raw' : 'preview';
+    // After the update, so the tab being focused is the one that just became focusable.
+    queueMicrotask(() => document.getElementById(`${uid}-${view}`)?.focus());
+  }
+
+  /** A path as the file's name and the folder it is in, the folder relative to the worktree. */
+  function fileParts(path: string): { name: string; dir: string } {
+    const local = root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+    const cut = local.lastIndexOf('/');
+    return { name: local.slice(cut + 1), dir: cut === -1 ? '' : local.slice(0, cut + 1) };
+  }
 
   /** The one-line question. Deliberately not the body: a diff is not a sentence. */
   const heading = $derived.by(() => {
@@ -118,6 +165,7 @@
     otherSelected = {};
     notes = '';
     changes = '';
+    view = 'preview';
     // `focusOnMount` is sampled for this request, not a reason to clear the form later if scrolling
     // changes it. Tracking it here would make a jump back to the tail erase a half-written answer.
     if (untrack(() => focusOnMount)) {
@@ -207,7 +255,29 @@
   tabindex="-1"
   bind:this={card}
 >
-  <p class="c-approval__ask" aria-live="assertive">{heading}</p>
+  <div class="c-approval__head">
+    <p class="c-approval__ask" aria-live="assertive">{heading}</p>
+    {#if markdownWrite}
+      <!-- The app's tab strip, compact, beside the question: it switches how the one body below is
+           shown, so it belongs with the card's heading rather than above the body as a second one. -->
+      <div class="c-tabs c-tabs--compact" role="tablist" aria-label="Show the file as">
+        {#each VIEWS as entry (entry.id)}
+          <button
+            type="button"
+            id="{uid}-{entry.id}"
+            class="c-tabs__tab"
+            class:is-active={view === entry.id}
+            role="tab"
+            aria-selected={view === entry.id}
+            aria-controls="{uid}-panel"
+            tabindex={view === entry.id ? 0 : -1}
+            onclick={() => (view = entry.id)}
+            onkeydown={onViewKey}>{entry.label}</button
+          >
+        {/each}
+      </div>
+    {/if}
+  </div>
 
   {#if request.kind === 'command'}
     <code class="c-approval__body">{request.command}</code>
@@ -215,7 +285,28 @@
       <p class="c-approval__where">in <code>{request.cwd}</code></p>
     {/if}
   {:else if request.kind === 'file_change'}
-    {#if request.unified_diff}
+    {#if markdownWrite}
+      {@const file = fileParts(markdownWrite.path)}
+      <p class="c-approval__file" title={markdownWrite.path}>
+        <span class="c-approval__file-name">{file.name}</span>
+        {#if file.dir}<span class="c-approval__file-dir">{file.dir}</span>{/if}
+      </p>
+      {#if view === 'preview'}
+        <div
+          id="{uid}-panel"
+          class="c-approval__body c-approval__body--plan"
+          role="tabpanel"
+          aria-labelledby="{uid}-preview"
+        >
+          <Markdown source={markdownWrite.content} />
+        </div>
+      {:else}
+        <!-- A wrapper carries the panel role because a `<pre>` may not. -->
+        <div id="{uid}-panel" role="tabpanel" aria-labelledby="{uid}-raw">
+          <pre class="c-approval__body c-approval__body--diff">{markdownWrite.content}</pre>
+        </div>
+      {/if}
+    {:else if request.unified_diff}
       <pre class="c-approval__body c-approval__body--diff">{request.unified_diff}</pre>
     {:else}
       <!-- The diff arrives on the file-change stream rather than in the approval params, so it is

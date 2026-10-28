@@ -76,6 +76,7 @@
       resolve: (text: string) => resolveRef(text, index),
       open: (ref: CodeRef) =>
         codeRequests.open(pane.projectId, pane.worktreeId, ref.path, ref.line),
+      root: index.root,
     };
   });
 
@@ -194,6 +195,7 @@
       <div class="c-peek__approval">
         <ApprovalCard
           request={blocking.request}
+          root={codeLink.root}
           focusOnMount={false}
           onanswer={(answer) =>
             void sessions.answerAndKeep(pane.id, blocking.id, answer, blocking.request)}

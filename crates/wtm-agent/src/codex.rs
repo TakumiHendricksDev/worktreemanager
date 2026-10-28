@@ -288,6 +288,9 @@ impl CodexProtocol {
                         // above it shows the change.
                         unified_diff: text("patch").or_else(|| text("diff")).unwrap_or_default(),
                         reason: text("reason").or_else(|| text("grantRoot")),
+                        // A patch can touch several files and replaces none of them whole.
+                        path: None,
+                        content: None,
                     },
                     PendingKind::Approval,
                 )

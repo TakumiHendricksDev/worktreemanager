@@ -186,7 +186,18 @@
         case 'reasoning_delta': {
           const open = openThinking();
           if (open) open.text += event.text;
-          else out.push({ key: `t${index}`, kind: 'thinking', text: event.text });
+          /*
+           * No row for a thinking block with nothing in it.
+           *
+           * Current Claude models mostly stream their reasoning with the text left out — 31 of 39
+           * blocks in one session were empty — and each drew a row reading only "Thinking". Worse,
+           * a thinking row is content to `group()`, so each one also ended the run of tool calls
+           * around it, and a turn of thirty steps showed as thirty rows that never folded. A block
+           * whose text arrives later still gets its row from the first delta that carries some.
+           */
+          else if (event.text.trim() !== '') {
+            out.push({ key: `t${index}`, kind: 'thinking', text: event.text });
+          }
           break;
         }
 
@@ -579,9 +590,38 @@
    * an agenda step is something the model plans to do, this is something it did.
    */
   function labelOf(step: Step): string {
-    if (step.kind === 'tool') return step.title ?? step.name;
+    if (step.kind === 'tool') {
+      const { lead, path, rest } = toolTitle(step.title ?? step.name);
+      return `${lead}${path ?? ''}${rest}`;
+    }
     if (step.kind === 'command') return shortCommand(step.command);
     return `${step.provider} · ${step.event}`;
+  }
+
+  /**
+   * A tool's title with the worktree's own path taken off the file it names.
+   *
+   * Claude titles a file tool with the absolute path, so a row read `Write /Users/…/ACME-123-a-
+   * branch-named-after-a-whole-ticket-title/notes/implement/ACME-123/questions.md`, which wraps on
+   * any pane and whose readable part is the last few segments. Split
+   * into the words before the path, the path relative to the worktree, and whatever follows it, so
+   * the row can quieten the verb and leave the path as the thing the eye lands on. The full title
+   * stays on the row as its tooltip.
+   *
+   * Only a path inside this worktree is shortened. One outside it, or a title with none, comes back
+   * whole as `lead`.
+   */
+  function toolTitle(title: string): { lead: string; path: string | null; rest: string } {
+    const root = codeLink?.root;
+    const at = root ? title.indexOf(`${root}/`) : -1;
+    if (!root || at === -1) return { lead: title, path: null, rest: '' };
+    const after = title.slice(at + root.length + 1);
+    const end = after.search(/\s/);
+    return {
+      lead: title.slice(0, at),
+      path: end === -1 ? after : after.slice(0, end),
+      rest: end === -1 ? '' : after.slice(end),
+    };
   }
 
   /**
@@ -932,6 +972,11 @@
   Every kind is the same shape: one line that discloses. That uniformity is what lets a group hold a
   mix of tool calls, shell commands and unknown events without reading as three different things.
 -->
+<!-- One line, for the reason `Markdown.svelte`'s span run is: whitespace between these tags would
+     become a space inside the title. See `toolTitle`. -->
+<!-- prettier-ignore -->
+{#snippet toolName(title: string)}{@const part = toolTitle(title)}{#if part.path !== null}<span class="c-transcript__tool-verb">{part.lead}</span><span class="c-transcript__tool-path">{part.path}</span>{part.rest}{:else}{part.lead}{/if}{/snippet}
+
 {#snippet step(row: Step)}
   {#if row.kind === 'command'}
     <!--
@@ -971,8 +1016,8 @@
       `failed` is what tells you to click.
     -->
     <details class="c-transcript__tool" ontoggle={(event) => toggle(row.key, event)}>
-      <summary class="c-transcript__tool-name">
-        {row.title ?? row.name}
+      <summary class="c-transcript__tool-name" title={row.title ?? row.name}>
+        {@render toolName(row.title ?? row.name)}
         {#if row.ok === false}<span class="c-status--danger">failed</span>{/if}
       </summary>
       {#if disclosures[row.key]}<pre class="c-transcript__out">{row.output}</pre>{/if}
@@ -980,8 +1025,11 @@
   {:else}
     <!-- Nothing to disclose. A `<details>` with an empty body offers a marker that does nothing,
          which is worse than no marker. -->
-    <p class="c-transcript__tool-name c-transcript__tool-name--bare">
-      {row.title ?? row.name}
+    <p
+      class="c-transcript__tool-name c-transcript__tool-name--bare"
+      title={row.title ?? row.name}
+    >
+      {@render toolName(row.title ?? row.name)}
       {#if !row.done}
         <span class="c-status--subtle">running</span>
       {:else if row.ok === false}

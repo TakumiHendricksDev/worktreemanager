@@ -135,6 +135,19 @@ pub enum ApprovalRequest {
         /// concern and the domain has no stake in hunk boundaries.
         unified_diff: String,
         reason: Option<String>,
+        /// The file the change is to, where the provider names one.
+        ///
+        /// `#[serde(default)]` on this and `content` because an approval is part of a session's
+        /// replay, and a replay recorded before these existed has to read back.
+        #[serde(default)]
+        path: Option<String>,
+        /// The file's whole new contents, when the change replaces it rather than patching it.
+        ///
+        /// Carried as itself so the card can show the file as what it is. Without it a Markdown
+        /// file arrived only inside `unified_diff`'s display text, and a table in it read as rows
+        /// of pipes; recovering it from that text would mean parsing a string written for people.
+        #[serde(default)]
+        content: Option<String>,
     },
     /// Grant a capability for the rest of the session.
     Permissions {

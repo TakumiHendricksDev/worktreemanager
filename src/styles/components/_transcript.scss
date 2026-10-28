@@ -395,6 +395,22 @@
   padding-left: 9px;
 }
 
+/*
+ * A file tool's verb and path, split so the path leads.
+ *
+ * `Write`, `Read`, `Edit` repeat on every row and the path is what tells one from the next, so the
+ * verb drops a step and the path keeps the row's colour: quieter than the row was, never louder,
+ * which keeps the machinery in its one register. The path is relative to the worktree; the full
+ * title is the row's tooltip.
+ */
+.c-transcript__tool-verb {
+  color: var(--fg-subtle);
+}
+
+.c-transcript__tool-path {
+  overflow-wrap: anywhere;
+}
+
 .c-transcript__tool .c-transcript__out {
   margin-top: var(--sp-1);
 }

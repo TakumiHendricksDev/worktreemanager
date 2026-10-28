@@ -53,3 +53,20 @@
   font-size: var(--step--2);
   color: var(--fg-subtle);
 }
+
+/*
+ * A strip small enough to share a row with a card's heading.
+ *
+ * The approval card switches a Markdown file between its rendering and its source, and a full strip
+ * there would be a second heading over a one-line choice. No baseline rule, since there is no panel
+ * edge for it to stand on; the active tab keeps its underline, which is what says which is showing.
+ */
+.c-tabs--compact {
+  gap: 0;
+  border-bottom: 0;
+}
+
+.c-tabs--compact .c-tabs__tab {
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--step--2);
+}

@@ -1123,6 +1123,15 @@ impl ClaudeProtocol {
                     .and_then(Value::as_str)
                     .map(|p| format!("outside the allowed directories: {p}"))
                     .or(description),
+                path: input
+                    .get("file_path")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                // Only `Write` replaces a file whole. An edit's strings are fragments of one.
+                content: (tool == "Write")
+                    .then(|| input.get("content").and_then(Value::as_str))
+                    .flatten()
+                    .map(str::to_owned),
             }
         } else {
             ApprovalRequest::ToolInput {
