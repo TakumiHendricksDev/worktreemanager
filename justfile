@@ -109,9 +109,12 @@ check: fmt-check lint test core-wasm
 # for the Rust tree and the frontend both. Deliberately separate from `just check`: it hits
 # the network to refresh the advisory database, and a check that fails on a train is a check
 # people stop running. Run it before a release, and when a dependency changes.
+#
+# One frontend advisory is ignored by ID, GHSA-gcqx-w48m-w2h4; the reason, and when to remove
+# it, is beside the same flag in ci.yml's `licenses + advisories` job. Keep the two identical.
 audit:
     cargo deny check
-    {{ pm }} audit
+    {{ pm }} audit --ignore=GHSA-gcqx-w48m-w2h4
 
 # Ship one clean, tested main commit, publish its GitHub artifacts, and update the Homebrew cask.
 # The tap waits for the release build because its sha256 is derived from the built macOS zip.

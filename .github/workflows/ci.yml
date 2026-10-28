@@ -145,5 +145,15 @@ jobs:
         if: ${{ !cancelled() }}
       # No `bun install`: `bun audit` reads bun.lock and asks the registry, so
       # installing would download every package only to leave it unread.
-      - run: bun audit
+      #
+      # One advisory is ignored, by its ID, and it is the only one. Ignoring by ID is
+      # the thing `deny.toml` warns against, so the case for this one is written
+      # down: GHSA-gcqx-w48m-w2h4 (2026-09-18) is low severity, in `deepmerge`,
+      # which reaches us only through `@sveltejs/vite-plugin-svelte`, a build tool
+      # that is not part of the shipped app. No fixed `deepmerge` exists, and every
+      # release of the plugin requires it, so there was nothing to upgrade to. It
+      # turned `main` red on 2026-10-28 with no change of ours involved. Remove the
+      # flag here and in `just audit` together, as soon as a fixed `deepmerge`
+      # ships; anything else the audit finds still fails this job.
+      - run: bun audit --ignore=GHSA-gcqx-w48m-w2h4
         if: ${{ !cancelled() }}
