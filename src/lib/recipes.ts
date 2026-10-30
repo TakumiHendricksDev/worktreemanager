@@ -36,6 +36,7 @@ export interface RecipeAction {
 
 /** Variables every run has, whatever offered it. Filled by the backend from where the run is. */
 export const PLACE_VARIABLES = [
+  'worktree.issue',
   'worktree.name',
   'worktree.branch',
   'worktree.path',
@@ -102,6 +103,9 @@ export function isRecipeRun(run: string | null | undefined): boolean {
 export function agentMark(agent: string): string {
   return { claude: 'Cl', codex: 'Cx', cursor: 'Cu' }[agent] ?? agent.slice(0, 2);
 }
+
+/** What `settingsView.focus` says to open Settings › Recipes on a new, unsaved recipe. */
+export const NEW_RECIPE = '#new';
 
 export function blankStep(agent = 'claude'): RecipeStep {
   return {
@@ -210,12 +214,47 @@ export function canContinue(steps: readonly RecipeStep[], index: number): boolea
   return previous !== undefined && previous.agent === steps[index]?.agent;
 }
 
-/** Variables the editor offers to insert, in the order people reach for them. */
+/**
+ * Variables the editor offers to insert, in the order people reach for them. The repository's own
+ * New Worktree fields are offered beside these as `form.<key>`, read from its form rather than
+ * guessed — a `form.ticket` chip offered to a repository whose field is `issue` is how a recipe
+ * came to send an empty ticket.
+ */
 export const INSERTABLE = [
+  'worktree.issue',
   'worktree.branch',
   'worktree.name',
   'project.name',
-  'form.ticket',
   'previous.reply',
-  'action.exit_code',
 ];
+
+/** The variables a step's text uses that will not resolve, and why, for the editor to warn about. */
+export function unresolved(
+  text: string,
+  formKeys: readonly string[] | null,
+): { name: string; why: string }[] {
+  const out: { name: string; why: string }[] = [];
+  for (const match of text.matchAll(/\{\{\s*([a-z_]+)\.([a-zA-Z0-9_.*-]+)\s*\}\}/g)) {
+    const [, namespace, key] = match;
+    const name = `${namespace}.${key}`;
+    if (out.some((u) => u.name === name)) continue;
+    if (namespace === 'worktree' || namespace === 'project') {
+      if (!PLACE_VARIABLES.includes(name))
+        out.push({
+          name,
+          why: `there is no ${name}; there is ${PLACE_VARIABLES.filter((v) => v.startsWith(namespace)).join(', ')}`,
+        });
+    } else if (namespace === 'previous' && key !== 'reply') {
+      out.push({ name, why: 'the only one is previous.reply' });
+    } else if (namespace === 'form' && formKeys !== null && !formKeys.includes(key ?? '')) {
+      out.push({
+        name,
+        why:
+          formKeys.length > 0
+            ? `this repository’s New Worktree form has no “${key}” field; it has ${formKeys.join(', ')}`
+            : 'this repository’s New Worktree form has no fields',
+      });
+    }
+  }
+  return out;
+}

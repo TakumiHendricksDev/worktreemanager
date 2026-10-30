@@ -6,7 +6,12 @@
    * saved recipe is one click that is just as easily undone, and it runs nothing — the action still
    * asks every time.
    */
-  import { RECIPE_ACTIONS, PLACE_VARIABLES, type RecipeActionId } from '../recipes';
+  import {
+    NEW_RECIPE,
+    PLACE_VARIABLES,
+    RECIPE_ACTIONS,
+    type RecipeActionId,
+  } from '../recipes';
   import { recipes } from '../state/recipes.svelte';
   import { settingsView } from '../state/settings-view.svelte';
   import { workspace } from '../state/workspace.svelte';
@@ -158,43 +163,41 @@
           <p class="c-offers__empty">No recipes. {action.name} won’t ask anything.</p>
         {/each}
         <div class="c-offers__add">
-          <select
-            class="c-select"
-            aria-label="Recipe to offer"
-            value={toAdd}
-            onchange={(e) => (adding = (e.currentTarget as HTMLSelectElement).value)}
-            disabled={unbound.length === 0}
-          >
-            {#if unbound.length === 0}
-              <option value=""
-                >{recipes.recipes.length === 0
-                  ? 'No recipes yet'
-                  : 'Every recipe is offered'}</option
-              >
-            {:else}
+          {#if unbound.length === 0}
+            <!-- Said, not shown as a disabled control: with one recipe offered and no other to
+                 add, an empty select read as though an action could only ever offer one. -->
+            <span class="c-offers__hint">
+              {recipes.recipes.length === 0
+                ? 'No recipes yet.'
+                : `Every recipe you have is offered here. Make another — a review, say — to offer it too.`}
+            </span>
+            <Button
+              variant="neutral"
+              size="sm"
+              onclick={() => settingsView.show('recipes', NEW_RECIPE)}
+            >
+              <Icon name="plus" size={12} /> New recipe
+            </Button>
+          {:else}
+            <select
+              class="c-select"
+              aria-label="Recipe to offer"
+              value={toAdd}
+              onchange={(e) => (adding = (e.currentTarget as HTMLSelectElement).value)}
+            >
               {#each unbound as recipe (recipe.id)}
                 <option value={recipe.id}>{recipe.name}</option>
               {/each}
-            {/if}
-          </select>
-          <Button
-            variant="neutral"
-            size="sm"
-            disabled={unbound.length === 0}
-            onclick={offer}
-          >
-            <Icon name="plus" size={12} /> Offer
-          </Button>
-          {#if recipes.recipes.length === 0}
-            <Button variant="link" size="sm" onclick={() => settingsView.show('recipes')}
-              >Make a recipe</Button
-            >
+            </select>
+            <Button variant="neutral" size="sm" onclick={offer}>
+              <Icon name="plus" size={12} /> Offer
+            </Button>
           {/if}
         </div>
       </div>
       <p class="c-field__help">
-        The first one is preselected. A recipe limited to other repositories isn’t offered
-        there.
+        Offer as many as you like. When the action happens you choose which one runs; the
+        first is preselected. A recipe limited to other repositories isn’t offered there.
       </p>
     </div>
 

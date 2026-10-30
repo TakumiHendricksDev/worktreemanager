@@ -15,7 +15,7 @@
    */
   import { commandsFor } from '../agent-commands';
   import type { AgentOption, AgentSkill, RecipeStep } from '../ipc/types';
-  import { INSERTABLE, agentMark, canContinue } from '../recipes';
+  import { INSERTABLE, agentMark, canContinue, unresolved } from '../recipes';
   import { sessions } from '../state/sessions.svelte';
   import { matchSkills } from '../suggest';
   import Button from './ui/Button.svelte';
@@ -33,6 +33,8 @@
     skills,
     asking,
     place,
+    formFields,
+    projectName,
     ontoggle,
     onchange,
     onmove,
@@ -50,6 +52,9 @@
     asking: boolean;
     /** Where the skills were asked about, for the help line: a worktree's name, say. */
     place: string;
+    /** The New Worktree form's fields in the repository in view, or null if unknown. */
+    formFields: { key: string; label: string }[] | null;
+    projectName: string | null;
     ontoggle: () => void;
     onchange: (patch: Partial<RecipeStep>) => void;
     onmove: (by: -1 | 1) => void;
@@ -114,6 +119,17 @@
           detail: s.detail,
           scope: scopeOf(s.value, listed.find((l) => l.name === s.value)?.scope ?? null),
         })),
+  );
+
+  /** Variables this step names that will not resolve, checked against the repository in view. */
+  const problems = $derived(
+    unresolved(
+      step.kind === 'skill' ? step.args : step.prompt,
+      formFields?.map((f) => f.key) ?? null,
+    ),
+  );
+  const usesForm = $derived(
+    /\{\{\s*form\./.test(step.kind === 'skill' ? step.args : step.prompt),
   );
 
   function chooseAgent(agent: string) {
@@ -186,6 +202,15 @@
           >
         {:else}
           <span><Icon name="plus" size={12} /> New session</span>
+        {/if}
+        {#if problems.length > 0}
+          <!-- On the summary too, so a closed step that will send a hole still says so. -->
+          <span class="c-status--warn"
+            ><Icon name="warn" size={12} />
+            {problems.length === 1
+              ? `{{${problems[0]?.name}}} won’t be filled`
+              : `${problems.length} variables won’t be filled`}</span
+          >
         {/if}
         {#if index > 0 && step.previousReply && step.conversation === 'new'}
           <span><Icon name="link" size={12} /> Gets step {previousNumber}’s reply</span>
@@ -424,14 +449,35 @@
             <button
               type="button"
               class="c-var"
-              title="Filled in when the recipe starts"
+              title={variable === 'worktree.issue'
+                ? 'The issue the worktree is for, read off its branch or directory name'
+                : 'Filled in when the recipe starts'}
               onclick={() => insert(variable)}>{`{{${variable}}}`}</button
             >
           {/each}
-          <span
-            >· a variable the action doesn’t have is left empty and named in the run.</span
-          >
+          {#each formFields ?? [] as field (field.key)}
+            <button
+              type="button"
+              class="c-var"
+              title="{field.label} — from {projectName ??
+                'the'} New Worktree form, only when Worktree created asks"
+              onclick={() => insert(`form.${field.key}`)}>{`{{form.${field.key}}}`}</button
+            >
+          {/each}
         </div>
+        {#each problems as problem (problem.name)}
+          <p class="c-field__help c-status--warn">
+            {`{{${problem.name}}}`} won’t be filled: {problem.why}.
+          </p>
+        {/each}
+        {#if usesForm && problems.length === 0}
+          <p class="c-field__help">
+            <code>{'{{form.…}}'}</code> comes from the New Worktree form, so it is only
+            filled when “Worktree created” or “Setup failed” asks. Run from a worktree’s
+            menu, use
+            <code>{'{{worktree.issue}}'}</code> for its issue.
+          </p>
+        {/if}
 
         {#if index > 0}
           <div class="c-field">

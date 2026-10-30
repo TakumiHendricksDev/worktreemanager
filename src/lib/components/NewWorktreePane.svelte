@@ -69,14 +69,21 @@
   let form = $state<Form | null>(null);
   let loadError = $state<string | null>(null);
   const values = $state<Record<string, string>>({});
-  /** The form as it was submitted, as `{{form.<key>}}` variables. */
-  const formVars = $derived(
-    Object.fromEntries(
-      Object.entries(values).map(([key, value]) => [`form.${key}`, value]),
-    ),
-  );
 
   let preview = $state<Preview | null>(null);
+  /**
+   * The form as the worktree was made from it, as `{{form.<key>}}` variables: each value as its
+   * field normalized it, which is what the branch and directory were named from — `ACME-8599`,
+   * not the `8599` that was typed.
+   */
+  const formVars = $derived(
+    Object.fromEntries(
+      Object.entries({ ...values, ...(preview?.normalized ?? {}) }).map(([key, value]) => [
+        `form.${key}`,
+        value,
+      ]),
+    ),
+  );
   let previewError = $state<string | null>(null);
   /** Field-level problems, keyed by field, from a validation rejection. */
   let fieldProblems = $state<Record<string, string>>({});

@@ -21,7 +21,14 @@
     type Recipe,
     type RecipeStep,
   } from '../ipc/types';
-  import { RECIPE_ACTIONS, TEMPLATES, agentMark, blankRecipe, blankStep } from '../recipes';
+  import {
+    NEW_RECIPE,
+    RECIPE_ACTIONS,
+    TEMPLATES,
+    agentMark,
+    blankRecipe,
+    blankStep,
+  } from '../recipes';
   import { recipes } from '../state/recipes.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { settingsView } from '../state/settings-view.svelte';
@@ -75,6 +82,12 @@
   /** Select what Settings was opened for, or the first recipe, once the list has loaded. */
   $effect(() => {
     if (!recipes.loaded || draft !== null) return;
+    if (settingsView.focus === NEW_RECIPE) {
+      // Asked for from Actions, where there was nothing left to offer: open on a new one.
+      draft = blankRecipe();
+      baseline = '';
+      return;
+    }
     const wanted = settingsView.focus ? recipes.byId(settingsView.focus) : undefined;
     edit(wanted ?? recipes.recipes[0] ?? null);
   });
@@ -231,6 +244,25 @@
           skills[agent] ??= [];
         });
     }
+  });
+
+  /**
+   * The New Worktree form's fields for the repository in view, so the editor offers the `form.*`
+   * variables that exist and can say when a step names one that does not. Null until read, and for
+   * a repository whose form could not be read: then nothing is flagged rather than everything.
+   */
+  let formFields = $state<{ key: string; label: string }[] | null>(null);
+  $effect(() => {
+    const projectId = workspace.activeProjectId;
+    formFields = null;
+    if (!projectId) return;
+    commands
+      .worktreeForm(projectId)
+      .then((form) => {
+        if (workspace.activeProjectId === projectId)
+          formFields = form.fields.map((f) => ({ key: f.key, label: f.label }));
+      })
+      .catch(() => {});
   });
 
   const offeredOn = (id: string) =>
@@ -443,6 +475,8 @@
               skills={skills[step.agent] ?? null}
               asking={asking[step.agent] ?? false}
               {place}
+              {formFields}
+              projectName={workspace.activeProject?.name ?? null}
               ontoggle={() => (openStep = openStep === index ? -1 : index)}
               onchange={(patch) => patchStep(index, patch)}
               onmove={(by) => move(index, by)}
@@ -517,10 +551,13 @@
       <Button
         variant="danger-solid"
         onclick={() => {
+          // Read before clearing, for the reason SettingsDialog's Discard does: `then` is derived
+          // from `confirm`, and is gone the moment `confirm` is.
+          const go = then;
           confirm = null;
           // Back to the saved copy first, so whatever `then` opens is not asked about again.
           baseline = JSON.stringify(draft);
-          then();
+          go();
         }}>Discard</Button
       >
     {/snippet}

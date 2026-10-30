@@ -407,9 +407,13 @@ A recipe is agent work you line up once and run whenever you want it: steps that
 another, each on the agent, model, effort and mode you pick, each running either a skill (sent as
 `/name args`, as the composer sends it) or a prompt. A step can carry on the previous step's
 conversation (same agent only) or start a new session, and can be handed the previous step's final
-reply. Prompts can use `{{worktree.branch}}`, `{{worktree.name}}`, `{{worktree.path}}`,
-`{{project.name}}`, `{{project.path}}`, the New Worktree form's values as `{{form.<field>}}`, and
-`{{previous.reply}}`. A variable the run has no value for is sent empty and named on the run.
+reply. Prompts can use `{{worktree.issue}}` (the issue key read off the worktree's branch or
+directory name, as the sidebar reads it), `{{worktree.branch}}`, `{{worktree.name}}`,
+`{{worktree.path}}`, `{{project.name}}`, `{{project.path}}` and `{{previous.reply}}` in any run, and
+the New Worktree form's values as `{{form.<field key>}}` — normalized, so `ACME-8599` rather than
+the `8599` typed — when a recipe runs from **Worktree created** or **Setup failed**. The editor
+offers the repository's own form fields and says when a variable won't be filled. A variable the run
+has no value for is sent empty and named on the run.
 
 Make them in **Settings › Recipes**. A skill step's list is the agent's own answer for the
 worktree you are looking at, plugins included (a plugin's skill is `plugin:skill`), asked the way a
@@ -419,9 +423,9 @@ step's turn ends. A strip above the panes shows the steps; click one to bring it
 **Stop recipe** to interrupt the current step and skip the rest. One recipe runs per worktree at a
 time.
 
-**Settings › Actions** binds recipes to moments in wtm. An action never runs a recipe by itself:
-when it happens it asks, with the first recipe preselected, and an action with nothing bound
-behaves exactly as it always has.
+**Settings › Actions** binds recipes to moments in wtm, as many to each as you like. An action
+never runs a recipe by itself: when it happens it asks which to run, with the first preselected, and
+an action with nothing bound behaves exactly as it always has.
 
 | Action | Where it asks |
 | --- | --- |

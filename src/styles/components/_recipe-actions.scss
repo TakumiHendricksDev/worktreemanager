@@ -183,6 +183,13 @@
   background: var(--bg);
 }
 
+.c-offers__hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--fg-muted);
+  font-size: var(--step--1);
+}
+
 .c-offers__add .c-select {
   flex: 0 1 260px;
   width: auto;

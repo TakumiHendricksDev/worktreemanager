@@ -55,6 +55,7 @@ window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebvie
  if(command==='stop_recipe'||command==='dismiss_recipe_run')return;
  if(command==='recipe_runs')return [];
  if(command==='list_worktrees')return [structuredClone(state.worktree)];
+ if(command==='worktree_form')return {projectId:args.projectId,actions:[],fields:[{key:'issue',label:'Jira issue',kind:'text'},{key:'title',label:'Title override',kind:'text'}]};
  if(command==='remove_preflight')return [];
  if(command==='list_palettes')return [];
  if(command==='list_openers')return {openers:[],preferred:null};
@@ -180,7 +181,19 @@ try {
     await page.getByText('broken', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('Recipe name').inputValue(), 'Implementation');
     await page.locator('.c-recipe__status', { hasText: 'Saved' }).waitFor();
+    // Step 1 asks for {{form.ticket}}, which this repository's form does not have: the editor says
+    // so, and offers the fields it does have.
+    await page
+        .getByText(
+            '{{form.ticket}} won’t be filled: this repository’s New Worktree form has no “ticket” field; it has issue, title.',
+        )
+        .waitFor();
+    await page.getByRole('button', { name: '{{form.issue}}', exact: true }).waitFor();
+    await stepCard(page, 'Review').getByText('{{form.ticket}} won’t be filled').waitFor();
+    await page.getByRole('button', { name: '{{worktree.issue}}', exact: true }).waitFor();
     await shoot(page, 'settings-recipes-dark');
+    await page.getByText('won’t be filled').first().scrollIntoViewIfNeeded();
+    await shoot(page, 'variables-warning-dark');
 
     // Open step 2 and rename it; the draft is dirty and Save carries exactly that change.
     await stepCard(page, 'Implement').click();
@@ -197,6 +210,11 @@ try {
         0,
         'Escape asked rather than closed',
     );
+    // Leaving for another recipe with changes asks; Discard really leaves.
+    await page.getByRole('option', { name: /^Wrap up/ }).click();
+    await page.getByRole('dialog', { name: 'Discard unsaved changes?' }).waitFor();
+    await page.getByRole('button', { name: 'Keep editing' }).click();
+    assert.equal(await page.getByLabel('Recipe name').inputValue(), 'Implementation');
     await page.getByRole('button', { name: 'Save recipe' }).click();
     await page.locator('.c-recipe__status', { hasText: 'Saved' }).waitFor();
     const saved = (await callsOf(page, 'save_recipe')).at(-1).args.recipe;
@@ -262,6 +280,15 @@ try {
         'plugin-skill',
     );
 
+    // Discarding on the way to another recipe really goes there, with the draft thrown away.
+    await stepCard(page, 'Plan').click();
+    await page.locator('#recipe-step-0-name').fill('Plan it');
+    await page.getByRole('option', { name: /^Wrap up/ }).click();
+    await page.getByRole('button', { name: 'Discard', exact: true }).last().click();
+    await page.waitForFunction(
+        () => document.querySelector('[aria-label="Recipe name"]')?.value === 'Wrap up',
+    );
+
     // A template is an unsaved draft until Save, which stores it under a new id.
     await page.getByRole('button', { name: 'Review', exact: true }).first().click();
     await page.locator('.c-recipe__status', { hasText: 'Not saved yet' }).waitFor();
@@ -289,7 +316,28 @@ try {
         'implementation',
     ]);
     await shoot(page, 'settings-actions-dark');
+    // An action that offers one recipe takes a second; the question then asks which to run.
+    await page.getByRole('option', { name: /Removing a worktree/ }).click();
+    await page.getByRole('combobox', { name: 'Recipe to offer' }).selectOption('review');
+    await page.getByRole('button', { name: 'Offer', exact: true }).click();
+    assert.deepEqual((await callsOf(page, 'set_recipe_offers')).at(-1).args, {
+        action: 'worktree.removing',
+        recipes: ['wrap-up', 'review'],
+    });
+    await page.locator('.c-action__preview').getByRole('radio').nth(1).waitFor();
+    // Offer the rest: with nothing left, the row says what to do instead of greying out.
+    while ((await page.getByRole('combobox', { name: 'Recipe to offer' }).count()) > 0)
+        await page.getByRole('button', { name: 'Offer', exact: true }).click();
+    await page.getByText('Every recipe you have is offered here.').waitFor();
+    await page.getByRole('button', { name: 'New recipe', exact: true }).last().click();
+    await page.locator('.c-recipe__status', { hasText: 'Not saved yet' }).waitFor();
+    assert.equal(
+        await page.getByRole('tab', { name: /Recipes/ }).getAttribute('aria-selected'),
+        'true',
+    );
     await page.getByRole('tab', { name: /General/ }).click();
+    await page.getByRole('dialog', { name: 'Discard unsaved changes?' }).waitFor();
+    await page.getByRole('button', { name: 'Discard', exact: true }).last().click();
     await page.getByText('Send a message with').waitFor();
     await page.close();
 

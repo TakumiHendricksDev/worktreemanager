@@ -847,9 +847,12 @@
       <Button
         variant="danger-solid"
         onclick={() => {
+          // Read before clearing: `then` is derived from `confirmLeave`, so after the clear it is
+          // null, and calling it threw — Discard closed nothing and left the dialog up.
+          const go = then;
           confirmLeave = null;
           recipeDirty = false;
-          then();
+          go();
         }}>Discard</Button
       >
     {/snippet}

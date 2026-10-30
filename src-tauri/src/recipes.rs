@@ -648,6 +648,17 @@ fn listed(
 
 /// What the backend knows about where a run happens, as variables.
 fn place_vars(project: &Project, worktree: &Worktree) -> BTreeMap<String, String> {
+    let mut vars = worktree_vars(worktree);
+    vars.insert("project.name".to_owned(), project.display_name().to_owned());
+    vars.insert(
+        "project.path".to_owned(),
+        project.root.to_string_lossy().into_owned(),
+    );
+    vars
+}
+
+/// The `worktree.*` variables: its directory name, branch, path, and the issue it is for.
+fn worktree_vars(worktree: &Worktree) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
     vars.insert("worktree.name".to_owned(), worktree.dirname().to_owned());
     vars.insert(
@@ -662,11 +673,13 @@ fn place_vars(project: &Project, worktree: &Worktree) -> BTreeMap<String, String
         "worktree.path".to_owned(),
         worktree.path.to_string_lossy().into_owned(),
     );
-    vars.insert("project.name".to_owned(), project.display_name().to_owned());
-    vars.insert(
-        "project.path".to_owned(),
-        project.root.to_string_lossy().into_owned(),
-    );
+    // The issue a worktree is for, read off its branch or directory the way the sidebar reads it —
+    // so a recipe run from a worktree's menu, long after the New Worktree form that named the issue
+    // has gone, still knows it. Absent rather than empty when there is none, so the run names it as
+    // missing instead of sending a prompt about nothing.
+    if let Some(issue) = crate::view::extract_issue_key(worktree) {
+        vars.insert("worktree.issue".to_owned(), issue);
+    }
     vars
 }
 
@@ -1499,6 +1512,35 @@ mod tests {
         assert_eq!(vars["form.ticket"], "ABC-1");
         assert_eq!(vars["action.exit_code"], "2");
         assert!(!vars.contains_key("previous.reply"));
+    }
+
+    #[test]
+    fn a_worktree_named_for_an_issue_gives_every_run_that_issue() {
+        use wtm_core::model::{BranchRef, Checkout, WorktreeId};
+        let worktree = |branch: &str, dir: &str| {
+            let path = std::path::PathBuf::from(dir);
+            Worktree {
+                id: WorktreeId::from_path(&path),
+                path,
+                head: None,
+                checkout: Checkout::Branch {
+                    branch: BranchRef::new(branch),
+                },
+                is_main: false,
+                is_bare: false,
+                locked: None,
+                prunable: None,
+            }
+        };
+        let vars = worktree_vars(&worktree("task/ACME-8599-export", "/wt/ACME-8599-export"));
+        assert_eq!(
+            vars.get("worktree.issue").map(String::as_str),
+            Some("ACME-8599")
+        );
+        assert!(
+            !worktree_vars(&worktree("spike", "/wt/spike")).contains_key("worktree.issue"),
+            "no issue is reported missing, not sent as an empty string"
+        );
     }
 
     #[test]
