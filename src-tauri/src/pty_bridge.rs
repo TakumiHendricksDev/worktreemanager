@@ -149,8 +149,18 @@ impl PtySink for EventSink {
 }
 
 /// Forwards pipeline progress to the window.
+///
+/// # Tagged with the creation it belongs to
+///
+/// `wtm:progress` is one channel for every pipeline, and the New Worktree screen used to be the
+/// only listener, mounted for one run at a time. Now a creation outlives its screen — its tab in the
+/// list carries on while you work elsewhere — and two can run at once, so an untagged stage would be
+/// drawn on both. A bridge made with [`tagged`](Self::tagged) adds `creation` to every event it
+/// emits. The event's own shape is unchanged, so a listener that ignores the field reads it as
+/// before.
 pub struct ProgressBridge {
     app: AppHandle,
+    creation: Option<String>,
 }
 
 impl std::fmt::Debug for ProgressBridge {
@@ -162,16 +172,45 @@ impl std::fmt::Debug for ProgressBridge {
 impl ProgressBridge {
     #[must_use]
     pub fn new(app: AppHandle) -> Self {
-        Self { app }
+        Self {
+            app,
+            creation: None,
+        }
+    }
+
+    /// A bridge whose every event names `creation`, when there is one.
+    #[must_use]
+    pub fn tagged(app: AppHandle, creation: Option<String>) -> Self {
+        Self { app, creation }
     }
 }
 
 impl wtm_core::ports::progress::ProgressSink for ProgressBridge {
     fn emit(&self, event: wtm_core::ports::progress::ProgressEvent) {
-        if let Err(err) = self.app.emit(PROGRESS_EVENT, event) {
+        let sent = match &self.creation {
+            None => self.app.emit(PROGRESS_EVENT, event),
+            Some(creation) => match tag(&event, creation) {
+                Some(tagged) => self.app.emit(PROGRESS_EVENT, tagged),
+                None => self.app.emit(PROGRESS_EVENT, event),
+            },
+        };
+        if let Err(err) = sent {
             tracing::debug!(error = %err, "could not emit progress");
         }
     }
+}
+
+/// `event` as JSON with `creation` added beside its own fields.
+fn tag(
+    event: &wtm_core::ports::progress::ProgressEvent,
+    creation: &str,
+) -> Option<serde_json::Value> {
+    let mut value = serde_json::to_value(event).ok()?;
+    value.as_object_mut()?.insert(
+        "creation".to_owned(),
+        serde_json::Value::String(creation.to_owned()),
+    );
+    Some(value)
 }
 
 /// Standard base64, hand-rolled.
@@ -249,6 +288,22 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tagged_event_keeps_its_own_shape_and_names_its_creation() {
+        // The window routes progress by `creation` and reads everything else exactly as it reads
+        // an untagged event, so the tag sits beside the event's fields rather than wrapping them.
+        let event = wtm_core::ports::progress::ProgressEvent::Stage {
+            id: "worktree".to_owned(),
+            label: "git worktree add".to_owned(),
+            index: 3,
+            total: 5,
+        };
+        let tagged = tag(&event, "c-1").unwrap();
+        assert_eq!(tagged["kind"], "stage");
+        assert_eq!(tagged["label"], "git worktree add");
+        assert_eq!(tagged["creation"], "c-1");
+    }
 
     #[test]
     fn base64_matches_the_standard_alphabet_and_padding() {

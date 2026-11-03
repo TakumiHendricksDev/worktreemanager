@@ -22,6 +22,7 @@
   import RunShellDialog from './lib/components/RunShellDialog.svelte';
   import { shellRuns } from './lib/state/shell-runs.svelte';
   import { recipes } from './lib/state/recipes.svelte';
+  import { creations } from './lib/state/creations.svelte';
   import { settingsView } from './lib/state/settings-view.svelte';
   import FleetTree from './lib/components/FleetTree.svelte';
   import HomeAgent from './lib/components/HomeAgent.svelte';
@@ -121,6 +122,7 @@
   let offFleet: (() => void) | null = null;
   let offShellRuns: (() => void) | null = null;
   let offRecipes: (() => void) | null = null;
+  let offCreations: (() => void) | null = null;
 
   /**
    * The one navigation recipe. Notification clicks and toast clicks both land here, because
@@ -289,6 +291,8 @@
       if (gone) offShellRuns();
       offRecipes = await recipes.init();
       if (gone) offRecipes();
+      offCreations = await creations.init();
+      if (gone) offCreations();
 
       // Last, and not awaited: a network round trip must not hold up a window that is otherwise
       // ready, and nothing above depends on its answer.
@@ -453,6 +457,7 @@
       void unlistenClicks.then((off) => off());
       offShellRuns?.();
       offRecipes?.();
+      offCreations?.();
       offFleet?.();
       offWindows?.();
       offSessions?.();
@@ -544,7 +549,7 @@
       -->
       <Sidebar
         hidden={view.home}
-        onnew={() => view.show('new')}
+        onnew={() => creations.showForm()}
         onselectworktree={() => view.show('worktree')}
         detailId={view.current === 'new' ? null : 'worktree-detail'}
       />
@@ -554,7 +559,7 @@
           onhome={() => view.peek(null)}
           onopenworktree={(projectId, worktreeId) => openWorktree(projectId, worktreeId)}
           onnewworktree={(projectId) =>
-            void workspace.selectProject(projectId).then(() => view.show('new'))}
+            void workspace.selectProject(projectId).then(() => creations.showForm())}
           onaddproject={addProject}
         />
       {/if}
@@ -746,7 +751,7 @@
             workspace.select(worktreeId);
             view.show('worktree');
           }}
-          onnew={() => view.show('new')}
+          onnew={() => creations.showForm()}
         />
       {:else if !workspace.loadingWorktrees}
         <div class="c-placeholder">

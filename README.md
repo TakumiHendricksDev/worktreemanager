@@ -572,8 +572,20 @@ review that updates as you type:
 
 **Create worktree** stays disabled until preflight is clear, or until you've ticked *Do it anyway* on
 the checks that can be overridden. While it runs you see each step and the setup command in a live
-terminal you can type into, and *Cancel setup* stops it. If setup fails, the worktree is kept, with
-*Re-run setup* and *Remove the worktree* buttons.
+terminal you can type into, and *Cancel setup* stops it.
+
+The run doesn't need the screen. Pressing Create puts a dashed **ghost tab** in the list where the
+worktree will land, showing its step as it goes (`creating · 3/5 git worktree add`). Click another
+worktree and it carries on; click the ghost to come back to its progress, with the steps and the
+setup output as they were. Several can run at once, each with its own ghost.
+
+When it finishes, the ghost becomes the worktree's own tab, marked **new**, and the worktree's view
+carries a record of how it was made above the usual start-a-session buttons: the setup output, and
+the [recipes](#recipes) *Worktree created* offers. The record goes when you dismiss it or open a
+session there. If setup fails, the worktree is kept and its tab says *setup failed*; its record has
+*Re-run setup*, *Remove the worktree*, the output, and what *Setup failed* offers. If the run is
+refused before git makes anything (a branch that exists, say), the ghost keeps the attempt: click it
+for the form, filled in as it was, with the reason, or × to discard it.
 
 ### Removing one
 

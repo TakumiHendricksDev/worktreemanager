@@ -167,3 +167,34 @@
   font-size: var(--step--2);
   color: var(--fg-muted);
 }
+
+/* Said while a run is on screen: leaving is safe now, and nothing on the screen used to say so. */
+.c-new-worktree__hint {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--fg-subtle);
+  font-size: var(--step--2);
+}
+
+/* A run refused before git made anything, above the form it came from. */
+.c-new-worktree__refused {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+  font-size: var(--step--1);
+
+  > svg {
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--danger);
+  }
+}

@@ -23,10 +23,12 @@
 
   import type { Brief } from '../ipc/types';
   import { browsers } from '../state/browsers.svelte';
+  import { creations } from '../state/creations.svelte';
   import { AT_CAPACITY, sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { STATUS_WORD } from '../status';
   import AgentsDialog from './AgentsDialog.svelte';
+  import CreationRecord from './CreationRecord.svelte';
   import RecipeRunStrip from './RecipeRunStrip.svelte';
   import AgentTree from './AgentTree.svelte';
   import PlanViewer from './PlanViewer.svelte';
@@ -48,6 +50,16 @@
   /** Worktrees that have any pane at all, so nothing renders an empty tree. */
   const occupied = $derived([...new Set(sessions.panes.map((p) => p.worktreeId))]);
   const activeLayout = $derived(sessions.layoutFor(activeId));
+  /** This worktree's creation record, if it was just made and the record has not been dismissed. */
+  const record = $derived(creations.recordFor(activeId));
+  /*
+   * A cleanly made worktree's record was waiting for the first session, so the first pane here lets
+   * it go. A failed setup's stays until dismissed: it is a problem still worth seeing on return.
+   */
+  $effect(() => {
+    if (record && record.phase === 'created' && !record.rerunning && activeLayout !== null)
+      untrack(() => creations.dismiss(record.id));
+  });
   /** This worktree's panes that are in windows of their own. */
   const poppedOut = $derived(sessions.outIn(activeId));
   const resumable = $derived(activeId ? (sessions.resumable[activeId] ?? []) : []);
@@ -292,13 +304,18 @@
   {/each}
 
   {#if !activeLayout}
-    <div class="c-surface__empty">
+    <div class="c-surface__empty" class:has-record={record !== undefined}>
       {#if sessions.atCapacity}
         <!-- The same sentence the banner carries. This branch is reachable only when the worktree
              has no panes of its own while some *other* worktree holds the global cap; the banner
              covers the far commoner case of being refused while looking at a full surface. -->
         <p>{AT_CAPACITY}</p>
       {:else if workspace.selected && workspace.activeProjectId}
+        {#if record}
+          <!-- How this worktree was just made, above the usual way to start working in it. -->
+          <CreationRecord creation={record} />
+          <div class="c-creation-record__divider">or start a session yourself</div>
+        {/if}
         {#if poppedOut.length > 0}
           <p>
             Every pane in this worktree is in a window of its own. Put one back from the

@@ -41,6 +41,13 @@
   }
 }
 
+/* With a creation record above the start-a-session row there is more than a centred prompt's worth,
+   so it reads from the top and scrolls rather than centring content taller than the pane. */
+.c-surface__empty.has-record {
+  justify-content: flex-start;
+  overflow-y: auto;
+}
+
 .c-surface__empty {
   flex: 1 1 auto;
   display: flex;

@@ -299,6 +299,10 @@ pub struct PreviewView {
     /// Normalized field values, so the form can show `1234` → `ACME-1234`.
     pub normalized: BTreeMap<String, String>,
     pub can_create: bool,
+    /// The issue key the worktree will be listed under, read from the planned branch and directory
+    /// the way [`extract_issue_key`] reads them off a real one — so the tab standing in for it
+    /// while it is being made is labelled exactly as the tab that replaces it will be.
+    pub issue_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1231,6 +1235,19 @@ pub fn preview_view(preview: &PlanPreview) -> PreviewView {
             .branch()
             .map(|b| b.as_str().to_owned()),
         directory: preview.plan.directory.to_string_lossy().into_owned(),
+        issue_key: preview
+            .plan
+            .branch_plan
+            .branch()
+            .and_then(|b| find_issue_key(b.as_str()))
+            .or_else(|| {
+                preview
+                    .plan
+                    .directory
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(find_issue_key)
+            }),
         base_ref: preview.plan.base_ref.clone(),
         base_commit: preview
             .plan

@@ -1228,6 +1228,9 @@ pub async fn preview_worktree(
 /// repository can change between the review screen and the click, and re-planning is free
 /// because it mutates nothing.
 #[tauri::command]
+// Nine because each is a separate field of the window's request, and the IPC shape is flat on
+// purpose: bundling them into a struct would rename every argument the frontend already sends.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_worktree(
     handle: tauri::AppHandle,
     app: AppState<'_>,
@@ -1237,6 +1240,7 @@ pub async fn create_worktree(
     acknowledged: Vec<String>,
     rows: u16,
     cols: u16,
+    creation: Option<String>,
 ) -> Reply<wtm_core::model::CreateOutcome> {
     let app = Arc::clone(&app);
     blocking(move || {
@@ -1249,7 +1253,8 @@ pub async fn create_worktree(
             rows,
             cols,
         )?;
-        let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
+        // Tagged so the window can tell this run's progress from another's; see `ProgressBridge`.
+        let progress = crate::pty_bridge::ProgressBridge::tagged(handle.clone(), creation);
         let sink = crate::pty_bridge::EventSink::new(handle);
         // Counted while it runs, so Home can honour `one_globally` against a dialog's run too.
         let _creating = app.start_creating(&project_id);
@@ -1427,6 +1432,7 @@ pub async fn run_setup(
     extra_args: Vec<String>,
     rows: u16,
     cols: u16,
+    creation: Option<String>,
 ) -> Reply<crate::view::SetupResultView> {
     let app = Arc::clone(&app);
     blocking(move || {
@@ -1436,7 +1442,7 @@ pub async fn run_setup(
         let mut ambient = display::base_context(&project, app.os_tokens());
         ambient.insert("env.LOGIN_PATH".to_owned(), app.runner.resolved_path());
 
-        let progress = crate::pty_bridge::ProgressBridge::new(handle.clone());
+        let progress = crate::pty_bridge::ProgressBridge::tagged(handle.clone(), creation);
         let sink = crate::pty_bridge::EventSink::new(handle);
         let (session, outcome) = app.create_pipeline().run_setup(
             &wtm_core::usecase::SetupRequest {

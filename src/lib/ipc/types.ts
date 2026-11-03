@@ -454,6 +454,8 @@ export interface Preview {
   /** Field values after normalization, so the form can show `1234` → `ACME-1234`. */
   normalized: Record<string, string>;
   canCreate: boolean;
+  /** The issue key the worktree will be listed under, read the way a real one's is. */
+  issueKey: string | null;
 }
 
 export type CreateOutcome =
@@ -1249,7 +1251,11 @@ export interface BrowserShortcutEvent {
 }
 
 /** Emitted as `wtm:progress` while a pipeline runs. */
-export type ProgressEvent =
+/**
+ * One step of a pipeline's progress, as `wtm:progress` carries it. `creation` names the New
+ * Worktree run it belongs to, when the run was started with one; see `ProgressBridge`.
+ */
+export type ProgressEvent = { creation?: string } & (
   | { kind: 'stage'; id: string; label: string; index: number; total: number }
   | { kind: 'lookup_started'; id: string }
   | { kind: 'lookup_finished'; id: string; tokens: Record<string, string> }
@@ -1257,7 +1263,8 @@ export type ProgressEvent =
   | { kind: 'command_finished'; argv: string[]; code: number; durationMs: number }
   | { kind: 'session_started'; session: string }
   | { kind: 'warning'; id: string; message: string }
-  | { kind: 'note'; message: string };
+  | { kind: 'note'; message: string }
+);
 
 export interface Tool {
   name: string;

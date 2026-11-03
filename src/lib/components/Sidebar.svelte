@@ -45,9 +45,12 @@
   import { attention } from '../state/attention.svelte';
   import { errorMessage } from '../ipc/types';
   import { worktreeRemoval } from '../state/worktree-removal.svelte';
+  import { creations } from '../state/creations.svelte';
   import { sessions } from '../state/sessions.svelte';
+  import { view } from '../state/view.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { inRail, worse, type PaneStatus } from '../status';
+  import CreationTab from './CreationTab.svelte';
   import SidebarSection from './SidebarSection.svelte';
   import WorktreeTab from './WorktreeTab.svelte';
   import Button from './ui/Button.svelte';
@@ -113,9 +116,21 @@
   /** The sentence the keyboard move just announced. A live region reads it. */
   let announcement = $state('');
 
+  /*
+   * The worktrees a ghost is standing in for stay out of the list until their run is over: git makes
+   * the worktree before setup, which can take minutes, and a refresh in between would list it beside
+   * its own ghost. See `creations.hides`.
+   */
+  const listed = $derived(workspace.worktrees.filter((w) => !creations.hides(w.id)));
+  const ghosts = $derived(creations.ghostsIn(workspace.activeProjectId));
+  /** A ghost's screen is up, so no real row is the one on display. */
+  const ghostShown = $derived(view.current === 'new' && creations.shown !== null);
+
   const arrangement = $derived(
-    arrange(workspace.worktrees, workspace.layout, {
-      matching: workspace.filtering ? workspace.matching : null,
+    arrange(listed, workspace.layout, {
+      matching: workspace.filtering
+        ? workspace.matching.filter((w) => !creations.hides(w.id))
+        : null,
       selectedId: workspace.selectedWorktreeId,
       urgent,
       dragging: dragging?.kind === 'row',
@@ -194,16 +209,20 @@
     if (!el) return;
     const key = el.dataset.nav ?? '';
     if (key.startsWith('row:')) pick(key.slice(4));
+    else if (key.startsWith('ghost:')) creations.show(key.slice(6));
     focusItem(key);
   }
 
   /** Which item an event came from: the row or group it is inside, star buttons included. */
   function itemOf(
     target: EventTarget | null,
-  ): { kind: 'row' | 'group'; id: string } | null {
+  ): { kind: 'row' | 'group' | 'ghost'; id: string } | null {
     const el = target instanceof HTMLElement ? target : null;
     const row = el?.closest<HTMLElement>('[data-row]')?.dataset.row;
     if (row) return { kind: 'row', id: row };
+    // A worktree being made: arrow keys move through it, but it has no menu and does not move.
+    const ghost = el?.closest<HTMLElement>('[data-nav^="ghost:"]')?.dataset.nav?.slice(6);
+    if (ghost) return { kind: 'ghost', id: ghost };
     const group = el?.closest<HTMLElement>('[data-nav^="group:"]')?.dataset.nav?.slice(6);
     return group ? { kind: 'group', id: group } : null;
   }
@@ -227,7 +246,7 @@
     }
 
     if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
-      if (!here) return;
+      if (!here || here.kind === 'ghost') return;
       event.preventDefault();
       const el = items[at];
       const box = el?.getBoundingClientRect();
@@ -682,7 +701,8 @@
     group={section.id}
     next={nextOf(section, worktree)}
     status={railStatus(worktree.id)}
-    selected={worktree.id === workspace.selectedWorktreeId}
+    selected={worktree.id === workspace.selectedWorktreeId && !ghostShown}
+    fresh={creations.freshness(worktree.id)}
     favorite={workspace.isFavorite(worktree.id)}
     dragging={dragging?.kind === 'row' && dragging.id === worktree.id}
     removing={workspace.activeProjectId !== null &&
@@ -791,6 +811,17 @@
               {@render row(worktree, section, 1)}
             {/each}
           {/if}
+        {/each}
+
+        <!-- Where a new worktree lands: after everything, until its run is over and its own tab
+             takes this place. -->
+        {#each ghosts as ghost (ghost.id)}
+          <CreationTab
+            creation={ghost}
+            selected={ghostShown && creations.shown === ghost.id}
+            onselect={() => creations.show(ghost.id)}
+            ondiscard={() => creations.discard(ghost.id)}
+          />
         {/each}
 
         {#if line !== null}

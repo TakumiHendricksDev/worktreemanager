@@ -147,6 +147,8 @@ export const commands = {
     acknowledged: string[];
     rows: number;
     cols: number;
+    /** Tags this run's `wtm:progress`, so two runs at once are told apart. */
+    creation?: string | null;
   }) => invoke<CreateOutcome>('create_worktree', args),
 
   // ── remove ──
@@ -168,6 +170,7 @@ export const commands = {
     extraArgs: string[];
     rows: number;
     cols: number;
+    creation?: string | null;
   }) => invoke<SetupResult>('run_setup', args),
 
   /** Start one of the project's declared actions. Returns the session id to attach to. */

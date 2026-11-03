@@ -23,6 +23,7 @@
     next,
     dragging = false,
     removing = false,
+    fresh = null,
     controls = 'worktree-detail',
     onselect,
     onfavorite,
@@ -53,6 +54,11 @@
      * no clicks, drags, menus or arrow keys: everything they lead to is being torn down.
      */
     removing?: boolean;
+    /**
+     * Just made, and how that went, while its record is on its view: `created` shows a "new" pill,
+     * `setup_failed` warns, `setting_up` is setup running again. Null for every other worktree.
+     */
+    fresh?: 'created' | 'setup_failed' | 'setting_up' | null;
     /** The panel this row controls. Null while the create pane is on screen. */
     controls?: string | null;
     onselect: () => void;
@@ -127,6 +133,11 @@
     <span class="c-worktree-tab__line">
       {#if identity.key}<span class="c-worktree-tab__key">{identity.key}</span>{/if}
       <span class="c-worktree-tab__name" title={identity.detail}>{identity.name}</span>
+      {#if fresh === 'created'}
+        <span class="c-worktree-tab__pill" title="Made just now; its view says how it went"
+          >new</span
+        >
+      {/if}
       {#if worktree.isMain}
         <span class="c-worktree-tab__pill" title="The main worktree">main</span>
       {/if}
@@ -160,8 +171,21 @@
           <SessionDot status="starting" />&nbsp;removing…
         </span>
       </span>
-    {:else if status || worktree.dirty || worktree.prunable}
+    {:else if fresh || status || worktree.dirty || worktree.prunable}
       <span class="c-worktree-tab__line c-worktree-tab__flags">
+        {#if fresh === 'created'}
+          <span class="c-status--ok" title="Created; its view has the setup output"
+            >✓&nbsp;created</span
+          >
+        {:else if fresh === 'setup_failed'}
+          <span class="c-status--warn" title="Its setup failed; the worktree was kept"
+            >▲&nbsp;setup failed</span
+          >
+        {:else if fresh === 'setting_up'}
+          <span class="c-status--muted" title="Running setup again"
+            ><SessionDot status="working" />&nbsp;setting up…</span
+          >
+        {/if}
         {#if status}
           <!--
             First in the row, because a session waiting on you outranks every git fact beside it.

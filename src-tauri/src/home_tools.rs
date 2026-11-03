@@ -3357,6 +3357,7 @@ mod tests {
             naming_fields: vec![],
             normalized: BTreeMap::new(),
             can_create: true,
+            issue_key: None,
         }
     }
 

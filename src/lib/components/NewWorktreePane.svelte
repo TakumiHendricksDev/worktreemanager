@@ -17,26 +17,24 @@
    *    call and a preview per keystroke would hammer it.
    * 2. **Create is disabled until preflight is clear** — or until every overridable failure is
    *    explicitly acknowledged. It cannot be clicked into a state git will refuse.
-   * 3. **A failed setup is not an error.** The worktree exists; the dialog switches to the
-   *    transcript and offers the remedies rather than throwing away what was built.
+   * 3. **A failed setup is not an error.** The worktree exists; its own view carries the
+   *    transcript and the remedies (`CreationRecord`) rather than throwing away what was built.
+   *
+   * # The run is not this pane's
+   *
+   * Pressing Create hands the run to `creations`, which keeps its steps, command and terminal
+   * for as long as it takes; this pane only draws the one `creations.shown` names. So leaving for
+   * another worktree mid-setup loses nothing: the run's ghost tab in the list carries on, and
+   * clicking it brings this screen back as it was. A run refused before git made anything comes
+   * back here as its form, filled in as it was, with the reason.
    */
   import { commands } from '../ipc/commands';
-  import {
-    errorMessage,
-    isWtmError,
-    type CreateOutcome,
-    type Form,
-    type Preview,
-    type ProgressEvent,
-  } from '../ipc/types';
-  import { listen } from '@tauri-apps/api/event';
+  import { errorMessage, isWtmError, type Form, type Preview } from '../ipc/types';
   import { untrack } from 'svelte';
+  import { creations, currentStep, madeWorktree } from '../state/creations.svelte';
   import { workspace } from '../state/workspace.svelte';
-  import { worktreeRemoval } from '../state/worktree-removal.svelte';
-  import { actionById, type RecipeAction } from '../recipes';
-  import RecipeOffer from './RecipeOffer.svelte';
+  import CreationRecord from './CreationRecord.svelte';
   import ReviewPanel from './ReviewPanel.svelte';
-  import RemoveWorktreeDialog from './RemoveWorktreeDialog.svelte';
   import SchemaForm from './SchemaForm.svelte';
   import Terminal from './Terminal.svelte';
   import Button from './ui/Button.svelte';
@@ -51,39 +49,19 @@
     onclose: () => void;
   } = $props();
 
-  /*
-   * The two moments this pane can ask about recipes. Looked up once: the registry is static, and an
-   * action that offers nothing in this repository renders nothing, so the finished screen is exactly
-   * what it was before recipes existed.
-   */
-  const CREATED = actionById('worktree.created') as RecipeAction;
-  const SETUP_FAILED = actionById('worktree.setup_failed') as RecipeAction;
-  /** "Not now" on either question, for the rest of this pane's life. */
-  let offerDismissed = $state(false);
-
   /** A preview costs a lookup command, so wait for typing to settle. */
   const PREVIEW_DEBOUNCE_MS = 400;
 
-  type Phase = 'form' | 'running' | 'done';
+  /** The creation on display, or none for a blank form. */
+  const creation = $derived(creations.byId(creations.shown));
+  /** Whether this screen is a form: a blank one, or a refused creation's, to try again. */
+  const editing = $derived(!creation || creation.phase === 'refused');
 
   let form = $state<Form | null>(null);
   let loadError = $state<string | null>(null);
   const values = $state<Record<string, string>>({});
 
   let preview = $state<Preview | null>(null);
-  /**
-   * The form as the worktree was made from it, as `{{form.<key>}}` variables: each value as its
-   * field normalized it, which is what the branch and directory were named from — `ACME-8599`,
-   * not the `8599` that was typed.
-   */
-  const formVars = $derived(
-    Object.fromEntries(
-      Object.entries({ ...values, ...(preview?.normalized ?? {}) }).map(([key, value]) => [
-        `form.${key}`,
-        value,
-      ]),
-    ),
-  );
   let previewError = $state<string | null>(null);
   /** Field-level problems, keyed by field, from a validation rejection. */
   let fieldProblems = $state<Record<string, string>>({});
@@ -98,60 +76,39 @@
   /** Same shape as `previewSeq`: a stale form response must not clobber a newer project's. */
   let formSeq = 0;
 
-  let phase = $state<Phase>('form');
   let adoptBranch = $state<string | null>(null);
   const acknowledged = $state<string[]>([]);
 
-  let session = $state<string | null>(null);
-  let outcome = $state<CreateOutcome | null>(null);
-  let runError = $state<string | null>(null);
-  let confirmingRemove = $state(false);
-  let acting = $state(false);
-
-  const removable = $derived(outcome && 'worktree' in outcome ? outcome.worktree : null);
-  const removing = $derived(
-    removable !== null && worktreeRemoval.isRemoving(projectId, removable.id),
-  );
-
-  /**
-   * A removal confirmed here carries on after its dialog closes, so this screen learns how it went
-   * by watching it stop. If the worktree went with it, there is nothing left here to offer.
+  /*
+   * What the form should hold: blank for a new worktree, or a refused creation's own values so
+   * trying again is one click. A running creation leaves the form alone — it is not on screen, and a
+   * run's progress must not reset anything. Keyed on this rather than on the id alone because the
+   * same creation goes from running to refused without the id changing.
    */
-  let wasRemoving = false;
+  const formKey = $derived(
+    creations.shown === null
+      ? 'blank'
+      : creation?.phase === 'refused'
+        ? `refused:${creation.id}`
+        : 'run',
+  );
   $effect(() => {
-    const now = removing;
-    if (wasRemoving && !now) untrack(closeIfGone);
-    wasRemoving = now;
+    const key = formKey;
+    if (key === 'run') return;
+    untrack(() => {
+      const refused = key === 'blank' ? undefined : creation;
+      for (const field of Object.keys(values)) delete values[field];
+      acknowledged.length = 0;
+      Object.assign(values, refused?.values ?? {});
+      acknowledged.push(...(refused?.acknowledged ?? []));
+      adoptBranch = refused?.adoptBranch ?? null;
+      preview = null;
+    });
   });
 
-  /**
-   * What the run is doing, as it does it.
-   *
-   * The first version put a single stage label in the header and left the body empty, which is
-   * the worst of both: the one thing worth watching was the smallest text on screen, and a
-   * multi-minute setup looked like a hung window. The pipeline already emits typed progress —
-   * this keeps it and renders it where the eye is.
-   */
-  type Step = {
-    id: string;
-    label: string;
-    index: number;
-    total: number;
-    /** Set once a later stage begins, which is what "this one finished" means here. */
-    done: boolean;
-  };
-
-  let steps = $state<Step[]>([]);
-  let currentCommand = $state<{ argv: string[]; cwd: string } | null>(null);
-  let notes = $state<{ id: string; text: string; kind: 'warning' | 'note' }[]>([]);
-
-  const currentStep = $derived(steps.find((s) => !s.done) ?? null);
+  const step = $derived(creation ? currentStep(creation) : null);
   const percent = $derived(
-    currentStep && currentStep.total > 0
-      ? Math.round(((currentStep.index - 1) / currentStep.total) * 100)
-      : phase === 'done'
-        ? 100
-        : 0,
+    step && step.total > 0 ? Math.round(((step.index - 1) / step.total) * 100) : 0,
   );
 
   const canCreate = $derived(
@@ -178,7 +135,7 @@
 
   // Live preview. Depends on every value, so editing any field re-plans.
   $effect(() => {
-    if (phase !== 'form' || !form) return;
+    if (!editing || !form) return;
     // Touch the values so this effect tracks them.
     const snapshot = JSON.stringify(values);
     const chosen = adoptBranch;
@@ -233,156 +190,25 @@
     return () => clearTimeout(timer);
   });
 
-  // Pipeline progress. Subscribed for the whole life of the pane, not just while running, so
-  // nothing emitted between pressing Create and the first render is missed.
-  $effect(() => {
-    const unlisten = listen<ProgressEvent>('wtm:progress', (event) => {
-      const payload = event.payload;
-      switch (payload.kind) {
-        case 'stage': {
-          // A stage beginning is also the signal that every earlier one is over; the pipeline
-          // does not emit a separate "finished", and inferring it here beats adding one.
-          steps = [
-            ...steps.filter((s) => s.id !== payload.id).map((s) => ({ ...s, done: true })),
-            {
-              id: payload.id,
-              label: payload.label,
-              index: payload.index,
-              total: payload.total,
-              done: payload.id === 'done',
-            },
-          ];
-          currentCommand = null;
-          break;
-        }
-        case 'command_started':
-          currentCommand = { argv: payload.argv, cwd: payload.cwd };
-          break;
-        case 'command_finished':
-          currentCommand = null;
-          break;
-        case 'session_started':
-          // The only moment the live transcript becomes attachable. Before this landed, the
-          // session id arrived with the *return value* — after the run was already over.
-          session = payload.session;
-          break;
-        case 'warning':
-          notes = [
-            ...notes,
-            {
-              id: `warn-${notes.length}-${payload.id}`,
-              text: payload.message,
-              kind: 'warning',
-            },
-          ];
-          break;
-        case 'note':
-          notes = [
-            ...notes,
-            { id: `note-${notes.length}`, text: payload.message, kind: 'note' },
-          ];
-          break;
-        default:
-          // Lookup start/finish are already reflected in the review panel.
-          break;
-      }
+  /** Hand the run to `creations`, and show it. A refused creation is retried under its own id. */
+  function create() {
+    if (!preview) return;
+    const id = creations.start({
+      projectId,
+      values: { ...values },
+      adoptBranch,
+      acknowledged: [...acknowledged],
+      preview,
+      retry: creation?.phase === 'refused' ? creation.id : null,
     });
-    return () => void unlisten.then((off) => off());
-  });
-
-  async function create() {
-    phase = 'running';
-    runError = null;
-    steps = [];
-    notes = [];
-    currentCommand = null;
-    session = null;
-    try {
-      const result = await commands.createWorktree({
-        projectId,
-        values: { ...values },
-        adoptBranch,
-        acknowledged: [...acknowledged],
-        rows: 24,
-        cols: 100,
-      });
-      outcome = result;
-      // Normally `session_started` has already set this mid-run; these are the fallbacks for a
-      // run that produced no session at all (no setup command, or a spawn that failed).
-      if (result.kind === 'created') session ??= result.setupSession;
-      if (result.kind === 'setup_failed') session ??= result.session;
-      if (result.kind === 'cancelled') session ??= result.session;
-      phase = 'done';
-      await workspace.refreshWorktrees();
-      // Select what was just made, so closing the dialog lands on it.
-      if (result.kind !== 'cancelled' && result.worktree) {
-        workspace.select(result.worktree.id);
-      }
-    } catch (e) {
-      runError = errorMessage(e);
-      phase = 'form';
-    }
-  }
-
-  async function retrySetup() {
-    const worktree = outcome && 'worktree' in outcome ? outcome.worktree : null;
-    if (!worktree || acting) return;
-    acting = true;
-    // A retry that succeeds is a worktree created, and its question has not been answered yet.
-    offerDismissed = false;
-    runError = null;
-    phase = 'running';
-    notes = [];
-    currentCommand = null;
-    session = null;
-    try {
-      const result = await commands.runSetup({
-        projectId,
-        worktreeId: worktree.id,
-        extraArgs: [],
-        rows: 24,
-        cols: 100,
-      });
-      session ??= result.session;
-      if (result.success)
-        outcome = { kind: 'created', worktree, setupSession: result.session };
-      phase = 'done';
-      await workspace.refreshWorktrees();
-    } catch (e) {
-      runError = errorMessage(e);
-      phase = 'done';
-    } finally {
-      acting = false;
-    }
-  }
-
-  function removeIt() {
-    if (!removable || acting || removing) return;
-    confirmingRemove = true;
-  }
-
-  function onRemoveClosed() {
-    confirmingRemove = false;
-    closeIfGone();
-  }
-
-  function closeIfGone() {
-    const id = removable?.id;
-    void workspace.refreshWorktrees().then(() => {
-      if (id && !workspace.worktrees.some((w) => w.id === id)) onclose();
-    });
+    creations.shown = id;
   }
 
   function onKeydown(event: KeyboardEvent) {
-    // Escape returns to the worktree list, but only while nothing is running — losing sight of
-    // a live setup transcript would be worse than an extra click. A removal confirmation can now
-    // be mounted inside this pane; its Dialog owns Escape while open, or sibling window listeners
-    // would close both the confirmation and this entire screen on the same keypress.
-    if (
-      event.key === 'Escape' &&
-      phase !== 'running' &&
-      !document.querySelector('[aria-modal="true"]')
-    ) {
+    // Escape returns to the worktree list. Even mid-run now: the run is `creations`', and its tab
+    // brings this screen back. A dialog mounted over this pane owns Escape while it is open, or
+    // sibling window listeners would close both on the same keypress.
+    if (event.key === 'Escape' && !document.querySelector('[aria-modal="true"]')) {
       event.stopPropagation();
       onclose();
     }
@@ -396,15 +222,32 @@
     <div class="c-new-worktree__titles">
       <h1 class="c-pane-title">New Worktree</h1>
     </div>
-    <Button variant="quiet" size="sm" onclick={onclose} disabled={phase === 'running'}
-      >{phase === 'done' ? 'Done' : 'Cancel'}</Button
+    {#if creation?.phase === 'running'}
+      <span class="c-new-worktree__hint">
+        <Icon name="chevron-right" size={12} /> Keeps going if you switch worktrees — its tab
+        in the list brings you back here
+      </span>
+    {/if}
+    <Button variant="quiet" size="sm" onclick={onclose}
+      >{editing ? 'Cancel' : 'Close'}</Button
     >
   </header>
 
   <div class="c-new-worktree__body">
     {#if loadError}
       <p class="c-status--danger">{loadError}</p>
-    {:else if phase === 'form'}
+    {:else if editing}
+      {#if creation?.phase === 'refused'}
+        <!-- Nothing was made, so this is the form again, as it was, with why. -->
+        <div class="c-new-worktree__refused" role="alert">
+          <Icon name="warn" size={14} />
+          <p>
+            <strong>Couldn’t create it.</strong>
+            {creation.error ?? 'The run stopped before git made anything.'} Change the form and
+            try again, or discard it with × on its tab.
+          </p>
+        </div>
+      {/if}
       {#if !form}
         <p class="c-status--muted">Loading the project's form…</p>
       {:else}
@@ -463,47 +306,31 @@
             {/if}
           </div>
         </div>
-
-        {#if runError}
-          <p class="c-status--danger">{runError}</p>
-        {/if}
       {/if}
-    {:else}
+    {:else if creation && creation.phase !== 'running' && madeWorktree(creation)}
+      <!-- Finished while on screen in a project not in view, so it could not be gone to: its record
+           here, the same one its worktree's view shows. -->
+      <CreationRecord {creation} />
+    {:else if creation}
       <!--
         The run occupies the body. Three things, top to bottom: where the pipeline is, what it
         is running right now, and the live transcript. The transcript mounts immediately — even
         before a session exists — because that is what lets it catch the first line of output
-        rather than joining a run already in progress.
+        rather than joining a run already in progress; and on coming back mid-run it replays what
+        the session has printed so far.
       -->
       <div class="c-new-worktree__run">
         <div class="c-new-worktree__run-head">
-          {#if phase === 'running'}
-            <h2 class="c-new-worktree__stage">{currentStep?.label ?? 'Starting…'}</h2>
-            <span class="c-new-worktree__count">
-              {#if currentStep}step {currentStep.index} of {currentStep.total}{/if}
-            </span>
-          {:else if outcome?.kind === 'created'}
-            <h2 class="c-new-worktree__stage c-status--ok">
-              Created <code>{outcome.worktree.dirname}</code>
-            </h2>
-            <span class="c-new-worktree__count"
-              >on {outcome.worktree.branch ?? 'a detached HEAD'}</span
-            >
-          {:else if outcome?.kind === 'setup_failed'}
-            <h2 class="c-new-worktree__stage c-status--warn">
-              Setup {outcome.outcome.kind === 'timed_out' ? 'timed out' : 'failed'}
-            </h2>
-            <span class="c-new-worktree__count">the worktree was created and kept</span>
-          {:else if outcome?.kind === 'cancelled'}
-            <h2 class="c-new-worktree__stage c-status--warn">Cancelled</h2>
-          {:else}
-            <h2 class="c-new-worktree__stage">Finished</h2>
-          {/if}
+          <h2 class="c-new-worktree__stage">{step?.label ?? 'Starting…'}</h2>
+          <span class="c-new-worktree__count">
+            {#if step}step {step.index} of {step.total} ·{/if}
+            <code>{creation.dirname}</code>
+          </span>
         </div>
 
         <div
           class="c-progress"
-          class:is-indeterminate={phase === 'running' && !currentStep}
+          class:is-indeterminate={!step}
           role="progressbar"
           aria-valuenow={percent}
           aria-valuemin="0"
@@ -513,91 +340,40 @@
           <div class="c-progress__fill" style:width="{percent}%"></div>
         </div>
 
-        {#if steps.length > 0}
+        {#if creation.steps.length > 0}
           <ol class="c-steps o-plain-list">
-            {#each steps as step (step.id)}
+            {#each creation.steps as item (item.id)}
               <li
                 class="c-steps__item"
-                class:is-done={step.done}
-                class:is-active={!step.done && phase === 'running'}
+                class:is-done={item.done}
+                class:is-active={!item.done}
               >
                 <span class="c-steps__mark">
-                  <Icon name={step.done ? 'check' : 'chevron-right'} size={12} />
+                  <Icon name={item.done ? 'check' : 'chevron-right'} size={12} />
                 </span>
-                <span>{step.label}</span>
+                <span>{item.label}</span>
               </li>
             {/each}
           </ol>
         {/if}
 
-        {#if currentCommand}
+        {#if creation.command}
           <div class="c-command">
-            <code>{currentCommand.argv.join(' ')}</code>
-            <span class="c-command__cwd">in {currentCommand.cwd}</span>
+            <code>{creation.command.argv.join(' ')}</code>
+            <span class="c-command__cwd">in {creation.command.cwd}</span>
           </div>
         {/if}
 
-        {#each notes as note (note.id)}
+        {#each creation.notes as note (note.id)}
           <p class={note.kind === 'warning' ? 'c-status--warn' : 'c-status--muted'}>
             {note.text}
           </p>
         {/each}
 
-        {#if outcome?.kind === 'setup_failed'}
-          <p class="c-note">
-            It has <strong>not</strong> been removed. Setup may already have written an environment
-            file, allocated ports or cloned a database volume — deleting the worktree would leak
-            those and lose work that is usually one command from fixed.
-          </p>
-          <div class="c-new-worktree__remedies">
-            <Button
-              variant="neutral"
-              onclick={retrySetup}
-              disabled={acting || confirmingRemove || removing}>Re-run setup</Button
-            >
-            <Button
-              variant="danger-outline"
-              onclick={removeIt}
-              disabled={acting || confirmingRemove || removing}
-              >{removing ? 'Removing…' : 'Remove the worktree'}</Button
-            >
-          </div>
-          {#if !offerDismissed}
-            <RecipeOffer
-              action={SETUP_FAILED}
-              {projectId}
-              worktreeId={outcome.worktree.id}
-              place={outcome.worktree.dirname}
-              vars={{
-                ...formVars,
-                'action.outcome': outcome.outcome.kind,
-                'action.exit_code':
-                  outcome.outcome.kind === 'failed' ? String(outcome.outcome.code) : '',
-              }}
-              onstarted={onclose}
-              ondismiss={() => (offerDismissed = true)}
-            />
-          {/if}
-        {/if}
-
-        {#if outcome?.kind === 'created' && !offerDismissed}
-          <RecipeOffer
-            action={CREATED}
-            {projectId}
-            worktreeId={outcome.worktree.id}
-            place={outcome.worktree.dirname}
-            vars={formVars}
-            onstarted={onclose}
-            ondismiss={() => (offerDismissed = true)}
-          />
-        {/if}
-
-        {#if runError}
-          <p class="c-status--danger">{runError}</p>
-        {/if}
-
         <div class="c-new-worktree__terminal">
-          <Terminal {session} />
+          {#key creation.id}
+            <Terminal session={creation.session} />
+          {/key}
         </div>
       </div>
     {/if}
@@ -605,15 +381,15 @@
 
   <footer class="c-new-worktree__foot">
     <div class="o-row o-row--end">
-      {#if phase === 'form'}
+      {#if editing}
         <Button variant="accent" onclick={create} disabled={!canCreate || previewing}>
-          {previewing ? 'Planning…' : 'Create worktree'}
+          {previewing ? 'Planning…' : creation ? 'Try again' : 'Create worktree'}
         </Button>
-      {:else if phase === 'running'}
+      {:else if creation?.phase === 'running'}
         <Button
           variant="neutral"
-          onclick={() => session && commands.ptyKill(session)}
-          disabled={!session}
+          onclick={() => creation?.session && commands.ptyKill(creation.session)}
+          disabled={!creation.session}
         >
           Cancel setup
         </Button>
@@ -623,7 +399,3 @@
     </div>
   </footer>
 </section>
-
-{#if confirmingRemove && removable}
-  <RemoveWorktreeDialog {projectId} worktree={removable} onclose={onRemoveClosed} />
-{/if}

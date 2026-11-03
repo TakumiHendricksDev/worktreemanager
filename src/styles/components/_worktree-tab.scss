@@ -169,3 +169,73 @@
   font-weight: 600;
   white-space: nowrap;
 }
+
+/*
+ * A worktree being made (`CreationTab`).
+ *
+ * Hollow rather than dimmed: a dashed outline says "not here yet" without the faded text that says
+ * "you cannot click this" — and clicking it is the way back to the run's progress. Selected, the
+ * outline takes the accent so it is still plainly the row on display.
+ */
+.c-worktree-tab--ghost .c-worktree-tab__button {
+  border: 1px dashed var(--border-strong);
+}
+
+.c-worktree-tab--ghost .c-worktree-tab__button.is-selected {
+  border-color: var(--accent);
+}
+
+.c-worktree-tab--ghost .c-worktree-tab__name {
+  color: var(--fg-muted);
+}
+
+/* An attempt that made nothing. Still a ghost — there is no worktree — but one that went wrong. */
+.c-worktree-tab--failed .c-worktree-tab__button {
+  border-color: var(--danger-line);
+}
+
+.c-worktree-tab--failed .c-worktree-tab__button.is-selected {
+  border-color: var(--danger);
+}
+
+/* One flag that takes the line: a run's step names are long, and the line must not wrap. */
+.c-worktree-tab__flag {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-worktree-tab__progress {
+  display: block;
+  height: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--bg-hover);
+}
+
+.c-worktree-tab__progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur-base) var(--ease);
+}
+
+/* Where a real tab's star sits, so a discarded attempt's × is where the eye expects an action. */
+.c-worktree-tab__close {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-sm);
+  color: var(--fg-subtle);
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+}

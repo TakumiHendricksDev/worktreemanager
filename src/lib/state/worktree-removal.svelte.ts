@@ -15,6 +15,7 @@ import { commands } from '../ipc/commands';
 import { errorMessage } from '../ipc/types';
 import { revalidateWorktree, type WorktreeTarget } from '../worktree-menu';
 import { attention } from './attention.svelte';
+import { creations } from './creations.svelte';
 import { fleet } from './fleet.svelte';
 
 /** What the dialog decided, beyond which worktree. */
@@ -131,6 +132,8 @@ class WorktreeRemoval {
     } finally {
       this.settle(id);
     }
+    // A worktree that was made and then removed takes the note about how it was made with it.
+    creations.forget(worktree.id);
     if (warnings) attention.notice(`Removed ${name}`, warnings);
   }
 
