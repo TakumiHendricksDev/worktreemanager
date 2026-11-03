@@ -65,7 +65,7 @@ serde_json_path = "0.7"
 # `default-features = false` is the sandbox: without the `loader` feature there is
 # no way for a template to `{% include %}` a file. `builtins` supplies the string
 # filters; `serde` is needed to build values from our own types.
-minijinja       = { version = "2", default-features = false, features = ["builtins", "serde"] }
+minijinja       = { version = "3", default-features = false, features = ["builtins", "serde"] }
 portable-pty    = "0.9"
 etcetera        = "0.11"
 shell-words     = "1"
