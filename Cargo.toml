@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "crates/wtm-core",
+  "crates/wtm-plugins",
   "crates/wtm-config",
   "crates/wtm-git",
   "crates/wtm-exec",
@@ -39,6 +40,7 @@ publish      = false
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.dependencies]
 # internal
+wtm-plugins = { path = "crates/wtm-plugins" }
 wtm-core    = { path = "crates/wtm-core" }
 wtm-config  = { path = "crates/wtm-config" }
 wtm-git     = { path = "crates/wtm-git" }
@@ -62,6 +64,8 @@ thiserror  = "2"
 # external — adapters
 toml            = "1"
 serde_json_path = "0.7"
+# Native Codex speaks WebSocket over a private Unix socket. No TLS features are needed.
+tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
 # `default-features = false` is the sandbox: without the `loader` feature there is
 # no way for a template to `{% include %}` a file. `builtins` supplies the string
 # filters; `serde` is needed to build values from our own types.

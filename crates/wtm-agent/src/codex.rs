@@ -60,6 +60,56 @@ const GUARDIAN_APPROVED: &str = "Automatic approval review approved";
 #[derive(Debug)]
 pub struct Codex;
 
+/// The same event mapping as WTM Chat, with no writes, retries or approval ownership.
+pub struct NativeEvents(CodexProtocol);
+
+impl std::fmt::Debug for NativeEvents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeEvents").finish_non_exhaustive()
+    }
+}
+
+impl Default for NativeEvents {
+    fn default() -> Self {
+        Self(CodexProtocol::new(SessionRequest::default()))
+    }
+}
+
+impl NativeEvents {
+    pub fn notification(&mut self, method: &str, params: &Value) -> Vec<AgentEvent> {
+        if !matches!(
+            method,
+            "turn/started"
+                | "turn/completed"
+                | "thread/tokenUsage/updated"
+                | "turn/plan/updated"
+                | "item/started"
+                | "item/completed"
+                | "warning"
+                | "thread/compacted"
+        ) {
+            return Vec::new();
+        }
+        self.0
+            .on_notification(method, params)
+            .into_iter()
+            .filter_map(|step| match step {
+                Step::Emit(event)
+                    if !matches!(
+                        event,
+                        AgentEvent::Raw { .. }
+                            | AgentEvent::Message { .. }
+                            | AgentEvent::ReasoningDelta { .. }
+                    ) =>
+                {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 impl Provider for Codex {
     fn id(&self) -> ProviderId {
         ProviderId::new(ID)
@@ -126,7 +176,7 @@ fn is_bare_key(name: &str) -> bool {
 /// side as TOML, and a JSON string and a TOML basic string are the same grammar, as are a JSON
 /// array of strings and a TOML array. A JSON *object* is not a TOML inline table — `:` versus `=` —
 /// which is why `env` is expanded into one assignment per variable rather than emitted whole.
-fn mcp_overrides(servers: &BTreeMap<String, McpServer>) -> Vec<String> {
+pub fn mcp_overrides(servers: &BTreeMap<String, McpServer>) -> Vec<String> {
     let mut argv = Vec::new();
     for (name, server) in servers {
         if !is_bare_key(name) {
@@ -443,6 +493,9 @@ impl CodexProtocol {
         let method = if let Some(fork) = self.req.fork.clone() {
             params["threadId"] = json!(fork);
             params["ephemeral"] = json!(self.req.ephemeral);
+            if let Some(turn) = &self.req.fork_through {
+                params["lastTurnId"] = json!(turn);
+            }
             "thread/fork"
         } else if let Some(resume) = self.req.resume.clone() {
             params["threadId"] = json!(resume);
@@ -623,10 +676,13 @@ impl CodexProtocol {
             // the durable conversation before announcing readiness so a resumed pane is the
             // conversation the user picked rather than an empty composer attached to it.
             // A fork deliberately does not inherit the transcript: `/btw` is a one-answer overlay.
-            if self.req.resume.is_some() && self.req.fork.is_none() {
+            if self.req.resume.is_some() || (self.req.fork.is_some() && !self.req.ephemeral) {
                 steps.extend(history_from_thread(
                     result.and_then(|reply| reply.get("thread")),
                 ));
+            }
+            if self.req.resume.is_none() && self.req.fork.is_none() {
+                steps.push(Step::Emit(AgentEvent::HistoryBoundary { complete: true }));
             }
             steps.push(Step::Ready);
 
@@ -639,6 +695,10 @@ impl CodexProtocol {
             steps.push(self.ask_for_skills(false));
 
             for (text, attachments) in std::mem::take(&mut self.queued) {
+                if self.req.fork.is_some() && !self.req.ephemeral {
+                    steps.extend(attachment_steps(&attachments));
+                    steps.push(Step::Emit(AgentEvent::UserEcho { text: text.clone() }));
+                }
                 if let Some(step) = self.turn_frame(&text, &attachments) {
                     steps.push(step);
                 }
@@ -924,6 +984,12 @@ impl CodexProtocol {
             .to_owned();
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
 
+        if item_type == "userMessage" && !started {
+            return message_identity(item, &turn_id(params))
+                .into_iter()
+                .map(Step::Emit)
+                .collect();
+        }
         let event = match item_event(item, item_type, &id, started) {
             Some(event) => event,
             // All three already arrived another way, so emitting the item as well would
@@ -1041,6 +1107,11 @@ impl Protocol for CodexProtocol {
         // Queued, and echoed anyway. The message is visibly in the transcript even though the
         // handshake has not finished, which is the difference between "slow" and "broken".
         self.queued.push((text.to_owned(), attachments.to_vec()));
+        // A durable fork replays its prefix during the handshake. Echoing an edit now would
+        // paint the new message above the history it continues, even though the provider forks correctly.
+        if self.req.fork.is_some() && !self.req.ephemeral {
+            return Vec::new();
+        }
         let mut steps = attachment_steps(attachments);
         steps.push(Step::Emit(AgentEvent::UserEcho {
             text: text.to_owned(),
@@ -1539,17 +1610,58 @@ pub fn parse_rate_limits(reply: &Value) -> Result<UsageLimits, String> {
 /// card. `reasoning` and `userMessage` are emitted here and skipped on the live path, because live
 /// they arrive as deltas and as the composer's own echo respectively, and a resumed thread has had
 /// neither.
+fn message_identity(item: &Value, turn: &str) -> Option<AgentEvent> {
+    if item["type"] != "userMessage" {
+        return None;
+    }
+    let message = item["id"].as_str()?;
+    if message.is_empty() || turn.is_empty() {
+        return None;
+    }
+    let content = item["content"].as_array()?;
+    Some(AgentEvent::MessageIdentity {
+        message: message.into(),
+        turn: turn.into(),
+        text: content
+            .iter()
+            .filter_map(|p| {
+                if p["type"] == "text" {
+                    p["text"].as_str()
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        attachments: content.iter().any(|p| p["type"] != "text"),
+        truncated: false,
+    })
+}
 fn history_from_thread(thread: Option<&Value>) -> Vec<Step> {
-    thread
-        .and_then(|thread| thread.get("turns"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|turn| turn.get("items").and_then(Value::as_array))
-        .flatten()
-        .flat_map(history_item)
-        .map(Step::Emit)
-        .collect()
+    let Some(turns) = thread.and_then(|t| t["turns"].as_array()) else {
+        return Vec::new();
+    };
+    // Paginated replies are not proof that the first visible turn is the first durable turn.
+    let complete =
+        thread.is_some_and(|t| t["pagination"].is_null() && t["historyMode"] != "paginated");
+    let mut events = vec![AgentEvent::HistoryBoundary { complete }];
+    for turn in turns {
+        let id = turn["id"].as_str().unwrap_or_default();
+        events.push(AgentEvent::HistoricalTurn {
+            turn: id.into(),
+            complete: matches!(
+                turn["status"].as_str(),
+                Some("completed" | "interrupted" | "failed")
+            ),
+        });
+        if let Some(items) = turn["items"].as_array() {
+            for item in items {
+                events.extend(history_item(item));
+                events.extend(message_identity(item, id));
+            }
+        }
+    }
+    events.into_iter().map(Step::Emit).collect()
 }
 
 /// One stored thread item as the events a live turn would have produced for it.
@@ -1915,7 +2027,7 @@ fn turn_id(params: &Value) -> String {
 /// one. A stale `wtm.toml` naming a mode a later version renamed must not silently open the sandbox
 /// — the safe direction for an unknown value is the cautious one, and if it is wrong the user sees
 /// approval prompts rather than unreviewed writes.
-fn expand_mode(mode: &str) -> (&'static str, &'static str, &'static str, Value) {
+pub(crate) fn expand_mode(mode: &str) -> (&'static str, &'static str, &'static str, Value) {
     match mode {
         "read-only" => (
             "on-request",

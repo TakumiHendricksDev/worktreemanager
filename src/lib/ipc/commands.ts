@@ -6,7 +6,44 @@
  * cannot invent a command name or get its arguments wrong silently.
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import type {
+  PluginDraft,
+  PluginDraftView,
+  PluginsSnapshot,
+  PluginReview,
+  PluginSlot,
+  PluginBinding,
+} from '../plugins';
+import { invoke as nativeInvoke, type InvokeArgs } from '@tauri-apps/api/core';
+import { catalog } from '../extensions';
+
+type OperationMiddleware = (
+  operation: string,
+  args: InvokeArgs,
+  next: (args: InvokeArgs) => Promise<unknown>,
+) => Promise<unknown>;
+let operationMiddleware: OperationMiddleware | null = null;
+export function setOperationMiddleware(middleware: OperationMiddleware | null) {
+  operationMiddleware = middleware;
+}
+function invoke<T>(operation: string, args: InvokeArgs = {}): Promise<T> {
+  if (
+    operationMiddleware &&
+    catalog.operations.some((o) => o.id === operation && o.exposure === 'public')
+  )
+    return operationMiddleware(operation, args, (next) =>
+      nativeInvoke(operation, next),
+    ) as Promise<T>;
+  return nativeInvoke<T>(operation, args);
+}
+export function dispatchExtensionOperation(
+  operation: string,
+  args: InvokeArgs,
+): Promise<unknown> {
+  if (!catalog.operations.some((o) => o.id === operation && o.exposure === 'public'))
+    return Promise.reject(new Error('Protected or unknown host operation'));
+  return nativeInvoke(operation, args);
+}
 import type { DesignDiscovery, PrototypeState } from '../open-design';
 import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 
@@ -74,6 +111,113 @@ import type {
 } from './types';
 
 export const commands = {
+  extensionValidate: (
+    plugin: string,
+    operation: string,
+    arguments_: unknown,
+    context: unknown,
+  ) =>
+    invoke<void>('extension_validate', {
+      plugin,
+      operation,
+      arguments: arguments_,
+      context,
+    }),
+  chatEditSnapshot: (session: string) =>
+    invoke<import('../state/chat-edit.svelte').ChatEditSnapshot>('chat_edit_snapshot', {
+      session,
+    }),
+  chatEdit: (edit: import('../state/chat-edit.svelte').ChatEditRequest) =>
+    invoke<import('../state/chat-edit.svelte').ChatEditOutcome>('chat_edit', { edit }),
+  extensionConfigure: (plugin: string, change: unknown) =>
+    invoke<PluginsSnapshot>('extension_configure', { plugin, change }),
+  extensionStart: () => invoke<Record<string, string>>('extension_start'),
+  extensionRestart: (plugin: string) => invoke<void>('extension_restart', { plugin }),
+  extensionCall: (plugin: string, method: string, params: unknown) =>
+    invoke<unknown>('extension_call', { plugin, method, params }),
+  extensionEvent: (name: string, payload: unknown, worktree: string) =>
+    invoke<void>('extension_event', { name, payload, worktree }),
+  extensionHost: (
+    plugin: string,
+    operation: string,
+    arguments_: unknown,
+    context: unknown,
+  ) =>
+    invoke<unknown>('extension_host', {
+      plugin,
+      operation,
+      arguments: arguments_,
+      context,
+    }),
+  extensionReply: (id: string, result: unknown, problem: string | null) =>
+    invoke<void>('extension_reply', { id, result, problem }),
+  pluginDrafts: () => invoke<PluginDraftView[]>('plugin_drafts'),
+  pluginCreate: (id: string, provider: string, brief: string, folder: string) =>
+    invoke<PluginDraft>('plugin_create', { id, provider, brief, folder }),
+  pluginOpenDraft: (id: string, fix = false) =>
+    invoke<PluginDraft>('plugin_open_draft', { id, fix }),
+  pluginReviewDraft: (id: string) => invoke<PluginReview>('plugin_review_draft', { id }),
+  pluginsState: () => invoke<PluginsSnapshot>('plugins_state'),
+  openPluginTerminal: (
+    projectId: string,
+    worktreeId: string,
+    plugin: string,
+    contribution: string,
+  ) =>
+    invoke<string>('open_plugin_terminal', { projectId, worktreeId, plugin, contribution }),
+  pluginBind: (slot: PluginSlot, binding: PluginBinding) =>
+    invoke<PluginsSnapshot>('plugin_bind', { slot, binding }),
+  pluginView: (
+    slot: PluginSlot,
+    plugin: string,
+    view: string,
+    project: string,
+    worktree: string,
+  ) => invoke<BrowserView>('plugin_view', { slot, plugin, view, project, worktree }),
+  pluginPrepare: (source: string, kind: string, revision: string) =>
+    invoke<PluginReview>('plugin_prepare', { source, kind, revision }),
+  pluginCancel: (token: string) => invoke<void>('plugin_cancel', { token }),
+  pluginChange: (action: string, id: string, enabled: boolean) =>
+    invoke<PluginsSnapshot>('plugin_change', { action, id, enabled }),
+  pluginRun: (
+    projectId: string,
+    worktreeId: string,
+    plugin: string,
+    contribution: string,
+  ) => invoke<string>('plugin_run', { projectId, worktreeId, plugin, contribution }),
+  pluginPanel: (
+    projectId: string,
+    worktreeId: string,
+    plugin: string,
+    contribution: string,
+  ) => invoke<BrowserView>('plugin_panel', { projectId, worktreeId, plugin, contribution }),
+  pluginSession: (plugin: string, backend: string, method: string, params: unknown = {}) =>
+    invoke<unknown>('plugin_session', { plugin, backend, request: { method, params } }),
+  openNativeCli: (
+    projectId: string,
+    worktreeId: string,
+    provider: string,
+    resume: string | null = null,
+    integrated = true,
+  ) =>
+    invoke<string>('open_native_cli', {
+      projectId,
+      worktreeId,
+      provider,
+      resume,
+      integrated,
+    }),
+  nativeSessions: () =>
+    invoke<import('../native-sessions').NativeSession[]>('native_sessions'),
+  nativeSession: (session: string) =>
+    invoke<import('../native-sessions').NativeSession>('native_session', { session }),
+  sendNativeMessage: (session: string, text: string) =>
+    invoke<import('../native-sessions').NativeReceipt>('send_native_message', {
+      session,
+      text,
+    }),
+  interruptNativeTurn: (session: string) =>
+    invoke<void>('interrupt_native_turn', { session }),
   discoverDesignContext: (projectId: string, worktreeId: string) =>
     invoke<DesignDiscovery>('discover_design_context', { projectId, worktreeId }),
   listPrototypes: (session: string) =>

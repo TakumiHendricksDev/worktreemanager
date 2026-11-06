@@ -1,0 +1,18 @@
+schema = 1
+api = 1
+id = "example.session-demo"
+name = "Session Protocol Demo"
+version = "0.1.0"
+description = "A durable echo session that demonstrates attachment, replay, input leases, and detach. It does not run an AI agent or connect over SSH. Requires Python 3."
+platforms = ["macos", "linux"]
+
+[[session_backends]]
+id = "demo"
+title = "Protocol demonstration"
+command = ["./backend.py"]
+
+[[views]]
+id = "workbench"
+title = "My session workbench"
+file = "workbench.html"
+slots = ["workbench", "sessions", "home"]

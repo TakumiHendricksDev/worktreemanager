@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * The "Open in …" split button.
    *
@@ -130,56 +133,60 @@
   onDestroy(() => clearTimeout(timer));
 </script>
 
-{#if primary}
-  <div class="o-stack o-stack--tight o-stack--end">
-    <div class="c-split-button" class:is-busy={busy}>
-      <button
-        class="c-split-button__action"
-        onclick={() => launch(primary)}
-        disabled={busy}
-        title={primary.available
-          ? `Open this worktree in ${primary.label}`
-          : (primary.detail ?? '')}
-      >
-        {#if opened}
-          Opened in {opened}
-        {:else}
-          Open in {primary.label}{primary.available ? '' : ' ⚠'}
-        {/if}
-      </button>
+<ExtensionPoint target="component.open-in-button" context={publicContext()}>
+  {#if primary}
+    <div class="o-stack o-stack--tight o-stack--end">
+      <div class="c-split-button" class:is-busy={busy}>
+        <button
+          class="c-split-button__action"
+          onclick={() => launch(primary)}
+          disabled={busy}
+          title={primary.available
+            ? `Open this worktree in ${primary.label}`
+            : (primary.detail ?? '')}
+        >
+          {#if opened}
+            Opened in {opened}
+          {:else}
+            Open in {primary.label}{primary.available ? '' : ' ⚠'}
+          {/if}
+        </button>
 
-      <div class="c-split-button__menu o-overlay-select">
-        <Icon name="chevron-down" size={12} />
-        <label class="u-visually-hidden" for="open-in-picker">Open this worktree in…</label>
-        <!--
+        <div class="c-split-button__menu o-overlay-select">
+          <Icon name="chevron-down" size={12} />
+          <label class="u-visually-hidden" for="open-in-picker"
+            >Open this worktree in…</label
+          >
+          <!--
           `value` is always the sentinel, never the preference — see the header. The
           sentinel option is selectable and simply does nothing, rather than `disabled`,
           because a disabled option cannot reliably be re-selected programmatically.
         -->
-        <select
-          id="open-in-picker"
-          class="o-overlay-select__native"
-          value=""
-          onchange={pick}
-          onmousedown={onmenuopen}
-          onfocus={onmenuopen}
-        >
-          <option value="">Open in…</option>
-          {#each grouped.available as opener (opener.id)}
-            <option value={opener.id}>{opener.label}</option>
-          {/each}
-          {#each grouped.missing as opener (opener.id)}
-            <!-- Listed but not selectable: the label is the point, the tooltip is the why. -->
-            <option value={opener.id} disabled title={opener.detail ?? ''}>
-              {opener.label} — not found
-            </option>
-          {/each}
-        </select>
+          <select
+            id="open-in-picker"
+            class="o-overlay-select__native"
+            value=""
+            onchange={pick}
+            onmousedown={onmenuopen}
+            onfocus={onmenuopen}
+          >
+            <option value="">Open in…</option>
+            {#each grouped.available as opener (opener.id)}
+              <option value={opener.id}>{opener.label}</option>
+            {/each}
+            {#each grouped.missing as opener (opener.id)}
+              <!-- Listed but not selectable: the label is the point, the tooltip is the why. -->
+              <option value={opener.id} disabled title={opener.detail ?? ''}>
+                {opener.label} — not found
+              </option>
+            {/each}
+          </select>
+        </div>
       </div>
-    </div>
 
-    {#if failure}
-      <p class="c-split-button__error" role="alert">{failure}</p>
-    {/if}
-  </div>
-{/if}
+      {#if failure}
+        <p class="c-split-button__error" role="alert">{failure}</p>
+      {/if}
+    </div>
+  {/if}
+</ExtensionPoint>

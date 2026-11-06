@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * A line you drag to set one panel's width: the sidebar's, and Home's side panel's.
    *
@@ -104,6 +106,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
+  use:extensionPart={{ target: 'ui.splitter', context: publicContext }}
   class="c-splitter"
   role="separator"
   aria-orientation="vertical"

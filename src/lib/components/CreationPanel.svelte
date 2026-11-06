@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * A worktree the Home agent is creating or removing: which step it is on, and its terminal.
    *
@@ -35,64 +38,70 @@
   );
 </script>
 
-<section class="c-creation" aria-label="{verb} {name}">
-  <header class="c-peek__head">
-    <SessionDot status={words.status} name={words.name} />
-    <div class="c-peek__titles">
-      <h2 class="c-peek__title">{job.projectName} › {name}</h2>
-      <p class="c-peek__where">
-        {job.branch ? `branch ${job.branch}` : 'detached'} · asked for by Home ·
-        <span class="c-peek__status">{words.word}</span>
-      </p>
-    </div>
-    <span class="c-peek__actions">
-      <!-- Not for a worktree that is gone: a removal that failed left it, one that worked did not. -->
-      {#if job.worktree && job.phase !== 'running' && job.phase !== 'removed'}
-        <Button
-          variant="neutral"
-          size="sm"
-          onclick={() => job.worktree && onopenworktree(job.projectId, job.worktree)}
-        >
-          Open worktree
-        </Button>
-      {/if}
-      {#if job.phase !== 'running'}
-        <Button
-          variant="quiet"
-          icon="sm"
-          title="Dismiss"
-          ariaLabel="Dismiss"
-          onclick={() => fleet.dismissJob(job.id)}
-        >
-          <Icon name="close" size={12} />
-        </Button>
-      {/if}
-    </span>
-  </header>
-
-  {#if job.phase === 'running'}
-    <div class="c-creation__step">
-      <div
-        class="c-progress"
-        role="progressbar"
-        aria-valuenow={percent}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label="{verb} {name}"
-      >
-        <div class="c-progress__fill" style:width="{percent}%"></div>
+<ExtensionPoint target="component.creation-panel" context={publicContext()}>
+  <section
+    use:extensionPart={{ target: 'component.creation-panel', context: publicContext }}
+    class="c-creation"
+    aria-label="{verb} {name}"
+  >
+    <header class="c-peek__head">
+      <SessionDot status={words.status} name={words.name} />
+      <div class="c-peek__titles">
+        <h2 class="c-peek__title">{job.projectName} › {name}</h2>
+        <p class="c-peek__where">
+          {job.branch ? `branch ${job.branch}` : 'detached'} · asked for by Home ·
+          <span class="c-peek__status">{words.word}</span>
+        </p>
       </div>
-      <p class="c-creation__label">{job.step?.label ?? 'Starting…'}</p>
-    </div>
-  {:else if job.error}
-    <p class="c-creation__error">{job.error}</p>
-  {/if}
+      <span class="c-peek__actions">
+        <!-- Not for a worktree that is gone: a removal that failed left it, one that worked did not. -->
+        {#if job.worktree && job.phase !== 'running' && job.phase !== 'removed'}
+          <Button
+            variant="neutral"
+            size="sm"
+            onclick={() => job.worktree && onopenworktree(job.projectId, job.worktree)}
+          >
+            Open worktree
+          </Button>
+        {/if}
+        {#if job.phase !== 'running'}
+          <Button
+            variant="quiet"
+            icon="sm"
+            title="Dismiss"
+            ariaLabel="Dismiss"
+            onclick={() => fleet.dismissJob(job.id)}
+          >
+            <Icon name="close" size={12} />
+          </Button>
+        {/if}
+      </span>
+    </header>
 
-  {#if job.setupSession}
-    <div class="c-creation__terminal">
-      <Terminal session={job.setupSession} />
-    </div>
-  {:else if job.phase === 'running' && !removing}
-    <p class="c-home__hint">The setup's output appears here once it starts.</p>
-  {/if}
-</section>
+    {#if job.phase === 'running'}
+      <div class="c-creation__step">
+        <div
+          class="c-progress"
+          role="progressbar"
+          aria-valuenow={percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="{verb} {name}"
+        >
+          <div class="c-progress__fill" style:width="{percent}%"></div>
+        </div>
+        <p class="c-creation__label">{job.step?.label ?? 'Starting…'}</p>
+      </div>
+    {:else if job.error}
+      <p class="c-creation__error">{job.error}</p>
+    {/if}
+
+    {#if job.setupSession}
+      <div class="c-creation__terminal">
+        <Terminal session={job.setupSession} />
+      </div>
+    {:else if job.phase === 'running' && !removing}
+      <p class="c-home__hint">The setup's output appears here once it starts.</p>
+    {/if}
+  </section>
+</ExtensionPoint>

@@ -404,6 +404,17 @@ fn bound_transcript_event(event: &mut AgentEvent) {
     const OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
     match event {
+        AgentEvent::MessageIdentity {
+            text, truncated, ..
+        } => {
+            strip_application_context(text);
+            *truncated |= text.len() > PROMPT_BYTES;
+            bound_text(
+                text,
+                PROMPT_BYTES,
+                "\n\n… prompt truncated in the transcript; the agent received it in full …",
+            );
+        }
         AgentEvent::UserEcho { text } => {
             strip_application_context(text);
             bound_text(
@@ -533,6 +544,35 @@ mod tests {
                 text: "fix the parser".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn editable_message_metadata_hides_application_context_and_marks_any_truncated_text() {
+        let mut event = AgentEvent::MessageIdentity {
+            message: "m1".into(), turn: "t1".into(), attachments: false, truncated: false,
+            text: "fix the parser\n\n<wtm_session_awareness>\nCodex is working.\n</wtm_session_awareness>".into(),
+        };
+        bound_transcript_event(&mut event);
+        let AgentEvent::MessageIdentity {
+            text, truncated, ..
+        } = &event
+        else {
+            panic!("identity expected")
+        };
+        assert_eq!(text, "fix the parser");
+        assert!(!truncated);
+        if let AgentEvent::MessageIdentity { text, .. } = &mut event {
+            *text = "x".repeat(70 * 1024);
+        }
+        bound_transcript_event(&mut event);
+        let AgentEvent::MessageIdentity {
+            text, truncated, ..
+        } = event
+        else {
+            panic!("identity expected")
+        };
+        assert!(truncated);
+        assert!(text.len() < 66 * 1024);
     }
 
     #[test]

@@ -95,6 +95,53 @@ fn writes(steps: &[Step]) -> Vec<serde_json::Value> {
 }
 
 #[test]
+fn a_durable_edit_fork_uses_the_previous_provider_turn_and_rehydrates_only_the_fork_reply() {
+    let mut driver = Codex.protocol(&SessionRequest {
+        cwd: "/tmp/workspace".into(),
+        fork: Some("original".into()),
+        fork_through: Some("turn-before-edit".into()),
+        ephemeral: false,
+        ..SessionRequest::default()
+    });
+    driver.open();
+    assert!(driver.send_turn("Edited message", &[]).is_empty());
+    let opening = driver.on_line(r#"{"id":1,"result":{}}"#);
+    let frames = writes(&opening);
+    assert_eq!(frames[1]["method"], "thread/fork");
+    assert_eq!(frames[1]["params"]["threadId"], "original");
+    assert_eq!(frames[1]["params"]["lastTurnId"], "turn-before-edit");
+    assert_eq!(frames[1]["params"]["ephemeral"], false);
+    let reply=driver.on_line(r#"{"id":2,"result":{"thread":{"id":"branch","historyMode":"legacy","turns":[{"id":"turn-before-edit","status":"completed","items":[{"id":"user-before","type":"userMessage","content":[{"type":"text","text":"Previous message"}]}]}]}}}"#);
+    assert!(events(&reply).iter().any(|event|matches!(event,AgentEvent::MessageIdentity{message,turn,..} if message=="user-before"&&turn=="turn-before-edit")));
+    assert_eq!(echoes(&reply), vec!["Previous message", "Edited message"]);
+    let sent = writes(&reply);
+    let turn = sent
+        .iter()
+        .find(|frame| frame["method"] == "turn/start")
+        .unwrap();
+    assert_eq!(turn["params"]["threadId"], "branch");
+    assert!(
+        !sent
+            .iter()
+            .any(|frame| frame["params"]["threadId"] == "original")
+    );
+}
+
+#[test]
+fn paginated_history_never_claims_that_its_first_loaded_turn_is_the_start_of_the_conversation() {
+    let mut driver = Codex.protocol(&SessionRequest {
+        resume: Some("original".into()),
+        ..SessionRequest::default()
+    });
+    driver.open();
+    driver.on_line(r#"{"id":1,"result":{}}"#);
+    let reply = driver.on_line(
+        r#"{"id":2,"result":{"thread":{"id":"original","historyMode":"paginated","turns":[]}}}"#,
+    );
+    assert!(events(&reply).contains(&&AgentEvent::HistoryBoundary { complete: false }));
+}
+
+#[test]
 fn the_argv_starts_the_app_server_on_stdio_and_never_exec() {
     // `codex exec` cannot ask for approval — there is no `--ask-for-approval` flag on it at all —
     // and emits no deltas. Both are disqualifying, so this asserts the mode rather than trusting
@@ -396,8 +443,20 @@ fn a_resumed_thread_rehydrates_its_visible_messages() {
     assert_eq!(
         history[1..],
         [
+            &AgentEvent::HistoryBoundary { complete: true },
+            &AgentEvent::HistoricalTurn {
+                turn: "turn-1".into(),
+                complete: true
+            },
             &AgentEvent::UserEcho {
                 text: "Fix the parser".to_owned()
+            },
+            &AgentEvent::MessageIdentity {
+                message: "u1".into(),
+                turn: "turn-1".into(),
+                text: "Fix the parser".into(),
+                attachments: false,
+                truncated: false,
             },
             &AgentEvent::Message {
                 text: "I fixed it.".to_owned()
@@ -431,6 +490,11 @@ fn a_resumed_thread_replays_its_commands_diffs_and_reasoning_and_not_only_its_pr
     assert_eq!(
         history[1..],
         [
+            &AgentEvent::HistoryBoundary { complete: true },
+            &AgentEvent::HistoricalTurn {
+                turn: "turn-1".into(),
+                complete: true
+            },
             &AgentEvent::ReasoningDelta {
                 text: "weighing it".to_owned()
             },
@@ -1077,6 +1141,13 @@ fn a_real_turns_lines_produce_a_transcript_and_not_a_wall_of_raw_rows() {
         vec![
             AgentEvent::TurnStarted {
                 turn: "019fd3ce-c271".to_owned()
+            },
+            AgentEvent::MessageIdentity {
+                message: "019fd3ce-c322".into(),
+                turn: "019fd3ce-c271".into(),
+                text: "hi".into(),
+                attachments: false,
+                truncated: false,
             },
             AgentEvent::MessageDelta {
                 text: "OK".to_owned()
@@ -1884,10 +1955,7 @@ fn a_steer_names_the_running_turn_and_is_echoed_from_the_item_carrying_its_clien
         vec!["Also: end your reply with the word PINEAPPLE."]
     );
     // The same item completing is not a second echo.
-    assert!(
-        d.on_line(&steered_item("item/completed", &client))
-            .is_empty()
-    );
+    assert!(echoes(&d.on_line(&steered_item("item/completed", &client))).is_empty());
 
     assert!(finished(&d.on_line(&completed("completed"))));
 }

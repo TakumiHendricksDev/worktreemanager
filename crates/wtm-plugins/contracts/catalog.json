@@ -1,0 +1,2147 @@
+{
+  "api": 2,
+  "operations": [
+    {
+      "id": "plugin_drafts",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "plugin_create",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_open_draft",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_review_draft",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugins_state",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "open_plugin_terminal",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_bind",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_view",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_prepare",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_cancel",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_change",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_run",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_panel",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "plugin_session",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "open_native_cli",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "discover_design_context",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_prototypes",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "dismiss_prototype",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "open_prototype_preview",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "implement_prototype",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "cancel_prototype",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "shell_run_target",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_run_shells",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "prepare_shell_run",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_shell_runs",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "approve_shell_run",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "admit_shell_run",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "deny_shell_run",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "cancel_shell_run",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "focus_run_shell",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_home_shell_grants",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "set_home_shell_grant",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "popup_native_menu",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "list_projects",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "register_project",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "unregister_project",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_worktrees",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "sidebar_layout",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "set_sidebar_layout",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "worktree_form",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "field_options",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_actions",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "preview_worktree",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "create_worktree",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "remove_preflight",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "remove_worktree",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "run_setup",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "run_action",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "open_terminal",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_terminals",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "terminal_replay",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "close_terminal",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "pty_write",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "pty_resize",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "pty_kill",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_agents",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "open_agent_session",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "open_home_session",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "home_jobs",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "home_dismiss_job",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "home_interrupted",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "open_agent_side_session",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_resumable",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "forget_session",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "agent_capability",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "usage_limits",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "refresh_usage_limits",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "send_turn",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "steer_turn",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "prepare_agent_attachment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "stage_agent_attachment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "configure_session",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "dictation_status",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "set_dictation_key",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "start_dictation",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "stop_dictation",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "check_for_update",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "prepare_update",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "install_update",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "take_update_outcome",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "list_worktree_files",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "answer_approval",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "save_brief",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_briefs",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "remove_brief",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_background_tasks",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "interrupt_turn",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_agent_sessions",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "agent_replay",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "claim_launch_restore",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "mark_interrupted_by_quit",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "agent_messages",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "close_agent_session",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "set_config_trust",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "get_pref",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "set_pref",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_palettes",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "doctor",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "reveal_env_value",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "list_database_connections",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "connect_database",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "disconnect_database",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "database_schemas",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "database_relations",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "database_columns",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "run_database_query",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "database_table_page",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "cancel_database_query",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_tree",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_list_dir",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_read_file",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_search",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_changes",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_file_diff",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_base_version",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_list_comments",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_add_comment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_update_comment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_resolve_comment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_remove_comment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_clear_comments",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_mark_comments_sent",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_symbols",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_definitions",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "code_stat",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "open_url",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "open_browser",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "close_browser",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_navigate",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_history",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_set_bounds",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "browser_set_agent_access",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "browser_focus",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_zoom",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_browsers",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_available",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_set_comment_mode",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_list_comments",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_update_comment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_remove_comment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_resolve_comment",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_snapshot_png",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "browser_set_theme",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "browser_open_devtools",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "pop_out_pane",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "pane_window_state",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "sync_pane_window",
+      "exposure": "internal",
+      "reason": "Private window/process transport; use public UI operations.",
+      "version": 1
+    },
+    {
+      "id": "close_pane_window",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "focus_pane_window",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_pane_windows",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "post_notification",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "notification_permission",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "request_notification_permission",
+      "exposure": "protected",
+      "reason": "Host-owned trust, permission, secret or package boundary.",
+      "version": 1
+    },
+    {
+      "id": "list_recipes",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "save_recipe",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "delete_recipe",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "set_recipe_offers",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "agent_skills",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "probe_agent_skills",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "preview_recipe",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "start_recipe",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "stop_recipe",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "recipe_runs",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "dismiss_recipe_run",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "list_openers",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "open_in",
+      "exposure": "public",
+      "reason": "Uses the same validated operation as built-in WTM UI.",
+      "version": 1
+    },
+    {
+      "id": "ui.workspace.rename",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.panels.list",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.panels.focus",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.panels.open",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.panels.close",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.chat.snapshot",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.chat.edit",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.composer.read",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.composer.write",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.navigate",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.settings.show",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "ui.chat.configure",
+      "exposure": "public",
+      "reason": "Host-owned operation on existing workbench state.",
+      "version": 1
+    },
+    {
+      "id": "extension_start",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Host-owned extension lifecycle, authorization or reviewed conversation mutation."
+    },
+    {
+      "id": "extension_restart",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Host-owned extension lifecycle, authorization or reviewed conversation mutation."
+    },
+    {
+      "id": "extension_reply",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Host-owned extension lifecycle, authorization or reviewed conversation mutation."
+    },
+    {
+      "id": "extension_call",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Host-owned extension lifecycle, authorization or reviewed conversation mutation."
+    },
+    {
+      "id": "extension_configure",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Host-owned extension lifecycle, authorization or reviewed conversation mutation."
+    },
+    {
+      "id": "extension_host",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Host-owned extension lifecycle, authorization or reviewed conversation mutation."
+    },
+    {
+      "id": "chat_edit",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Host-owned extension lifecycle, authorization or reviewed conversation mutation."
+    },
+    {
+      "id": "chat_edit_snapshot",
+      "exposure": "public",
+      "version": 1,
+      "reason": "Read provider-issued message identities and supported edit boundaries."
+    },
+    {
+      "id": "extension_event",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Only the host publishes frontend state events."
+    },
+    {
+      "id": "ui.panels.move",
+      "version": 1,
+      "exposure": "public",
+      "reason": "Uses the same validated panel layout operation as built-in controls."
+    },
+    {
+      "id": "ui.panels.resize",
+      "version": 1,
+      "exposure": "public",
+      "reason": "Uses the same validated panel layout operation as built-in controls."
+    },
+    {
+      "id": "extension_validate",
+      "exposure": "protected",
+      "version": 1,
+      "reason": "Revalidate owner, capability, identity and workspace scope before a hook transformation reaches a built-in operation."
+    },
+    {
+      "id": "native_sessions",
+      "exposure": "public",
+      "reason": "Uses the same conversation-scoped, capability-checked native operation as WTM.",
+      "version": 1
+    },
+    {
+      "id": "native_session",
+      "exposure": "public",
+      "reason": "Uses the same conversation-scoped, capability-checked native operation as WTM.",
+      "version": 1
+    },
+    {
+      "id": "send_native_message",
+      "exposure": "public",
+      "reason": "Uses the same conversation-scoped, capability-checked native operation as WTM.",
+      "version": 1
+    },
+    {
+      "id": "interrupt_native_turn",
+      "exposure": "public",
+      "reason": "Uses the same conversation-scoped, capability-checked native operation as WTM.",
+      "version": 1
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "component.activity-list",
+      "title": "ActivityList",
+      "source": "src/lib/components/ActivityList.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.add-project-dialog",
+      "title": "AddProjectDialog",
+      "source": "src/lib/components/AddProjectDialog.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.agent-transcript",
+      "title": "AgentTranscript",
+      "source": "src/lib/components/AgentTranscript.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.agent-tree",
+      "title": "AgentTree",
+      "source": "src/lib/components/AgentTree.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.agents-dialog",
+      "title": "AgentsDialog",
+      "source": "src/lib/components/AgentsDialog.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.approval-card",
+      "title": "ApprovalCard",
+      "source": "src/lib/components/ApprovalCard.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.browser-pane",
+      "title": "BrowserPane",
+      "source": "src/lib/components/BrowserPane.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.close-session-dialog",
+      "title": "CloseSessionDialog",
+      "source": "src/lib/components/CloseSessionDialog.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.code-comment-card",
+      "title": "CodeCommentCard",
+      "source": "src/lib/components/CodeCommentCard.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.code-preview",
+      "title": "CodePreview",
+      "source": "src/lib/components/CodePreview.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.code-review",
+      "title": "CodeReview",
+      "source": "src/lib/components/CodeReview.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.code-surface",
+      "title": "CodeSurface",
+      "source": "src/lib/components/CodeSurface.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.code-tree",
+      "title": "CodeTree",
+      "source": "src/lib/components/CodeTree.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.code-viewer",
+      "title": "CodeViewer",
+      "source": "src/lib/components/CodeViewer.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.composer-queue",
+      "title": "ComposerQueue",
+      "source": "src/lib/components/ComposerQueue.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.creation-panel",
+      "title": "CreationPanel",
+      "source": "src/lib/components/CreationPanel.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.creation-record",
+      "title": "CreationRecord",
+      "source": "src/lib/components/CreationRecord.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.creation-tab",
+      "title": "CreationTab",
+      "source": "src/lib/components/CreationTab.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.database-filters",
+      "title": "DatabaseFilters",
+      "source": "src/lib/components/DatabaseFilters.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.database-result",
+      "title": "DatabaseResult",
+      "source": "src/lib/components/DatabaseResult.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.database-surface",
+      "title": "DatabaseSurface",
+      "source": "src/lib/components/DatabaseSurface.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.database-value",
+      "title": "DatabaseValue",
+      "source": "src/lib/components/DatabaseValue.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.design-first-dialog",
+      "title": "DesignFirstDialog",
+      "source": "src/lib/components/DesignFirstDialog.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.detail",
+      "title": "Detail",
+      "source": "src/lib/components/Detail.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.find-in-files",
+      "title": "FindInFiles",
+      "source": "src/lib/components/FindInFiles.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.fleet-tree",
+      "title": "FleetTree",
+      "source": "src/lib/components/FleetTree.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.go-to",
+      "title": "GoTo",
+      "source": "src/lib/components/GoTo.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.home-agent",
+      "title": "HomeAgent",
+      "source": "src/lib/components/HomeAgent.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.home-shell-permissions",
+      "title": "HomeShellPermissions",
+      "source": "src/lib/components/HomeShellPermissions.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.home-surface",
+      "title": "HomeSurface",
+      "source": "src/lib/components/HomeSurface.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.in-flight",
+      "title": "InFlight",
+      "source": "src/lib/components/InFlight.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.inspector",
+      "title": "Inspector",
+      "source": "src/lib/components/Inspector.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.limit-meters",
+      "title": "LimitMeters",
+      "source": "src/lib/components/LimitMeters.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.links-button",
+      "title": "LinksButton",
+      "source": "src/lib/components/LinksButton.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.markdown",
+      "title": "Markdown",
+      "source": "src/lib/components/Markdown.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.model-picker",
+      "title": "ModelPicker",
+      "source": "src/lib/components/ModelPicker.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.needs-you",
+      "title": "NeedsYou",
+      "source": "src/lib/components/NeedsYou.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.new-worktree-pane",
+      "title": "NewWorktreePane",
+      "source": "src/lib/components/NewWorktreePane.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.open-in-button",
+      "title": "OpenInButton",
+      "source": "src/lib/components/OpenInButton.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.peek-panel",
+      "title": "PeekPanel",
+      "source": "src/lib/components/PeekPanel.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.plan-viewer",
+      "title": "PlanViewer",
+      "source": "src/lib/components/PlanViewer.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.plugin-authoring",
+      "title": "PluginAuthoring",
+      "source": "src/lib/components/PluginAuthoring.svelte",
+      "kinds": [],
+      "reason": "Plugin infrastructure; prevents recursive extension mounts.",
+      "version": 1
+    },
+    {
+      "id": "component.plugin-sessions",
+      "title": "PluginSessions",
+      "source": "src/lib/components/PluginSessions.svelte",
+      "kinds": [],
+      "reason": "Plugin infrastructure; prevents recursive extension mounts.",
+      "version": 1
+    },
+    {
+      "id": "component.plugin-settings",
+      "title": "PluginSettings",
+      "source": "src/lib/components/PluginSettings.svelte",
+      "kinds": [],
+      "reason": "Plugin infrastructure; prevents recursive extension mounts.",
+      "version": 1
+    },
+    {
+      "id": "component.plugin-slot",
+      "title": "PluginSlot",
+      "source": "src/lib/components/PluginSlot.svelte",
+      "kinds": [],
+      "reason": "Plugin infrastructure; prevents recursive extension mounts.",
+      "version": 1
+    },
+    {
+      "id": "component.plugin-view",
+      "title": "PluginView",
+      "source": "src/lib/components/PluginView.svelte",
+      "kinds": [],
+      "reason": "Plugin infrastructure; prevents recursive extension mounts.",
+      "version": 1
+    },
+    {
+      "id": "component.prototype-review",
+      "title": "PrototypeReview",
+      "source": "src/lib/components/PrototypeReview.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.recipe-action-settings",
+      "title": "RecipeActionSettings",
+      "source": "src/lib/components/RecipeActionSettings.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.recipe-offer",
+      "title": "RecipeOffer",
+      "source": "src/lib/components/RecipeOffer.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.recipe-run-strip",
+      "title": "RecipeRunStrip",
+      "source": "src/lib/components/RecipeRunStrip.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.recipe-settings",
+      "title": "RecipeSettings",
+      "source": "src/lib/components/RecipeSettings.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.recipe-step-card",
+      "title": "RecipeStepCard",
+      "source": "src/lib/components/RecipeStepCard.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.remove-project-dialog",
+      "title": "RemoveProjectDialog",
+      "source": "src/lib/components/RemoveProjectDialog.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.remove-worktree-dialog",
+      "title": "RemoveWorktreeDialog",
+      "source": "src/lib/components/RemoveWorktreeDialog.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.review-panel",
+      "title": "ReviewPanel",
+      "source": "src/lib/components/ReviewPanel.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.run-shell-dialog",
+      "title": "RunShellDialog",
+      "source": "src/lib/components/RunShellDialog.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.schema-form",
+      "title": "SchemaForm",
+      "source": "src/lib/components/SchemaForm.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.session-pane",
+      "title": "SessionPane",
+      "source": "src/lib/components/SessionPane.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.session-surface",
+      "title": "SessionSurface",
+      "source": "src/lib/components/SessionSurface.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.session-tree",
+      "title": "SessionTree",
+      "source": "src/lib/components/SessionTree.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.settings-dialog",
+      "title": "SettingsDialog",
+      "source": "src/lib/components/SettingsDialog.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.shell-run-header",
+      "title": "ShellRunHeader",
+      "source": "src/lib/components/ShellRunHeader.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.side-question",
+      "title": "SideQuestion",
+      "source": "src/lib/components/SideQuestion.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.sidebar",
+      "title": "Sidebar",
+      "source": "src/lib/components/Sidebar.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.sidebar-section",
+      "title": "SidebarSection",
+      "source": "src/lib/components/SidebarSection.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.sql-editor",
+      "title": "SqlEditor",
+      "source": "src/lib/components/SqlEditor.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.suggest",
+      "title": "Suggest",
+      "source": "src/lib/components/Suggest.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.terminal",
+      "title": "Terminal",
+      "source": "src/lib/components/Terminal.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.title-bar",
+      "title": "TitleBar",
+      "source": "src/lib/components/TitleBar.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.toasts",
+      "title": "Toasts",
+      "source": "src/lib/components/Toasts.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.trust-banner",
+      "title": "TrustBanner",
+      "source": "src/lib/components/TrustBanner.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.update-dialog",
+      "title": "UpdateDialog",
+      "source": "src/lib/components/UpdateDialog.svelte",
+      "kinds": [],
+      "reason": "Host-owned approval, recovery or confirmation.",
+      "version": 1
+    },
+    {
+      "id": "component.usage-dialog",
+      "title": "UsageDialog",
+      "source": "src/lib/components/UsageDialog.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.worktree-bar",
+      "title": "WorktreeBar",
+      "source": "src/lib/components/WorktreeBar.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "component.worktree-tab",
+      "title": "WorktreeTab",
+      "source": "src/lib/components/WorktreeTab.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Public component boundary; builtin content stays until an explicit replacement is selected.",
+      "version": 1
+    },
+    {
+      "id": "ui.button",
+      "title": "button",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/Button.svelte"
+    },
+    {
+      "id": "ui.text-input",
+      "title": "text-input",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/TextInput.svelte"
+    },
+    {
+      "id": "ui.field",
+      "title": "field",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/Field.svelte"
+    },
+    {
+      "id": "ui.choice",
+      "title": "choice",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/Choice.svelte"
+    },
+    {
+      "id": "ui.banner",
+      "title": "banner",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/Banner.svelte"
+    },
+    {
+      "id": "ui.icon",
+      "title": "icon",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/Icon.svelte"
+    },
+    {
+      "id": "ui.meter",
+      "title": "meter",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/Meter.svelte"
+    },
+    {
+      "id": "ui.session-dot",
+      "title": "session-dot",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/SessionDot.svelte"
+    },
+    {
+      "id": "ui.logo",
+      "title": "logo",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/Logo.svelte"
+    },
+    {
+      "id": "ui.preflight-list",
+      "title": "preflight-list",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/PreflightList.svelte"
+    },
+    {
+      "id": "ui.splitter",
+      "title": "splitter",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Shared semantic UI primitive.",
+      "source": "src/lib/components/ui/Splitter.svelte"
+    },
+    {
+      "id": "chat.markdown.link",
+      "title": "chat.markdown.link",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/Markdown.svelte"
+    },
+    {
+      "id": "chat.markdown.code",
+      "title": "chat.markdown.code",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/Markdown.svelte"
+    },
+    {
+      "id": "chat.markdown.paragraph",
+      "title": "chat.markdown.paragraph",
+      "kinds": ["style"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/Markdown.svelte"
+    },
+    {
+      "id": "chat.message",
+      "title": "chat.message",
+      "kinds": ["style", "content", "actions"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/AgentTranscript.svelte"
+    },
+    {
+      "id": "chat.tool",
+      "title": "chat.tool",
+      "kinds": ["style", "content", "actions"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/AgentTranscript.svelte"
+    },
+    {
+      "id": "chat.composer",
+      "title": "chat.composer",
+      "kinds": ["style", "content", "actions"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/SessionPane.svelte"
+    },
+    {
+      "id": "chat.transcript",
+      "title": "chat.transcript",
+      "kinds": ["style", "content", "actions"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/AgentTranscript.svelte"
+    },
+    {
+      "id": "workspace.toolbar",
+      "title": "workspace.toolbar",
+      "kinds": ["style", "content", "actions"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/WorktreeBar.svelte"
+    },
+    {
+      "id": "panel.header",
+      "title": "panel.header",
+      "kinds": ["style", "content", "actions"],
+      "version": 1,
+      "reason": "Public part within an existing feature.",
+      "source": "src/lib/components/SessionPane.svelte"
+    },
+    {
+      "id": "workspace.actions",
+      "title": "workspace.actions",
+      "kinds": ["actions"],
+      "version": 1,
+      "reason": "Contributions join the existing action collection.",
+      "source": "src/lib/components/WorktreeBar.svelte"
+    },
+    {
+      "id": "panel.actions",
+      "title": "panel.actions",
+      "kinds": ["actions"],
+      "version": 1,
+      "reason": "Contributions join the existing action collection.",
+      "source": "src/lib/components/SessionPane.svelte"
+    },
+    {
+      "id": "chat.message.actions",
+      "title": "chat.message.actions",
+      "kinds": ["actions"],
+      "version": 1,
+      "reason": "Contributions join the existing action collection.",
+      "source": "src/lib/components/AgentTranscript.svelte"
+    },
+    {
+      "id": "chat.composer.actions",
+      "title": "chat.composer.actions",
+      "kinds": ["actions"],
+      "version": 1,
+      "reason": "Contributions join the existing action collection.",
+      "source": "src/lib/components/SessionPane.svelte"
+    },
+    {
+      "id": "code.actions",
+      "title": "code.actions",
+      "kinds": ["actions"],
+      "version": 1,
+      "reason": "Contributions join the existing action collection.",
+      "source": "src/lib/components/CodeViewer.svelte"
+    },
+    {
+      "id": "database.actions",
+      "title": "database.actions",
+      "kinds": ["actions"],
+      "version": 1,
+      "reason": "Contributions join the existing action collection.",
+      "source": "src/lib/components/DatabaseSurface.svelte"
+    },
+    {
+      "id": "settings.appearance",
+      "title": "appearance",
+      "kinds": ["settings", "content", "style", "actions"],
+      "version": 1,
+      "reason": "Schema-defined preferences and content within the existing section.",
+      "source": "src/lib/components/SettingsDialog.svelte"
+    },
+    {
+      "id": "settings.general",
+      "title": "general",
+      "kinds": ["settings", "content", "style", "actions"],
+      "version": 1,
+      "reason": "Schema-defined preferences and content within the existing section.",
+      "source": "src/lib/components/SettingsDialog.svelte"
+    },
+    {
+      "id": "settings.notifications",
+      "title": "notifications",
+      "kinds": ["settings", "content", "style", "actions"],
+      "version": 1,
+      "reason": "Schema-defined preferences and content within the existing section.",
+      "source": "src/lib/components/SettingsDialog.svelte"
+    },
+    {
+      "id": "settings.advanced",
+      "title": "advanced",
+      "kinds": ["settings", "content", "style", "actions"],
+      "version": 1,
+      "reason": "Schema-defined preferences and content within the existing section.",
+      "source": "src/lib/components/SettingsDialog.svelte"
+    },
+    {
+      "id": "settings.recipes",
+      "title": "recipes",
+      "kinds": ["settings", "content", "style", "actions"],
+      "version": 1,
+      "reason": "Schema-defined preferences and content within the existing section.",
+      "source": "src/lib/components/SettingsDialog.svelte"
+    },
+    {
+      "id": "settings.actions",
+      "title": "actions",
+      "kinds": ["settings", "content", "style", "actions"],
+      "version": 1,
+      "reason": "Schema-defined preferences and content within the existing section.",
+      "source": "src/lib/components/SettingsDialog.svelte"
+    },
+    {
+      "id": "settings.plugins",
+      "title": "plugins",
+      "kinds": ["settings", "content", "style", "actions"],
+      "version": 1,
+      "reason": "Schema-defined preferences and content within the existing section.",
+      "source": "src/lib/components/SettingsDialog.svelte"
+    },
+    {
+      "id": "component.extension-point",
+      "title": "ExtensionPoint",
+      "source": "src/lib/components/ExtensionPoint.svelte",
+      "kinds": [],
+      "version": 1,
+      "reason": "Host rendering infrastructure or explicit mutation review."
+    },
+    {
+      "id": "component.extension-actions",
+      "title": "ExtensionActions",
+      "source": "src/lib/components/ExtensionActions.svelte",
+      "kinds": [],
+      "version": 1,
+      "reason": "Host rendering infrastructure or explicit mutation review."
+    },
+    {
+      "id": "component.extension-setting",
+      "title": "ExtensionSetting",
+      "source": "src/lib/components/ExtensionSetting.svelte",
+      "kinds": [],
+      "version": 1,
+      "reason": "Host rendering infrastructure or explicit mutation review."
+    },
+    {
+      "id": "component.extension-widgets",
+      "title": "ExtensionWidgets",
+      "source": "src/lib/components/ExtensionWidgets.svelte",
+      "kinds": [],
+      "version": 1,
+      "reason": "Host rendering infrastructure or explicit mutation review."
+    },
+    {
+      "id": "component.plugin-contributions",
+      "title": "PluginContributions",
+      "source": "src/lib/components/PluginContributions.svelte",
+      "kinds": [],
+      "version": 1,
+      "reason": "Host rendering infrastructure or explicit mutation review."
+    },
+    {
+      "id": "component.chat-edit-dialog",
+      "title": "ChatEditDialog",
+      "source": "src/lib/components/ChatEditDialog.svelte",
+      "kinds": [],
+      "version": 1,
+      "reason": "Host rendering infrastructure or explicit mutation review."
+    },
+    {
+      "id": "ui.dialog",
+      "source": "src/lib/components/ui/Dialog.svelte",
+      "title": "Dialog host",
+      "kinds": [],
+      "version": 1,
+      "reason": "Host focus trapping, modality, Escape and portal enforcement. Individual ordinary dialogs expose their content."
+    },
+    {
+      "id": "native.session",
+      "title": "Native session",
+      "source": "src/lib/components/NativeSessionView.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Shared contribution registry for native and structured experiences; provider transcript and approval prompts remain provider-owned.",
+      "version": 1
+    },
+    {
+      "id": "native.activity",
+      "title": "Native activity",
+      "source": "src/lib/components/NativeSessionView.svelte",
+      "kinds": ["content", "actions"],
+      "reason": "Contribution area in Connection info, accessed from the native pane menu. Activity events remain available while the dialog is closed; provider transcript and approval prompts remain provider-owned.",
+      "version": 1
+    },
+    {
+      "id": "session.new",
+      "title": "New agent session",
+      "source": "src/lib/components/NewAgentSessionDialog.svelte",
+      "kinds": ["style", "content", "actions"],
+      "reason": "Shared contribution registry for native and structured experiences; provider transcript and approval prompts remain provider-owned.",
+      "version": 1
+    }
+  ],
+  "events": [
+    {
+      "id": "operation.completed",
+      "version": 1,
+      "reason": "Public built-in operations and their results after completion."
+    },
+    {
+      "id": "workspace.changed",
+      "version": 1,
+      "reason": "Selected workspace identity changes."
+    },
+    {
+      "id": "panels.changed",
+      "version": 1,
+      "reason": "Panel identity and activity changes; read a snapshot for details."
+    },
+    {
+      "id": "chat.event",
+      "version": 1,
+      "reason": "Provider events with host sequence numbers and session identity."
+    },
+    {
+      "id": "settings.changed",
+      "version": 1,
+      "reason": "Host preference changes."
+    },
+    {
+      "id": "native.session.changed",
+      "version": 1,
+      "reason": "Native renderer lifecycle, capability, activity and receipt snapshots; never terminal scraping or permission decisions."
+    }
+  ]
+}

@@ -1,3 +1,6 @@
+import { nativeSessions } from './native-sessions.svelte';
+import type { NativeSession } from '../native-sessions';
+import { interceptUiOperation } from '../extension-operations';
 import { tick } from 'svelte';
 /**
  * Every session in every worktree: shells and agent chats, in one list.
@@ -47,6 +50,7 @@ import {
   type SpawnedSession,
   type Worktree,
 } from '../ipc/types';
+import { plugins } from './plugins.svelte';
 import { HOME, isHome, isWtmNotice } from '../home';
 import { statusOf, worse, type PaneStatus } from '../status';
 import { transferPrompt } from '../transfer';
@@ -106,6 +110,15 @@ function eventBytes(event: AgentEvent): number {
  */
 export const MAX_PANES_PER_WORKTREE = 20;
 export const MAX_PANES = 40;
+
+export type AgentExperience = 'native' | 'chat' | 'plain';
+
+interface AgentLaunchOptions {
+  experience?: AgentExperience;
+  placement?: Placement;
+  beside?: string;
+  repo?: AgentOption;
+}
 
 /**
  * What a refused pane says.
@@ -184,7 +197,12 @@ const MAX_EARLY_EVENTS = 64;
 const MAX_EARLY_SESSIONS = 64;
 
 export type SessionKind =
-  | { kind: 'shell' }
+  | {
+      kind: 'shell';
+      native?: string;
+      plain?: boolean;
+      profile?: { plugin: string; contribution: string; title: string };
+    }
   | { kind: 'agent'; provider: string }
   /** A browser pane. Its facts live in `browsers.svelte.ts`, keyed by `Pane.session`. */
   | { kind: 'browser' };
@@ -993,7 +1011,7 @@ class Sessions {
     const out: Record<string, PaneStatus> = {};
     for (const pane of this.panes) {
       if (pane.sideOf !== null) continue;
-      const next = statusOf(facts(pane));
+      const next = this.statusOfPane(pane);
       const held = out[pane.worktreeId];
       out[pane.worktreeId] = held === undefined ? next : worse(held, next);
     }
@@ -1002,6 +1020,18 @@ class Sessions {
 
   /** The status of one pane, for its own header. */
   statusOfPane(pane: Pane): PaneStatus {
+    const native =
+      pane.session && pane.kind.kind === 'shell' && !pane.kind.plain
+        ? nativeSessions.states[pane.session]
+        : undefined;
+    if (native && !pane.error && !pane.ended) {
+      if (native.status === 'needs_approval') return 'attention';
+      if (native.status === 'disconnected' || native.status === 'unavailable')
+        return 'failed';
+      if (native.status === 'starting') return 'starting';
+      if (native.status === 'ended') return 'ended';
+      if (native.status === 'working') return 'working';
+    }
     return statusOf(facts(pane));
   }
 
@@ -1046,7 +1076,12 @@ class Sessions {
   /** Catalogue label, or the raw provider id, or "Shell" — or, for a browser, the page. */
   labelOf(pane: Pane): string {
     const kind = pane.kind;
-    if (kind.kind === 'shell') return 'Shell';
+    if (kind.kind === 'shell')
+      return kind.profile
+        ? kind.profile.title
+        : kind.native
+          ? `${kind.native === 'claude' ? 'Claude Code' : 'Codex'} · CLI`
+          : 'Shell';
     if (kind.kind === 'browser') {
       // The title once the page has one, its host until then, and "Browser" for an empty pane —
       // the same three-step fallback a browser's own tab strip uses.
@@ -1158,7 +1193,21 @@ class Sessions {
    * transcript: Rust buffers each session's events for exactly this, so an adopted pane comes back
    * showing what it showed before rather than blank. See `agent_replay`.
    */
+  private recordNative(state: NativeSession) {
+    const pane = this.paneBySession(state.session);
+    if (!pane || pane.kind.kind !== 'shell') return;
+    pane.kind = { kind: 'shell', native: state.provider };
+    pane.providerSession = state.conversation || null;
+    pane.ready = !['starting', 'unavailable'].includes(state.status);
+    pane.working = ['working', 'needs_approval'].includes(state.status);
+    pane.model = state.model;
+    pane.usage = state.usage;
+    if (state.title) pane.firstPrompt = state.title;
+    this.remember(pane.worktreeId);
+  }
+
   async init(): Promise<UnlistenFn> {
+    const offNative = await nativeSessions.init((state) => this.recordNative(state));
     const offAgent = await listen<AgentEventEnvelope>('agent:event', (e) => {
       this.record(e.payload.session, e.payload.event, e.payload.seq);
     });
@@ -1205,6 +1254,7 @@ class Sessions {
     );
 
     const off = () => {
+      offNative();
       offAgent();
       offAgentExit();
       offReady();
@@ -1249,7 +1299,20 @@ class Sessions {
     this.reclaimWindows(windows);
 
     for (const shell of shells) {
-      await this.adopt({ kind: 'shell' }, shell.project, shell.worktree, shell.session);
+      const native = nativeSessions.states[shell.session];
+      await this.adopt(
+        native ? { kind: 'shell', native: native.provider } : { kind: 'shell' },
+        shell.project,
+        shell.worktree,
+        shell.session,
+        native?.conversation,
+      );
+      if (native) this.recordNative(native);
+      else {
+        const adopted = this.paneBySession(shell.session);
+        if (adopted?.kind.kind === 'shell' && adopted.kind.native)
+          adopted.kind = { ...adopted.kind, plain: true };
+      }
     }
     // Sequentially, not `Promise.all`: each one fetches a transcript and then places a pane, and
     // `place` reads the tree it is about to rewrite. Interleaving them would race the layout.
@@ -1265,6 +1328,7 @@ class Sessions {
     // Only after a *reload*: a browser has no process to outlive a quit, so after a relaunch this
     // list is empty and `materialise` reloads the remembered addresses instead.
     for (const view of liveBrowsers) {
+      if (view.openedBy?.startsWith('plugin-slot:')) continue;
       browsers.apply(view);
       await this.adopt({ kind: 'browser' }, view.project, view.worktree, view.id);
     }
@@ -1769,7 +1833,7 @@ class Sessions {
     provider: string,
     brief: Brief,
   ): Promise<void> {
-    await this.openAgent(projectId, worktreeId, provider, 'right');
+    await this.openChat(projectId, worktreeId, provider, 'right');
     const pane = this.panesIn(worktreeId).at(-1);
     if (!pane) return;
 
@@ -1816,7 +1880,7 @@ class Sessions {
     // the new session starts, and the transfer should be of the conversation as the user saw it.
     const prompt = transferPrompt(source.events, fromLabel);
 
-    await this.openAgent(source.projectId, source.worktreeId, provider, 'right', paneId);
+    await this.openChat(source.projectId, source.worktreeId, provider, 'right', paneId);
     const pane = this.panesIn(source.worktreeId).at(-1);
     // `hasRoom` refuses at the cap, in which case no pane was created and `atCapacity` is already
     // set for the UI to explain. Bailing out leaves the offer standing, which is right: nothing has
@@ -2091,6 +2155,8 @@ class Sessions {
       this.panes.filter(
         (pane) =>
           pane.kind.kind === 'agent' &&
+          (!isHome(pane.worktreeId) || plugins.enabled('wtm.home')) &&
+          plugins.enabled('wtm.chat') &&
           pane.detached &&
           pane.sideOf === null &&
           pane.error === null &&
@@ -2104,7 +2170,7 @@ class Sessions {
       await this.dropGone();
 
       const home = this.homePane;
-      if (home?.detached) await this.reattach(home.id);
+      if (home?.detached && plugins.enabled('wtm.home')) await this.reattach(home.id);
 
       const selected = workspace.selectedWorktreeId;
       const rank = (pane: Pane) =>
@@ -2375,6 +2441,53 @@ class Sessions {
    * are rebuilt only by the same pass that wrote them. Assigning the array would give back a pane
    * that reads correctly and behaves as though nothing were running.
    */
+  /** Reuse the normal pane and replay path even if Settings closed during the launch. */
+  async showPluginDraft(job: {
+    session: string | null;
+    conversation: string | null;
+    provider: string;
+    folder: string;
+  }): Promise<string> {
+    if (!job.session) throw new Error('The agent did not start. Open the draft to retry.');
+    if (!this.paneBySession(job.session)) {
+      await this.adopt(
+        { kind: 'agent', provider: job.provider },
+        job.folder,
+        job.folder,
+        job.session,
+        job.conversation ?? undefined,
+      );
+    }
+    const pane = this.paneBySession(job.session);
+    if (!pane) throw new Error('Could not open the plugin conversation.');
+    this.focus(job.folder, pane.id);
+    // A replaced workbench may not show WTM's panes at all. Its own window preserves access
+    // without changing the user's chosen replacement or re-enabling a hidden region.
+    if (
+      plugins.binding('workbench').kind !== 'builtin' ||
+      plugins.binding('sessions').kind !== 'builtin'
+    ) {
+      await this.popOut(
+        pane.id,
+        { text: '', attachments: [] },
+        { x: 100, y: 100, w: 1000, h: 720 },
+      );
+    }
+    return pane.id;
+  }
+
+  async showExtensionSession(
+    project: string,
+    worktree: string,
+    provider: string,
+    session: string,
+  ): Promise<void> {
+    if (!this.paneBySession(session))
+      await this.adopt({ kind: 'agent', provider }, project, worktree, session);
+    const pane = this.paneBySession(session);
+    if (pane) this.focus(worktree, pane.id);
+  }
+
   private async adopt(
     kind: SessionKind,
     projectId: string,
@@ -2761,13 +2874,31 @@ class Sessions {
     worktreeId: string,
   ): Promise<void> {
     try {
-      const session = await commands.openTerminal({
-        projectId,
-        worktreeId,
-        rows: SPAWN_ROWS,
-        cols: SPAWN_COLS,
-      });
+      const session =
+        pane.kind.kind === 'shell' && pane.kind.profile
+          ? await commands.openPluginTerminal(
+              projectId,
+              worktreeId,
+              pane.kind.profile.plugin,
+              pane.kind.profile.contribution,
+            )
+          : pane.kind.kind === 'shell' && pane.kind.native
+            ? await commands.openNativeCli(
+                projectId,
+                worktreeId,
+                pane.kind.native,
+                pane.providerSession,
+                !pane.kind.plain,
+              )
+            : await commands.openTerminal({
+                projectId,
+                worktreeId,
+                rows: SPAWN_ROWS,
+                cols: SPAWN_COLS,
+              });
       await this.claimOrClose(pane.id, session, 'shell');
+      if (pane.kind.kind === 'shell' && pane.kind.native && !pane.kind.plain)
+        this.recordNative(await nativeSessions.load(session));
     } catch (e) {
       const live = this.paneById(pane.id);
       if (live) live.error = errorMessage(e);
@@ -2811,19 +2942,143 @@ class Sessions {
   }
 
   /**
-   * Start an agent session. Not idempotent — several in one worktree is the feature.
+   * Manual launch paths share experience selection. A split or explicit picker choice takes
+   * precedence over defaults; only an unspecified experience follows the current default.
    *
-   * `beside` names the pane the new one lands next to. Pass it whenever the caller knows; see
-   * `place` for what goes wrong when it does not.
-   */
-  /**
-   * Open an agent pane in a worktree, and return its pane id — or null when the cap refused it.
-   *
-   * `repo` is the repository's own settings for this agent. Omitted, they come from
-   * `this.options`, which only ever holds the *active* project's; Home opens sessions in any
-   * project, so it fetches that project's list itself and passes the entry here.
+   * `beside` anchors a split to the clicked pane, before focus bubbles. `repo` carries another
+   * project's settings when launching from Fleet; this.options belongs to the active project.
    */
   async openAgent(
+    projectId: string,
+    worktreeId: string,
+    provider: string,
+    { experience, placement = 'right', beside, repo }: AgentLaunchOptions = {},
+  ): Promise<string | null> {
+    experience ??=
+      plugins.state.registry.experience === 'wtm.native-cli' &&
+      ['claude', 'codex'].includes(provider)
+        ? 'native'
+        : 'chat';
+    if (experience !== 'chat') {
+      return this.openNative(
+        projectId,
+        worktreeId,
+        provider,
+        placement,
+        beside,
+        experience === 'plain',
+      );
+    }
+    return this.openChat(projectId, worktreeId, provider, placement, beside, repo);
+  }
+
+  /** Splitting starts a fresh conversation with the same experience, even after defaults change. */
+  async splitPane(paneId: string): Promise<void> {
+    const pane = this.paneById(paneId);
+    if (!pane || pane.ended || pane.error || isHome(pane.worktreeId)) return;
+    const { kind, projectId, worktreeId } = pane;
+    const options = { placement: 'right' as const, beside: pane.id };
+    if (kind.kind === 'agent') {
+      await this.openAgent(projectId, worktreeId, kind.provider, {
+        ...options,
+        experience: 'chat',
+      });
+    } else if (kind.kind === 'browser') {
+      await this.openBrowser(projectId, worktreeId, null, 'right', pane.id);
+    } else if (kind.native) {
+      await this.openAgent(projectId, worktreeId, kind.native, {
+        ...options,
+        experience: kind.plain ? 'plain' : 'native',
+      });
+    } else if (kind.profile) {
+      const { plugin, contribution, title } = kind.profile;
+      await this.openPluginTerminal(
+        projectId,
+        worktreeId,
+        plugin,
+        contribution,
+        title,
+        pane.id,
+      );
+    } else {
+      await this.openShell(projectId, worktreeId, 'right', pane.id);
+    }
+  }
+
+  async openNative(
+    projectId: string,
+    worktreeId: string,
+    provider: string,
+    placement: Placement = 'right',
+    beside?: string,
+    plain = false,
+  ): Promise<string | null> {
+    if (!this.hasRoom(worktreeId)) return null;
+    const pane = this.blank(
+      { kind: 'shell', native: provider, plain },
+      projectId,
+      worktreeId,
+    );
+    this.panes = [...this.panes, pane];
+    this.place(worktreeId, pane.id, placement, beside);
+    await this.fillShell(pane, projectId, worktreeId);
+    this.remember(worktreeId);
+    return pane.id;
+  }
+
+  async openPluginTerminal(
+    projectId: string,
+    worktreeId: string,
+    plugin: string,
+    contribution: string,
+    title: string,
+    beside?: string,
+  ): Promise<void> {
+    if (!this.hasRoom(worktreeId)) return;
+    const pane = this.blank(
+      { kind: 'shell', profile: { plugin, contribution, title } },
+      projectId,
+      worktreeId,
+    );
+    this.panes = [...this.panes, pane];
+    this.place(worktreeId, pane.id, 'right', beside);
+    await this.fillShell(pane, projectId, worktreeId);
+    this.remember(worktreeId);
+  }
+
+  /**
+   * Show a package's isolated panel in this worktree, as Settings → Plugins → Open does.
+   *
+   * Rust builds the panel's fixed document and announces the webview, and `adoptBrowser` gives it a
+   * pane. A panel already open here comes back as the same view with no announcement, so that pane
+   * is focused instead, and it needs no room because nothing new is placed.
+   */
+  async openPluginPanel(
+    projectId: string,
+    worktreeId: string,
+    plugin: string,
+    contribution: string,
+  ): Promise<void> {
+    if (browsers.unavailable !== null) {
+      this.error = browsers.unavailable;
+      return;
+    }
+    const identity = `plugin:${plugin}:${contribution}`;
+    const open = Object.values(browsers.views).some(
+      (view) => view.worktree === worktreeId && view.prototypeId === identity,
+    );
+    if (!open && !this.hasRoom(worktreeId)) return;
+    try {
+      const view = await commands.pluginPanel(projectId, worktreeId, plugin, contribution);
+      const pane = this.paneBySession(view.id);
+      if (pane) this.focus(worktreeId, pane.id);
+    } catch (e) {
+      this.error = errorMessage(e);
+    }
+  }
+
+  /** Programmatic prompts need the structured protocol even when manual launches use a CLI. */
+  async openChat(
     projectId: string,
     worktreeId: string,
     provider: string,
@@ -2832,7 +3087,6 @@ class Sessions {
     repo?: AgentOption,
   ): Promise<string | null> {
     if (!this.hasRoom(worktreeId)) return null;
-
     const pane = this.blank({ kind: 'agent', provider }, projectId, worktreeId);
     // The repository's `[agent.<id>]` first, then the provider's own defaults, so the picker shows
     // what the session will run on rather than an empty control.
@@ -3098,6 +3352,7 @@ class Sessions {
    */
   private adoptBrowser(view: BrowserView): void {
     browsers.apply(view);
+    if (view.openedBy?.startsWith('plugin-slot:')) return;
     if (inPaneWindow || this.paneBySession(view.id)) return;
 
     const pane = this.blank({ kind: 'browser' }, view.project, view.worktree);
@@ -3211,6 +3466,23 @@ class Sessions {
   }
 
   focus(worktreeId: string, paneId: string): void {
+    const pane = this.paneById(paneId);
+    if (
+      pane &&
+      interceptUiOperation(
+        'ui.panels.focus',
+        { paneId },
+        { projectId: pane.projectId, worktreeId, paneId },
+        (args) => {
+          if (
+            typeof args.paneId === 'string' &&
+            this.paneById(args.paneId)?.worktreeId === worktreeId
+          )
+            this.focus(worktreeId, args.paneId);
+        },
+      )
+    )
+      return;
     // A pane in a window of its own is focused by bringing that window forward. It has no tile
     // here to put the caret in, and it must not become the target the next split lands beside.
     if (!inPaneWindow && this.isOut(paneId)) {
@@ -3275,6 +3547,17 @@ class Sessions {
    * has to hand it back to the grip so the next press works.
    */
   movePane(worktreeId: string, paneId: string, target: Target): void {
+    const pane = this.paneById(paneId);
+    if (
+      pane &&
+      interceptUiOperation(
+        'ui.panels.move',
+        { paneId, target },
+        { projectId: pane.projectId, worktreeId, paneId },
+        () => this.movePane(worktreeId, paneId, target),
+      )
+    )
+      return;
     const layout = this.layoutFor(worktreeId);
     const next = move(layout, paneId, target);
     if (next === layout) return;
@@ -3284,6 +3567,20 @@ class Sessions {
   }
 
   setRatio(worktreeId: string, path: string, ratio: number): void {
+    const pane = this.panesIn(worktreeId)[0];
+    if (
+      pane &&
+      interceptUiOperation(
+        'ui.panels.resize',
+        { path, ratio },
+        { projectId: pane.projectId, worktreeId },
+        (args) => {
+          if (typeof args.ratio === 'number' && Number.isFinite(args.ratio))
+            this.setRatio(worktreeId, path, Math.min(0.9, Math.max(0.1, args.ratio)));
+        },
+      )
+    )
+      return;
     const layout = this.layoutFor(worktreeId);
     if (!layout) return;
     this.layouts = { ...this.layouts, [worktreeId]: resize(layout, path, ratio) };
@@ -3331,7 +3628,16 @@ class Sessions {
       return false;
     }
     try {
-      await commands.sendTurn(pane.session, text, attachments);
+      if (pane.kind.kind === 'shell' && pane.kind.native && !pane.kind.plain) {
+        if (attachments.length) throw new Error('Add attachments in the native CLI.');
+        const receipt = await commands.sendNativeMessage(pane.session, text);
+        await nativeSessions.load(pane.session);
+        if (receipt.status === 'rejected' || receipt.status === 'unknown')
+          throw new Error(
+            receipt.error ??
+              'Delivery is unconfirmed. Inspect the native conversation; WTM will not retry.',
+          );
+      } else await commands.sendTurn(pane.session, text, attachments);
       this.noteTyped(pane);
       return true;
     } catch (e) {
@@ -4156,21 +4462,17 @@ class Sessions {
       return;
     }
 
+    if (pane.kind.kind === 'shell') {
+      await this.fillShell(pane, pane.projectId, pane.worktreeId);
+      return;
+    }
     try {
-      const session =
-        pane.kind.kind === 'shell'
-          ? await commands.openTerminal({
-              projectId: pane.projectId,
-              worktreeId: pane.worktreeId,
-              rows: SPAWN_ROWS,
-              cols: SPAWN_COLS,
-            })
-          : await this.spawnAgent(pane, {
-              model: pane.model,
-              effort: pane.effort,
-              mode: pane.mode,
-              fast: pane.fast,
-            });
+      const session = await this.spawnAgent(pane, {
+        model: pane.model,
+        effort: pane.effort,
+        mode: pane.mode,
+        fast: pane.fast,
+      });
       await this.claimOrClose(pane.id, session, pane.kind.kind);
     } catch (e) {
       const live = this.paneById(pane.id);

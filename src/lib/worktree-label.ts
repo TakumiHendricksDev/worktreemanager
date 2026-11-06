@@ -1,3 +1,4 @@
+import { workspaceLabels } from './state/workspace-labels.svelte';
 /** Display identities never replace the directory id used by actions. */
 export interface WorktreeIdentity {
   title: string;
@@ -32,7 +33,7 @@ export function worktreeLabel(worktree: WorktreeIdentity): {
   }
   return {
     key,
-    name,
+    name: workspaceLabels.values[worktree.path] ?? name,
     detail: [worktree.title, worktree.branch ?? 'Detached HEAD', worktree.path].join('\n'),
   };
 }

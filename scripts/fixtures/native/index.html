@@ -1,0 +1,118 @@
+<!doctype html>
+<html data-theme="dark" data-palette="pine">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+      }
+      #app {
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      #app > p {
+        padding: 10px;
+      }
+      nav {
+        display: flex;
+        padding: 10px;
+        gap: 10px;
+      }
+      .c-pane {
+        min-height: 0;
+        flex: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      const qa = (window.qa = { calls: [], callbacks: {}, listeners: {}, n: 0 });
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+        unregisterListener: (event, id) => {
+          qa.listeners[event] = (qa.listeners[event] || []).filter((n) => n !== id);
+        },
+      };
+      window.__TAURI_INTERNALS__ = {
+        metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
+        transformCallback: (fn) => {
+          const id = ++qa.n;
+          qa.callbacks[id] = fn;
+          return id;
+        },
+        unregisterCallback: (id) => delete qa.callbacks[id],
+        invoke: async (command, args = {}) => {
+          qa.calls.push({ command, args });
+          if (command === 'plugin:event|listen') {
+            (qa.listeners[args.event] ??= []).push(args.handler);
+            return ++qa.n;
+          }
+          if (
+            command === 'plugin:event|unlisten' ||
+            command === 'pty_resize' ||
+            command === 'pty_write' ||
+            command === 'focus_run_shell'
+          )
+            return;
+          if (command === 'terminal_replay')
+            return {
+              through: 0,
+              chunkBase64: btoa(
+                'Native CLI UI fixture\r\n\r\nNo provider is running. Host responses are simulated for UI verification.\r\n',
+              ),
+            };
+          if (command === 'open_native_cli') return qa.newNative(args);
+          if (
+            command === 'open_agent_session' ||
+            command === 'open_terminal' ||
+            command === 'open_plugin_terminal'
+          )
+            return `session-${++qa.n}`;
+          if (command === 'agent_replay') return [];
+          if (command === 'agent_capability') return { models: [], modes: [] };
+          if (command === 'list_prototypes') return qa.launch ? [] : qa.reviews;
+          if (command === 'plugin:menu|new') {
+            qa.menu = args.options;
+            return [++qa.n, 'fixture-menu'];
+          }
+          if (command === 'popup_native_menu') {
+            const chosen = qa.menu.items.find((item) => item.text === qa.menuChoice);
+            if (!chosen) throw Error('Missing menu entry ' + qa.menuChoice);
+            chosen.handler.onmessage(chosen.id);
+            return;
+          }
+          if (command === 'plugin:resources|close') return;
+          if (command === 'native_session')
+            return JSON.parse(JSON.stringify(qa.native.states[args.session]));
+          if (command === 'implement_prototype') {
+            const value = qa.native.states['qa-native'];
+            if (value.status !== 'idle' || qa.review.stale) throw Error('Not ready');
+            qa.native.accept({
+              ...value,
+              seq: value.seq + 1,
+              deliveries: [
+                {
+                  id: 'receipt',
+                  label: 'Implement design',
+                  status: value.provider === 'claude' ? 'pending' : 'delivered',
+                  prototype: 'prototype',
+                  review: 'review',
+                  error: null,
+                },
+              ],
+            });
+            return qa.review;
+          }
+          if (command === 'interrupt_native_turn') {
+            qa.update({ status: 'idle' });
+            return;
+          }
+          if (command === 'open_prototype_preview') return;
+          throw Error('Unexpected IPC ' + command);
+        },
+      };
+    </script>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -33,7 +33,8 @@ just check
 ```
 
 That is `cargo fmt --check`, `prettier --check`, `cargo clippy --workspace --all-targets
---all-features -- -D warnings`, `svelte-check --fail-on-warnings`, `cargo nextest run
+--all-features -- -D warnings`, the generated plugin-contract check,
+`svelte-check --fail-on-warnings`, `cargo nextest run
 --workspace`, and a `wasm32` check of `wtm-core`. CI runs exactly these commands, so if it
 passes locally it passes there. If it fails locally and you cannot tell why, say so in the PR
 and push anyway — a confusing lint message is a reasonable thing to ask about.

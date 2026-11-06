@@ -62,6 +62,7 @@ tauri-plugin-dialog = "2"
 # A dependency rather than four lines of DOM because the webview's own `Notification` API does not
 # exist in WKWebView, which is the engine every Mac build runs on.
 tauri-plugin-notification = "2"
+wtm-plugins = { workspace = true }
 wtm-core   = { workspace = true }
 wtm-notify = { workspace = true }
 # The browser pane's native half: isolated-world scripts, message handlers, evaluation and
@@ -80,6 +81,7 @@ parking_lot = { workspace = true }
 regex      = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
+tungstenite = { workspace = true }
 tracing    = { workspace = true }
 # Handoff tokens. A v4 is the right shape here: the token identifies which session's MCP bridge is
 # calling, so it must be unguessable by anything that did not receive it in its environment.

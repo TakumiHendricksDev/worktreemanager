@@ -890,6 +890,16 @@ export type AgentEvent =
   | { kind: 'turn_started'; turn: string }
   | { kind: 'turn_finished'; turn: string; usage: AgentUsage; costUsd: number | null }
   | { kind: 'attachments'; attachments: AgentAttachment[] }
+  | {
+      kind: 'message_identity';
+      message: string;
+      turn: string;
+      text: string;
+      attachments: boolean;
+      truncated: boolean;
+    }
+  | { kind: 'history_boundary'; complete: boolean }
+  | { kind: 'historical_turn'; turn: string; complete: boolean }
   | { kind: 'user_echo'; text: string }
   | { kind: 'message_delta'; text: string }
   | { kind: 'message'; text: string }

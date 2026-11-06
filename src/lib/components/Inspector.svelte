@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Everything about the selected worktree that is not a session.
    *
@@ -93,138 +96,142 @@
   });
 </script>
 
-<Dialog title={worktree.title} {onclose} wide>
-  {#snippet body()}
-    <dl class="o-facts">
-      <!-- First, because "where is this on disk" is the question the app exists to answer quickly. -->
-      <dt>Path</dt>
-      <dd class="c-detail__path-row">
-        <code>{worktree.path}</code>
-        <Button variant="link" size="sm" onclick={copyPath}
-          >{copied ? 'copied' : 'copy'}</Button
-        >
-      </dd>
-
-      <dt>Branch</dt>
-      <dd>
-        {#if worktree.branch}
-          <code>{worktree.branch}</code>
-        {:else}
-          <!-- Never substitute the directory name here: they legitimately disagree. -->
-          <span class="c-status--muted">detached HEAD</span>
-        {/if}
-      </dd>
-
-      {#if worktree.head}
-        <dt>HEAD</dt>
-        <dd><code>{worktree.head}</code></dd>
-      {/if}
-
-      <dt>Status</dt>
-      <dd>
-        {#if worktree.dirty || worktree.untracked > 0 || worktree.staged > 0}
-          <span class="c-detail__statuses">
-            {#if worktree.staged > 0}<span class="c-status--ok"
-                >{worktree.staged} staged</span
-              >{/if}
-            {#if worktree.dirty}<span class="c-status--warn">modified</span>{/if}
-            {#if worktree.untracked > 0}
-              <span class="c-status--muted">{worktree.untracked} untracked</span>
-            {/if}
-          </span>
-        {:else}
-          <span class="c-status--ok">clean</span>
-        {/if}
-      </dd>
-
-      {#if worktree.ahead > 0 || worktree.behind > 0}
-        <dt>Divergence</dt>
-        <dd>
-          <span class="c-status--info"
-            >{worktree.ahead} ahead, {worktree.behind} behind</span
+<ExtensionPoint target="component.inspector" context={publicContext()}>
+  <Dialog title={worktree.title} {onclose} wide>
+    {#snippet body()}
+      <dl class="o-facts">
+        <!-- First, because "where is this on disk" is the question the app exists to answer quickly. -->
+        <dt>Path</dt>
+        <dd class="c-detail__path-row">
+          <code>{worktree.path}</code>
+          <Button variant="link" size="sm" onclick={copyPath}
+            >{copied ? 'copied' : 'copy'}</Button
           >
         </dd>
-      {/if}
 
-      {#if worktree.locked}
-        <dt>Locked</dt>
-        <dd><span class="c-status--warn">{worktree.locked || 'no reason given'}</span></dd>
-      {/if}
+        <dt>Branch</dt>
+        <dd>
+          {#if worktree.branch}
+            <code>{worktree.branch}</code>
+          {:else}
+            <!-- Never substitute the directory name here: they legitimately disagree. -->
+            <span class="c-status--muted">detached HEAD</span>
+          {/if}
+        </dd>
 
-      {#if worktree.prunable}
-        <dt>Stale</dt>
-        <dd><span class="c-status--danger">{worktree.prunable}</span></dd>
-      {/if}
-    </dl>
+        {#if worktree.head}
+          <dt>HEAD</dt>
+          <dd><code>{worktree.head}</code></dd>
+        {/if}
 
-    {#if worktree.table.length > 0}
-      <h2 class="c-section-heading">Ports</h2>
-      <table class="c-table">
-        <tbody>
-          {#each worktree.table as row (row.label)}
-            <tr>
-              <th>{row.label}</th>
-              <td>
-                {#if row.url}
-                  <Button variant="link" size="sm" onclick={() => open(row.url ?? '')}
-                    >{row.value}</Button
-                  >
-                {:else}
-                  <code>{row.value}</code>
-                {/if}
-                {#if row.inherited}
-                  <!-- An absent variable means the base value is in effect. Invisible unless we
+        <dt>Status</dt>
+        <dd>
+          {#if worktree.dirty || worktree.untracked > 0 || worktree.staged > 0}
+            <span class="c-detail__statuses">
+              {#if worktree.staged > 0}<span class="c-status--ok"
+                  >{worktree.staged} staged</span
+                >{/if}
+              {#if worktree.dirty}<span class="c-status--warn">modified</span>{/if}
+              {#if worktree.untracked > 0}
+                <span class="c-status--muted">{worktree.untracked} untracked</span>
+              {/if}
+            </span>
+          {:else}
+            <span class="c-status--ok">clean</span>
+          {/if}
+        </dd>
+
+        {#if worktree.ahead > 0 || worktree.behind > 0}
+          <dt>Divergence</dt>
+          <dd>
+            <span class="c-status--info"
+              >{worktree.ahead} ahead, {worktree.behind} behind</span
+            >
+          </dd>
+        {/if}
+
+        {#if worktree.locked}
+          <dt>Locked</dt>
+          <dd>
+            <span class="c-status--warn">{worktree.locked || 'no reason given'}</span>
+          </dd>
+        {/if}
+
+        {#if worktree.prunable}
+          <dt>Stale</dt>
+          <dd><span class="c-status--danger">{worktree.prunable}</span></dd>
+        {/if}
+      </dl>
+
+      {#if worktree.table.length > 0}
+        <h2 class="c-section-heading">Ports</h2>
+        <table class="c-table">
+          <tbody>
+            {#each worktree.table as row (row.label)}
+              <tr>
+                <th>{row.label}</th>
+                <td>
+                  {#if row.url}
+                    <Button variant="link" size="sm" onclick={() => open(row.url ?? '')}
+                      >{row.value}</Button
+                    >
+                  {:else}
+                    <code>{row.value}</code>
+                  {/if}
+                  {#if row.inherited}
+                    <!-- An absent variable means the base value is in effect. Invisible unless we
                        say so, and then confusing. -->
-                  <span
-                    class="c-detail__inherited"
-                    title="Not set for this worktree — the project default applies"
-                  >
-                    default
-                  </span>
-                {/if}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-
-    {#if worktree.env.length > 0}
-      <h2 class="c-section-heading">Environment</h2>
-      {#if revealError}
-        <p class="c-status--danger">{revealError}</p>
+                    <span
+                      class="c-detail__inherited"
+                      title="Not set for this worktree — the project default applies"
+                    >
+                      default
+                    </span>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       {/if}
-      <p class="c-detail__env-note">
-        No values are sent to this window. Reveal one at a time; each is read from disk when
-        you ask for it and never kept. Closing this dialog re-masks everything.
-      </p>
-      <table class="c-table c-table--env">
-        <tbody>
-          {#each worktree.env as key (key)}
-            <tr>
-              <th><code>{key}</code></th>
-              <td>
-                {#if revealed[key] !== undefined}
-                  <code class="c-detail__revealed">{revealed[key]}</code>
-                  <Button variant="link" size="sm" onclick={() => hide(key)}>hide</Button>
-                {:else}
-                  <code class="c-detail__masked" aria-label="hidden value">••••••••</code>
-                  <Button variant="link" size="sm" onclick={() => reveal(key)}
-                    >reveal</Button
-                  >
-                {/if}
-                <Button variant="link" size="sm" onclick={() => copyValue(key)}>
-                  {copiedKey === key ? 'copied' : 'copy'}
-                </Button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  {/snippet}
 
-  {#snippet footer()}
-    <Button variant="neutral" onclick={onclose}>Done</Button>
-  {/snippet}
-</Dialog>
+      {#if worktree.env.length > 0}
+        <h2 class="c-section-heading">Environment</h2>
+        {#if revealError}
+          <p class="c-status--danger">{revealError}</p>
+        {/if}
+        <p class="c-detail__env-note">
+          No values are sent to this window. Reveal one at a time; each is read from disk
+          when you ask for it and never kept. Closing this dialog re-masks everything.
+        </p>
+        <table class="c-table c-table--env">
+          <tbody>
+            {#each worktree.env as key (key)}
+              <tr>
+                <th><code>{key}</code></th>
+                <td>
+                  {#if revealed[key] !== undefined}
+                    <code class="c-detail__revealed">{revealed[key]}</code>
+                    <Button variant="link" size="sm" onclick={() => hide(key)}>hide</Button>
+                  {:else}
+                    <code class="c-detail__masked" aria-label="hidden value">••••••••</code>
+                    <Button variant="link" size="sm" onclick={() => reveal(key)}
+                      >reveal</Button
+                    >
+                  {/if}
+                  <Button variant="link" size="sm" onclick={() => copyValue(key)}>
+                    {copiedKey === key ? 'copied' : 'copy'}
+                  </Button>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+    {/snippet}
+
+    {#snippet footer()}
+      <Button variant="neutral" onclick={onclose}>Done</Button>
+    {/snippet}
+  </Dialog>
+</ExtensionPoint>

@@ -1,12 +1,22 @@
 <script lang="ts">
+  import { setContext as setExtensionContext, untrack } from 'svelte';
+  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
+  setExtensionContext(EXTENSION_PROTECTED, true);
   import { listen } from '@tauri-apps/api/event';
   import { commands } from '../ipc/commands';
   import { errorMessage } from '../ipc/types';
   import type { PrototypeChanged, PrototypeState } from '../open-design';
   import { sessions, type Pane } from '../state/sessions.svelte';
   import Button from './ui/Button.svelte';
+  import { nativeSessions } from '../state/native-sessions.svelte';
 
-  const { pane }: { pane: Pane } = $props();
+  const {
+    pane,
+    onreview,
+  }: {
+    pane: Pane;
+    onreview?: (review: PrototypeState | null) => void;
+  } = $props();
   let records = $state<PrototypeState[]>([]);
   let feedback = $state('');
   let error = $state<string | null>(null);
@@ -21,6 +31,27 @@
   const current = $derived(pending[0] ?? null);
   const design = $derived(current?.prototype ?? null);
   const earlier = $derived(pending.slice(1));
+  const native = $derived(pane.session ? nativeSessions.states[pane.session] : undefined);
+  const conversation = $derived(native?.conversation ?? pane.providerSession);
+  const receipt = $derived(
+    native?.deliveries.find(
+      (r) =>
+        r.prototype === design?.id &&
+        r.review === design?.review?.id &&
+        r.status !== 'rejected',
+    ),
+  );
+  const nativeBlocked = $derived(
+    native &&
+      (native.status !== 'idle' ||
+        native.deliveries.some((r) => r.status === 'pending' || r.status === 'unknown')),
+  );
+
+  // A native review stays subscribed while hidden, so a newly published revision can reveal it.
+  $effect(() => {
+    const review = current;
+    untrack(() => onreview?.(review));
+  });
 
   function accept(state: PrototypeState) {
     const next = [state, ...records.filter((r) => r.prototype.id !== state.prototype.id)];
@@ -35,13 +66,19 @@
 
   $effect(() => {
     const session = pane.session;
+    // A native /clear or /resume keeps the PTY but changes which review belongs here.
+    const owner = conversation;
+    records = [];
+    feedback = '';
+    selected = [];
+    contextChanged = false;
+    error = null;
     if (!session) return;
     let stopped = false;
     let updated = false;
     let off: (() => void) | undefined;
-    records = [];
     void listen<PrototypeChanged>('prototype:changed', (event) => {
-      if (event.payload.session === session) {
+      if (!stopped && owner === conversation && event.payload.session === session) {
         updated = true;
         accept(event.payload.state);
       }
@@ -52,7 +89,7 @@
     void commands
       .listPrototypes(session)
       .then((list) => {
-        if (stopped || updated) return;
+        if (stopped || updated || owner !== conversation) return;
         records = list;
         selected =
           list
@@ -173,6 +210,8 @@
           variant="accent"
           size="sm"
           disabled={busy ||
+            !!receipt ||
+            !!nativeBlocked ||
             pane.working ||
             current.stale ||
             !design.review.opened ||
@@ -185,9 +224,22 @@
               commands.implementPrototype(pane.session!, design.id, design.review!.id),
             )}
         >
-          Implement this design
+          {receipt?.status === 'delivered'
+            ? 'Delivered to this conversation'
+            : receipt?.status === 'pending'
+              ? 'Approved · awaiting your next message'
+              : receipt?.status === 'unknown'
+                ? 'Delivery unknown'
+                : 'Implement this design'}
         </Button>
       </div>
+      {#if receipt}<p class="c-note" role="status">
+          {receipt.status === 'pending'
+            ? 'Type your next message in the native CLI to collect this exact approval. It is not delivered yet.'
+            : receipt.status === 'unknown'
+              ? 'WTM cannot confirm delivery. Inspect this conversation; this approval will not be replayed automatically.'
+              : 'The provider acknowledged this exact review. This is delivery confirmation, not implementation completion.'}
+        </p>{/if}
       <p class="c-note">
         Implement sends this exact reviewed revision to this conversation with its current
         model and permissions.
@@ -230,6 +282,7 @@
           size="sm"
           disabled={busy ||
             pane.working ||
+            !!nativeBlocked ||
             (!feedback.trim() && !contextChanged && !current.stale) ||
             (design.sources.length > 0 && !selected.length) ||
             pane.ended !== null}

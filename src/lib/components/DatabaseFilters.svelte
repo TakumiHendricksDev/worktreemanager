@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * WHERE and ORDER BY for table data, typed as SQL — PyCharm's data-editor bar.
    *
@@ -39,39 +42,44 @@
   }
 </script>
 
-<div class="c-database__filters">
-  <label
-    class="c-database__filter"
-    class:is-applied={filter !== ''}
-    class:is-dirty={whereDraft.trim() !== filter}
+<ExtensionPoint target="component.database-filters" context={publicContext()}>
+  <div
+    use:extensionPart={{ target: 'component.database-filters', context: publicContext }}
+    class="c-database__filters"
   >
-    <span class="c-database__filter-label">WHERE</span>
-    <input
-      class="c-database__filter-input"
-      value={whereDraft}
-      oninput={(event) => (whereDraft = event.currentTarget.value)}
-      onkeydown={key}
-      placeholder="id > 10 AND name ILIKE '%plan%'"
-      autocomplete="off"
-      spellcheck="false"
-    />
-    <span class="c-database__filter-hint" aria-hidden="true">↵</span>
-  </label>
-  <label
-    class="c-database__filter"
-    class:is-applied={orderBy !== ''}
-    class:is-dirty={orderDraft.trim() !== orderBy}
-  >
-    <span class="c-database__filter-label">ORDER BY</span>
-    <input
-      class="c-database__filter-input"
-      value={orderDraft}
-      oninput={(event) => (orderDraft = event.currentTarget.value)}
-      onkeydown={key}
-      placeholder="created_at DESC"
-      autocomplete="off"
-      spellcheck="false"
-    />
-    <span class="c-database__filter-hint" aria-hidden="true">↵</span>
-  </label>
-</div>
+    <label
+      class="c-database__filter"
+      class:is-applied={filter !== ''}
+      class:is-dirty={whereDraft.trim() !== filter}
+    >
+      <span class="c-database__filter-label">WHERE</span>
+      <input
+        class="c-database__filter-input"
+        value={whereDraft}
+        oninput={(event) => (whereDraft = event.currentTarget.value)}
+        onkeydown={key}
+        placeholder="id > 10 AND name ILIKE '%plan%'"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <span class="c-database__filter-hint" aria-hidden="true">↵</span>
+    </label>
+    <label
+      class="c-database__filter"
+      class:is-applied={orderBy !== ''}
+      class:is-dirty={orderDraft.trim() !== orderBy}
+    >
+      <span class="c-database__filter-label">ORDER BY</span>
+      <input
+        class="c-database__filter-input"
+        value={orderDraft}
+        oninput={(event) => (orderDraft = event.currentTarget.value)}
+        onkeydown={key}
+        placeholder="created_at DESC"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <span class="c-database__filter-hint" aria-hidden="true">↵</span>
+    </label>
+  </div>
+</ExtensionPoint>

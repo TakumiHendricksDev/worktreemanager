@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * The stack of cards about sessions you are not looking at.
    *
@@ -52,89 +55,96 @@
   }
 </script>
 
-<!--
+<ExtensionPoint target="component.toasts" context={publicContext()}>
+  <!--
   The list exists even when it is empty, and that is deliberate: a live region added to the document
   at the same moment as its first content is not announced, because there was nothing there to observe
   a change against. `pointer-events` on the empty box is handled in `_toast.scss` — read the note
   there, it sits over the Send button.
 -->
-<ul class="c-toasts" aria-live="polite" aria-label="Session alerts">
-  <!--
+  <ul
+    use:extensionPart={{ target: 'component.toasts', context: publicContext }}
+    class="c-toasts"
+    aria-live="polite"
+    aria-label="Session alerts"
+  >
+    <!--
     A recipe question from an action with no screen of its own — a repository just added. In this
     list rather than beside it so the two stack instead of overlapping, and first because the list
     runs bottom-up: it sits nearest the corner, under whatever notices arrive after it.
   -->
-  {#if recipes.ask && askAction}
-    {@const ask = recipes.ask}
-    <li class="c-toasts__offer">
-      <RecipeOffer
-        action={askAction}
-        projectId={ask.projectId}
-        worktreeId={ask.worktreeId}
-        place={ask.place}
-        vars={ask.vars}
-        variant="toast"
-        onstarted={() => (recipes.ask = null)}
-        ondismiss={() => (recipes.ask = null)}
-      />
-    </li>
-  {/if}
-  {#each attention.toasts as toast (toast.id)}
-    <li class="c-toast c-toast--{toast.kind}">
-      {#if toast.kind === 'ask'}
-        <!-- The one-time opt-in, asked here rather than in a dialog. It arrives on the first focus
+    {#if recipes.ask && askAction}
+      {@const ask = recipes.ask}
+      <li class="c-toasts__offer">
+        <RecipeOffer
+          action={askAction}
+          projectId={ask.projectId}
+          worktreeId={ask.worktreeId}
+          place={ask.place}
+          vars={ask.vars}
+          variant="toast"
+          onstarted={() => (recipes.ask = null)}
+          ondismiss={() => (recipes.ask = null)}
+        />
+      </li>
+    {/if}
+    {#each attention.toasts as toast (toast.id)}
+      <li class="c-toast c-toast--{toast.kind}">
+        {#if toast.kind === 'ask'}
+          <!-- The one-time opt-in, asked here rather than in a dialog. It arrives on the first focus
              *after* something was actually missed, so it is a question about an event the user
              remembers — and a modal for it would interrupt whatever they came back to do. -->
-        <div class="c-toast__body c-toast__body--static">
-          <span class="c-toast__title">{toast.title}</span>
-          <span class="c-toast__detail">{toast.detail}</span>
-          <div class="c-toast__actions">
-            <Button variant="accent" size="sm" onclick={() => void attention.enable()}>
-              Turn on
-            </Button>
-            <Button variant="neutral" size="sm" onclick={() => void attention.disable()}>
-              Not now
-            </Button>
+          <div class="c-toast__body c-toast__body--static">
+            <span class="c-toast__title">{toast.title}</span>
+            <span class="c-toast__detail">{toast.detail}</span>
+            <div class="c-toast__actions">
+              <Button variant="accent" size="sm" onclick={() => void attention.enable()}>
+                Turn on
+              </Button>
+              <Button variant="neutral" size="sm" onclick={() => void attention.disable()}>
+                Not now
+              </Button>
+            </div>
           </div>
-        </div>
-      {:else if toast.kind === 'notice'}
-        <!-- Something wtm has to tell you, with nowhere to go: a body that is not a button, and the
+        {:else if toast.kind === 'notice'}
+          <!-- Something wtm has to tell you, with nowhere to go: a body that is not a button, and the
              same ✕ as every other card, because a card that cannot be dismissed is the bug that
              made the opt-in above look frozen. -->
-        <div class="c-toast__body c-toast__body--static">
-          <span class="c-toast__title">{toast.title}</span>
-          <span class="c-toast__detail">{toast.detail}</span>
-        </div>
-        <button
-          class="c-toast__close"
-          title="Dismiss"
-          onclick={() => attention.dismiss(toast.id)}
-        >
-          <Icon name="close" size={12} />
-          <span class="u-visually-hidden">Dismiss</span>
-        </button>
-      {:else}
-        <button class="c-toast__body" onclick={() => go(toast)}>
-          <span class="c-toast__title">
-            <SessionDot status={DOT[toast.kind]} />
-            {toast.title}
-          </span>
-          <span class="c-toast__detail">{toast.detail}</span>
-        </button>
-        <!--
+          <div class="c-toast__body c-toast__body--static">
+            <span class="c-toast__title">{toast.title}</span>
+            <span class="c-toast__detail">{toast.detail}</span>
+          </div>
+          <button
+            class="c-toast__close"
+            title="Dismiss"
+            onclick={() => attention.dismiss(toast.id)}
+          >
+            <Icon name="close" size={12} />
+            <span class="u-visually-hidden">Dismiss</span>
+          </button>
+        {:else}
+          <button class="c-toast__body" onclick={() => go(toast)}>
+            <span class="c-toast__title">
+              <SessionDot status={DOT[toast.kind]} />
+              {toast.title}
+            </span>
+            <span class="c-toast__detail">{toast.detail}</span>
+          </button>
+          <!--
           A sibling of the body, never a child of it. A button inside a button is invalid HTML and
           would break both the outer target and its accessible name — the same note
           `WorktreeTab.svelte` carries about its star, for the same reason.
         -->
-        <button
-          class="c-toast__close"
-          title="Dismiss"
-          onclick={() => attention.dismiss(toast.id)}
-        >
-          <Icon name="close" size={12} />
-          <span class="u-visually-hidden">Dismiss</span>
-        </button>
-      {/if}
-    </li>
-  {/each}
-</ul>
+          <button
+            class="c-toast__close"
+            title="Dismiss"
+            onclick={() => attention.dismiss(toast.id)}
+          >
+            <Icon name="close" size={12} />
+            <span class="u-visually-hidden">Dismiss</span>
+          </button>
+        {/if}
+      </li>
+    {/each}
+  </ul>
+</ExtensionPoint>

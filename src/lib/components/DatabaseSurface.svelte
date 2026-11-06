@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Database explorer and query console.
    *
@@ -619,364 +622,370 @@ password = "{{ env.DB_PASSWORD }}"`;
   }
 </script>
 
-<section
-  class="c-database"
-  class:is-hidden={!visible}
-  id="database-view"
-  aria-label="Database"
->
-  {#if !projectId || !worktreeId}
-    <div class="c-database__empty">Select a worktree to inspect its databases.</div>
-  {:else if listLoading[contextKey ?? ''] && connections.length === 0}
-    <div class="c-database__empty">Looking for database profiles…</div>
-  {:else if listErrors[contextKey ?? '']}
-    <div class="c-database__empty">
-      <p>{listErrors[contextKey ?? '']}</p>
-      <Button variant="neutral" size="sm" onclick={refreshConnections}>Retry</Button>
-    </div>
-  {:else if connections.length === 0}
-    <div class="c-database__empty">
-      <h2>No databases configured</h2>
-      <p>
-        Add a <code>[database.local]</code> profile to this repository's
-        <code>wtm.toml</code>. Host, port, database name and credentials may use the same
-        worktree environment tokens as the rest of Worktree Manager.
-      </p>
-      <pre class="c-database__example">{exampleConfig}</pre>
-      <Button variant="neutral" size="sm" onclick={refreshConnections}
-        >Reload profiles</Button
-      >
-    </div>
-  {:else}
-    <header class="c-database__toolbar">
-      <label class="c-database__connection-picker">
-        <span class="u-visually-hidden">Database connection</span>
-        <select class="c-select" value={selectedProfile} onchange={chooseProfile}>
-          {#each connections as candidate (candidate.id)}
-            <option value={candidate.id} disabled={!candidate.available}>
-              {candidate.label} — {candidate.target}
-              {candidate.available ? '' : ' (unavailable)'}
-            </option>
-          {/each}
-        </select>
-      </label>
-
-      {#if connection}
-        <span class="c-badge c-badge--accent">{connection.environment}</span>
-        <span class="c-badge">{connection.scope}</span>
-        <span class="c-badge"
-          >{connection.access === 'read_only' ? 'read only' : 'read/write'}</span
-        >
-        <!-- With the badges rather than beside Disconnect: it describes this connection, the way
-             they do, and next to the button it read as the button's label. -->
-        <span
-          class="c-database__status"
-          class:is-connected={!!current?.session}
-          class:is-connecting={!current?.session && current?.connecting}
-          title={current?.session ? serverLabel(current.session) : undefined}
-        >
-          {current?.session
-            ? 'connected'
-            : current?.connecting
-              ? 'connecting…'
-              : 'not connected'}
-        </span>
-      {/if}
-
-      <span class="c-database__toolbar-spacer"></span>
-      {#if current?.session}
-        <Button variant="quiet" size="sm" onclick={() => void disconnect()}
-          >Disconnect</Button
-        >
-      {:else}
-        <Button
-          variant="accent"
-          size="sm"
-          disabled={!connection?.available || current?.connecting}
-          title={connection?.problem ?? undefined}
-          onclick={() => void connect()}
-        >
-          {current?.connecting ? 'Connecting…' : 'Connect'}
-        </Button>
-      {/if}
-    </header>
-
-    {#if connection?.problem}
-      <div class="c-database__notice">{connection.problem}</div>
-    {/if}
-    {#if current?.error}
-      <div class="c-database__error" role="alert">
-        <span>{current.error}</span>
-        <Button
-          variant="inline"
-          size="sm"
-          ariaLabel="Dismiss"
-          onclick={() => (current.error = null)}
-        >
-          <Icon name="close" size={12} />
-        </Button>
+<ExtensionPoint target="component.database-surface" context={publicContext()}>
+  <section
+    use:extensionPart={{ target: 'component.database-surface', context: publicContext }}
+    class="c-database"
+    class:is-hidden={!visible}
+    id="database-view"
+    aria-label="Database"
+  >
+    {#if !projectId || !worktreeId}
+      <div class="c-database__empty">Select a worktree to inspect its databases.</div>
+    {:else if listLoading[contextKey ?? ''] && connections.length === 0}
+      <div class="c-database__empty">Looking for database profiles…</div>
+    {:else if listErrors[contextKey ?? '']}
+      <div class="c-database__empty">
+        <p>{listErrors[contextKey ?? '']}</p>
+        <Button variant="neutral" size="sm" onclick={refreshConnections}>Retry</Button>
       </div>
-    {/if}
+    {:else if connections.length === 0}
+      <div class="c-database__empty">
+        <h2>No databases configured</h2>
+        <p>
+          Add a <code>[database.local]</code> profile to this repository's
+          <code>wtm.toml</code>. Host, port, database name and credentials may use the same
+          worktree environment tokens as the rest of Worktree Manager.
+        </p>
+        <pre class="c-database__example">{exampleConfig}</pre>
+        <Button variant="neutral" size="sm" onclick={refreshConnections}
+          >Reload profiles</Button
+        >
+      </div>
+    {:else}
+      <header class="c-database__toolbar">
+        <label class="c-database__connection-picker">
+          <span class="u-visually-hidden">Database connection</span>
+          <select class="c-select" value={selectedProfile} onchange={chooseProfile}>
+            {#each connections as candidate (candidate.id)}
+              <option value={candidate.id} disabled={!candidate.available}>
+                {candidate.label} — {candidate.target}
+                {candidate.available ? '' : ' (unavailable)'}
+              </option>
+            {/each}
+          </select>
+        </label>
 
-    {#if current?.session}
-      <div class="c-database__body">
-        <aside class="c-database__explorer" aria-label="Database objects">
-          <div class="c-database__explorer-title">
-            <strong>{current.session.label}</strong>
-            <span>{serverLabel(current.session)}</span>
-          </div>
-          <div class="c-database__search" role="search">
-            <span class="c-database__search-icon"><Icon name="search" size={14} /></span>
-            <label class="u-visually-hidden" for="database-relation-search"
-              >Filter tables and views</label
-            >
-            <input
-              id="database-relation-search"
-              class="c-database__search-input"
-              type="search"
-              value={current.relationFilter}
-              oninput={filterRelations}
-              onkeydown={relationFilterKeydown}
-              placeholder="Filter tables and views"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            {#if current.relationFilter}
-              <button
-                class="c-database__search-clear"
-                title="Clear the filter"
-                onclick={clearRelationFilter}
+        {#if connection}
+          <span class="c-badge c-badge--accent">{connection.environment}</span>
+          <span class="c-badge">{connection.scope}</span>
+          <span class="c-badge"
+            >{connection.access === 'read_only' ? 'read only' : 'read/write'}</span
+          >
+          <!-- With the badges rather than beside Disconnect: it describes this connection, the way
+             they do, and next to the button it read as the button's label. -->
+          <span
+            class="c-database__status"
+            class:is-connected={!!current?.session}
+            class:is-connecting={!current?.session && current?.connecting}
+            title={current?.session ? serverLabel(current.session) : undefined}
+          >
+            {current?.session
+              ? 'connected'
+              : current?.connecting
+                ? 'connecting…'
+                : 'not connected'}
+          </span>
+        {/if}
+
+        <span class="c-database__toolbar-spacer"></span>
+        {#if current?.session}
+          <Button variant="quiet" size="sm" onclick={() => void disconnect()}
+            >Disconnect</Button
+          >
+        {:else}
+          <Button
+            variant="accent"
+            size="sm"
+            disabled={!connection?.available || current?.connecting}
+            title={connection?.problem ?? undefined}
+            onclick={() => void connect()}
+          >
+            {current?.connecting ? 'Connecting…' : 'Connect'}
+          </Button>
+        {/if}
+      </header>
+
+      {#if connection?.problem}
+        <div class="c-database__notice">{connection.problem}</div>
+      {/if}
+      {#if current?.error}
+        <div class="c-database__error" role="alert">
+          <span>{current.error}</span>
+          <Button
+            variant="inline"
+            size="sm"
+            ariaLabel="Dismiss"
+            onclick={() => (current.error = null)}
+          >
+            <Icon name="close" size={12} />
+          </Button>
+        </div>
+      {/if}
+
+      {#if current?.session}
+        <div class="c-database__body">
+          <aside class="c-database__explorer" aria-label="Database objects">
+            <div class="c-database__explorer-title">
+              <strong>{current.session.label}</strong>
+              <span>{serverLabel(current.session)}</span>
+            </div>
+            <div class="c-database__search" role="search">
+              <span class="c-database__search-icon"><Icon name="search" size={14} /></span>
+              <label class="u-visually-hidden" for="database-relation-search"
+                >Filter tables and views</label
               >
-                <Icon name="close" size={12} />
-                <span class="u-visually-hidden">Clear the filter</span>
-              </button>
-            {/if}
-          </div>
-          <div class="c-database__tree">
-            {#each filteredSchemas(current) as schema (schema)}
-              {@const expanded = current.expandedSchemas.includes(schema)}
-              {@const filtering = current.relationFilter.trim().length > 0}
-              {@const shownExpanded = expanded || filtering}
-              {@const relations = filteredRelations(current, schema)}
+              <input
+                id="database-relation-search"
+                class="c-database__search-input"
+                type="search"
+                value={current.relationFilter}
+                oninput={filterRelations}
+                onkeydown={relationFilterKeydown}
+                placeholder="Filter tables and views"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              {#if current.relationFilter}
+                <button
+                  class="c-database__search-clear"
+                  title="Clear the filter"
+                  onclick={clearRelationFilter}
+                >
+                  <Icon name="close" size={12} />
+                  <span class="u-visually-hidden">Clear the filter</span>
+                </button>
+              {/if}
+            </div>
+            <div class="c-database__tree">
+              {#each filteredSchemas(current) as schema (schema)}
+                {@const expanded = current.expandedSchemas.includes(schema)}
+                {@const filtering = current.relationFilter.trim().length > 0}
+                {@const shownExpanded = expanded || filtering}
+                {@const relations = filteredRelations(current, schema)}
+                <button
+                  class="c-database__tree-item c-database__tree-item--schema"
+                  aria-expanded={shownExpanded}
+                  onclick={() => void toggleSchema(schema)}
+                >
+                  <Icon name={shownExpanded ? 'chevron-down' : 'chevron-right'} size={12} />
+                  <span>{schema}</span>
+                </button>
+                {#if shownExpanded}
+                  <div class="c-database__relations">
+                    {#if current.loadingSchemas.includes(schema)}
+                      <span class="c-database__tree-note">Loading…</span>
+                    {:else if relations.length === 0}
+                      <span class="c-database__tree-note">No tables or views</span>
+                    {:else}
+                      {#each relations as relation (`${relation.schema}.${relation.name}`)}
+                        <button
+                          class="c-database__tree-item c-database__tree-item--relation"
+                          class:is-active={current.selectedRelation?.schema ===
+                            relation.schema &&
+                            current.selectedRelation?.name === relation.name}
+                          title={`${relationLabel(relation.kind)} ${relation.schema}.${relation.name}`}
+                          onclick={() => void selectRelation(relation)}
+                        >
+                          <span class="c-database__relation-mark" aria-hidden="true"></span>
+                          <span>{relation.name}</span>
+                        </button>
+                      {/each}
+                    {/if}
+                  </div>
+                {/if}
+              {:else}
+                <span class="c-database__tree-note">No matching tables or views</span>
+              {/each}
+            </div>
+          </aside>
+
+          <div class="c-database__workspace">
+            <nav class="c-tabs" aria-label="Database workspace">
               <button
-                class="c-database__tree-item c-database__tree-item--schema"
-                aria-expanded={shownExpanded}
-                onclick={() => void toggleSchema(schema)}
+                class="c-tabs__tab"
+                class:is-active={current.mode === 'data'}
+                aria-pressed={current.mode === 'data'}
+                disabled={!current.selectedRelation}
+                onclick={() => (current.mode = 'data')}
               >
-                <Icon name={shownExpanded ? 'chevron-down' : 'chevron-right'} size={12} />
-                <span>{schema}</span>
+                Table data
               </button>
-              {#if shownExpanded}
-                <div class="c-database__relations">
-                  {#if current.loadingSchemas.includes(schema)}
-                    <span class="c-database__tree-note">Loading…</span>
-                  {:else if relations.length === 0}
-                    <span class="c-database__tree-note">No tables or views</span>
-                  {:else}
-                    {#each relations as relation (`${relation.schema}.${relation.name}`)}
-                      <button
-                        class="c-database__tree-item c-database__tree-item--relation"
-                        class:is-active={current.selectedRelation?.schema ===
-                          relation.schema &&
-                          current.selectedRelation?.name === relation.name}
-                        title={`${relationLabel(relation.kind)} ${relation.schema}.${relation.name}`}
-                        onclick={() => void selectRelation(relation)}
-                      >
-                        <span class="c-database__relation-mark" aria-hidden="true"></span>
-                        <span>{relation.name}</span>
-                      </button>
-                    {/each}
+              <button
+                class="c-tabs__tab"
+                class:is-active={current.mode === 'query'}
+                aria-pressed={current.mode === 'query'}
+                onclick={() => (current.mode = 'query')}
+              >
+                Query console
+              </button>
+            </nav>
+
+            {#if current.mode === 'data'}
+              {#if current.selectedRelation}
+                <div class="c-database__object-head">
+                  <div>
+                    <strong
+                      >{current.selectedRelation.schema}.{current.selectedRelation
+                        .name}</strong
+                    >
+                    <span>{relationLabel(current.selectedRelation.kind)}</span>
+                  </div>
+                  <Button variant="quiet" size="sm" onclick={() => void loadTable()}
+                    >Refresh</Button
+                  >
+                </div>
+
+                <div class="c-database__columns" aria-label="Columns">
+                  {#each current.columns as column (column.name)}
+                    <div class="c-database__column" title={column.default ?? undefined}>
+                      <code>{column.name}</code>
+                      <span>{column.typeName}</span>
+                      {#if column.primaryKey}<span class="c-badge c-badge--accent">PK</span
+                        >{/if}
+                      {#if column.nullable}<span class="c-status--subtle">nullable</span
+                        >{/if}
+                    </div>
+                  {/each}
+                </div>
+
+                <DatabaseFilters
+                  filter={current.filter}
+                  orderBy={current.orderBy}
+                  onapply={(next) => void loadTable({ ...next, offset: 0 })}
+                />
+
+                <div class="c-database__results">
+                  {#if current.loadingTable}
+                    <div class="c-database__result-empty">Loading table rows…</div>
+                  {:else if typedTable}
+                    <DatabaseResult
+                      bind:this={tableGrid}
+                      findPlaceholder="Find on this page"
+                      result={typedTable}
+                      rowOffset={current.offset}
+                      sortable={true}
+                      sortColumn={tableSort?.column ?? null}
+                      sortDirection={tableSort?.direction ?? null}
+                      onfilter={filterBy}
+                      onsort={sortTable}
+                      relation={current.selectedRelation}
+                      sendLabel={destination?.label ?? null}
+                      onsend={(selection) => sendToAgent(selection, 'data')}
+                    />
                   {/if}
                 </div>
+                <footer class="c-database__pager">
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    disabled={current.offset === 0 || current.loadingTable}
+                    onclick={() => page(-1)}>Previous</Button
+                  >
+                  <span>
+                    rows {current.offset + 1}–{current.offset +
+                      (current.tableResult?.rows.length ?? 0)}
+                  </span>
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    disabled={(current.tableResult?.rows.length ?? 0) < current.limit ||
+                      current.loadingTable}
+                    onclick={() => page(1)}>Next</Button
+                  >
+                </footer>
+              {:else}
+                <div class="c-database__empty">
+                  Choose a table or view from the schema tree.
+                </div>
               {/if}
             {:else}
-              <span class="c-database__tree-note">No matching tables or views</span>
-            {/each}
-          </div>
-        </aside>
-
-        <div class="c-database__workspace">
-          <nav class="c-tabs" aria-label="Database workspace">
-            <button
-              class="c-tabs__tab"
-              class:is-active={current.mode === 'data'}
-              aria-pressed={current.mode === 'data'}
-              disabled={!current.selectedRelation}
-              onclick={() => (current.mode = 'data')}
-            >
-              Table data
-            </button>
-            <button
-              class="c-tabs__tab"
-              class:is-active={current.mode === 'query'}
-              aria-pressed={current.mode === 'query'}
-              onclick={() => (current.mode = 'query')}
-            >
-              Query console
-            </button>
-          </nav>
-
-          {#if current.mode === 'data'}
-            {#if current.selectedRelation}
-              <div class="c-database__object-head">
-                <div>
-                  <strong
-                    >{current.selectedRelation.schema}.{current.selectedRelation
-                      .name}</strong
-                  >
-                  <span>{relationLabel(current.selectedRelation.kind)}</span>
-                </div>
-                <Button variant="quiet" size="sm" onclick={() => void loadTable()}
-                  >Refresh</Button
+              <div class="c-database__query-toolbar">
+                <Button
+                  variant="accent"
+                  size="sm"
+                  disabled={current.runningQuery || !current.sql.trim() || productionLocked}
+                  title={`Run selected SQL, or the whole editor (${runShortcut})`}
+                  onclick={() => void runQuery(selectedSql)}>Run</Button
                 >
+                {#if current.runningQuery}
+                  <Button
+                    variant="danger-outline"
+                    size="sm"
+                    onclick={() => void cancelQuery()}
+                  >
+                    Cancel
+                  </Button>
+                {/if}
+                <span class="c-database__query-hint">
+                  {runShortcut} runs · Tab indents · Esc then Tab leaves
+                </span>
+                <span class="c-database__toolbar-spacer"></span>
+                <span class="c-status--subtle">up to 500 rows</span>
               </div>
 
-              <div class="c-database__columns" aria-label="Columns">
-                {#each current.columns as column (column.name)}
-                  <div class="c-database__column" title={column.default ?? undefined}>
-                    <code>{column.name}</code>
-                    <span>{column.typeName}</span>
-                    {#if column.primaryKey}<span class="c-badge c-badge--accent">PK</span
-                      >{/if}
-                    {#if column.nullable}<span class="c-status--subtle">nullable</span>{/if}
+              {#if productionLocked}
+                <div class="c-database__production">
+                  <div>
+                    <strong>Production query console locked</strong>
+                    <p>
+                      Table browsing remains available. Unlock only if you intend to run
+                      arbitrary SQL.
+                    </p>
                   </div>
-                {/each}
-              </div>
+                  <Button
+                    variant="danger-outline"
+                    size="sm"
+                    onclick={() => (current.productionConsoleUnlocked = true)}
+                    >Enable for this session</Button
+                  >
+                </div>
+              {/if}
 
-              <DatabaseFilters
-                filter={current.filter}
-                orderBy={current.orderBy}
-                onapply={(next) => void loadTable({ ...next, offset: 0 })}
+              <SqlEditor
+                bind:this={editor}
+                bind:value={current.sql}
+                bind:selection={selectedSql}
+                onrun={(sql) => void runQuery(sql)}
               />
-
-              <div class="c-database__results">
-                {#if current.loadingTable}
-                  <div class="c-database__result-empty">Loading table rows…</div>
-                {:else if typedTable}
+              <div class="c-database__results c-database__results--query">
+                {#if current.runningQuery}
+                  <div class="c-database__result-empty">Running query…</div>
+                {:else if current.queryResult}
                   <DatabaseResult
-                    bind:this={tableGrid}
-                    findPlaceholder="Find on this page"
-                    result={typedTable}
-                    rowOffset={current.offset}
-                    sortable={true}
-                    sortColumn={tableSort?.column ?? null}
-                    sortDirection={tableSort?.direction ?? null}
-                    onfilter={filterBy}
-                    onsort={sortTable}
-                    relation={current.selectedRelation}
+                    bind:this={queryGrid}
+                    result={current.queryResult}
+                    note={current.queryReadOnly ? 'read-only run' : null}
                     sendLabel={destination?.label ?? null}
-                    onsend={(selection) => sendToAgent(selection, 'data')}
+                    onsend={(selection) => sendToAgent(selection, 'query')}
                   />
+                {:else}
+                  <div class="c-database__result-empty">Query results appear here.</div>
                 {/if}
               </div>
-              <footer class="c-database__pager">
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  disabled={current.offset === 0 || current.loadingTable}
-                  onclick={() => page(-1)}>Previous</Button
-                >
-                <span>
-                  rows {current.offset + 1}–{current.offset +
-                    (current.tableResult?.rows.length ?? 0)}
-                </span>
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  disabled={(current.tableResult?.rows.length ?? 0) < current.limit ||
-                    current.loadingTable}
-                  onclick={() => page(1)}>Next</Button
-                >
-              </footer>
-            {:else}
-              <div class="c-database__empty">
-                Choose a table or view from the schema tree.
-              </div>
             {/if}
+          </div>
+        </div>
+      {:else if connection?.available}
+        <div class="c-database__empty">
+          {#if current?.pendingRun}
+            <p>Connect to run the query from the agent's reply. It runs read-only.</p>
           {:else}
-            <div class="c-database__query-toolbar">
-              <Button
-                variant="accent"
-                size="sm"
-                disabled={current.runningQuery || !current.sql.trim() || productionLocked}
-                title={`Run selected SQL, or the whole editor (${runShortcut})`}
-                onclick={() => void runQuery(selectedSql)}>Run</Button
-              >
-              {#if current.runningQuery}
-                <Button
-                  variant="danger-outline"
-                  size="sm"
-                  onclick={() => void cancelQuery()}
-                >
-                  Cancel
-                </Button>
-              {/if}
-              <span class="c-database__query-hint">
-                {runShortcut} runs · Tab indents · Esc then Tab leaves
-              </span>
-              <span class="c-database__toolbar-spacer"></span>
-              <span class="c-status--subtle">up to 500 rows</span>
-            </div>
-
-            {#if productionLocked}
-              <div class="c-database__production">
-                <div>
-                  <strong>Production query console locked</strong>
-                  <p>
-                    Table browsing remains available. Unlock only if you intend to run
-                    arbitrary SQL.
-                  </p>
-                </div>
-                <Button
-                  variant="danger-outline"
-                  size="sm"
-                  onclick={() => (current.productionConsoleUnlocked = true)}
-                  >Enable for this session</Button
-                >
-              </div>
-            {/if}
-
-            <SqlEditor
-              bind:this={editor}
-              bind:value={current.sql}
-              bind:selection={selectedSql}
-              onrun={(sql) => void runQuery(sql)}
-            />
-            <div class="c-database__results c-database__results--query">
-              {#if current.runningQuery}
-                <div class="c-database__result-empty">Running query…</div>
-              {:else if current.queryResult}
-                <DatabaseResult
-                  bind:this={queryGrid}
-                  result={current.queryResult}
-                  note={current.queryReadOnly ? 'read-only run' : null}
-                  sendLabel={destination?.label ?? null}
-                  onsend={(selection) => sendToAgent(selection, 'query')}
-                />
-              {:else}
-                <div class="c-database__result-empty">Query results appear here.</div>
-              {/if}
-            </div>
+            <p>Connect to inspect schemas, browse table rows, or open a query console.</p>
+          {/if}
+          {#if connection.scope === 'worktree'}
+            <span class="c-status--subtle"
+              >This connection belongs only to the selected worktree.</span
+            >
+          {:else}
+            <span class="c-status--subtle"
+              >This connection persists while you move between this project's worktrees.</span
+            >
           {/if}
         </div>
-      </div>
-    {:else if connection?.available}
-      <div class="c-database__empty">
-        {#if current?.pendingRun}
-          <p>Connect to run the query from the agent's reply. It runs read-only.</p>
-        {:else}
-          <p>Connect to inspect schemas, browse table rows, or open a query console.</p>
-        {/if}
-        {#if connection.scope === 'worktree'}
-          <span class="c-status--subtle"
-            >This connection belongs only to the selected worktree.</span
-          >
-        {:else}
-          <span class="c-status--subtle"
-            >This connection persists while you move between this project's worktrees.</span
-          >
-        {/if}
-      </div>
+      {/if}
     {/if}
-  {/if}
-</section>
+  </section>
+
+  <ExtensionPoint target="database.actions" context={publicContext()} />
+</ExtensionPoint>

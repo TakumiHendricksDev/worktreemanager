@@ -99,6 +99,7 @@
 @use 'components/new-worktree';
 @use 'components/note';
 @use 'components/pane';
+@use 'components/native-session';
 @use 'components/pane-window';
 @use 'components/peek';
 @use 'components/planview';
@@ -118,6 +119,8 @@
 @use 'components/sidebar-group';
 @use 'components/section-heading';
 @use 'components/settings';
+@use 'components/plugins';
+@use 'components/extensions';
 @use 'components/shell';
 @use 'components/shell-run';
 @use 'components/side-question';

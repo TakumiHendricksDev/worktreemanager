@@ -1,0 +1,109 @@
+// Native terminal geometry stays independent of the provider's text and escape sequences.
+.c-native {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  container-type: inline-size;
+}
+.c-native__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.c-native__toolbar > strong {
+  flex: 1;
+}
+.c-native__workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.c-native__terminal {
+  flex: 1;
+  min-height: 160px;
+  min-width: 0;
+  display: block;
+}
+.c-native__aside {
+  width: 320px;
+  max-width: 48%;
+  overflow: auto;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  overflow-wrap: anywhere;
+}
+.c-native__section {
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: var(--sp-2);
+}
+.c-native__section > h3 {
+  font-size: var(--step--1);
+  margin: 0;
+}
+.c-native__section > p {
+  margin: 0;
+}
+.c-native__notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  font-size: var(--step--1);
+}
+.c-native__notice.is-warning {
+  background: var(--warn-soft);
+}
+.c-native__notice > span {
+  flex: 1;
+  min-width: 180px;
+}
+.c-native__identity {
+  overflow-wrap: anywhere;
+}
+.c-native__choices {
+  display: grid;
+  gap: var(--sp-3);
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.c-native__choice {
+  display: flex;
+  align-items: start;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.c-native__choice > span {
+  display: grid;
+  gap: var(--sp-1);
+}
+.c-native__choice small {
+  color: var(--fg-muted);
+}
+@container (max-width: 580px) {
+  .c-native__workspace {
+    flex-direction: column;
+  }
+  .c-native__aside {
+    width: auto;
+    max-width: none;
+    max-height: 45%;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}

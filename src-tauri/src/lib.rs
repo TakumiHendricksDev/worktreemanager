@@ -12,6 +12,7 @@ pub mod bridge;
 pub mod browser;
 pub mod browser_bridge;
 pub mod browser_tools;
+pub mod chat_edit;
 pub mod code;
 pub mod code_comments;
 pub mod code_tools;
@@ -19,15 +20,20 @@ pub mod commands;
 pub mod design_evidence;
 pub mod dictate;
 pub mod display;
+pub mod extensions;
 pub mod handoff;
 pub mod home;
 pub mod home_shells;
 pub mod home_tools;
 pub mod messages;
 pub mod native_menu;
+pub mod native_sessions;
 pub mod notifier;
 pub mod openers;
 pub mod pane_windows;
+pub mod plugin_authoring;
+pub mod plugin_views;
+pub mod plugins;
 pub mod prototype_commands;
 pub mod prototype_context;
 pub mod prototype_tools;
@@ -226,7 +232,21 @@ pub fn run() {
             // now ships on macOS alone: an application menu is a macOS concept, and the
             // title bar's gear is the affordance that does not assume one.
             if std::env::consts::OS == "macos" {
-                handle.set_menu(build_menu(handle.handle())?)?;
+                let menu = build_menu(handle.handle())?;
+                {
+                    use tauri::Manager;
+                    if let Some(item) = menu.get(HOME_EVENT).and_then(|i| i.as_menuitem().cloned())
+                    {
+                        item.set_enabled(
+                            handle
+                                .state::<Arc<App>>()
+                                .plugins
+                                .binding(wtm_plugins::contributions::Slot::Home)
+                                != wtm_plugins::contributions::Binding::Hidden,
+                        )?;
+                    }
+                }
+                handle.set_menu(menu)?;
             }
 
             // The socket an agent's MCP bridge calls home on. Started here rather than before
@@ -264,6 +284,31 @@ pub fn run() {
         })
         .on_window_event(pane_windows::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            plugin_authoring::plugin_drafts,
+            extensions::extension_configure,
+            extensions::extension_start,
+            extensions::extension_restart,
+            extensions::extension_call,
+            extensions::extension_reply,
+            extensions::extension_host,
+            extensions::extension_validate,
+            extensions::extension_event,
+            chat_edit::chat_edit,
+            chat_edit::chat_edit_snapshot,
+            plugin_authoring::plugin_create,
+            plugin_authoring::plugin_open_draft,
+            plugin_authoring::plugin_review_draft,
+            plugins::plugins_state,
+            plugin_views::plugin_bind,
+            plugin_views::plugin_view,
+            plugins::plugin_prepare,
+            plugins::plugin_cancel,
+            plugins::plugin_change,
+            plugins::plugin_run,
+            plugins::plugin_session,
+            plugins::plugin_panel,
+            plugins::open_native_cli,
+            plugins::open_plugin_terminal,
             native_menu::popup_native_menu,
             commands::dictation_status,
             commands::set_dictation_key,
@@ -337,6 +382,10 @@ pub fn run() {
             usage::usage_limits,
             usage::refresh_usage_limits,
             commands::open_agent_session,
+            native_sessions::native_sessions,
+            native_sessions::native_session,
+            native_sessions::send_native_message,
+            native_sessions::interrupt_native_turn,
             commands::open_agent_side_session,
             commands::send_turn,
             commands::steer_turn,

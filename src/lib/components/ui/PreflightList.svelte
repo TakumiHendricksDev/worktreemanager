@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * The reasons an operation might not be a good idea, and the acknowledgements that let it
    * proceed anyway.
@@ -36,7 +38,10 @@
   const warns = $derived(items.filter((i) => i.severity === 'warn'));
 </script>
 
-<ul class="c-preflight o-plain-list">
+<ul
+  use:extensionPart={{ target: 'ui.preflight-list', context: publicContext }}
+  class="c-preflight o-plain-list"
+>
   {#each errors as item (item.id)}
     <li class="c-preflight__item">
       <span class="c-preflight__message c-status--danger">

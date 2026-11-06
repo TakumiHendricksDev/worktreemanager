@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * What agents have said to each other lately, newest first: who to whom, how it went, and the
    * start of what was said.
@@ -48,47 +51,53 @@
   }
 </script>
 
-<section class="c-activity" aria-label="Activity">
-  <p class="u-visually-hidden" aria-live="polite">{spoken}</p>
-  {#if recent.length === 0}
-    <p class="c-activity__empty">
-      When one agent asks another for something — a handoff, a review, a message from Home —
-      it shows here, and as a wire in the tree while it is happening.
-    </p>
-  {:else}
-    <ul class="o-plain-list c-activity__list">
-      {#each recent as exchange (exchange.id)}
-        <li class="c-activity__item">
-          <button class="c-activity__row" onclick={() => peek(exchange)}>
-            <span class="c-activity__head">
-              <span
-                class="c-activity__dot c-activity__dot--{exchange.state}"
-                aria-hidden="true"
-              ></span>
-              <span class="c-activity__who">
-                {fleet.nameOf(exchange.from)} → {fleet.nameOf(exchange.to)}
+<ExtensionPoint target="component.activity-list" context={publicContext()}>
+  <section
+    use:extensionPart={{ target: 'component.activity-list', context: publicContext }}
+    class="c-activity"
+    aria-label="Activity"
+  >
+    <p class="u-visually-hidden" aria-live="polite">{spoken}</p>
+    {#if recent.length === 0}
+      <p class="c-activity__empty">
+        When one agent asks another for something — a handoff, a review, a message from Home
+        — it shows here, and as a wire in the tree while it is happening.
+      </p>
+    {:else}
+      <ul class="o-plain-list c-activity__list">
+        {#each recent as exchange (exchange.id)}
+          <li class="c-activity__item">
+            <button class="c-activity__row" onclick={() => peek(exchange)}>
+              <span class="c-activity__head">
+                <span
+                  class="c-activity__dot c-activity__dot--{exchange.state}"
+                  aria-hidden="true"
+                ></span>
+                <span class="c-activity__who">
+                  {fleet.nameOf(exchange.from)} → {fleet.nameOf(exchange.to)}
+                </span>
+                <span class="c-activity__state">{STATE_WORD[exchange.state]}</span>
+                <time
+                  class="c-activity__time"
+                  datetime={new Date(exchange.sentAt).toISOString()}
+                >
+                  {time.format(exchange.sentAt)}
+                </time>
               </span>
-              <span class="c-activity__state">{STATE_WORD[exchange.state]}</span>
-              <time
-                class="c-activity__time"
-                datetime={new Date(exchange.sentAt).toISOString()}
-              >
-                {time.format(exchange.sentAt)}
-              </time>
-            </span>
-            <span class="c-activity__text">“{exchange.prompt}”</span>
-            {#if exchange.reply}
-              <span class="c-activity__text c-activity__text--reply"
-                >↳ {exchange.reply}</span
-              >
-            {:else if exchange.error}
-              <span class="c-activity__text c-activity__text--error"
-                >↳ {exchange.error}</span
-              >
-            {/if}
-          </button>
-        </li>
-      {/each}
-    </ul>
-  {/if}
-</section>
+              <span class="c-activity__text">“{exchange.prompt}”</span>
+              {#if exchange.reply}
+                <span class="c-activity__text c-activity__text--reply"
+                  >↳ {exchange.reply}</span
+                >
+              {:else if exchange.error}
+                <span class="c-activity__text c-activity__text--error"
+                  >↳ {exchange.error}</span
+                >
+              {/if}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+</ExtensionPoint>

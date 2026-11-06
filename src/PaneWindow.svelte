@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ChatEditDialog from './lib/components/ChatEditDialog.svelte';
+  import { initExtensionWorkbench } from './lib/state/extension-workbench.svelte';
+  let offExtensions: (() => void) | undefined;
   /**
    * The root of a window holding one popped-out pane.
    *
@@ -30,6 +33,7 @@
   import { dictation } from './lib/state/dictate.svelte';
   import { initPaneWindow, putBackFromWindow } from './lib/state/pane-windows.svelte';
   import { sessions } from './lib/state/sessions.svelte';
+  import { plugins } from './lib/state/plugins.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { usage } from './lib/state/usage.svelte';
   import { workspace } from './lib/state/workspace.svelte';
@@ -49,8 +53,10 @@
     // The pane's context card shows its agent's limits, and this window has its own copy of the
     // store. Seeded from Rust's record, so it starts with what the main window already knows.
     const offUsage = usage.init();
+    const offPlugins = plugins.init();
 
     void (async () => {
+      await offPlugins;
       await theme.init();
       await composerPrefs.init();
       await browsers.init();
@@ -60,6 +66,7 @@
       // Subscribed before the pane is adopted, for the reason `adopt` states: the replay is asked
       // for after the listeners exist, so nothing the session says in between falls through.
       offSessions = await sessions.init();
+      offExtensions = await initExtensionWorkbench();
       const view = await commands.paneWindowState().catch(() => null);
       if (gone) return;
       if (!view || !(await sessions.adoptWindowState(view.state))) {
@@ -71,9 +78,11 @@
 
     return () => {
       gone = true;
+      offExtensions?.();
       offWindow?.();
       offSessions?.();
       void offUsage.then((off) => off());
+      void offPlugins.then((off) => off());
     };
   });
 </script>
@@ -140,3 +149,5 @@
     {/if}
   </main>
 </div>
+
+<ChatEditDialog />

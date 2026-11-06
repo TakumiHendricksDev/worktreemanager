@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * The worktree's configured links, as a split button: the one last opened on the left, the others
    * in a menu on the right.
@@ -67,27 +70,29 @@
   }
 </script>
 
-{#if primary}
-  <div class="c-split-button">
-    <button
-      class="c-split-button__action c-split-button__action--link"
-      onclick={() => open(primary)}
-      title="{primary.label} — {primary.url}"
-      aria-label="Open {primary.label}"
-    >
-      <Icon name="external" size={11} />
-      <span class="c-split-button__label">{primary.label}</span>
-    </button>
-    {#if rest.length > 0}
+<ExtensionPoint target="component.links-button" context={publicContext()}>
+  {#if primary}
+    <div class="c-split-button">
       <button
-        class="c-split-button__menu"
-        onclick={menu}
-        title="Other links"
-        aria-label="Other links for this worktree"
-        aria-haspopup="menu"
+        class="c-split-button__action c-split-button__action--link"
+        onclick={() => open(primary)}
+        title="{primary.label} — {primary.url}"
+        aria-label="Open {primary.label}"
       >
-        <Icon name="chevron-down" size={12} />
+        <Icon name="external" size={11} />
+        <span class="c-split-button__label">{primary.label}</span>
       </button>
-    {/if}
-  </div>
-{/if}
+      {#if rest.length > 0}
+        <button
+          class="c-split-button__menu"
+          onclick={menu}
+          title="Other links"
+          aria-label="Other links for this worktree"
+          aria-haspopup="menu"
+        >
+          <Icon name="chevron-down" size={12} />
+        </button>
+      {/if}
+    </div>
+  {/if}
+</ExtensionPoint>

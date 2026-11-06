@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { setContext as setExtensionContext } from 'svelte';
+  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
+  setExtensionContext(EXTENSION_PROTECTED, true);
   /**
    * "Close session?" — the one confirmation every route to closing a pane goes through.
    *

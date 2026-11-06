@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Project summary</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+        font: 14px var(--wtm-font-ui, system-ui);
+        background: var(--wtm-bg);
+        color: var(--wtm-fg);
+      }
+      button {
+        font: inherit;
+        padding: 8px 12px;
+        border: 1px solid var(--wtm-border);
+        border-radius: 6px;
+        background: var(--wtm-bg-elevated);
+        color: inherit;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      p {
+        color: var(--wtm-fg-muted);
+      }
+    </style>
+  </head>
+  <body>
+    <h2>My project summary</h2>
+    <p id="context">Reading host context…</p>
+    <button id="refresh">Refresh status</button
+    ><button id="settings">Plugin settings</button>
+    <pre id="output" role="status"></pre>
+    <script>
+      const output = document.querySelector('#output');
+      async function refresh() {
+        try {
+          const context = await wtm.request('context');
+          document.querySelector('#context').textContent = context.cwd;
+          output.textContent =
+            (await wtm.request('command', { id: 'status' })) || 'Working tree is clean.';
+        } catch (error) {
+          output.textContent = error.message;
+        }
+      }
+      document.querySelector('#refresh').onclick = refresh;
+      document.querySelector('#settings').onclick = () =>
+        wtm.request('navigate', { target: 'settings' });
+      refresh();
+    </script>
+  </body>
+</html>

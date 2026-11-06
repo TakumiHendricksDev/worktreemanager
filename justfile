@@ -90,6 +90,7 @@ fmt-check:
     {{ pmx }} prettier --check "src/**/*.{ts,svelte,css,scss}" "src-tauri/runtime/*.js" "*.json"
 
 lint:
+    {{ pm }} scripts/plugin-contracts.mjs --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     {{ pmx }} svelte-check --fail-on-warnings
 

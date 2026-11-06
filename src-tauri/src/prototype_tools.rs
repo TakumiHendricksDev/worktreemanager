@@ -53,6 +53,15 @@ pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, token: &str, call: &CodeCa
                 .ok_or_else(|| crate::prototype_context::failure(format!("{key} is required")))
         };
         match call.tool.as_str() {
+            "native_acknowledge" => {
+                let native = app.native_sessions.get(session).ok_or_else(|| {
+                    crate::prototype_context::failure(
+                        "This is not a registered native conversation",
+                    )
+                })?;
+                crate::native_sessions::hooks::acknowledge(&native, required("receipt")?)
+                    .map_err(crate::prototype_context::failure)
+            }
             "prototype_prepare" => {
                 let paths = call
                     .args

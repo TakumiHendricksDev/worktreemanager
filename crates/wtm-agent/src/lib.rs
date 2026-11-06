@@ -44,6 +44,7 @@ pub mod claude;
 pub mod codex;
 pub mod cursor;
 mod limits;
+pub mod native;
 pub mod provider;
 pub mod session;
 pub mod skills;

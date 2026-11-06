@@ -1,0 +1,331 @@
+<!doctype html>
+<html data-theme="dark" data-palette="pine">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+      }
+      nav {
+        display: flex;
+        gap: 8px;
+        padding: 12px;
+      }
+      #app > p {
+        padding: 0 12px;
+        font-size: 12px;
+      }
+      .c-plugins {
+        min-height: 0;
+      }
+      #app {
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app" style="height: 100vh; display: flex; flex-direction: column"></div>
+    <script>
+      const manifest = {
+        schema: 1,
+        api: 2,
+        id: 'example.workbench-toolkit',
+        name: 'Workbench Toolkit',
+        version: '1.0.0',
+        description:
+          'Author example: contributions inside existing Chat, workspaces, panels and settings.',
+        extensions: {
+          access: ['ui.workspace.rename', 'ui.chat.edit', 'ui.panels.open'],
+          runtime: ['python3', 'runtime.py'],
+          events: ['workspace.changed', 'panels.changed'],
+          styles: [
+            {
+              id: 'readable-links',
+              title: 'Underlined chat links',
+              target: 'chat.markdown.link',
+              properties: {
+                color: 'var(--accent)',
+                'text-decoration': 'underline',
+                'text-underline-offset': '3px',
+              },
+            },
+          ],
+          settings: [
+            {
+              id: 'workspace-label',
+              title: 'Workspace display name',
+              description:
+                'Changes the label while preserving the Git directory and workspace identity.',
+              section: 'settings.appearance',
+              kind: 'text',
+              default: 'Review workspace',
+              options: [],
+            },
+          ],
+          actions: [
+            {
+              id: 'rename',
+              title: 'Apply workspace display name',
+              target: 'workspace.actions',
+              operation: 'ui.workspace.rename',
+              arguments: { name: { $setting: 'workspace-label' } },
+              replaces: null,
+            },
+            {
+              id: 'edit-message',
+              title: 'Edit and continue\u2026',
+              target: 'chat.message.actions',
+              operation: 'ui.chat.edit',
+              arguments: {
+                paneId: { $context: 'paneId' },
+                messageId: { $context: 'messageId' },
+              },
+              replaces: null,
+            },
+            {
+              id: 'open-terminal',
+              title: 'Open a terminal here',
+              target: 'panel.actions',
+              operation: 'ui.panels.open',
+              arguments: { kind: 'shell' },
+              replaces: null,
+            },
+            {
+              id: 'runtime-status',
+              title: 'Check toolkit runtime',
+              target: 'workspace.actions',
+              operation: 'plugin.status',
+              arguments: {},
+              replaces: null,
+            },
+          ],
+          content: [
+            {
+              id: 'workspace-note',
+              title: 'Workspace note',
+              target: 'component.session-surface',
+              position: 'before',
+              body: [{ kind: 'text', text: 'Workspace: ${context:worktreeId}' }],
+            },
+            {
+              id: 'runtime-action',
+              title: 'Toolkit action',
+              target: 'settings.appearance',
+              position: 'after',
+              body: [{ kind: 'action', action: 'runtime-status' }],
+            },
+          ],
+          hooks: [],
+        },
+        commands: [],
+        panels: [],
+        views: [],
+        palettes: [],
+        session_backends: [],
+        terminals: [],
+        platforms: [],
+      };
+      const state = (window.qa = {
+        calls: [],
+        listeners: {},
+        callbacks: {},
+        n: 0,
+        jobs: [],
+        fail: false,
+        snapshot: {
+          registry: {
+            version: 1,
+            installed: {
+              [manifest.id]: {
+                current: {
+                  manifest,
+                  source: '/example/toolkit',
+                  kind: 'local',
+                  revision: 'reviewed snapshot',
+                  digest: 'fixture-digest',
+                  directory: 'fixture',
+                },
+                previous: null,
+                enabled: true,
+              },
+            },
+            disabled: [],
+            experience: 'wtm.chat',
+            safe_mode: false,
+            bindings: {},
+            extensions: {},
+            extension_choices: {},
+            extension_order: [],
+          },
+          problem: null,
+          builtins: [],
+        },
+      });
+      window.emit = (event, payload) => {
+        for (const id of state.listeners[event] || [])
+          state.callbacks[id]({ id, event, payload });
+      };
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+        unregisterListener: (event, id) => {
+          state.listeners[event] = (state.listeners[event] || []).filter(
+            (value) => value !== id,
+          );
+        },
+      };
+      window.__TAURI_INTERNALS__ = {
+        metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
+        transformCallback: (fn) => {
+          const id = ++state.n;
+          state.callbacks[id] = fn;
+          return id;
+        },
+        unregisterCallback: (id) => delete state.callbacks[id],
+        invoke: async (command, args = {}) => {
+          state.calls.push({ command, args });
+          if (command === 'plugin:event|listen') {
+            (state.listeners[args.event] ??= []).push(args.handler);
+            return ++state.n;
+          }
+          if (command === 'plugin:event|unlisten') return;
+          if (command === 'extension_configure') {
+            const r = state.snapshot.registry,
+              p = (r.extensions[args.plugin] ??= {
+                disabled: [],
+                worktrees: [],
+                values: {},
+              }),
+              c = args.change;
+            if (c.kind === 'enabled')
+              p.disabled = c.enabled
+                ? p.disabled.filter((id) => id !== c.id)
+                : [...p.disabled, c.id];
+            if (c.kind === 'scope') p.worktrees = c.worktrees;
+            if (c.kind === 'setting') (p.values[c.worktree || ''] ??= {})[c.id] = c.value;
+            if (c.kind === 'choice')
+              r.extension_choices[c.target] =
+                c.id === 'builtin' ? 'builtin' : args.plugin + ':' + c.id;
+            if (c.kind === 'order') r.extension_order = c.order;
+            return structuredClone(state.snapshot);
+          }
+          if (command === 'chat_edit_snapshot')
+            return {
+              session: args.session,
+              revision: 12,
+              problem: state.busy
+                ? 'Session is busy'
+                : state.unsupported
+                  ? 'This provider cannot edit history.'
+                  : null,
+              status: state.busy ? 'busy' : state.unsupported ? 'unsupported' : 'ready',
+              messages: [
+                {
+                  id: 'm1',
+                  turn: 't1',
+                  text: 'Use links in this reply.',
+                  previous: null,
+                  problem: null,
+                },
+              ],
+            };
+          if (command === 'chat_edit') {
+            if (state.stale)
+              throw { kind: 'fixture', message: 'Conversation changed. Reopen Edit.' };
+            return { session: 'new-branch', original: args.edit.session, submitted: true };
+          }
+          if (command === 'plugin:notification|is_permission_granted') return true;
+          if (command === 'plugin:notification|register_listener') return;
+          if (command === 'get_pref') return null;
+          if (command === 'extension_restart') return;
+          if (command === 'interrupt_turn') {
+            state.busy = false;
+            return;
+          }
+          if (command === 'extension_event') return;
+          if (command === 'extension_call') return state.hookResult;
+          if (command === 'extension_validate') return;
+          if (command === 'plugin_drafts') return structuredClone(state.jobs);
+          if (command === 'list_agents')
+            return ['claude', 'codex'].map((id) => ({
+              id,
+              label: id === 'claude' ? 'Claude' : 'Codex',
+              available: true,
+              offered: true,
+              detail: null,
+              model: null,
+              effort: null,
+              mode: null,
+            }));
+          if (command === 'plugin_create') {
+            const j = {
+              id: args.id,
+              provider: args.provider,
+              brief: args.brief,
+              folder: args.folder,
+              session: 'test-session',
+              conversation: 'test-conversation',
+              submitted: true,
+              problem: null,
+              validationError: null,
+              status: 'building',
+              installed: null,
+            };
+            state.jobs.push(j);
+            window.emit('plugins:drafts', null);
+            return structuredClone(j);
+          }
+          if (command === 'plugin_open_draft') {
+            state.jobs[0].status = 'building';
+            state.jobs[0].validationError = null;
+            return structuredClone(state.jobs[0]);
+          }
+          if (command === 'plugin_review_draft') {
+            if (state.fail) {
+              state.jobs[0].validationError = 'Missing panel.html';
+              window.emit('plugins:drafts', null);
+              throw { kind: 'fixture', message: 'Missing panel.html' };
+            }
+            return {
+              token: 'review-token',
+              package: {
+                manifest,
+                source: state.jobs[0].folder,
+                kind: 'local',
+                revision: 'content snapshot',
+                digest: 'sha256-fixture',
+                directory: '/snapshot',
+              },
+              replacing: null,
+            };
+          }
+          if (command === 'plugin_cancel') return;
+          if (command === 'plugin_change') {
+            if (args.action === 'install') {
+              state.jobs[0].installed = manifest.id;
+              state.snapshot.registry.installed[manifest.id] = {
+                current: {
+                  manifest,
+                  source: state.jobs[0].folder,
+                  kind: 'local',
+                  revision: 'content snapshot',
+                  digest: 'sha256-fixture',
+                  directory: '/snapshot',
+                },
+                previous: null,
+                enabled: true,
+              };
+              window.emit('plugins:changed', state.snapshot);
+            }
+            return structuredClone(state.snapshot);
+          }
+          if (command === 'list_projects') return [];
+          if (command === 'list_palettes') return [];
+          if (command === 'plugin:dialog|open') return '/tmp/chosen-plugin';
+          throw Error('Unexpected IPC ' + command);
+        },
+      };
+    </script>
+    <script type="module" src="/scripts/fixtures/plugins/main.ts"></script>
+  </body>
+</html>

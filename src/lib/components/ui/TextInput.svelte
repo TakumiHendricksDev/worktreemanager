@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * A single-line text input.
    *
@@ -41,6 +43,7 @@
   whose `type` is dynamic — it has no way to know whether to coerce to a number.
 -->
 <input
+  use:extensionPart={{ target: 'ui.text-input', context: publicContext }}
   {id}
   {...{ type }}
   {placeholder}

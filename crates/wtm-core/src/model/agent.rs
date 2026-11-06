@@ -267,6 +267,24 @@ pub enum AgentEvent {
     /// Rendered rather than discarded because it is the provider's acknowledgement that the
     /// turn was received — without it, a slow first token is indistinguishable from a dropped
     /// message.
+    /// A provider-issued user item identity, distinct from the optimistic composer echo.
+    MessageIdentity {
+        message: String,
+        turn: String,
+        text: String,
+        attachments: bool,
+        #[serde(default)]
+        truncated: bool,
+    },
+    /// Whether the retained transcript begins at the start of the provider conversation.
+    HistoryBoundary {
+        complete: bool,
+    },
+    /// A durable history turn carries identity without replaying live activity transitions.
+    HistoricalTurn {
+        turn: String,
+        complete: bool,
+    },
     UserEcho {
         text: String,
     },

@@ -605,6 +605,9 @@ fn collect_all(children: &BTreeMap<String, Vec<Child>>, parent: &str) -> Vec<Chi
 /// oversight: the user asked to see what the other agent did, and closing the pane the moment the
 /// caller got its answer would destroy the transcript they wanted to read.
 pub fn run(handle: &tauri::AppHandle, app: &Arc<App>, request: &Request) -> Response {
+    if let Some(session) = app.native_sessions.by_token(&request.token) {
+        session.tools_connected();
+    }
     // An unknown token falls through to each handler's own message, so no refusal text changes
     // for the callers that existed before scopes did.
     if let Some(caller) = app.handoff.resolve(&request.token)

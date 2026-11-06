@@ -366,7 +366,15 @@ impl Host {
         opened_by: Option<&str>,
     ) -> Result<String, ErrorView> {
         let mut entries = self.entries.lock();
-        if entries.len() >= MAX_TOTAL {
+        let is_slot = |owner: Option<&str>| {
+            owner.is_some_and(|o| o.starts_with(crate::plugin_views::OWNER_PREFIX))
+        };
+        let slot = is_slot(opened_by);
+        let owned = entries
+            .values()
+            .filter(|e| is_slot(e.opened_by.as_deref()) == slot)
+            .count();
+        if owned >= if slot { 20 } else { MAX_TOTAL } {
             return Err(ErrorView::new(
                 "browserCap",
                 format!("wtm holds at most {MAX_TOTAL} browser panes at once; close one first"),
@@ -374,9 +382,9 @@ impl Host {
         }
         let here = entries
             .values()
-            .filter(|entry| entry.worktree == worktree)
+            .filter(|entry| entry.worktree == worktree && !is_slot(entry.opened_by.as_deref()))
             .count();
-        if here >= MAX_PER_WORKTREE {
+        if !slot && here >= MAX_PER_WORKTREE {
             return Err(ErrorView::new(
                 "browserCap",
                 format!(
@@ -1092,6 +1100,7 @@ fn on_runtime_message(handle: &AppHandle, app: &Arc<App>, id: &str, message: &Me
         return;
     }
     match body.get("event").and_then(Value::as_str) {
+        Some("plugin-request") => crate::plugin_views::dispatch(handle, app, id, &body["request"]),
         Some("prototype-ready") => {
             if let Some(view) = app.browsers.prototype_loaded(id) {
                 app.browsers.loaded(id);
@@ -1729,6 +1738,7 @@ pub fn close(handle: &AppHandle, app: &Arc<App>, id: &str) -> bool {
     let Some(_view) = app.browsers.forget(id) else {
         return false;
     };
+    app.plugins.release_client(id);
     if let Some(webview) = handle.get_webview(id)
         && let Err(error) = webview.close()
     {

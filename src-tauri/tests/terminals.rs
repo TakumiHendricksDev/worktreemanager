@@ -155,6 +155,66 @@ impl Drop for Harness {
     }
 }
 
+#[test]
+fn a_reviewed_plugin_terminal_uses_the_hosts_pty_input_resize_and_teardown() {
+    let harness = Harness::new(&["alpha"]);
+    let worktree = harness.worktree("alpha");
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join("wtm-plugin.toml"), r#"
+schema = 1
+api = 1
+id = "example.terminal"
+name = "Terminal"
+version = "1.0.0"
+[[terminals]]
+id = "interactive"
+title = "Interactive CLI"
+command = ["sh", "-c", "printf 'ready\\n'; read answer; printf 'answer:%s\\n' \"$answer\"; read finish"]
+"#).unwrap();
+    let review = harness
+        .app
+        .plugins
+        .prepare(source.path().to_str().unwrap(), "local", "")
+        .unwrap();
+    harness.app.plugins.install(&review.token).unwrap();
+    let argv = harness
+        .app
+        .plugins
+        .terminal("example.terminal", "interactive")
+        .unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let session = harness
+        .app
+        .open_shell(
+            &worktree,
+            &harness.project_id(),
+            argv,
+            24,
+            80,
+            recorder.clone(),
+        )
+        .unwrap();
+    assert!(recorder.wait_for("ready").contains("ready"));
+    harness.app.pty.resize(&session, 40, 120).unwrap();
+    harness.app.pty.write(&session, b"hello\n").unwrap();
+    assert!(recorder.wait_for("answer:hello").contains("answer:hello"));
+    assert!(
+        harness
+            .app
+            .live_shells()
+            .iter()
+            .any(|s| s.session == session.as_str())
+    );
+    assert!(harness.app.close_shell(session.as_str()));
+    assert!(
+        !harness
+            .app
+            .live_shells()
+            .iter()
+            .any(|s| s.session == session.as_str())
+    );
+}
+
 /// The shell must start where the worktree is, not where the repository is.
 ///
 /// A plausible copy-paste from `display::resolve_cwd` uses `CwdBase::RepoRoot`, which is what

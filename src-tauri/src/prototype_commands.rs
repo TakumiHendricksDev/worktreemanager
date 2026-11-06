@@ -36,7 +36,7 @@ pub fn storage(app: &App) -> Result<PathBuf, ErrorView> {
 }
 
 pub fn owner(app: &App, session: &str) -> Result<AgentSessionFacts, ErrorView> {
-    app.live_agents()
+    app.conversation_sessions()
         .into_iter()
         .find(|a| a.session == session && !a.ephemeral && a.scope.place().is_some())
         .ok_or_else(|| failure("Open or resume this worktree's chat to work with its prototypes"))
@@ -362,6 +362,39 @@ pub async fn implement_prototype(
     blocking(move || {
         let _guard = MUTATING.lock();
         let mut prototype = record(&app, &session, &id)?;
+        if let Some(native) = app.native_sessions.get(&session) {
+            if stale(&app, &prototype) {
+                return Err(failure(
+                    "Project context changed. Refresh and review the design first.",
+                ));
+            }
+            let prompt = prototypes::handoff(&prototype, &review_id)?;
+            let receipt = native
+                .send(
+                    "Implement reviewed design",
+                    &prompt,
+                    Some((&id, &review_id)),
+                )
+                .map_err(failure)?;
+            prototype.phase = match receipt.status {
+                crate::native_sessions::delivery::DeliveryStatus::Pending => {
+                    "Approval saved; continue in the native CLI"
+                }
+                crate::native_sessions::delivery::DeliveryStatus::Unknown => {
+                    "Approval delivery is unconfirmed; no automatic retry"
+                }
+                crate::native_sessions::delivery::DeliveryStatus::Delivered => {
+                    "Approval delivered to this native conversation"
+                }
+                crate::native_sessions::delivery::DeliveryStatus::Rejected => {
+                    "Approval was rejected by the provider"
+                }
+            }
+            .into();
+            prototypes::save(&prototype)?;
+            announce(&handle, &app, &session, &prototype);
+            return Ok(());
+        }
         if app
             .overview_of(&session)
             .is_none_or(|s| s.status != AgentStatus::Idle)
@@ -411,6 +444,15 @@ pub async fn cancel_prototype(
         let mut prototype = record(&app, &session, &id)?;
         prototypes::cancel(&mut prototype)?;
         announce(&handle, &app, &session, &prototype);
+        if let Some(native) = app.native_sessions.get(&session) {
+            return if native.snapshot().capabilities.stop {
+                native.interrupt().map_err(failure)
+            } else {
+                Err(failure(
+                    "Design cancelled. Stop the current turn in the native CLI.",
+                ))
+            };
+        }
         app.with_agent(&session, wtm_agent::AgentSession::interrupt)
             .map_err(|e| {
                 failure(format!(

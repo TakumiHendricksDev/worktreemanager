@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   import { onMount } from 'svelte';
   import { commands } from '../ipc/commands';
   import { errorMessage } from '../ipc/types';
@@ -23,20 +26,22 @@
   });
 </script>
 
-{#if run}
-  <details class="c-shell-run__header">
-    <summary
-      >{run.requester ? 'Home command' : 'Reviewed command'} · {runStatus(run)}</summary
-    >
-    <p class="c-shell-run__directory">{run.request.interpreter} · {run.directory}</p>
-    <pre class="c-shell-run__command">{run.request.command}</pre>
-    {#if !runSettled(run)}<Button
-        size="sm"
-        onclick={() =>
-          void commands
-            .cancelShellRun(run.id)
-            .catch((e) => attention.notice('Could not stop command', errorMessage(e)))}
-        >Stop command</Button
-      >{/if}
-  </details>
-{/if}
+<ExtensionPoint target="component.shell-run-header" context={publicContext()}>
+  {#if run}
+    <details class="c-shell-run__header">
+      <summary
+        >{run.requester ? 'Home command' : 'Reviewed command'} · {runStatus(run)}</summary
+      >
+      <p class="c-shell-run__directory">{run.request.interpreter} · {run.directory}</p>
+      <pre class="c-shell-run__command">{run.request.command}</pre>
+      {#if !runSettled(run)}<Button
+          size="sm"
+          onclick={() =>
+            void commands
+              .cancelShellRun(run.id)
+              .catch((e) => attention.notice('Could not stop command', errorMessage(e)))}
+          >Stop command</Button
+        >{/if}
+    </details>
+  {/if}
+</ExtensionPoint>

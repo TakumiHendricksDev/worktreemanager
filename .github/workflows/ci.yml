@@ -87,6 +87,7 @@ jobs:
       # until they are, they at least get changed together.
       - run: bun x prettier --check "src/**/*.{ts,svelte,css,scss}" "src-tauri/runtime/*.js" "*.json"
       - run: bun run check
+      - run: bun scripts/plugin-contracts.mjs --check
 
   # ───────────────────────────────────────────────────────────────────────────
   # Prove the app actually links and bundles.

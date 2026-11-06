@@ -164,6 +164,10 @@
   display: none;
 }
 
+.c-pane__more.is-persistent {
+  display: contents;
+}
+
 @container pane-head (max-width: #{$pane-fold}) {
   .c-pane__foldable {
     display: none;

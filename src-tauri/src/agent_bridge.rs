@@ -283,6 +283,22 @@ impl AgentSink for AgentEventSink {
         // After the emit, so the turn's last event is on screen before its wire settles. Here
         // rather than in `App` because settling announces, and only the sink holds a handle.
         if let Some(app) = &self.app {
+            match app.plugin_jobs.observe(app, session.as_str(), event) {
+                Ok(true) => {
+                    let _ = self.handle.emit("plugins:drafts", ());
+                }
+                Err(e) => tracing::warn!(error = %e.message, "could not save plugin conversation"),
+                Ok(false) => {}
+            }
+            if let Some(source) = app.agent_fork_source(session.as_str()) {
+                crate::extensions::Runtime::event(
+                    &self.handle,
+                    app,
+                    "chat.event",
+                    &serde_json::json!({"session":session.as_str(),"seq":seq,"event":event,"projectId":source.scope.place().map(|p|p.0),"worktreeId":source.scope.worktree_id()}),
+                    source.scope.worktree_id().unwrap_or_default(),
+                );
+            }
             let settled = app.turns.observe(session.as_str(), event);
             crate::messages::settle_turns(&self.handle, app, &settled);
             // After the turns have settled, never before: a Home tool call waiting in person for

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { setContext as setExtensionContext } from 'svelte';
+  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
+  setExtensionContext(EXTENSION_PROTECTED, true);
   /**
    * A session asking permission before it does something.
    *

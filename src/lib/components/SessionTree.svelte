@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * One worktree's panes, positioned from its split tree rather than nested to match it.
    *
@@ -278,80 +281,88 @@
   }
 </script>
 
-<div class="o-tiles" class:is-dragging={resizing} class:is-moving={moving} bind:this={host}>
-  {#each tiles as tile (tile.paneId)}
-    {@const pane = sessions.paneById(tile.paneId)}
-    {#if pane}
-      <!--
+<ExtensionPoint target="component.session-tree" context={publicContext()}>
+  <div
+    use:extensionPart={{ target: 'component.session-tree', context: publicContext }}
+    class="o-tiles"
+    class:is-dragging={resizing}
+    class:is-moving={moving}
+    bind:this={host}
+  >
+    {#each tiles as tile (tile.paneId)}
+      {@const pane = sessions.paneById(tile.paneId)}
+      {#if pane}
+        <!--
         Keyed on the pane id **and its generation**, which is the render key `sessions.svelte.ts`
         documented and nothing had ever used. The id alone makes a reshape a reorder rather than a
         teardown; the generation is what makes a Restart genuinely remount, so a new shell process
         gets a clean screen instead of appending under the dead session's output.
       -->
-      {#key `${pane.id}:${pane.generation}`}
-        <div
-          class="o-tiles__tile"
-          class:is-lifted={moving && dragPaneId === tile.paneId}
-          style:--tile-x={tile.frame.x}
-          style:--tile-y={tile.frame.y}
-          style:--tile-w={tile.frame.w}
-          style:--tile-h={tile.frame.h}
-        >
-          <SessionPane
-            {pane}
-            {visible}
-            host={{
-              kind: 'tile',
-              onmovestart: (event) => startMove(event, tile.paneId),
-              onmovekey: (event) => onMoveKey(event, tile.paneId),
-            }}
-          />
-        </div>
-      {/key}
-    {/if}
-  {/each}
+        {#key `${pane.id}:${pane.generation}`}
+          <div
+            class="o-tiles__tile"
+            class:is-lifted={moving && dragPaneId === tile.paneId}
+            style:--tile-x={tile.frame.x}
+            style:--tile-y={tile.frame.y}
+            style:--tile-w={tile.frame.w}
+            style:--tile-h={tile.frame.h}
+          >
+            <SessionPane
+              {pane}
+              {visible}
+              host={{
+                kind: 'tile',
+                onmovestart: (event) => startMove(event, tile.paneId),
+                onmovekey: (event) => onMoveKey(event, tile.paneId),
+              }}
+            />
+          </div>
+        {/key}
+      {/if}
+    {/each}
 
-  {#each handles as handle (handle.path)}
-    <!--
+    {#each handles as handle (handle.path)}
+      <!--
       A resize handle is a real widget, not decoration: `role="separator"` with aria-value* and a
       tabindex is the ARIA window-splitter pattern, and the keydown handler is what makes a split
       resizable without a mouse. Same two exemptions as the sidebar's and the dock's, for the same
       reason — Svelte's rule assumes a separator is decorative, which a focusable one is not.
     -->
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="o-tiles__handle o-tiles__handle--{handle.dir}"
-      role="separator"
-      aria-orientation={handle.dir === 'row' ? 'vertical' : 'horizontal'}
-      aria-label="Resize the panes"
-      aria-valuenow={Math.round(handle.ratio * 100)}
-      aria-valuemin={10}
-      aria-valuemax={90}
-      tabindex="0"
-      style:--tile-x={handle.frame.x}
-      style:--tile-y={handle.frame.y}
-      style:--tile-w={handle.frame.w}
-      style:--tile-h={handle.frame.h}
-      style:--tile-at={handle.ratio}
-      onpointerdown={(event) => startResize(event, handle)}
-      onkeydown={(event) => onResizeKey(event, handle)}
-    ></div>
-  {/each}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="o-tiles__handle o-tiles__handle--{handle.dir}"
+        role="separator"
+        aria-orientation={handle.dir === 'row' ? 'vertical' : 'horizontal'}
+        aria-label="Resize the panes"
+        aria-valuenow={Math.round(handle.ratio * 100)}
+        aria-valuemin={10}
+        aria-valuemax={90}
+        tabindex="0"
+        style:--tile-x={handle.frame.x}
+        style:--tile-y={handle.frame.y}
+        style:--tile-w={handle.frame.w}
+        style:--tile-h={handle.frame.h}
+        style:--tile-at={handle.ratio}
+        onpointerdown={(event) => startResize(event, handle)}
+        onkeydown={(event) => onResizeKey(event, handle)}
+      ></div>
+    {/each}
 
-  {#if indicator}
-    <!-- Last child, so it paints over the tiles by tree order rather than by a z-index. -->
-    <div
-      class="o-tiles__drop c-drop"
-      class:is-swap={zone?.kind === 'swap'}
-      style:--tile-x={indicator.x}
-      style:--tile-y={indicator.y}
-      style:--tile-w={indicator.w}
-      style:--tile-h={indicator.h}
-    ></div>
-  {/if}
+    {#if indicator}
+      <!-- Last child, so it paints over the tiles by tree order rather than by a z-index. -->
+      <div
+        class="o-tiles__drop c-drop"
+        class:is-swap={zone?.kind === 'swap'}
+        style:--tile-x={indicator.x}
+        style:--tile-y={indicator.y}
+        style:--tile-w={indicator.w}
+        style:--tile-h={indicator.h}
+      ></div>
+    {/if}
 
-  <!-- The only feedback a screen-reader user gets for a change that is otherwise pure geometry.
+    <!-- The only feedback a screen-reader user gets for a change that is otherwise pure geometry.
        Following the one existing precedent, the sidebar's freshness region. -->
-  <p class="u-visually-hidden" role="status">{announcement}</p>
-</div>
+    <p class="u-visually-hidden" role="status">{announcement}</p>
+  </div>
+</ExtensionPoint>

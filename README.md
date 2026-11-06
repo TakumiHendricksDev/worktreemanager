@@ -1301,3 +1301,11 @@ declares.
 
 Design decisions, the crate layout, the ports, and why the toolchain is pinned the way it is live in
 [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Plugins and mods
+
+Use Settings → Plugins to manage Home, WTM Chat, Native CLI and user packages.
+Packages can replace the entire workbench or individual regions and add commands, terminal
+profiles, palettes, isolated panels and attachable session backends.
+See [the plugin guide](docs/plugins.md) for installation, trust, author examples, recovery
+and the current limits of remote-session support.

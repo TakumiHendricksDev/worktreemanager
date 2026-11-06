@@ -37,6 +37,7 @@ wtm-config   wtm.toml schema, four-layer merge, validation, trust store.   impl 
 wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl Git
 wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl both
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
+wtm-plugins  reviewed packages, named region composition and external session contracts.
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
@@ -1012,6 +1013,31 @@ renders nothing. The window may supply only `form.*` and `action.*` variables; w
 (`worktree.*`, `project.*`) is the backend's to say. One run per worktree at a time: two would be
 two writers in one checkout.
 
+## Native CLI session ownership
+
+The native renderer retains the vendor TUI and its approval prompts. `native_sessions` owns
+processes and receipts; `conversation_sessions()` exposes a common identity to scoped MCP tools
+and Open Design without pretending a PTY is a structured `AgentSession`. Native activity and
+normal WTM Chat use the same provider-event mapping and public plugin registries.
+
+Codex's remote TUI connects to a private Unix WebSocket which relays the public protocol to
+one app-server stdio process. One connection avoids a second client competing for approvals
+or trying to resume a thread before its first rollout exists. WTM forwards provider requests
+unchanged and consumes only its own UUID-prefixed control replies. The `tungstenite` dependency
+has handshake support only: this adapter binds no TCP listener and adds no browser egress.
+Claude's launch-scoped settings add lifecycle hooks; its MCP server and context use the same
+session token as structured chats. No user config is overwritten and no terminal text is parsed.
+
+An implementation instruction is saved with its project/worktree/provider/conversation and
+immutable prototype/review identity. The journal moves to unknown before dispatch or hook
+collection. Only a correlated provider response or scoped acknowledgment marks delivery;
+a Codex public-history read can also confirm the exact client-message ID and content. Missing
+history never proves non-delivery and cannot authorize another send;
+a timeout, restart or reconnect never authorizes replay. Claude collects pending context on
+explicit user submission. A rejected request can be explicitly retried; uncertain delivery
+remains visible. Reconnect closes the old local process and resumes the saved conversation.
+It does not promise SSH persistence, retroactive recovery, or restoration of an interrupted turn.
+
 ## 7. Toolchain policy
 
 **Pinned to an exact version** (`1.97.1`) rather than the floating `stable` channel, so `cargo build`
@@ -1441,8 +1467,11 @@ decision, and it belongs written down rather than discovered in eighteen months.
 - **`git2` / `gix`.** The porcelain CLI _is_ the compatibility contract. Shelling out means the user's
   git config, credential helpers, hooks, and commit signing behave identically to their terminal — and
   `git2`'s worktree support is incomplete besides.
-- **A plugin or WASM extension system.** TOML + argv + minijinja already satisfies "no code changes for
-  a new convention." A plugin host would be an order of magnitude more code for a case that doesn't exist.
+- **An in-process third-party or WASM runtime.** The plugin use case now includes replacing the
+  agent experience and attaching to an external session owner. `wtm-plugins` uses reviewed TOML
+  packages, the existing command runner, and isolated panels instead of injecting executable code
+  into the privileged webview. [The plugin contract](docs/plugins.md) records its current surfaces
+  and the distinction between attach/detach and create/stop. Not every built-in view is extracted yet.
 - **A database.** The projects list, trust store, and window state are one JSON file written atomically
   (temp + rename).
 - **`--move-changes`** (stash/pop across worktrees). The one `create` feature with genuinely nasty

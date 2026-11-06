@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Home's own conversation: an agent outside every repository, whose tools reach the sessions
    * inside them — or, until one is started, a launcher for it.
@@ -75,56 +78,58 @@
   }
 </script>
 
-{#if pane}
-  {#key `${pane.id}:${pane.generation}`}
-    <SessionPane {pane} {visible} host={{ kind: 'home', onhistory: history }} />
-  {/key}
-{:else}
-  <div class="c-home__intro">
-    <h2 class="c-home__title">Home</h2>
-    <p class="c-home__prose">
-      Talk to an agent here that isn't in any repository. It can see every session in the
-      tree, read what one has done, hand work to it or to a new session in any worktree, and
-      keep talking to you while that work runs — it hears back as each session finishes.
-      Approvals stay yours: whatever a session asks shows up under Needs you.
-    </p>
-    <div class="o-row">
-      {#each agents as option (option.id)}
-        <Button
-          variant={option.available ? 'accent' : 'neutral'}
-          size="sm"
-          disabled={!option.available}
-          title={option.detail ?? option.blurb}
-          onclick={() => void sessions.openHome(option.id)}
-        >
-          {option.label}
-        </Button>
-      {/each}
-    </div>
-    {#if past.length > 0}
-      <h3 class="c-section-heading c-home__past">Pick up a past Home conversation</h3>
-      <ul class="o-plain-list c-home__resume">
-        {#each past as record (record.provider + record.providerSession)}
-          <li class="o-row">
-            <Button
-              variant="neutral"
-              size="sm"
-              title="Resume this conversation on {record.model ?? 'its own model'}"
-              onclick={() => resume(record)}
-            >
-              {titleOf(record)}
-            </Button>
-            <span class="c-status--subtle">{labelOf(record.provider)}</span>
-            <button
-              class="c-row-action"
-              title="Stop offering this conversation"
-              onclick={() => void sessions.forget(HOME, record)}
-            >
-              forget
-            </button>
-          </li>
+<ExtensionPoint target="component.home-agent" context={publicContext()}>
+  {#if pane}
+    {#key `${pane.id}:${pane.generation}`}
+      <SessionPane {pane} {visible} host={{ kind: 'home', onhistory: history }} />
+    {/key}
+  {:else}
+    <div class="c-home__intro">
+      <h2 class="c-home__title">Home</h2>
+      <p class="c-home__prose">
+        Talk to an agent here that isn't in any repository. It can see every session in the
+        tree, read what one has done, hand work to it or to a new session in any worktree,
+        and keep talking to you while that work runs — it hears back as each session
+        finishes. Approvals stay yours: whatever a session asks shows up under Needs you.
+      </p>
+      <div class="o-row">
+        {#each agents as option (option.id)}
+          <Button
+            variant={option.available ? 'accent' : 'neutral'}
+            size="sm"
+            disabled={!option.available}
+            title={option.detail ?? option.blurb}
+            onclick={() => void sessions.openHome(option.id)}
+          >
+            {option.label}
+          </Button>
         {/each}
-      </ul>
-    {/if}
-  </div>
-{/if}
+      </div>
+      {#if past.length > 0}
+        <h3 class="c-section-heading c-home__past">Pick up a past Home conversation</h3>
+        <ul class="o-plain-list c-home__resume">
+          {#each past as record (record.provider + record.providerSession)}
+            <li class="o-row">
+              <Button
+                variant="neutral"
+                size="sm"
+                title="Resume this conversation on {record.model ?? 'its own model'}"
+                onclick={() => resume(record)}
+              >
+                {titleOf(record)}
+              </Button>
+              <span class="c-status--subtle">{labelOf(record.provider)}</span>
+              <button
+                class="c-row-action"
+                title="Stop offering this conversation"
+                onclick={() => void sessions.forget(HOME, record)}
+              >
+                forget
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
+</ExtensionPoint>

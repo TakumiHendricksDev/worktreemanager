@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { setContext as setExtensionContext } from 'svelte';
+  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
+  setExtensionContext(EXTENSION_PROTECTED, true);
   import { untrack } from 'svelte';
   import { commands } from '../ipc/commands';
   import { errorMessage, type Worktree } from '../ipc/types';

@@ -91,6 +91,8 @@ pub struct SessionRequest {
     pub fork: Option<String>,
     /// Whether the fork is temporary UI rather than a conversation the user can resume later.
     pub ephemeral: bool,
+    /// Last completed provider turn included in a durable fork; never a local display index.
+    pub fork_through: Option<String>,
     /// MCP servers to hand the CLI, rendered but **not** serialized.
     ///
     /// This used to be a `String` of pre-baked JSON, and the shape was wrong in a way that showed

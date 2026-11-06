@@ -1,3 +1,4 @@
+import { interceptUiOperation } from '../extension-operations';
 /**
  * Whether Settings is open, and at which section.
  *
@@ -7,7 +8,13 @@
  */
 
 export type SettingsSection =
-  'appearance' | 'general' | 'notifications' | 'advanced' | 'recipes' | 'actions';
+  | 'plugins'
+  | 'appearance'
+  | 'general'
+  | 'notifications'
+  | 'advanced'
+  | 'recipes'
+  | 'actions';
 
 class SettingsView {
   open = $state(false);
@@ -16,6 +23,16 @@ class SettingsView {
   focus = $state<string | null>(null);
 
   show(section?: SettingsSection, focus: string | null = null): void {
+    if (
+      section !== 'plugins' &&
+      interceptUiOperation(
+        'ui.settings.show',
+        { section: section ?? this.section, focus },
+        { projectId: '', worktreeId: '' },
+        () => this.show(section, focus),
+      )
+    )
+      return;
     if (section) this.section = section;
     this.focus = focus;
     this.open = true;

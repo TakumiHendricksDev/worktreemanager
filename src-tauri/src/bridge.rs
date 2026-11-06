@@ -179,6 +179,15 @@ fn serve_one(handle: &tauri::AppHandle, app: &Arc<App>, stream: UnixStream) {
         crate::shell_control::serve(handle, app, &line, reader, stream);
         return;
     }
+    if let Ok(value) = serde_json::from_str::<Value>(&line)
+        && value["nativeHook"] == true
+    {
+        let reply = crate::native_sessions::serve_hook(app, &value);
+        let mut stream = stream;
+        let _ = serde_json::to_writer(&mut stream, &reply);
+        let _ = stream.write_all(b"\n");
+        return;
+    }
     let response = match serde_json::from_str::<Request>(&line) {
         Ok(request) => handoff::run(handle, app, &request),
         Err(error) => {
@@ -247,6 +256,9 @@ pub fn serve_stdio() {
                 let mut listed = tools(&agents, awareness, browser, code);
                 if design && let Some(entries) = listed["tools"].as_array_mut() {
                     entries.extend(crate::prototype_tools::definitions());
+                    if crate::native_sessions::hooks::enabled() {
+                        entries.extend(crate::native_sessions::hooks::definitions());
+                    }
                 }
                 Some(result(&id, &listed))
             }
@@ -473,7 +485,10 @@ fn tools(agents: &[(String, String)], awareness: bool, browser: bool, code: bool
 /// Run a `tools/call` by asking the app.
 fn call(params: &Value, browser: bool, code: bool, design: bool) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    if design && name.starts_with(crate::prototype_tools::PREFIX) {
+    if design
+        && (name.starts_with(crate::prototype_tools::PREFIX)
+            || (name == "native_acknowledge" && crate::native_sessions::hooks::enabled()))
+    {
         return call_design(
             name,
             params

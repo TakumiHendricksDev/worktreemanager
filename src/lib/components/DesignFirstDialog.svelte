@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { setContext as setExtensionContext } from 'svelte';
+  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
+  setExtensionContext(EXTENSION_PROTECTED, true);
   import { sessions } from '../state/sessions.svelte';
   import type { Worktree } from '../ipc/types';
   import { errorMessage } from '../ipc/types';
@@ -20,7 +23,7 @@
     try {
       const paneId =
         existing?.id ??
-        (await sessions.openAgent(
+        (await sessions.openChat(
           projectId,
           worktree.id,
           provider || available[0]?.id || '',

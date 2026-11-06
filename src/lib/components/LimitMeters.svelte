@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * One provider account's usage limits: a row and a bar per window, then when it was read.
    *
@@ -50,38 +53,40 @@
   });
 </script>
 
-{#if windows.length > 0}
-  <ul class="o-plain-list c-usage__windows">
-    {#each windows as window (`${window.minutes}:${window.scope}`)}
-      {@const over = elapsed(window, now)}
-      <li class="c-usage__window">
-        <span class="c-usage__name">{limitLabel(window)}</span>
-        <span class="c-usage__reset">{resetText(window, now)}</span>
-        <!-- An elapsed window shows no figure: after a reset the true one is lower by an amount
+<ExtensionPoint target="component.limit-meters" context={publicContext()}>
+  {#if windows.length > 0}
+    <ul class="o-plain-list c-usage__windows">
+      {#each windows as window (`${window.minutes}:${window.scope}`)}
+        {@const over = elapsed(window, now)}
+        <li class="c-usage__window">
+          <span class="c-usage__name">{limitLabel(window)}</span>
+          <span class="c-usage__reset">{resetText(window, now)}</span>
+          <!-- An elapsed window shows no figure: after a reset the true one is lower by an amount
              nobody has reported yet, and the old one would be a confident wrong number. -->
-        <span class="c-usage__figure"
-          >{over ? '—' : `${Math.round(window.usedPercent)}%`}</span
-        >
-        <div class="c-usage__bar">
-          <Meter
-            percent={over ? null : window.usedPercent}
-            tone={over ? 'accent' : toneFor(window.usedPercent)}
-            label="{limitLabel(window)} used"
-          />
-        </div>
-      </li>
-    {/each}
-  </ul>
-{:else if asking}
-  <p class="c-usage__note">Asking {label}…</p>
-{:else if !account?.error}
-  <p class="c-usage__note">{noFiguresText(provider, label)}</p>
-{/if}
+          <span class="c-usage__figure"
+            >{over ? '—' : `${Math.round(window.usedPercent)}%`}</span
+          >
+          <div class="c-usage__bar">
+            <Meter
+              percent={over ? null : window.usedPercent}
+              tone={over ? 'accent' : toneFor(window.usedPercent)}
+              label="{limitLabel(window)} used"
+            />
+          </div>
+        </li>
+      {/each}
+    </ul>
+  {:else if asking}
+    <p class="c-usage__note">Asking {label}…</p>
+  {:else if !account?.error}
+    <p class="c-usage__note">{noFiguresText(provider, label)}</p>
+  {/if}
 
-{#if account?.error}
-  <p class="c-usage__error">{label} could not be asked: {account.error}</p>
-{/if}
+  {#if account?.error}
+    <p class="c-usage__error">{label} could not be asked: {account.error}</p>
+  {/if}
 
-{#if footnote}
-  <p class="c-usage__note">{footnote}</p>
-{/if}
+  {#if footnote}
+    <p class="c-usage__note">{footnote}</p>
+  {/if}
+</ExtensionPoint>

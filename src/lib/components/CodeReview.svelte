@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * The Review drawer: every comment in the worktree, and the one button that turns them into a
    * message for an agent.
@@ -108,84 +111,90 @@
   let clearButton = $state<HTMLElement | null>(null);
 </script>
 
-<aside class="c-code-review" aria-label="Review comments">
-  <header class="c-code-review__head">
-    <span class="c-code-review__title">Review</span>
-    <span class="c-code-review__count">{open.length} open</span>
-    <span class="c-code-review__spacer"></span>
-    <span bind:this={clearButton}>
+<ExtensionPoint target="component.code-review" context={publicContext()}>
+  <aside
+    use:extensionPart={{ target: 'component.code-review', context: publicContext }}
+    class="c-code-review"
+    aria-label="Review comments"
+  >
+    <header class="c-code-review__head">
+      <span class="c-code-review__title">Review</span>
+      <span class="c-code-review__count">{open.length} open</span>
+      <span class="c-code-review__spacer"></span>
+      <span bind:this={clearButton}>
+        <Button
+          variant="quiet"
+          size="sm"
+          icon="sm"
+          title="Clear comments"
+          ariaLabel="Clear comments"
+          ariaHaspopup="menu"
+          onclick={() => clearButton && clearMenu(clearButton)}
+          ><Icon name="more" size={14} /></Button
+        >
+      </span>
+    </header>
+
+    <ul class="c-code-review__list">
+      {#each comments as comment (comment.id)}
+        <li>
+          <button
+            type="button"
+            class="c-code-review__item"
+            class:is-resolved={comment.status === 'resolved'}
+            title={`Go to ${reference(comment.path, comment.start, comment.end)}`}
+            onclick={() => onjump(comment)}
+          >
+            <span class="c-code-review__where">
+              {reference(comment.path, comment.start, comment.end)}
+            </span>
+            <span class="c-code-review__text">{comment.text}</span>
+            <span class="c-code-review__tags">
+              {#if comment.status === 'resolved'}<span>Resolved</span>{/if}
+              {#if comment.sentTo}<span>Sent to {comment.sentTo}</span>{/if}
+              {#if outdated(comment)}<span class="c-code-review__warn">Outdated</span>{/if}
+            </span>
+            {#if comment.note}<span class="c-code-review__note">{comment.note}</span>{/if}
+          </button>
+        </li>
+      {/each}
+    </ul>
+
+    <footer class="c-code-review__foot">
+      {#if agents.length > 0 && primaryLabel}
+        <div class="c-split-button">
+          <button
+            type="button"
+            class="c-split-button__action"
+            disabled={pending.length === 0}
+            title="Put these comments in the agent's message box. Nothing is sent until you press Enter there."
+            onclick={sendPrimary}
+          >
+            <span class="c-split-button__label"
+              >{again ? 'Send again' : `Send ${pending.length}`} to {primaryLabel}</span
+            >
+          </button>
+          <button
+            type="button"
+            class="c-split-button__menu"
+            bind:this={chevron}
+            aria-label="Send to another agent"
+            aria-haspopup="menu"
+            disabled={pending.length === 0}
+            onclick={() => chevron && chooseAgent(chevron)}
+            ><Icon name="chevron-down" size={12} /></button
+          >
+        </div>
+      {:else}
+        <p class="c-code-review__none">Open an agent in Sessions to send these to it.</p>
+      {/if}
       <Button
         variant="quiet"
         size="sm"
-        icon="sm"
-        title="Clear comments"
-        ariaLabel="Clear comments"
-        ariaHaspopup="menu"
-        onclick={() => clearButton && clearMenu(clearButton)}
-        ><Icon name="more" size={14} /></Button
+        disabled={open.length === 0}
+        title="Copy the open comments as Markdown"
+        onclick={() => oncopy(open)}>Copy</Button
       >
-    </span>
-  </header>
-
-  <ul class="c-code-review__list">
-    {#each comments as comment (comment.id)}
-      <li>
-        <button
-          type="button"
-          class="c-code-review__item"
-          class:is-resolved={comment.status === 'resolved'}
-          title={`Go to ${reference(comment.path, comment.start, comment.end)}`}
-          onclick={() => onjump(comment)}
-        >
-          <span class="c-code-review__where">
-            {reference(comment.path, comment.start, comment.end)}
-          </span>
-          <span class="c-code-review__text">{comment.text}</span>
-          <span class="c-code-review__tags">
-            {#if comment.status === 'resolved'}<span>Resolved</span>{/if}
-            {#if comment.sentTo}<span>Sent to {comment.sentTo}</span>{/if}
-            {#if outdated(comment)}<span class="c-code-review__warn">Outdated</span>{/if}
-          </span>
-          {#if comment.note}<span class="c-code-review__note">{comment.note}</span>{/if}
-        </button>
-      </li>
-    {/each}
-  </ul>
-
-  <footer class="c-code-review__foot">
-    {#if agents.length > 0 && primaryLabel}
-      <div class="c-split-button">
-        <button
-          type="button"
-          class="c-split-button__action"
-          disabled={pending.length === 0}
-          title="Put these comments in the agent's message box. Nothing is sent until you press Enter there."
-          onclick={sendPrimary}
-        >
-          <span class="c-split-button__label"
-            >{again ? 'Send again' : `Send ${pending.length}`} to {primaryLabel}</span
-          >
-        </button>
-        <button
-          type="button"
-          class="c-split-button__menu"
-          bind:this={chevron}
-          aria-label="Send to another agent"
-          aria-haspopup="menu"
-          disabled={pending.length === 0}
-          onclick={() => chevron && chooseAgent(chevron)}
-          ><Icon name="chevron-down" size={12} /></button
-        >
-      </div>
-    {:else}
-      <p class="c-code-review__none">Open an agent in Sessions to send these to it.</p>
-    {/if}
-    <Button
-      variant="quiet"
-      size="sm"
-      disabled={open.length === 0}
-      title="Copy the open comments as Markdown"
-      onclick={() => oncopy(open)}>Copy</Button
-    >
-  </footer>
-</aside>
+    </footer>
+  </aside>
+</ExtensionPoint>

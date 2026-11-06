@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Settings › Recipes: the list on the left, the selected recipe's editor on the right.
    *
@@ -289,290 +292,302 @@
   }
 </script>
 
-<div class="c-recipe-list" data-od-id="recipe-list">
-  <div class="c-recipe-list__top">
-    <Button variant="neutral" size="sm" full onclick={() => startNew()}>
-      <Icon name="plus" size={12} /> New recipe
-    </Button>
-  </div>
-  <div class="c-recipe-list__items" role="listbox" aria-label="Recipes">
-    {#if draft && !draft.id}
-      <button
-        type="button"
-        role="option"
-        aria-selected="true"
-        class="c-recipe-item is-selected"
-      >
-        <span class="c-recipe-item__name">
-          {draft.name || 'Untitled recipe'}<span
-            class="c-recipe-item__dirty"
-            title="Not saved yet"
-          ></span>
-        </span>
-        <span class="c-recipe-item__meta">Not saved yet</span>
-      </button>
-    {/if}
-    {#each recipes.recipes as recipe (recipe.id)}
-      {@const selected = draft?.id === recipe.id}
-      {@const on = offeredOn(recipe.id)}
-      <button
-        type="button"
-        role="option"
-        aria-selected={selected}
-        class="c-recipe-item"
-        class:is-selected={selected}
-        onclick={() => select(recipe.id)}
-      >
-        <span class="c-recipe-item__name">
-          {recipe.name}
-          {#if selected && dirty}<span class="c-recipe-item__dirty" title="Unsaved changes"
-            ></span>{/if}
-        </span>
-        <span class="c-recipe-item__meta">
-          {#each agentsOf(recipe) as agent (agent)}
-            <span class="c-agent-mark c-agent-mark--{agent}" aria-hidden="true"
-              >{agentMark(agent)}</span
-            >
-          {/each}
-          <span>{recipe.steps.length} step{recipe.steps.length === 1 ? '' : 's'}</span>
-          {#if on[0]}
-            <span class="c-recipe-item__on"
-              >Offered on {on[0].name}{on.length > 1 ? ` +${on.length - 1}` : ''}</span
-            >
-          {/if}
-        </span>
-      </button>
-    {/each}
-    {#each recipes.problems as problem (problem.id)}
-      <p class="c-recipe-list__problem c-status--warn" title={problem.message}>
-        <code>{problem.id}</code> in your config.toml could not be read: {problem.message}
-      </p>
-    {/each}
-  </div>
-  <p class="c-recipe-list__foot">
-    Start from a template:
-    {#each TEMPLATES as template, i (template.id)}{#if i > 0},
-      {/if}<Button variant="link" size="sm" onclick={() => startNew(template.build)}
-        >{template.build().name}</Button
-      >{/each}.
-  </p>
-</div>
-
-<div class="c-recipe" data-od-id="recipe-editor">
-  {#if draft}
-    <div class="c-recipe__scroll">
-      <div class="c-recipe__inner">
-        <div class="c-recipe__switch">
-          <select
-            class="c-select"
-            aria-label="Recipe"
-            value={draft.id}
-            onchange={(e) => select((e.currentTarget as HTMLSelectElement).value)}
-          >
-            {#if !draft.id}<option value="">{draft.name || 'Untitled recipe'}</option>{/if}
-            {#each recipes.recipes as recipe (recipe.id)}
-              <option value={recipe.id}>{recipe.name}</option>
+<ExtensionPoint target="component.recipe-settings" context={publicContext()}>
+  <div
+    use:extensionPart={{ target: 'component.recipe-settings', context: publicContext }}
+    use:extensionPart={{ target: 'component.recipe-settings', context: publicContext }}
+    class="c-recipe-list"
+    data-od-id="recipe-list"
+  >
+    <div class="c-recipe-list__top">
+      <Button variant="neutral" size="sm" full onclick={() => startNew()}>
+        <Icon name="plus" size={12} /> New recipe
+      </Button>
+    </div>
+    <div class="c-recipe-list__items" role="listbox" aria-label="Recipes">
+      {#if draft && !draft.id}
+        <button
+          type="button"
+          role="option"
+          aria-selected="true"
+          class="c-recipe-item is-selected"
+        >
+          <span class="c-recipe-item__name">
+            {draft.name || 'Untitled recipe'}<span
+              class="c-recipe-item__dirty"
+              title="Not saved yet"
+            ></span>
+          </span>
+          <span class="c-recipe-item__meta">Not saved yet</span>
+        </button>
+      {/if}
+      {#each recipes.recipes as recipe (recipe.id)}
+        {@const selected = draft?.id === recipe.id}
+        {@const on = offeredOn(recipe.id)}
+        <button
+          type="button"
+          role="option"
+          aria-selected={selected}
+          class="c-recipe-item"
+          class:is-selected={selected}
+          onclick={() => select(recipe.id)}
+        >
+          <span class="c-recipe-item__name">
+            {recipe.name}
+            {#if selected && dirty}<span
+                class="c-recipe-item__dirty"
+                title="Unsaved changes"
+              ></span>{/if}
+          </span>
+          <span class="c-recipe-item__meta">
+            {#each agentsOf(recipe) as agent (agent)}
+              <span class="c-agent-mark c-agent-mark--{agent}" aria-hidden="true"
+                >{agentMark(agent)}</span
+              >
             {/each}
-          </select>
-          <Button variant="neutral" size="sm" onclick={() => startNew()}>
-            <Icon name="plus" size={12} /> New
-          </Button>
-        </div>
+            <span>{recipe.steps.length} step{recipe.steps.length === 1 ? '' : 's'}</span>
+            {#if on[0]}
+              <span class="c-recipe-item__on"
+                >Offered on {on[0].name}{on.length > 1 ? ` +${on.length - 1}` : ''}</span
+              >
+            {/if}
+          </span>
+        </button>
+      {/each}
+      {#each recipes.problems as problem (problem.id)}
+        <p class="c-recipe-list__problem c-status--warn" title={problem.message}>
+          <code>{problem.id}</code> in your config.toml could not be read: {problem.message}
+        </p>
+      {/each}
+    </div>
+    <p class="c-recipe-list__foot">
+      Start from a template:
+      {#each TEMPLATES as template, i (template.id)}{#if i > 0},
+        {/if}<Button variant="link" size="sm" onclick={() => startNew(template.build)}
+          >{template.build().name}</Button
+        >{/each}.
+    </p>
+  </div>
 
-        <input
-          class="c-recipe__name"
-          aria-label="Recipe name"
-          bind:value={draft.name}
-          placeholder="Name this recipe"
-        />
-        <input
-          class="c-recipe__desc"
-          aria-label="Description"
-          bind:value={draft.description}
-          placeholder="What it’s for"
-        />
-
-        <dl class="c-recipe__facts">
-          <dt>Repositories</dt>
-          <dd>
+  <div class="c-recipe" data-od-id="recipe-editor">
+    {#if draft}
+      <div class="c-recipe__scroll">
+        <div class="c-recipe__inner">
+          <div class="c-recipe__switch">
             <select
               class="c-select"
-              aria-label="Repositories"
-              value={limited ? 'some' : 'all'}
-              onchange={(e) => setScope((e.currentTarget as HTMLSelectElement).value)}
+              aria-label="Recipe"
+              value={draft.id}
+              onchange={(e) => select((e.currentTarget as HTMLSelectElement).value)}
             >
-              <option value="all">Every repository</option>
-              <option value="some">Only some…</option>
+              {#if !draft.id}<option value="">{draft.name || 'Untitled recipe'}</option
+                >{/if}
+              {#each recipes.recipes as recipe (recipe.id)}
+                <option value={recipe.id}>{recipe.name}</option>
+              {/each}
             </select>
-            {#if limited}
-              {#each draft.repositories as root (root)}
-                <span class="c-chip">
-                  {projectName(root)}
-                  <button
-                    type="button"
-                    class="c-chip__remove"
-                    aria-label="Stop offering it in {projectName(root)}"
-                    onclick={() =>
-                      draft &&
-                      (draft.repositories = draft.repositories.filter((r) => r !== root))}
+            <Button variant="neutral" size="sm" onclick={() => startNew()}>
+              <Icon name="plus" size={12} /> New
+            </Button>
+          </div>
+
+          <input
+            class="c-recipe__name"
+            aria-label="Recipe name"
+            bind:value={draft.name}
+            placeholder="Name this recipe"
+          />
+          <input
+            class="c-recipe__desc"
+            aria-label="Description"
+            bind:value={draft.description}
+            placeholder="What it’s for"
+          />
+
+          <dl class="c-recipe__facts">
+            <dt>Repositories</dt>
+            <dd>
+              <select
+                class="c-select"
+                aria-label="Repositories"
+                value={limited ? 'some' : 'all'}
+                onchange={(e) => setScope((e.currentTarget as HTMLSelectElement).value)}
+              >
+                <option value="all">Every repository</option>
+                <option value="some">Only some…</option>
+              </select>
+              {#if limited}
+                {#each draft.repositories as root (root)}
+                  <span class="c-chip">
+                    {projectName(root)}
+                    <button
+                      type="button"
+                      class="c-chip__remove"
+                      aria-label="Stop offering it in {projectName(root)}"
+                      onclick={() =>
+                        draft &&
+                        (draft.repositories = draft.repositories.filter((r) => r !== root))}
+                    >
+                      <Icon name="close" size={12} />
+                    </button>
+                  </span>
+                {/each}
+                {#if addable.length > 0}
+                  <select
+                    class="c-select"
+                    aria-label="Add a repository"
+                    value=""
+                    onchange={(e) => {
+                      const value = (e.currentTarget as HTMLSelectElement).value;
+                      if (value && draft)
+                        draft.repositories = [...draft.repositories, value];
+                    }}
                   >
-                    <Icon name="close" size={12} />
-                  </button>
-                </span>
-              {/each}
-              {#if addable.length > 0}
-                <select
-                  class="c-select"
-                  aria-label="Add a repository"
-                  value=""
-                  onchange={(e) => {
-                    const value = (e.currentTarget as HTMLSelectElement).value;
-                    if (value && draft) draft.repositories = [...draft.repositories, value];
-                  }}
-                >
-                  <option value="">Add…</option>
-                  {#each addable as project (project.id)}
-                    <option value={project.id}>{project.name}</option>
-                  {/each}
-                </select>
+                    <option value="">Add…</option>
+                    {#each addable as project (project.id)}
+                      <option value={project.id}>{project.name}</option>
+                    {/each}
+                  </select>
+                {/if}
               {/if}
-            {/if}
-          </dd>
-          <dt>Offered on</dt>
-          <dd>
-            {#if draft.id && offeredOn(draft.id).length > 0}
-              {#each offeredOn(draft.id) as action (action.id)}
-                <span class="c-chip c-chip--plain">{action.name}</span>
-              {/each}
-            {:else}
-              <span class="c-status--muted">No action offers it yet</span>
-            {/if}
-            <Button
-              variant="link"
-              size="sm"
-              onclick={() => leave(() => settingsView.show('actions'))}
-              >Change in Actions</Button
-            >
-          </dd>
-          <dt>By hand</dt>
-          <dd class="c-status--muted">
-            A worktree’s right-click menu › Run recipe › {draft.name || 'this recipe'}
-          </dd>
-        </dl>
+            </dd>
+            <dt>Offered on</dt>
+            <dd>
+              {#if draft.id && offeredOn(draft.id).length > 0}
+                {#each offeredOn(draft.id) as action (action.id)}
+                  <span class="c-chip c-chip--plain">{action.name}</span>
+                {/each}
+              {:else}
+                <span class="c-status--muted">No action offers it yet</span>
+              {/if}
+              <Button
+                variant="link"
+                size="sm"
+                onclick={() => leave(() => settingsView.show('actions'))}
+                >Change in Actions</Button
+              >
+            </dd>
+            <dt>By hand</dt>
+            <dd class="c-status--muted">
+              A worktree’s right-click menu › Run recipe › {draft.name || 'this recipe'}
+            </dd>
+          </dl>
 
-        <div class="c-recipe__steps-head">
-          <h3 class="c-section-heading">Steps</h3>
-          <span class="c-recipe__flow">Each step waits for the one before it</span>
+          <div class="c-recipe__steps-head">
+            <h3 class="c-section-heading">Steps</h3>
+            <span class="c-recipe__flow">Each step waits for the one before it</span>
+          </div>
+          <ol class="c-recipe-steps" data-od-id="recipe-steps">
+            {#each draft.steps as step, index (index)}
+              <RecipeStepCard
+                {step}
+                {index}
+                steps={draft.steps}
+                open={openStep === index}
+                {agents}
+                skills={skills[step.agent] ?? null}
+                asking={asking[step.agent] ?? false}
+                {place}
+                {formFields}
+                projectName={workspace.activeProject?.name ?? null}
+                ontoggle={() => (openStep = openStep === index ? -1 : index)}
+                onchange={(patch) => patchStep(index, patch)}
+                onmove={(by) => move(index, by)}
+                onduplicate={() => duplicateStep(index)}
+                onremove={() => removeStep(index)}
+              />
+            {/each}
+            <li class="c-recipe-step">
+              <div class="c-recipe-step__rail"></div>
+              <button type="button" class="c-recipe-steps__add" onclick={addStep}>
+                <Icon name="plus" size={14} /> Add a step
+              </button>
+            </li>
+          </ol>
         </div>
-        <ol class="c-recipe-steps" data-od-id="recipe-steps">
-          {#each draft.steps as step, index (index)}
-            <RecipeStepCard
-              {step}
-              {index}
-              steps={draft.steps}
-              open={openStep === index}
-              {agents}
-              skills={skills[step.agent] ?? null}
-              asking={asking[step.agent] ?? false}
-              {place}
-              {formFields}
-              projectName={workspace.activeProject?.name ?? null}
-              ontoggle={() => (openStep = openStep === index ? -1 : index)}
-              onchange={(patch) => patchStep(index, patch)}
-              onmove={(by) => move(index, by)}
-              onduplicate={() => duplicateStep(index)}
-              onremove={() => removeStep(index)}
-            />
-          {/each}
-          <li class="c-recipe-step">
-            <div class="c-recipe-step__rail"></div>
-            <button type="button" class="c-recipe-steps__add" onclick={addStep}>
-              <Icon name="plus" size={14} /> Add a step
-            </button>
-          </li>
-        </ol>
       </div>
-    </div>
 
-    <div class="c-recipe__savebar" data-od-id="recipe-savebar">
-      {#if error}
-        <span class="c-recipe__status c-status--danger" role="alert">{error}</span>
-      {:else if dirty}
-        <span class="c-recipe__status is-dirty"
-          >{draft.id
-            ? `Unsaved changes to ${draft.name || 'this recipe'}`
-            : 'Not saved yet'}</span
-        >
-      {:else}
-        <span class="c-recipe__status">Saved</span>
-      {/if}
-      <Button variant="quiet" size="sm" disabled={!draft.id} onclick={duplicate}
-        >Duplicate</Button
-      >
-      <Button variant="quiet" size="sm" onclick={() => (confirm = { kind: 'delete' })}
-        >Delete</Button
-      >
-      <Button variant="neutral" disabled={!dirty || saving} onclick={discard}
-        >Discard</Button
-      >
-      <Button variant="accent" disabled={!dirty || saving} onclick={() => void save()}
-        >{saving ? 'Saving…' : 'Save recipe'}</Button
-      >
-    </div>
-  {:else}
-    <div class="c-recipe__empty">
-      <h3 class="c-recipe__empty-title">No recipes yet</h3>
-      <p class="c-field__help">
-        A recipe is steps that run one after another, each on the agent and model you pick.
-        Start from nothing or from a template.
-      </p>
-      <div class="c-recipe__empty-actions">
-        <Button variant="accent" onclick={() => startNew()}>New recipe</Button>
-        {#each TEMPLATES as template (template.id)}
-          <Button variant="neutral" onclick={() => startNew(template.build)}
-            >{template.build().name}</Button
+      <div class="c-recipe__savebar" data-od-id="recipe-savebar">
+        {#if error}
+          <span class="c-recipe__status c-status--danger" role="alert">{error}</span>
+        {:else if dirty}
+          <span class="c-recipe__status is-dirty"
+            >{draft.id
+              ? `Unsaved changes to ${draft.name || 'this recipe'}`
+              : 'Not saved yet'}</span
           >
-        {/each}
+        {:else}
+          <span class="c-recipe__status">Saved</span>
+        {/if}
+        <Button variant="quiet" size="sm" disabled={!draft.id} onclick={duplicate}
+          >Duplicate</Button
+        >
+        <Button variant="quiet" size="sm" onclick={() => (confirm = { kind: 'delete' })}
+          >Delete</Button
+        >
+        <Button variant="neutral" disabled={!dirty || saving} onclick={discard}
+          >Discard</Button
+        >
+        <Button variant="accent" disabled={!dirty || saving} onclick={() => void save()}
+          >{saving ? 'Saving…' : 'Save recipe'}</Button
+        >
       </div>
-    </div>
-  {/if}
-</div>
+    {:else}
+      <div class="c-recipe__empty">
+        <h3 class="c-recipe__empty-title">No recipes yet</h3>
+        <p class="c-field__help">
+          A recipe is steps that run one after another, each on the agent and model you
+          pick. Start from nothing or from a template.
+        </p>
+        <div class="c-recipe__empty-actions">
+          <Button variant="accent" onclick={() => startNew()}>New recipe</Button>
+          {#each TEMPLATES as template (template.id)}
+            <Button variant="neutral" onclick={() => startNew(template.build)}
+              >{template.build().name}</Button
+            >
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
 
-{#if confirm?.kind === 'leave'}
-  {@const then = confirm.then}
-  <Dialog title="Discard unsaved changes?" onclose={() => (confirm = null)}>
-    {#snippet body()}
-      <p>
-        {draft?.name || 'This recipe'} has changes that aren’t saved. Leaving it throws them away.
-      </p>
-    {/snippet}
-    {#snippet footer()}
-      <Button variant="neutral" onclick={() => (confirm = null)}>Keep editing</Button>
-      <Button
-        variant="danger-solid"
-        onclick={() => {
-          // Read before clearing, for the reason SettingsDialog's Discard does: `then` is derived
-          // from `confirm`, and is gone the moment `confirm` is.
-          const go = then;
-          confirm = null;
-          // Back to the saved copy first, so whatever `then` opens is not asked about again.
-          baseline = JSON.stringify(draft);
-          go();
-        }}>Discard</Button
-      >
-    {/snippet}
-  </Dialog>
-{:else if confirm?.kind === 'delete'}
-  <Dialog title="Delete {draft?.name || 'this recipe'}?" onclose={() => (confirm = null)}>
-    {#snippet body()}
-      <p>
-        It is removed from your config.toml, and from every action that offers it. Runs
-        already going carry on with the copy they started with.
-      </p>
-    {/snippet}
-    {#snippet footer()}
-      <Button variant="neutral" onclick={() => (confirm = null)}>Cancel</Button>
-      <Button variant="danger-solid" onclick={() => void remove()}>Delete</Button>
-    {/snippet}
-  </Dialog>
-{/if}
+  {#if confirm?.kind === 'leave'}
+    {@const then = confirm.then}
+    <Dialog title="Discard unsaved changes?" onclose={() => (confirm = null)}>
+      {#snippet body()}
+        <p>
+          {draft?.name || 'This recipe'} has changes that aren’t saved. Leaving it throws them
+          away.
+        </p>
+      {/snippet}
+      {#snippet footer()}
+        <Button variant="neutral" onclick={() => (confirm = null)}>Keep editing</Button>
+        <Button
+          variant="danger-solid"
+          onclick={() => {
+            // Read before clearing, for the reason SettingsDialog's Discard does: `then` is derived
+            // from `confirm`, and is gone the moment `confirm` is.
+            const go = then;
+            confirm = null;
+            // Back to the saved copy first, so whatever `then` opens is not asked about again.
+            baseline = JSON.stringify(draft);
+            go();
+          }}>Discard</Button
+        >
+      {/snippet}
+    </Dialog>
+  {:else if confirm?.kind === 'delete'}
+    <Dialog title="Delete {draft?.name || 'this recipe'}?" onclose={() => (confirm = null)}>
+      {#snippet body()}
+        <p>
+          It is removed from your config.toml, and from every action that offers it. Runs
+          already going carry on with the copy they started with.
+        </p>
+      {/snippet}
+      {#snippet footer()}
+        <Button variant="neutral" onclick={() => (confirm = null)}>Cancel</Button>
+        <Button variant="danger-solid" onclick={() => void remove()}>Delete</Button>
+      {/snippet}
+    </Dialog>
+  {/if}
+</ExtensionPoint>

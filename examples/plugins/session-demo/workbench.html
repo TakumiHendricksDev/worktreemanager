@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Custom session workbench</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        background: var(--wtm-bg);
+        color: var(--wtm-fg);
+        font: 15px var(--wtm-font-ui, system-ui);
+      }
+      button,
+      input {
+        font: inherit;
+        padding: 9px;
+        border: 1px solid var(--wtm-border);
+        border-radius: 6px;
+        color: inherit;
+        background: var(--wtm-bg-elevated);
+      }
+      pre {
+        white-space: pre-wrap;
+        border-block: 1px solid var(--wtm-border);
+        padding-block: 20px;
+        min-height: 160px;
+      }
+      p {
+        color: var(--wtm-fg-muted);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>A workbench owned by a plugin</h1>
+    <p>
+      This example replaces the entire region with its own UI and durable echo backend. It
+      is not an AI agent or SSH connection.
+    </p>
+    <button id="attach">Attach to the demo session</button
+    ><button id="control" disabled>Request input control</button
+    ><button id="detach" disabled>Detach</button
+    ><button id="settings">Plugin settings</button>
+    <pre id="transcript"></pre>
+    <form id="input">
+      <input id="message" aria-label="Message" disabled /><button id="send" disabled>
+        Send
+      </button>
+    </form>
+    <p id="error" role="alert"></p>
+    <script>
+      let active = false,
+        lease = null,
+        cursor = 0,
+        timer;
+      const element = (id) => document.getElementById(id);
+      const rpc = (method, params = {}) =>
+        wtm.request('session', {
+          backend: 'demo',
+          request: { method, params: { session: 'demo-1', ...params } },
+        });
+      function render(update) {
+        if (update.reset) {
+          cursor = 0;
+          element('transcript').textContent = '';
+        }
+        for (const event of update.events)
+          if (event.seq > cursor) {
+            element('transcript').textContent += event.text + '\n';
+            cursor = event.seq;
+          }
+        lease = update.lease;
+        element('message').disabled = element('send').disabled = !lease;
+      }
+      async function act(fn) {
+        try {
+          element('error').textContent = '';
+          await fn();
+        } catch (e) {
+          element('error').textContent = e.message;
+        }
+      }
+      async function poll() {
+        if (!active) return;
+        try {
+          render(await rpc('poll', { after: cursor }));
+          timer = setTimeout(poll, 1000);
+        } catch (e) {
+          active = false;
+          lease = null;
+          element('message').disabled = element('send').disabled = true;
+          element('error').textContent = e.message;
+        }
+      }
+      element('attach').onclick = () =>
+        act(async () => {
+          clearTimeout(timer);
+          render(await rpc('attach', { after: cursor }));
+          active = true;
+          element('control').disabled = element('detach').disabled = false;
+          timer = setTimeout(poll, 1000);
+        });
+      element('control').onclick = () =>
+        act(async () => {
+          lease = (await rpc('control')).lease;
+          element('message').disabled = element('send').disabled = !lease;
+        });
+      element('detach').onclick = () =>
+        act(async () => {
+          active = false;
+          clearTimeout(timer);
+          await rpc('detach', { lease });
+          lease = null;
+          element('message').disabled =
+            element('send').disabled =
+            element('control').disabled =
+            element('detach').disabled =
+              true;
+        });
+      element('settings').onclick = () => wtm.request('navigate', { target: 'settings' });
+      element('input').onsubmit = (event) => {
+        event.preventDefault();
+        act(async () => {
+          const text = element('message').value;
+          if (!lease || !text.trim()) return;
+          await rpc('input', { lease, text, input_id: crypto.randomUUID() });
+          element('message').value = '';
+        });
+      };
+    </script>
+  </body>
+</html>

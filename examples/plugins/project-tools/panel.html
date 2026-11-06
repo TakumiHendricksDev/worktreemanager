@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>Scratch panel</title
+  ><style>
+    body {
+      font: 15px system-ui;
+      margin: 2rem;
+      background: Canvas;
+      color: CanvasText;
+    }
+    textarea {
+      font: inherit;
+      width: 100%;
+      height: 60vh;
+      box-sizing: border-box;
+      background: Field;
+      color: FieldText;
+    }
+    button {
+      font: inherit;
+      margin-top: 1rem;
+    }
+  </style>
+  <h1>Scratch panel</h1>
+  <p>
+    This isolated panel can run its own UI. It cannot access WTM, files, or the network.
+    These notes last only as long as this panel.
+  </p>
+  <label for="notes">Notes</label
+  ><textarea id="notes"></textarea
+  ><button onclick="document.getElementById('notes').value = ''">Clear notes</button>
+</html>

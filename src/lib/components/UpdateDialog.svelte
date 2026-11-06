@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { setContext as setExtensionContext } from 'svelte';
+  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
+  setExtensionContext(EXTENSION_PROTECTED, true);
   /**
    * Offering an update, and saying plainly what installing it will do to what is on screen.
    *

@@ -930,6 +930,9 @@
       ),
     };
     applyTheme();
+    document
+      .querySelector('iframe[data-wtm-plugin-view]')
+      ?.contentWindow.postMessage({ channel: 'wtm.plugin.theme', tokens: theme }, '*');
     return 'ok';
   }
 
@@ -1261,6 +1264,11 @@
   // ── dispatch ───────────────────────────────────────────────────────────────────────────
 
   const methods = {
+    pluginResponse: (args) => {
+      document
+        .querySelector('iframe[data-wtm-plugin-view]')
+        ?.contentWindow.postMessage({ ...args, channel: 'wtm.plugin.reply' }, '*');
+    },
     snapshot,
     pageInfo,
     getContent,
@@ -1300,6 +1308,16 @@
     if (frame?.dataset.loaded === 'true') post({ event: 'prototype-ready' });
   });
 
+  addEventListener('message', (event) => {
+    const frame = document.querySelector('iframe[data-wtm-plugin-view]');
+    if (
+      !frame ||
+      event.source !== frame.contentWindow ||
+      event.data?.channel !== 'wtm.plugin.request'
+    )
+      return;
+    post({ event: 'plugin-request', request: event.data });
+  });
   globalThis.__wtm = Object.freeze({ dispatch, version: 1 });
   post({ event: 'ready', url: location.href });
 })();

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * A bounded result set returned by Rust. Values arrive as text so drivers stay out of the UI.
    *
@@ -523,188 +526,197 @@
   }
 </script>
 
-{#if result.columns.length > 0}
-  <div class="c-database__result-body">
-    {#if finding}
-      <div class="c-database__find" role="search">
-        <span class="c-database__search-icon"><Icon name="search" size={14} /></span>
-        <input
-          class="c-database__find-input"
-          type="search"
-          value={needle}
-          oninput={typed}
-          onkeydown={findKey}
-          placeholder={findPlaceholder}
-          aria-label={findPlaceholder}
-          autocomplete="off"
-          spellcheck="false"
-          bind:this={findInput}
-        />
-        <span class="c-database__find-count" role="status">
-          {#if query === ''}
-            &nbsp;
-          {:else if matches.length === 0}
-            No matches
-          {:else}
-            {(matchIndex + 1).toLocaleString()} / {matches.length.toLocaleString()}
-          {/if}
-        </span>
-        <Button
-          variant="quiet"
-          size="sm"
-          icon="sm"
-          ariaLabel="Previous match"
-          disabled={matches.length === 0}
-          onclick={() => showMatch(matchIndex - 1)}>↑</Button
-        >
-        <Button
-          variant="quiet"
-          size="sm"
-          icon="sm"
-          ariaLabel="Next match"
-          disabled={matches.length === 0}
-          onclick={() => showMatch(matchIndex + 1)}>↓</Button
-        >
-        <span class="c-database__find-toggle">
+<ExtensionPoint target="component.database-result" context={publicContext()}>
+  {#if result.columns.length > 0}
+    <div class="c-database__result-body">
+      {#if finding}
+        <div class="c-database__find" role="search">
+          <span class="c-database__search-icon"><Icon name="search" size={14} /></span>
+          <input
+            class="c-database__find-input"
+            type="search"
+            value={needle}
+            oninput={typed}
+            onkeydown={findKey}
+            placeholder={findPlaceholder}
+            aria-label={findPlaceholder}
+            autocomplete="off"
+            spellcheck="false"
+            bind:this={findInput}
+          />
+          <span class="c-database__find-count" role="status">
+            {#if query === ''}
+              &nbsp;
+            {:else if matches.length === 0}
+              No matches
+            {:else}
+              {(matchIndex + 1).toLocaleString()} / {matches.length.toLocaleString()}
+            {/if}
+          </span>
           <Button
             variant="quiet"
             size="sm"
-            ariaPressed={onlyMatches}
-            disabled={query === ''}
-            title="Hide the rows with no match"
-            onclick={() => void toggleOnlyMatches()}>Only matches</Button
+            icon="sm"
+            ariaLabel="Previous match"
+            disabled={matches.length === 0}
+            onclick={() => showMatch(matchIndex - 1)}>↑</Button
           >
-        </span>
-        <Button variant="inline" size="sm" ariaLabel="Close find" onclick={closeFind}>
-          <Icon name="close" size={12} />
-        </Button>
-      </div>
-    {/if}
-    <div class="c-database__grid-wrap">
-      <table
-        class="c-database__grid"
-        role="grid"
-        aria-multiselectable="true"
-        aria-rowcount={visible.length}
-        tabindex="0"
-        bind:this={grid}
-        onpointerdown={press}
-        onpointerover={sweep}
-        onkeydown={(event) => void keydown(event)}
-        onfocus={focused}
-        oncontextmenu={menu}
-        ondblclick={open}
-      >
-        <thead>
-          <tr>
-            <th class="c-database__row-number" scope="col" data-row="-1" data-col="-1">#</th
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            ariaLabel="Next match"
+            disabled={matches.length === 0}
+            onclick={() => showMatch(matchIndex + 1)}>↓</Button
+          >
+          <span class="c-database__find-toggle">
+            <Button
+              variant="quiet"
+              size="sm"
+              ariaPressed={onlyMatches}
+              disabled={query === ''}
+              title="Hide the rows with no match"
+              onclick={() => void toggleOnlyMatches()}>Only matches</Button
             >
-            <!-- Keyed by position: a join returns two columns called `id`, and keying by name
-               made Svelte throw on the duplicate. -->
-            {#each result.columns as column, col (col)}
-              <th
-                class="c-database__head"
-                class:is-selected={rect !== null &&
-                  rect.top === 0 &&
-                  rect.bottom === lastRow &&
-                  col >= rect.left &&
-                  col <= rect.right}
-                scope="col"
-                data-col={col}
-                title={column.typeName ?? undefined}
-              >
-                <span class="c-database__head-inner">
-                  <span class="c-database__head-name">{column.name}</span>
-                  {#if sortable && onsort}
-                    <button
-                      class="c-database__sort"
-                      class:is-active={sortColumn === column.name}
-                      onclick={() => onsort(column.name)}
-                      title="Sort by {column.name}"
-                      aria-label={sortColumn !== column.name
-                        ? `Sort by ${column.name}`
-                        : sortDirection === 'desc'
-                          ? `Sorted by ${column.name}, descending`
-                          : `Sorted by ${column.name}, ascending`}
-                    >
-                      {sortGlyph(column.name)}
-                    </button>
-                  {/if}
-                </span>
-              </th>
-            {/each}
-          </tr>
-        </thead>
-        <tbody>
-          {#each visible as index, row (index)}
+          </span>
+          <Button variant="inline" size="sm" ariaLabel="Close find" onclick={closeFind}>
+            <Icon name="close" size={12} />
+          </Button>
+        </div>
+      {/if}
+      <div class="c-database__grid-wrap">
+        <table
+          class="c-database__grid"
+          role="grid"
+          aria-multiselectable="true"
+          aria-rowcount={visible.length}
+          tabindex="0"
+          bind:this={grid}
+          onpointerdown={press}
+          onpointerover={sweep}
+          onkeydown={(event) => void keydown(event)}
+          onfocus={focused}
+          oncontextmenu={menu}
+          ondblclick={open}
+        >
+          <thead>
             <tr>
-              <th
-                class="c-database__row-number"
-                class:is-selected={rect !== null &&
-                  rect.left === 0 &&
-                  rect.right === lastCol &&
-                  row >= rect.top &&
-                  row <= rect.bottom}
-                scope="row"
-                data-row={row}>{rowOffset + index + 1}</th
+              <th class="c-database__row-number" scope="col" data-row="-1" data-col="-1"
+                >#</th
               >
-              {#each result.rows[index] as cell, col (col)}
-                {@const selected = contains(rect, row, col)}
-                <td
-                  class="c-database__cell"
-                  class:is-selected={selected}
-                  class:is-match={matched.has(`${index}:${col}`)}
-                  class:is-current={current !== null &&
-                    current.row === row &&
-                    current.col === col}
-                  class:is-focus={focus !== null && focus.row === row && focus.col === col}
-                  aria-selected={selected}
-                  data-row={row}
+              <!-- Keyed by position: a join returns two columns called `id`, and keying by name
+               made Svelte throw on the duplicate. -->
+              {#each result.columns as column, col (col)}
+                <th
+                  class="c-database__head"
+                  class:is-selected={rect !== null &&
+                    rect.top === 0 &&
+                    rect.bottom === lastRow &&
+                    col >= rect.left &&
+                    col <= rect.right}
+                  scope="col"
                   data-col={col}
-                  title={cell.value ?? 'NULL'}
+                  title={column.typeName ?? undefined}
                 >
-                  {#if cell.value === null}
-                    <span class="c-database__null">NULL</span>
-                  {:else}
-                    <span class:has-more={cell.truncated}>{cell.value}</span>
-                  {/if}
-                </td>
+                  <span class="c-database__head-inner">
+                    <span class="c-database__head-name">{column.name}</span>
+                    {#if sortable && onsort}
+                      <button
+                        class="c-database__sort"
+                        class:is-active={sortColumn === column.name}
+                        onclick={() => onsort(column.name)}
+                        title="Sort by {column.name}"
+                        aria-label={sortColumn !== column.name
+                          ? `Sort by ${column.name}`
+                          : sortDirection === 'desc'
+                            ? `Sorted by ${column.name}, descending`
+                            : `Sorted by ${column.name}, ascending`}
+                      >
+                        {sortGlyph(column.name)}
+                      </button>
+                    {/if}
+                  </span>
+                </th>
               {/each}
             </tr>
-          {/each}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {#each visible as index, row (index)}
+              <tr>
+                <th
+                  class="c-database__row-number"
+                  class:is-selected={rect !== null &&
+                    rect.left === 0 &&
+                    rect.right === lastCol &&
+                    row >= rect.top &&
+                    row <= rect.bottom}
+                  scope="row"
+                  data-row={row}>{rowOffset + index + 1}</th
+                >
+                {#each result.rows[index] as cell, col (col)}
+                  {@const selected = contains(rect, row, col)}
+                  <td
+                    class="c-database__cell"
+                    class:is-selected={selected}
+                    class:is-match={matched.has(`${index}:${col}`)}
+                    class:is-current={current !== null &&
+                      current.row === row &&
+                      current.col === col}
+                    class:is-focus={focus !== null &&
+                      focus.row === row &&
+                      focus.col === col}
+                    aria-selected={selected}
+                    data-row={row}
+                    data-col={col}
+                    title={cell.value ?? 'NULL'}
+                  >
+                    {#if cell.value === null}
+                      <span class="c-database__null">NULL</span>
+                    {:else}
+                      <span class:has-more={cell.truncated}>{cell.value}</span>
+                    {/if}
+                  </td>
+                {/each}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+      {#if viewed}
+        <DatabaseValue
+          column={viewed.column.name}
+          typeName={viewed.column.typeName}
+          cell={viewed.cell}
+          onclose={() => {
+            viewing = false;
+            grid?.focus({ preventScroll: true });
+          }}
+        />
+      {/if}
     </div>
-    {#if viewed}
-      <DatabaseValue
-        column={viewed.column.name}
-        typeName={viewed.column.typeName}
-        cell={viewed.cell}
-        onclose={() => {
-          viewing = false;
-          grid?.focus({ preventScroll: true });
-        }}
-      />
-    {/if}
-  </div>
-{:else if result.message}
-  <div class="c-database__result-empty">{result.message}</div>
-{:else}
-  <div class="c-database__result-empty">
-    Query complete. {result.affectedRows.toLocaleString()} row{result.affectedRows === 1
-      ? ''
-      : 's'}
-    affected.
-  </div>
-{/if}
+  {:else if result.message}
+    <div class="c-database__result-empty">{result.message}</div>
+  {:else}
+    <div class="c-database__result-empty">
+      Query complete. {result.affectedRows.toLocaleString()} row{result.affectedRows === 1
+        ? ''
+        : 's'}
+      affected.
+    </div>
+  {/if}
 
-<footer class="c-database__result-meta">
-  <span>{result.rows.length.toLocaleString()} row{result.rows.length === 1 ? '' : 's'}</span
+  <footer
+    use:extensionPart={{ target: 'component.database-result', context: publicContext }}
+    class="c-database__result-meta"
   >
-  <span>{result.durationMs.toLocaleString()} ms</span>
-  {#if result.affectedRows > 0}<span>{result.affectedRows.toLocaleString()} affected</span
-    >{/if}
-  {#if result.truncated}<span class="c-status--warn">result truncated</span>{/if}
-  {#if note}<span>{note}</span>{/if}
-  {#if copied}<span class="c-status--ok" role="status">{copied}</span>{/if}
-</footer>
+    <span
+      >{result.rows.length.toLocaleString()} row{result.rows.length === 1 ? '' : 's'}</span
+    >
+    <span>{result.durationMs.toLocaleString()} ms</span>
+    {#if result.affectedRows > 0}<span>{result.affectedRows.toLocaleString()} affected</span
+      >{/if}
+    {#if result.truncated}<span class="c-status--warn">result truncated</span>{/if}
+    {#if note}<span>{note}</span>{/if}
+    {#if copied}<span class="c-status--ok" role="status">{copied}</span>{/if}
+  </footer>
+</ExtensionPoint>

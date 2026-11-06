@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /** A single-response, dismissible fork of the parent conversation. */
   import type { Pane } from '../state/sessions.svelte';
   import { sessions } from '../state/sessions.svelte';
@@ -52,50 +55,61 @@
   }
 </script>
 
-<aside class="c-side-question" aria-label="Ephemeral side question">
-  <header class="c-side-question__head">
-    <div>
-      <strong>Side question</strong>
-      <span>Ephemeral · not added to the main conversation</span>
-    </div>
-    <Button
-      variant="quiet"
-      size="sm"
-      icon="sm"
-      title="Dismiss side question"
-      ariaLabel="Dismiss side question"
-      onclick={() => void sessions.close(side.id)}
-    >
-      <Icon name="close" size={11} />
-    </Button>
-  </header>
-
-  {#if question !== null}
-    <p class="c-side-question__prompt">{question}</p>
-  {/if}
-
-  {#if answer}
-    <div class="c-side-question__answer">
-      <Markdown source={answer} />
-    </div>
-  {:else if failure}
-    <p class="c-side-question__error">{failure}</p>
-  {:else if side.working}
-    <p class="c-side-question__waiting" aria-live="polite">Thinking…</p>
-  {:else if question !== null}
-    <p class="c-side-question__waiting" aria-live="polite">No written reply.</p>
-  {:else if !side.ready}
-    <p class="c-side-question__waiting" aria-live="polite">Opening side chat…</p>
-  {:else}
-    <form class="c-side-question__ask" onsubmit={(event) => void ask(event)}>
-      <TextInput
-        ariaLabel="Side question"
-        placeholder="Ask about what’s already in this conversation…"
-        bind:value={draft}
-      />
-      <Button type="submit" variant="accent" size="sm" disabled={!draft.trim() || sending}>
-        Ask
+<ExtensionPoint target="component.side-question" context={publicContext()}>
+  <aside
+    use:extensionPart={{ target: 'component.side-question', context: publicContext }}
+    class="c-side-question"
+    aria-label="Ephemeral side question"
+  >
+    <header class="c-side-question__head">
+      <div>
+        <strong>Side question</strong>
+        <span>Ephemeral · not added to the main conversation</span>
+      </div>
+      <Button
+        variant="quiet"
+        size="sm"
+        icon="sm"
+        title="Dismiss side question"
+        ariaLabel="Dismiss side question"
+        onclick={() => void sessions.close(side.id)}
+      >
+        <Icon name="close" size={11} />
       </Button>
-    </form>
-  {/if}
-</aside>
+    </header>
+
+    {#if question !== null}
+      <p class="c-side-question__prompt">{question}</p>
+    {/if}
+
+    {#if answer}
+      <div class="c-side-question__answer">
+        <Markdown source={answer} />
+      </div>
+    {:else if failure}
+      <p class="c-side-question__error">{failure}</p>
+    {:else if side.working}
+      <p class="c-side-question__waiting" aria-live="polite">Thinking…</p>
+    {:else if question !== null}
+      <p class="c-side-question__waiting" aria-live="polite">No written reply.</p>
+    {:else if !side.ready}
+      <p class="c-side-question__waiting" aria-live="polite">Opening side chat…</p>
+    {:else}
+      <form class="c-side-question__ask" onsubmit={(event) => void ask(event)}>
+        <TextInput
+          ariaLabel="Side question"
+          placeholder="Ask about what’s already in this conversation…"
+          bind:value={draft}
+        />
+        <Button
+          type="submit"
+          variant="accent"
+          size="sm"
+          disabled={!draft.trim() || sending}
+        >
+          Ask
+        </Button>
+      </form>
+    {/if}
+  </aside>
+</ExtensionPoint>

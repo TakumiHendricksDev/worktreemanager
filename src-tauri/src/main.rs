@@ -15,6 +15,16 @@
 /// The branch is here, in `main`, rather than inside `run()`: nothing about Tauri is constructed on
 /// this path, so no window appears, no menu is installed, and stdout stays clean for the protocol.
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some(wtm_app_lib::native_sessions::HOOK_FLAG) {
+        if let Err(error) = wtm_app_lib::native_sessions::run_helper() {
+            let _ = std::io::Write::write_all(
+                &mut std::io::stderr(),
+                format!("WTM integration: {error}\n").as_bytes(),
+            );
+            std::process::exit(1);
+        }
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some(wtm_app_lib::shell_control::ARGV_FLAG) {
         let args: Vec<_> = std::env::args().collect();
         let result = match args.as_slice() {

@@ -1,0 +1,73 @@
+schema = 1
+api = 2
+id = "example.workbench-toolkit"
+name = "Workbench Toolkit"
+version = "1.0.0"
+description = "Author example: contributions inside existing Chat, workspaces, panels and settings."
+
+[extensions]
+access = ["ui.workspace.rename", "ui.chat.edit", "ui.panels.open"]
+runtime = ["python3", "runtime.py"]
+events = ["workspace.changed", "panels.changed"]
+
+[[extensions.styles]]
+id = "readable-links"
+title = "Underlined chat links"
+target = "chat.markdown.link"
+[extensions.styles.properties]
+color = "var(--accent)"
+text-decoration = "underline"
+text-underline-offset = "3px"
+
+[[extensions.settings]]
+id = "workspace-label"
+title = "Workspace display name"
+description = "Changes the label while preserving the Git directory and workspace identity."
+section = "settings.appearance"
+kind = "text"
+default = "Review workspace"
+
+[[extensions.actions]]
+id = "rename"
+title = "Apply workspace display name"
+target = "workspace.actions"
+operation = "ui.workspace.rename"
+[extensions.actions.arguments]
+name = { "$setting" = "workspace-label" }
+
+[[extensions.actions]]
+id = "edit-message"
+title = "Edit and continue…"
+target = "chat.message.actions"
+operation = "ui.chat.edit"
+[extensions.actions.arguments]
+paneId = { "$context" = "paneId" }
+messageId = { "$context" = "messageId" }
+
+[[extensions.actions]]
+id = "open-terminal"
+title = "Open a terminal here"
+target = "panel.actions"
+operation = "ui.panels.open"
+[extensions.actions.arguments]
+kind = "shell"
+
+[[extensions.content]]
+id = "workspace-note"
+title = "Workspace note"
+target = "component.session-surface"
+position = "before"
+body = [{ kind = "text", text = "Workspace: ${context:worktreeId}" }]
+
+[[extensions.actions]]
+id = "runtime-status"
+title = "Check toolkit runtime"
+target = "workspace.actions"
+operation = "plugin.status"
+
+[[extensions.content]]
+id = "runtime-action"
+title = "Toolkit action"
+target = "settings.appearance"
+position = "after"
+body = [{ kind = "action", action = "runtime-status" }]

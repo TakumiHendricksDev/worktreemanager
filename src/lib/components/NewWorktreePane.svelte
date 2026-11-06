@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * The New Worktree dialog: form → review → run.
    *
@@ -216,46 +219,50 @@
 </script>
 
 <svelte:window onkeydown={onKeydown} />
-
-<section class="c-new-worktree" aria-label="New worktree">
-  <header class="c-new-worktree__head">
-    <div class="c-new-worktree__titles">
-      <h1 class="c-pane-title">New Worktree</h1>
-    </div>
-    {#if creation?.phase === 'running'}
-      <span class="c-new-worktree__hint">
-        <Icon name="chevron-right" size={12} /> Keeps going if you switch worktrees — its tab
-        in the list brings you back here
-      </span>
-    {/if}
-    <Button variant="quiet" size="sm" onclick={onclose}
-      >{editing ? 'Cancel' : 'Close'}</Button
-    >
-  </header>
-
-  <div class="c-new-worktree__body">
-    {#if loadError}
-      <p class="c-status--danger">{loadError}</p>
-    {:else if editing}
-      {#if creation?.phase === 'refused'}
-        <!-- Nothing was made, so this is the form again, as it was, with why. -->
-        <div class="c-new-worktree__refused" role="alert">
-          <Icon name="warn" size={14} />
-          <p>
-            <strong>Couldn’t create it.</strong>
-            {creation.error ?? 'The run stopped before git made anything.'} Change the form and
-            try again, or discard it with × on its tab.
-          </p>
-        </div>
+<ExtensionPoint target="component.new-worktree-pane" context={publicContext()}>
+  <section
+    use:extensionPart={{ target: 'component.new-worktree-pane', context: publicContext }}
+    class="c-new-worktree"
+    aria-label="New worktree"
+  >
+    <header class="c-new-worktree__head">
+      <div class="c-new-worktree__titles">
+        <h1 class="c-pane-title">New Worktree</h1>
+      </div>
+      {#if creation?.phase === 'running'}
+        <span class="c-new-worktree__hint">
+          <Icon name="chevron-right" size={12} /> Keeps going if you switch worktrees — its tab
+          in the list brings you back here
+        </span>
       {/if}
-      {#if !form}
-        <p class="c-status--muted">Loading the project's form…</p>
-      {:else}
-        <div class="c-new-worktree__columns">
-          <div class="c-new-worktree__col">
-            <h2 class="c-section-heading">Details</h2>
+      <Button variant="quiet" size="sm" onclick={onclose}
+        >{editing ? 'Cancel' : 'Close'}</Button
+      >
+    </header>
 
-            <!--
+    <div class="c-new-worktree__body">
+      {#if loadError}
+        <p class="c-status--danger">{loadError}</p>
+      {:else if editing}
+        {#if creation?.phase === 'refused'}
+          <!-- Nothing was made, so this is the form again, as it was, with why. -->
+          <div class="c-new-worktree__refused" role="alert">
+            <Icon name="warn" size={14} />
+            <p>
+              <strong>Couldn’t create it.</strong>
+              {creation.error ?? 'The run stopped before git made anything.'} Change the form
+              and try again, or discard it with × on its tab.
+            </p>
+          </div>
+        {/if}
+        {#if !form}
+          <p class="c-status--muted">Loading the project's form…</p>
+        {:else}
+          <div class="c-new-worktree__columns">
+            <div class="c-new-worktree__col">
+              <h2 class="c-section-heading">Details</h2>
+
+              <!--
               Adopting an existing branch takes the branch *and* the directory from that
               branch, so the naming templates never run and the fields feeding them have
               nothing left to affect. Without saying so, the form still looks like it is
@@ -267,135 +274,136 @@
               is careful to say the rest still apply — the fields that gate setup arguments
               very much do, and "the form is ignored" would be a dangerous thing to imply.
             -->
-            {#if adoptBranch}
-              <p class="c-new-worktree__adopting">
-                Adopting <code>{adoptBranch}</code>. Its name and directory are used as they
-                are, so the fields below no longer affect them — the rest still apply to
-                setup.
-              </p>
-            {/if}
+              {#if adoptBranch}
+                <p class="c-new-worktree__adopting">
+                  Adopting <code>{adoptBranch}</code>. Its name and directory are used as
+                  they are, so the fields below no longer affect them — the rest still apply
+                  to setup.
+                </p>
+              {/if}
 
-            <SchemaForm
-              projectId={form.projectId}
-              fields={form.fields}
-              {values}
-              problems={fieldProblems}
-              normalized={preview?.normalized ?? {}}
-              inert={adoptBranch ? (preview?.namingFields ?? []) : []}
-              inertReason="Not used — the adopted branch supplies this."
-            />
-          </div>
-
-          <div class="c-new-worktree__col c-new-worktree__review-col">
-            <h2 class="c-section-heading">Review</h2>
-            {#if previewError}
-              <p class="c-status--danger">{previewError}</p>
-            {:else if preview}
-              <ReviewPanel
-                {preview}
-                {acknowledged}
-                {adoptBranch}
-                onadopt={(branch) => (adoptBranch = branch)}
+              <SchemaForm
+                projectId={form.projectId}
+                fields={form.fields}
+                {values}
+                problems={fieldProblems}
+                normalized={preview?.normalized ?? {}}
+                inert={adoptBranch ? (preview?.namingFields ?? []) : []}
+                inertReason="Not used — the adopted branch supplies this."
               />
-            {:else if previewing}
-              <p class="c-status--muted">Planning…</p>
-            {:else}
-              <p class="c-status--muted">
-                Fill in the required fields to see what will be created.
-              </p>
-            {/if}
+            </div>
+
+            <div class="c-new-worktree__col c-new-worktree__review-col">
+              <h2 class="c-section-heading">Review</h2>
+              {#if previewError}
+                <p class="c-status--danger">{previewError}</p>
+              {:else if preview}
+                <ReviewPanel
+                  {preview}
+                  {acknowledged}
+                  {adoptBranch}
+                  onadopt={(branch) => (adoptBranch = branch)}
+                />
+              {:else if previewing}
+                <p class="c-status--muted">Planning…</p>
+              {:else}
+                <p class="c-status--muted">
+                  Fill in the required fields to see what will be created.
+                </p>
+              {/if}
+            </div>
           </div>
-        </div>
-      {/if}
-    {:else if creation && creation.phase !== 'running' && madeWorktree(creation)}
-      <!-- Finished while on screen in a project not in view, so it could not be gone to: its record
+        {/if}
+      {:else if creation && creation.phase !== 'running' && madeWorktree(creation)}
+        <!-- Finished while on screen in a project not in view, so it could not be gone to: its record
            here, the same one its worktree's view shows. -->
-      <CreationRecord {creation} />
-    {:else if creation}
-      <!--
+        <CreationRecord {creation} />
+      {:else if creation}
+        <!--
         The run occupies the body. Three things, top to bottom: where the pipeline is, what it
         is running right now, and the live transcript. The transcript mounts immediately — even
         before a session exists — because that is what lets it catch the first line of output
         rather than joining a run already in progress; and on coming back mid-run it replays what
         the session has printed so far.
       -->
-      <div class="c-new-worktree__run">
-        <div class="c-new-worktree__run-head">
-          <h2 class="c-new-worktree__stage">{step?.label ?? 'Starting…'}</h2>
-          <span class="c-new-worktree__count">
-            {#if step}step {step.index} of {step.total} ·{/if}
-            <code>{creation.dirname}</code>
-          </span>
-        </div>
-
-        <div
-          class="c-progress"
-          class:is-indeterminate={!step}
-          role="progressbar"
-          aria-valuenow={percent}
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-label="Create progress"
-        >
-          <div class="c-progress__fill" style:width="{percent}%"></div>
-        </div>
-
-        {#if creation.steps.length > 0}
-          <ol class="c-steps o-plain-list">
-            {#each creation.steps as item (item.id)}
-              <li
-                class="c-steps__item"
-                class:is-done={item.done}
-                class:is-active={!item.done}
-              >
-                <span class="c-steps__mark">
-                  <Icon name={item.done ? 'check' : 'chevron-right'} size={12} />
-                </span>
-                <span>{item.label}</span>
-              </li>
-            {/each}
-          </ol>
-        {/if}
-
-        {#if creation.command}
-          <div class="c-command">
-            <code>{creation.command.argv.join(' ')}</code>
-            <span class="c-command__cwd">in {creation.command.cwd}</span>
+        <div class="c-new-worktree__run">
+          <div class="c-new-worktree__run-head">
+            <h2 class="c-new-worktree__stage">{step?.label ?? 'Starting…'}</h2>
+            <span class="c-new-worktree__count">
+              {#if step}step {step.index} of {step.total} ·{/if}
+              <code>{creation.dirname}</code>
+            </span>
           </div>
-        {/if}
 
-        {#each creation.notes as note (note.id)}
-          <p class={note.kind === 'warning' ? 'c-status--warn' : 'c-status--muted'}>
-            {note.text}
-          </p>
-        {/each}
+          <div
+            class="c-progress"
+            class:is-indeterminate={!step}
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-label="Create progress"
+          >
+            <div class="c-progress__fill" style:width="{percent}%"></div>
+          </div>
 
-        <div class="c-new-worktree__terminal">
-          {#key creation.id}
-            <Terminal session={creation.session} />
-          {/key}
+          {#if creation.steps.length > 0}
+            <ol class="c-steps o-plain-list">
+              {#each creation.steps as item (item.id)}
+                <li
+                  class="c-steps__item"
+                  class:is-done={item.done}
+                  class:is-active={!item.done}
+                >
+                  <span class="c-steps__mark">
+                    <Icon name={item.done ? 'check' : 'chevron-right'} size={12} />
+                  </span>
+                  <span>{item.label}</span>
+                </li>
+              {/each}
+            </ol>
+          {/if}
+
+          {#if creation.command}
+            <div class="c-command">
+              <code>{creation.command.argv.join(' ')}</code>
+              <span class="c-command__cwd">in {creation.command.cwd}</span>
+            </div>
+          {/if}
+
+          {#each creation.notes as note (note.id)}
+            <p class={note.kind === 'warning' ? 'c-status--warn' : 'c-status--muted'}>
+              {note.text}
+            </p>
+          {/each}
+
+          <div class="c-new-worktree__terminal">
+            {#key creation.id}
+              <Terminal session={creation.session} />
+            {/key}
+          </div>
         </div>
-      </div>
-    {/if}
-  </div>
-
-  <footer class="c-new-worktree__foot">
-    <div class="o-row o-row--end">
-      {#if editing}
-        <Button variant="accent" onclick={create} disabled={!canCreate || previewing}>
-          {previewing ? 'Planning…' : creation ? 'Try again' : 'Create worktree'}
-        </Button>
-      {:else if creation?.phase === 'running'}
-        <Button
-          variant="neutral"
-          onclick={() => creation?.session && commands.ptyKill(creation.session)}
-          disabled={!creation.session}
-        >
-          Cancel setup
-        </Button>
-      {:else}
-        <Button variant="accent" onclick={onclose}>Back to worktrees</Button>
       {/if}
     </div>
-  </footer>
-</section>
+
+    <footer class="c-new-worktree__foot">
+      <div class="o-row o-row--end">
+        {#if editing}
+          <Button variant="accent" onclick={create} disabled={!canCreate || previewing}>
+            {previewing ? 'Planning…' : creation ? 'Try again' : 'Create worktree'}
+          </Button>
+        {:else if creation?.phase === 'running'}
+          <Button
+            variant="neutral"
+            onclick={() => creation?.session && commands.ptyKill(creation.session)}
+            disabled={!creation.session}
+          >
+            Cancel setup
+          </Button>
+        {:else}
+          <Button variant="accent" onclick={onclose}>Back to worktrees</Button>
+        {/if}
+      </div>
+    </footer>
+  </section>
+</ExtensionPoint>

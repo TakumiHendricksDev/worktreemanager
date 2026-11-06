@@ -832,6 +832,9 @@ pub struct AgentForkSource {
 
 /// Everything the app needs, wired once at startup.
 pub struct App {
+    pub plugins: wtm_plugins::Store,
+    pub plugin_jobs: crate::plugin_authoring::Jobs,
+    pub extensions: crate::extensions::Runtime,
     pub git: Arc<dyn Git>,
     pub runner: Arc<dyn CommandRunner>,
     /// The same runner as above, un-abstracted, for the one call that is not on the port:
@@ -897,6 +900,7 @@ pub struct App {
     /// minted while a session's config is built — and read on the socket thread. One owner for both
     /// is what keeps that from needing a channel.
     pub handoff: crate::handoff::Hub,
+    pub native_sessions: crate::native_sessions::Hub,
     /// Browser panes. Its own struct, like `handoff`, because it is consulted from the main thread's
     /// page-load callbacks as well as from commands — see `browser.rs` for the lock discipline.
     pub browsers: crate::browser::Host,
@@ -977,6 +981,7 @@ impl App {
     #[allow(clippy::unnecessary_wraps)]
     pub fn with_paths(paths: AppPaths) -> Result<Self, ConfigError> {
         // Captured before `paths` is moved into the config store below.
+        let plugins_root = paths.config_dir.join("plugins");
         let sessions_file = paths.sessions_file.clone();
         let handles_file = paths.handles_file.clone();
 
@@ -1018,6 +1023,18 @@ impl App {
         let database: Arc<dyn DatabaseHost> = Arc::new(wtm_db::Host::new(Arc::clone(&clock)));
 
         Ok(Self {
+            native_sessions: crate::native_sessions::Hub::new(
+                config.paths().config_dir.join("native-deliveries"),
+            ),
+            extensions: crate::extensions::Runtime::default(),
+            plugin_jobs: crate::plugin_authoring::Jobs::new(
+                config.paths().config_dir.join("plugin-drafts.json"),
+            ),
+            plugins: wtm_plugins::Store::new(
+                plugins_root,
+                Arc::clone(&runner),
+                std::env::args().any(|a| a == "--safe-mode"),
+            ),
             git,
             runner,
             launcher,
@@ -1452,7 +1469,7 @@ impl App {
         let config =
             wtm_config::UserConfig::load(&self.config.paths().config_file).unwrap_or_default();
 
-        config
+        let mut palettes: Vec<PaletteView> = config
             .ui
             .palettes
             .iter()
@@ -1472,7 +1489,22 @@ impl App {
                     error,
                 }
             })
-            .collect()
+            .collect();
+        for id in self.plugins.snapshot().registry.installed.keys() {
+            if let Ok((package, _)) = self.plugins.active(id) {
+                for palette in package.manifest.palettes {
+                    palettes.push(PaletteView {
+                        id: format!("{id}.{}", palette.id),
+                        name: palette.title,
+                        hue: palette.hue,
+                        chroma: palette.chroma,
+                        brand: palette.brand,
+                        error: None,
+                    });
+                }
+            }
+        }
+        palettes
     }
 
     /// Find a worktree by id within a project.
@@ -1581,7 +1613,31 @@ impl App {
         cols: u16,
         sink: Arc<dyn wtm_core::ports::pty::PtySink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
-        self.open_shell_inner(worktree, project_id, (argv, None), rows, cols, sink)
+        self.open_shell_inner(
+            worktree,
+            project_id,
+            (argv, None, BTreeMap::new()),
+            rows,
+            cols,
+            sink,
+        )
+    }
+
+    pub fn open_native_terminal(
+        &self,
+        worktree: &Worktree,
+        project_id: &str,
+        invocation: wtm_core::ports::exec::Invocation,
+        sink: Arc<dyn wtm_core::ports::pty::PtySink>,
+    ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
+        self.open_shell_inner(
+            worktree,
+            project_id,
+            (invocation.argv, None, invocation.env),
+            24,
+            100,
+            sink,
+        )
     }
 
     pub fn open_run_shell(
@@ -1596,7 +1652,7 @@ impl App {
         self.open_shell_inner(
             worktree,
             project_id,
-            (vec!["/bin/zsh".into(), "-l".into()], home),
+            (vec!["/bin/zsh".into(), "-l".into()], home, BTreeMap::new()),
             rows,
             cols,
             sink,
@@ -1607,13 +1663,13 @@ impl App {
         &self,
         worktree: &Worktree,
         project_id: &str,
-        launch: (Vec<String>, Option<String>),
+        launch: (Vec<String>, Option<String>, BTreeMap<String, String>),
         rows: u16,
         cols: u16,
         sink: Arc<dyn wtm_core::ports::pty::PtySink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
         use wtm_core::ports::pty::PtyHost;
-        let (argv, owner) = launch;
+        let (argv, owner, env) = launch;
 
         // Before the spawn, so descriptors a finished session is still holding are released
         // before a new pair is allocated. This is the app's only caller.
@@ -1624,6 +1680,7 @@ impl App {
             worktree.path.clone(),
             crate::commands::SHELL_TIMEOUT_MS,
         );
+        inv.env = env;
         // Unsupported shells retain their usual startup. Only ZLE can currently
         // prove an empty editor at dispatch; an ordinary prompt string cannot.
         let integration = if Path::new(inv.program())
@@ -1750,6 +1807,7 @@ impl App {
     /// `ARCHITECTURE.md` §8 bans outright.
     pub fn close_shell(&self, session_id: &str) -> bool {
         use wtm_core::ports::pty::PtyHost;
+        self.native_sessions.close(session_id);
 
         let session = wtm_core::model::SessionId::new(session_id);
         if self.shells.lock().remove(&session).is_none() {
@@ -1845,6 +1903,14 @@ impl App {
         scope: SessionScope,
         events: &Arc<dyn wtm_agent::session::AgentSink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
+        if !self.plugins.enabled("wtm.chat")
+            || (scope == SessionScope::Home && !self.plugins.enabled("wtm.home"))
+        {
+            return Err(wtm_core::error::ExecError::Spawn {
+                argv: entry.id.into(),
+                message: "This feature is disabled in Plugins settings".into(),
+            });
+        }
         // Before the spawn, so descriptors a finished session still holds are released before a
         // new set is allocated. The pty host's only caller does the same, for the same reason.
         self.pipe.reap_finished(KEEP_FINISHED_SESSIONS);
@@ -1963,6 +2029,20 @@ impl App {
                 ephemeral: entry.ephemeral,
             })
             .collect()
+    }
+
+    /// Identity is independent of rendering. Callers needing a structured protocol driver
+    /// still use `live_agents`; scoped tools and reviews use this common conversation view.
+    pub fn conversation_sessions(&self) -> Vec<AgentSessionFacts> {
+        let mut sessions = self.live_agents();
+        sessions.extend(
+            self.native_sessions
+                .list()
+                .into_iter()
+                .filter(|s| s.status != wtm_agent::native::Status::Ended)
+                .map(|s| s.facts()),
+        );
+        sessions
     }
 
     /// Every live, non-ephemeral session, for Home's tools. Every scope, Home's own included.
@@ -2139,6 +2219,27 @@ impl App {
                 title: entry.title.as_deref().and_then(normalized_peer_title),
             })
             .collect::<Vec<_>>();
+        drop(agents);
+        peers.extend(
+            self.native_sessions
+                .list()
+                .into_iter()
+                .filter(|s| {
+                    s.worktree == worktree
+                        && excluding != Some(s.session.as_str())
+                        && s.status != wtm_agent::native::Status::Ended
+                })
+                .map(|s| AgentPeerFacts {
+                    provider: s.provider,
+                    activity: match s.status {
+                        wtm_agent::native::Status::Working => AgentPeerActivity::Working,
+                        wtm_agent::native::Status::NeedsApproval => AgentPeerActivity::Waiting,
+                        wtm_agent::native::Status::Idle => AgentPeerActivity::Idle,
+                        _ => AgentPeerActivity::Starting,
+                    },
+                    title: s.title.as_deref().and_then(normalized_peer_title),
+                }),
+        );
         peers.sort();
         peers
     }
@@ -2315,6 +2416,9 @@ impl App {
     }
 
     pub fn close_shell_runs(&self) {
+        for state in self.native_sessions.list() {
+            self.native_sessions.close(&state.session);
+        }
         crate::shell_control::interrupt_many(
             &self.shell_runs.all(),
             "wtm closed before the command settled.",
@@ -2344,6 +2448,14 @@ impl App {
     /// Used by worktree removal: calling [`Self::close_shell`] / [`Self::close_agent`] in a
     /// loop would pay 400 ms per session.
     pub fn terminate_sessions_in(&self, worktree_id: &str) {
+        for state in self
+            .native_sessions
+            .list()
+            .into_iter()
+            .filter(|s| s.worktree == worktree_id)
+        {
+            self.native_sessions.close(&state.session);
+        }
         let runs: Vec<_> = self
             .shell_runs
             .all()
@@ -2385,6 +2497,13 @@ impl App {
             }
         }
         self.reap_hosts();
+    }
+
+    #[must_use]
+    pub fn has_home_sessions(&self) -> bool {
+        self.live_agents()
+            .iter()
+            .any(|entry| entry.scope == SessionScope::Home)
     }
 
     /// Every agent session the *worktree* has, live or not, for teardown.
@@ -2501,13 +2620,21 @@ impl App {
     /// thread.
     #[must_use]
     pub fn resumable(&self, worktree_id: &str) -> Vec<wtm_config::SessionRecord> {
-        let live: BTreeSet<String> = self
+        let mut live: BTreeSet<String> = self
             .agents
             .lock()
             .values()
             .map(|entry| entry.provider_session.clone())
             .filter(|id| !id.is_empty())
             .collect();
+
+        live.extend(
+            self.native_sessions
+                .list()
+                .into_iter()
+                .filter(|s| s.status != wtm_agent::native::Status::Ended)
+                .map(|s| s.conversation),
+        );
 
         let _guard = self.resume.lock();
         wtm_config::SessionStore::load(&self.sessions_file)
@@ -2521,6 +2648,10 @@ impl App {
     /// The provider's own id for a running session, once it has said.
     #[must_use]
     pub fn provider_session_of(&self, session: &str) -> Option<String> {
+        if let Some(native) = self.native_sessions.get(session) {
+            let id = native.snapshot().conversation;
+            return (!id.is_empty()).then_some(id);
+        }
         let id = wtm_core::model::SessionId::new(session);
         self.agents
             .lock()

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Every installed agent's usage limits, side by side.
    *
@@ -40,38 +43,40 @@
   onMount(refresh);
 </script>
 
-<Dialog title="Usage limits" {onclose}>
-  {#snippet body()}
-    {#if agents.length === 0}
-      <p>No agent CLI is installed, so there are no limits to show.</p>
-    {:else}
-      {#each agents as agent (agent.id)}
-        {@const account = usage.accounts[agent.id]}
-        <section class="c-usage">
-          <h3 class="c-section-heading">
-            {agent.label}
-            {#if account?.limits.plan}
-              <!-- Classed rather than a bare `small`, because the heading is uppercased and an
+<ExtensionPoint target="component.usage-dialog" context={publicContext()}>
+  <Dialog title="Usage limits" {onclose}>
+    {#snippet body()}
+      {#if agents.length === 0}
+        <p>No agent CLI is installed, so there are no limits to show.</p>
+      {:else}
+        {#each agents as agent (agent.id)}
+          {@const account = usage.accounts[agent.id]}
+          <section class="c-usage">
+            <h3 class="c-section-heading">
+              {agent.label}
+              {#if account?.limits.plan}
+                <!-- Classed rather than a bare `small`, because the heading is uppercased and an
                    element selector under it would be a naked one. -->
-              <span class="c-usage__plan">{account.limits.plan}</span>
-            {/if}
-          </h3>
-          <LimitMeters
-            provider={agent.id}
-            label={agent.label}
-            {account}
-            asking={usage.asking[agent.id] ?? false}
-            {now}
-          />
-        </section>
-      {/each}
-    {/if}
-  {/snippet}
+                <span class="c-usage__plan">{account.limits.plan}</span>
+              {/if}
+            </h3>
+            <LimitMeters
+              provider={agent.id}
+              label={agent.label}
+              {account}
+              asking={usage.asking[agent.id] ?? false}
+              {now}
+            />
+          </section>
+        {/each}
+      {/if}
+    {/snippet}
 
-  {#snippet footer()}
-    <Button variant="quiet" onclick={refresh} disabled={busy || agents.length === 0}>
-      {busy ? 'Refreshing…' : 'Refresh'}
-    </Button>
-    <Button variant="neutral" onclick={onclose}>Done</Button>
-  {/snippet}
-</Dialog>
+    {#snippet footer()}
+      <Button variant="quiet" onclick={refresh} disabled={busy || agents.length === 0}>
+        {busy ? 'Refreshing…' : 'Refresh'}
+      </Button>
+      <Button variant="neutral" onclick={onclose}>Done</Button>
+    {/snippet}
+  </Dialog>
+</ExtensionPoint>

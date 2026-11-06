@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Find in Files, after PyCharm's: a query with case, word and regex toggles and a file mask over
    * a list of matching lines, and the file around the highlighted line beneath it.
@@ -194,139 +197,141 @@
   });
 </script>
 
-<Dialog title="Find in files" shape="finder" {onclose}>
-  {#snippet body()}
-    <div class="c-find">
-      <div class="c-find__head">
-        <h2 class="c-find__title">Find in Files</h2>
-        <span class="c-find__count" aria-live="polite">
-          {#if searching}Searching…{:else}{summary}{/if}
-        </span>
-        <span class="c-find__spacer"></span>
-        <Choice checked={find.masked} onchange={(on) => (find.masked = on)}
-          >File mask</Choice
-        >
-        <input
-          class="c-find__mask"
-          type="text"
-          placeholder="*.py, !*.min.js"
-          spellcheck="false"
-          aria-label="File mask"
-          disabled={!find.masked}
-          bind:value={find.options.mask}
-        />
-        <Choice
-          checked={find.options.includeIgnored}
-          onchange={(on) => (find.options.includeIgnored = on)}>Include ignored</Choice
-        >
-      </div>
-
-      <div class="c-find__query">
-        <Icon name="search" size={14} />
-        <input
-          bind:this={input}
-          bind:value={find.query}
-          class="c-find__input"
-          type="text"
-          placeholder="Text to find"
-          spellcheck="false"
-          autocomplete="off"
-          role="combobox"
-          aria-label="Text to find"
-          aria-expanded="true"
-          aria-controls="code-find-results"
-          aria-activedescendant={current ? `code-find-${active}` : undefined}
-          onkeydown={onKeydown}
-        />
-        <Button
-          variant={find.options.caseSensitive ? 'neutral' : 'quiet'}
-          size="sm"
-          ariaPressed={find.options.caseSensitive}
-          title="Match case (⌥C)"
-          onclick={() => toggle('caseSensitive')}>Cc</Button
-        >
-        <Button
-          variant={find.options.wholeWord ? 'neutral' : 'quiet'}
-          size="sm"
-          ariaPressed={find.options.wholeWord}
-          title="Words (⌥W)"
-          onclick={() => toggle('wholeWord')}>W</Button
-        >
-        <Button
-          variant={find.options.regex ? 'neutral' : 'quiet'}
-          size="sm"
-          ariaPressed={find.options.regex}
-          title="Regex (⌥X)"
-          onclick={() => toggle('regex')}>.*</Button
-        >
-      </div>
-
-      {#if error}
-        <p class="c-find__notice c-find__notice--error">{error}</p>
-      {:else if results?.ignoredStopped}
-        <p class="c-find__notice">
-          The ignored files were too many to read them all; a file mask narrows them down.
-        </p>
-      {/if}
-
-      <ul
-        bind:this={list}
-        id="code-find-results"
-        class="c-find__results"
-        role="listbox"
-        aria-label="Matches"
-      >
-        {#each hits as hit, i (`${hit.path}:${hit.line}`)}
-          {@const where = place(hit.path)}
-          <!-- Keys are the input's; a click is the mouse's route to the same row. -->
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <li
-            id={`code-find-${i}`}
-            class="c-find__row"
-            class:is-active={i === active}
-            role="option"
-            aria-selected={i === active}
-            title={`${hit.path}:${hit.line}`}
-            onmousedown={(event) => {
-              event.preventDefault();
-              active = i;
-            }}
-            ondblclick={() => open(i)}
+<ExtensionPoint target="component.find-in-files" context={publicContext()}>
+  <Dialog title="Find in files" shape="finder" {onclose}>
+    {#snippet body()}
+      <div class="c-find">
+        <div class="c-find__head">
+          <h2 class="c-find__title">Find in Files</h2>
+          <span class="c-find__count" aria-live="polite">
+            {#if searching}Searching…{:else}{summary}{/if}
+          </span>
+          <span class="c-find__spacer"></span>
+          <Choice checked={find.masked} onchange={(on) => (find.masked = on)}
+            >File mask</Choice
           >
-            <span class="c-find__line">
-              {#each segments(hit) as part, j (j)}
-                {#if part.match}<mark class="c-find__mark">{part.text}</mark
-                  >{:else}{part.text}{/if}
-              {/each}
-            </span>
-            <span class="c-find__where">
-              <span class="c-find__dir">{where.dir}</span>
-              <span class="c-find__file">{where.name} {hit.line}</span>
-            </span>
-          </li>
-        {:else}
-          {#if results && !searching}
-            <li class="c-find__empty">Nothing matches.</li>
-          {/if}
-        {/each}
-      </ul>
+          <input
+            class="c-find__mask"
+            type="text"
+            placeholder="*.py, !*.min.js"
+            spellcheck="false"
+            aria-label="File mask"
+            disabled={!find.masked}
+            bind:value={find.options.mask}
+          />
+          <Choice
+            checked={find.options.includeIgnored}
+            onchange={(on) => (find.options.includeIgnored = on)}>Include ignored</Choice
+          >
+        </div>
 
-      <div class="c-find__preview-head">
-        {#if current}
-          {@const where = place(current.path)}
-          <span class="c-find__file">{where.name}</span>
-          <span class="c-find__dir">{where.dir}</span>
+        <div class="c-find__query">
+          <Icon name="search" size={14} />
+          <input
+            bind:this={input}
+            bind:value={find.query}
+            class="c-find__input"
+            type="text"
+            placeholder="Text to find"
+            spellcheck="false"
+            autocomplete="off"
+            role="combobox"
+            aria-label="Text to find"
+            aria-expanded="true"
+            aria-controls="code-find-results"
+            aria-activedescendant={current ? `code-find-${active}` : undefined}
+            onkeydown={onKeydown}
+          />
+          <Button
+            variant={find.options.caseSensitive ? 'neutral' : 'quiet'}
+            size="sm"
+            ariaPressed={find.options.caseSensitive}
+            title="Match case (⌥C)"
+            onclick={() => toggle('caseSensitive')}>Cc</Button
+          >
+          <Button
+            variant={find.options.wholeWord ? 'neutral' : 'quiet'}
+            size="sm"
+            ariaPressed={find.options.wholeWord}
+            title="Words (⌥W)"
+            onclick={() => toggle('wholeWord')}>W</Button
+          >
+          <Button
+            variant={find.options.regex ? 'neutral' : 'quiet'}
+            size="sm"
+            ariaPressed={find.options.regex}
+            title="Regex (⌥X)"
+            onclick={() => toggle('regex')}>.*</Button
+          >
+        </div>
+
+        {#if error}
+          <p class="c-find__notice c-find__notice--error">{error}</p>
+        {:else if results?.ignoredStopped}
+          <p class="c-find__notice">
+            The ignored files were too many to read them all; a file mask narrows them down.
+          </p>
         {/if}
-        <span class="c-find__spacer"></span>
-        <span class="c-find__hint">↵ open · ⇅ move · esc close</span>
+
+        <ul
+          bind:this={list}
+          id="code-find-results"
+          class="c-find__results"
+          role="listbox"
+          aria-label="Matches"
+        >
+          {#each hits as hit, i (`${hit.path}:${hit.line}`)}
+            {@const where = place(hit.path)}
+            <!-- Keys are the input's; a click is the mouse's route to the same row. -->
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <li
+              id={`code-find-${i}`}
+              class="c-find__row"
+              class:is-active={i === active}
+              role="option"
+              aria-selected={i === active}
+              title={`${hit.path}:${hit.line}`}
+              onmousedown={(event) => {
+                event.preventDefault();
+                active = i;
+              }}
+              ondblclick={() => open(i)}
+            >
+              <span class="c-find__line">
+                {#each segments(hit) as part, j (j)}
+                  {#if part.match}<mark class="c-find__mark">{part.text}</mark
+                    >{:else}{part.text}{/if}
+                {/each}
+              </span>
+              <span class="c-find__where">
+                <span class="c-find__dir">{where.dir}</span>
+                <span class="c-find__file">{where.name} {hit.line}</span>
+              </span>
+            </li>
+          {:else}
+            {#if results && !searching}
+              <li class="c-find__empty">Nothing matches.</li>
+            {/if}
+          {/each}
+        </ul>
+
+        <div class="c-find__preview-head">
+          {#if current}
+            {@const where = place(current.path)}
+            <span class="c-find__file">{where.name}</span>
+            <span class="c-find__dir">{where.dir}</span>
+          {/if}
+          <span class="c-find__spacer"></span>
+          <span class="c-find__hint">↵ open · ⇅ move · esc close</span>
+        </div>
+        <CodePreview
+          path={current?.path ?? null}
+          text={current ? (texts[current.path] ?? null) : null}
+          line={current?.line ?? 1}
+          from={current ? current.offset + (current.ranges[0]?.[0] ?? 0) : 0}
+          to={current ? current.offset + (current.ranges[0]?.[1] ?? 0) : 0}
+        />
       </div>
-      <CodePreview
-        path={current?.path ?? null}
-        text={current ? (texts[current.path] ?? null) : null}
-        line={current?.line ?? 1}
-        from={current ? current.offset + (current.ranges[0]?.[0] ?? 0) : 0}
-        to={current ? current.offset + (current.ranges[0]?.[1] ?? 0) : 0}
-      />
-    </div>
-  {/snippet}
-</Dialog>
+    {/snippet}
+  </Dialog>
+</ExtensionPoint>

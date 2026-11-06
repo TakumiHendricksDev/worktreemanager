@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * The Code tab's file view: CodeMirror, read-only.
    *
@@ -425,11 +428,16 @@
   }
 </script>
 
-<div
-  class="c-code-editor c-code-editor--viewer c-code-view__editor"
-  class:has-selection={hasSelection}
-  class:is-hidden={text === null}
-  bind:this={host}
-  oncontextmenu={onContextMenu}
-  role="presentation"
-></div>
+<ExtensionPoint target="component.code-viewer" context={publicContext()}>
+  <div
+    use:extensionPart={{ target: 'component.code-viewer', context: publicContext }}
+    class="c-code-editor c-code-editor--viewer c-code-view__editor"
+    class:has-selection={hasSelection}
+    class:is-hidden={text === null}
+    bind:this={host}
+    oncontextmenu={onContextMenu}
+    role="presentation"
+  ></div>
+
+  <ExtensionPoint target="code.actions" context={publicContext()} />
+</ExtensionPoint>

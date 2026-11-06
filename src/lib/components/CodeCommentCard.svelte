@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * One comment, drawn under the lines it is about inside the viewer: a box to write it in, or the
    * comment as saved with what can be done to it.
@@ -78,50 +81,56 @@
   }
 </script>
 
-<div class="c-code-comment" class:is-resolved={comment?.status === 'resolved'}>
-  {#if editing}
-    <textarea
-      class="c-code-comment__input"
-      rows="3"
-      placeholder={`Comment on line${lines.includes('–') ? 's' : ''} ${lines}…`}
-      aria-label={`Comment on lines ${lines}`}
-      bind:value={text}
-      onkeydown={onKeydown}
-      use:focus></textarea>
-    {#if failed}<p class="c-code-comment__error">{failed}</p>{/if}
-    <div class="c-code-comment__actions">
-      <Button
-        variant="accent"
-        size="sm"
-        disabled={saving || text.trim() === ''}
-        onclick={save}>{comment ? 'Save' : 'Comment'}</Button
-      >
-      <Button variant="quiet" size="sm" onclick={cancel}>Cancel</Button>
-      <span class="c-code-comment__hint">⌘↵ to save</span>
-    </div>
-  {:else if comment}
-    <p class="c-code-comment__text">{comment.text}</p>
-    <div class="c-code-comment__meta">
-      <span>Lines {lines}</span>
-      {#if comment.status === 'resolved'}<span class="c-code-comment__tag">Resolved</span
-        >{/if}
-      {#if comment.sentTo}<span class="c-code-comment__tag">Sent to {comment.sentTo}</span
-        >{/if}
-      {#if outdated}
-        <span class="c-code-comment__tag c-code-comment__tag--warn">Outdated</span>
+<ExtensionPoint target="component.code-comment-card" context={publicContext()}>
+  <div
+    use:extensionPart={{ target: 'component.code-comment-card', context: publicContext }}
+    class="c-code-comment"
+    class:is-resolved={comment?.status === 'resolved'}
+  >
+    {#if editing}
+      <textarea
+        class="c-code-comment__input"
+        rows="3"
+        placeholder={`Comment on line${lines.includes('–') ? 's' : ''} ${lines}…`}
+        aria-label={`Comment on lines ${lines}`}
+        bind:value={text}
+        onkeydown={onKeydown}
+        use:focus></textarea>
+      {#if failed}<p class="c-code-comment__error">{failed}</p>{/if}
+      <div class="c-code-comment__actions">
+        <Button
+          variant="accent"
+          size="sm"
+          disabled={saving || text.trim() === ''}
+          onclick={save}>{comment ? 'Save' : 'Comment'}</Button
+        >
+        <Button variant="quiet" size="sm" onclick={cancel}>Cancel</Button>
+        <span class="c-code-comment__hint">⌘↵ to save</span>
+      </div>
+    {:else if comment}
+      <p class="c-code-comment__text">{comment.text}</p>
+      <div class="c-code-comment__meta">
+        <span>Lines {lines}</span>
+        {#if comment.status === 'resolved'}<span class="c-code-comment__tag">Resolved</span
+          >{/if}
+        {#if comment.sentTo}<span class="c-code-comment__tag">Sent to {comment.sentTo}</span
+          >{/if}
+        {#if outdated}
+          <span class="c-code-comment__tag c-code-comment__tag--warn">Outdated</span>
+        {/if}
+        <span class="c-code-comment__spacer"></span>
+        <Button variant="link" size="sm" onclick={() => (editing = true)}>Edit</Button>
+        <Button
+          variant="link"
+          size="sm"
+          onclick={() => onresolve(comment.status !== 'resolved')}
+          >{comment.status === 'resolved' ? 'Reopen' : 'Resolve'}</Button
+        >
+        <Button variant="link" size="sm" onclick={ondelete}>Delete</Button>
+      </div>
+      {#if comment.note}
+        <p class="c-code-comment__note">{comment.note}</p>
       {/if}
-      <span class="c-code-comment__spacer"></span>
-      <Button variant="link" size="sm" onclick={() => (editing = true)}>Edit</Button>
-      <Button
-        variant="link"
-        size="sm"
-        onclick={() => onresolve(comment.status !== 'resolved')}
-        >{comment.status === 'resolved' ? 'Reopen' : 'Resolve'}</Button
-      >
-      <Button variant="link" size="sm" onclick={ondelete}>Delete</Button>
-    </div>
-    {#if comment.note}
-      <p class="c-code-comment__note">{comment.note}</p>
     {/if}
-  {/if}
-</div>
+  </div>
+</ExtensionPoint>

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * One worktree in the sidebar list.
    *
@@ -94,7 +97,8 @@
   };
 </script>
 
-<!--
+<ExtensionPoint target="component.worktree-tab" context={publicContext()}>
+  <!--
   The star is a *sibling* of the row, overlaid on its right edge, not a child. A button
   inside a button is invalid HTML, and nesting one inside `role="treeitem"` would break both the
   row's click target and its accessible name. The wrapper is `presentation` so it stays
@@ -104,52 +108,54 @@
   `data-slot` what a drag can land on. Attributes rather than a class, because the rule here is
   to select behaviour on ARIA or `data-*` and leave classes to the stylesheet.
 -->
-<div
-  class="c-worktree-tab"
-  class:is-dragging={dragging}
-  class:is-removing={removing}
-  role="presentation"
-  data-row={worktree.id}
-  data-slot="row"
-  data-group={group}
-  data-next={next ?? ''}
->
-  <button
-    role="treeitem"
-    id={`tab-${worktree.id}`}
-    aria-selected={selected}
-    aria-level={level}
-    aria-controls={controls ?? undefined}
-    aria-disabled={removing || undefined}
-    tabindex={selected ? 0 : -1}
-    class="c-worktree-tab__button"
-    class:is-selected={selected}
+  <div
+    use:extensionPart={{ target: 'component.worktree-tab', context: publicContext }}
+    class="c-worktree-tab"
+    class:is-dragging={dragging}
     class:is-removing={removing}
-    data-nav={removing ? undefined : `row:${worktree.id}`}
-    onclick={removing ? undefined : onselect}
-    onpointerdown={removing ? undefined : onpress}
-    oncontextmenu={removing ? (event) => event.preventDefault() : onmenu}
+    role="presentation"
+    data-row={worktree.id}
+    data-slot="row"
+    data-group={group}
+    data-next={next ?? ''}
   >
-    <span class="c-worktree-tab__line">
-      {#if identity.key}<span class="c-worktree-tab__key">{identity.key}</span>{/if}
-      <span class="c-worktree-tab__name" title={identity.detail}>{identity.name}</span>
-      {#if fresh === 'created'}
-        <span class="c-worktree-tab__pill" title="Made just now; its view says how it went"
-          >new</span
-        >
-      {/if}
-      {#if worktree.isMain}
-        <span class="c-worktree-tab__pill" title="The main worktree">main</span>
-      {/if}
-    </span>
-
-    <span class="c-worktree-tab__line c-worktree-tab__meta">
-      <span class="c-worktree-tab__branch" title={worktree.branch ?? 'detached HEAD'}>
-        {worktree.subtitle}
+    <button
+      role="treeitem"
+      id={`tab-${worktree.id}`}
+      aria-selected={selected}
+      aria-level={level}
+      aria-controls={controls ?? undefined}
+      aria-disabled={removing || undefined}
+      tabindex={selected ? 0 : -1}
+      class="c-worktree-tab__button"
+      class:is-selected={selected}
+      class:is-removing={removing}
+      data-nav={removing ? undefined : `row:${worktree.id}`}
+      onclick={removing ? undefined : onselect}
+      onpointerdown={removing ? undefined : onpress}
+      oncontextmenu={removing ? (event) => event.preventDefault() : onmenu}
+    >
+      <span class="c-worktree-tab__line">
+        {#if identity.key}<span class="c-worktree-tab__key">{identity.key}</span>{/if}
+        <span class="c-worktree-tab__name" title={identity.detail}>{identity.name}</span>
+        {#if fresh === 'created'}
+          <span
+            class="c-worktree-tab__pill"
+            title="Made just now; its view says how it went">new</span
+          >
+        {/if}
+        {#if worktree.isMain}
+          <span class="c-worktree-tab__pill" title="The main worktree">main</span>
+        {/if}
       </span>
-    </span>
 
-    <!--
+      <span class="c-worktree-tab__line c-worktree-tab__meta">
+        <span class="c-worktree-tab__branch" title={worktree.branch ?? 'detached HEAD'}>
+          {worktree.subtitle}
+        </span>
+      </span>
+
+      <!--
       No commit counters here, deliberately.
 
       This row used to carry `+N` untracked and `↑N↓N` ahead/behind alongside the two states below.
@@ -160,34 +166,34 @@
       whatever a session in it needs. `Inspector` still reports the full staged/unstaged breakdown,
       which is a panel you open on purpose.
     -->
-    {#if removing}
-      <!--
+      {#if removing}
+        <!--
         Instead of the flags, not beside them: a session's state and a dirty tree are both about a
         worktree that is going, and the one fact left worth reading is that it is going. The dot and
         the word are Home's for the same thing (`jobState`), so the two lists say it alike.
       -->
-      <span class="c-worktree-tab__line c-worktree-tab__flags">
-        <span class="c-status--muted" title="Removing this worktree">
-          <SessionDot status="starting" />&nbsp;removing…
+        <span class="c-worktree-tab__line c-worktree-tab__flags">
+          <span class="c-status--muted" title="Removing this worktree">
+            <SessionDot status="starting" />&nbsp;removing…
+          </span>
         </span>
-      </span>
-    {:else if fresh || status || worktree.dirty || worktree.prunable}
-      <span class="c-worktree-tab__line c-worktree-tab__flags">
-        {#if fresh === 'created'}
-          <span class="c-status--ok" title="Created; its view has the setup output"
-            >✓&nbsp;created</span
-          >
-        {:else if fresh === 'setup_failed'}
-          <span class="c-status--warn" title="Its setup failed; the worktree was kept"
-            >▲&nbsp;setup failed</span
-          >
-        {:else if fresh === 'setting_up'}
-          <span class="c-status--muted" title="Running setup again"
-            ><SessionDot status="working" />&nbsp;setting up…</span
-          >
-        {/if}
-        {#if status}
-          <!--
+      {:else if fresh || status || worktree.dirty || worktree.prunable}
+        <span class="c-worktree-tab__line c-worktree-tab__flags">
+          {#if fresh === 'created'}
+            <span class="c-status--ok" title="Created; its view has the setup output"
+              >✓&nbsp;created</span
+            >
+          {:else if fresh === 'setup_failed'}
+            <span class="c-status--warn" title="Its setup failed; the worktree was kept"
+              >▲&nbsp;setup failed</span
+            >
+          {:else if fresh === 'setting_up'}
+            <span class="c-status--muted" title="Running setup again"
+              ><SessionDot status="working" />&nbsp;setting up…</span
+            >
+          {/if}
+          {#if status}
+            <!--
             First in the row, because a session waiting on you outranks every git fact beside it.
 
             In this row rather than a corner of the tab on purpose: it is already `--font-mono` and
@@ -197,36 +203,37 @@
             reads "feature/foo, task-123, needs you, modified" and the dot stays `aria-hidden`, which
             is both the colour-alone rule satisfied and the state announced exactly once.
           -->
-          <span class={TONE[status]} title={STATUS_WORD[status]}>
-            <SessionDot {status} />&nbsp;{STATUS_WORD[status]}
-          </span>
-        {/if}
-        {#if worktree.dirty}
-          <span class="c-status--warn" title="Tracked files are modified"
-            >●&nbsp;modified</span
-          >
-        {/if}
-        {#if worktree.prunable}
-          <span class="c-status--danger" title={worktree.prunable}>stale</span>
-        {/if}
-      </span>
-    {/if}
-  </button>
+            <span class={TONE[status]} title={STATUS_WORD[status]}>
+              <SessionDot {status} />&nbsp;{STATUS_WORD[status]}
+            </span>
+          {/if}
+          {#if worktree.dirty}
+            <span class="c-status--warn" title="Tracked files are modified"
+              >●&nbsp;modified</span
+            >
+          {/if}
+          {#if worktree.prunable}
+            <span class="c-status--danger" title={worktree.prunable}>stale</span>
+          {/if}
+        </span>
+      {/if}
+    </button>
 
-  <!--
+    <!--
     Roving tabindex, matching the tab's: only the selected row's star is a tab stop, so
     reaching the New Worktree button does not mean pressing Tab once per worktree.
   -->
-  <button
-    class="c-worktree-tab__star"
-    class:is-on={favorite}
-    tabindex={selected && !removing ? 0 : -1}
-    aria-pressed={favorite}
-    title={favorite ? 'Remove from favorites' : 'Add to favorites'}
-    disabled={removing}
-    onclick={onfavorite}
-  >
-    <Icon name={favorite ? 'star' : 'star-outline'} size={14} />
-    <span class="u-visually-hidden">Favorite</span>
-  </button>
-</div>
+    <button
+      class="c-worktree-tab__star"
+      class:is-on={favorite}
+      tabindex={selected && !removing ? 0 : -1}
+      aria-pressed={favorite}
+      title={favorite ? 'Remove from favorites' : 'Add to favorites'}
+      disabled={removing}
+      onclick={onfavorite}
+    >
+      <Icon name={favorite ? 'star' : 'star-outline'} size={14} />
+      <span class="u-visually-hidden">Favorite</span>
+    </button>
+  </div>
+</ExtensionPoint>

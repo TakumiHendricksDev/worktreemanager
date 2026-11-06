@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ChatEditDialog from './lib/components/ChatEditDialog.svelte';
+  import { initExtensionWorkbench } from './lib/state/extension-workbench.svelte';
+  let offExtensions: (() => void) | undefined;
   /**
    * The app shell: a two-column grid with a resizable splitter.
    *
@@ -9,6 +12,8 @@
    */
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import PluginSlot from './lib/components/PluginSlot.svelte';
+  import { plugins } from './lib/state/plugins.svelte';
   import { onMount, untrack } from 'svelte';
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
@@ -77,6 +82,22 @@
   let sidebarCollapsed = $state(false);
   let dragging = $state(false);
   let booted = $state(false);
+  let offPluginState: (() => void) | undefined;
+  $effect(() => {
+    if (!plugins.ready) return;
+    if (!plugins.available('home')) view.homeMounted = false;
+    const region =
+      view.current === 'worktree'
+        ? 'sessions'
+        : view.current === 'new'
+          ? 'new_worktree'
+          : view.current;
+    if (plugins.available(region)) return;
+    const fallback = (['worktree', 'home', 'code', 'database'] as const).find((v) =>
+      plugins.available(v === 'worktree' ? 'sessions' : v),
+    );
+    if (fallback) view.show(fallback);
+  });
   let addError = $state<string | null>(null);
   /*
    * What the main pane shows lives in `view.svelte.ts` now, because Home made it something
@@ -220,7 +241,39 @@
 
   onMount(() => {
     let gone = false;
+    let off: (() => void) | undefined;
+    void listen<{ target: string; project?: string; worktree?: string }>(
+      'plugins:navigate',
+      async ({ payload }) => {
+        if (payload.target === 'settings') {
+          settingsView.show('plugins');
+          return;
+        }
+        if (payload.project) await workspace.selectProject(payload.project);
+        if (payload.worktree) workspace.select(payload.worktree);
+        if (['home', 'worktree', 'code', 'database', 'new'].includes(payload.target))
+          view.show(payload.target as typeof view.current);
+      },
+    ).then((unlisten) => {
+      if (gone) unlisten();
+      else off = unlisten;
+    });
+    return () => {
+      gone = true;
+      off?.();
+    };
+  });
+
+  onMount(() => {
+    let gone = false;
     void (async () => {
+      const offPlugins = await plugins.init();
+      if (gone) {
+        offPlugins();
+        return;
+      }
+      offPluginState = offPlugins;
+      if (!plugins.available('home')) view.show('worktree');
       await theme.init();
 
       // Before `sessions.init` for the same reason `attention.init` is: a composer can be typed
@@ -261,6 +314,7 @@
       // into nothing. Nothing can start a session until there is a worktree list to start one
       // from, so paying for this first costs nothing visible.
       offSessions = await sessions.init();
+      offExtensions = await initExtensionWorkbench();
       if (gone) {
         offSessions?.();
         offAttention?.();
@@ -447,6 +501,8 @@
 
     return () => {
       gone = true;
+      offPluginState?.();
+      offExtensions?.();
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keydown', onCodeChord, true);
@@ -524,87 +580,89 @@
 </script>
 
 <div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
-  <TitleBar
-    {sidebarCollapsed}
-    home={view.home}
-    ontogglehome={() => view.toggleHome()}
-    ontogglesidebar={toggleSidebar}
-    onaddproject={addProject}
-    onremoveproject={() => (removingProject = workspace.activeProject)}
-    onusage={() => (showUsage = true)}
-    onsettings={() => settingsView.show()}
-  />
-
-  <div
-    class="c-shell__columns"
-    class:is-dragging={dragging}
-    class:is-sidebar-collapsed={sidebarCollapsed}
-  >
-    <aside class="c-shell__col" id="worktree-sidebar" hidden={sidebarCollapsed}>
-      <!--
+  {#if plugins.binding('workbench').kind !== 'builtin' || plugins.binding('titlebar').kind !== 'builtin'}
+    <header class="c-titlebar">
+      <div class="c-titlebar__gutter"></div>
+      <div class="c-titlebar__identity">Custom workbench</div>
+      <Button onclick={addProject}>Add repository</Button><Button
+        onclick={() => settingsView.show('plugins')}>Plugins &amp; recovery</Button
+      >
+    </header>
+  {/if}
+  <PluginSlot region="workbench">
+    <PluginSlot region="titlebar">
+      <TitleBar
+        {sidebarCollapsed}
+        home={view.home}
+        ontogglehome={() => view.toggleHome()}
+        ontogglesidebar={toggleSidebar}
+        onaddproject={addProject}
+        onremoveproject={() => (removingProject = workspace.activeProject)}
+        onusage={() => (showUsage = true)}
+        onsettings={() => settingsView.show()}
+      />
+    </PluginSlot>
+    <div
+      class="c-shell__columns"
+      class:is-dragging={dragging}
+      class:is-sidebar-collapsed={sidebarCollapsed || !plugins.available('sidebar')}
+    >
+      <aside
+        class="c-shell__col"
+        id="worktree-sidebar"
+        hidden={sidebarCollapsed || !plugins.available('sidebar')}
+      >
+        <!--
         In Home the session tree takes the sidebar's place rather than sitting beside it: one lists a
         project's worktrees, the other every project's, and two trees of the same checkouts side by
         side would be one too many. The sidebar stays mounted underneath, hidden, so its scroll and
         its folds are where they were when you come back.
       -->
-      <Sidebar
-        hidden={view.home}
-        onnew={() => creations.showForm()}
-        onselectworktree={() => view.show('worktree')}
-        detailId={view.current === 'new' ? null : 'worktree-detail'}
+        <PluginSlot region="sidebar">
+          <Sidebar
+            hidden={view.home}
+            onnew={() => creations.showForm()}
+            onselectworktree={() => view.show('worktree')}
+            detailId={view.current === 'new' ? null : 'worktree-detail'}
+          />
+          {#if plugins.ready && plugins.enabled('wtm.home') && view.homeMounted}
+            <FleetTree
+              visible={view.home}
+              onhome={() => view.peek(null)}
+              onopenworktree={(projectId, worktreeId) =>
+                openWorktree(projectId, worktreeId)}
+              onnewworktree={(projectId) =>
+                void workspace.selectProject(projectId).then(() => creations.showForm())}
+              onaddproject={addProject}
+            />
+          {/if}
+        </PluginSlot>
+      </aside>
+
+      <Splitter
+        value={sidebarWidth}
+        min={MIN_SIDEBAR}
+        max={MAX_SIDEBAR}
+        label="Resize the sidebar"
+        grows="right"
+        controls="worktree-sidebar"
+        hidden={sidebarCollapsed || !plugins.available('sidebar')}
+        onresize={(width) => (sidebarWidth = width)}
+        oncommit={(width) =>
+          void commands.setPref(SIDEBAR_WIDTH_PREF, String(width)).catch(() => {})}
+        ondrag={(active) => (dragging = active)}
       />
-      {#if view.homeMounted}
-        <FleetTree
-          visible={view.home}
-          onhome={() => view.peek(null)}
-          onopenworktree={(projectId, worktreeId) => openWorktree(projectId, worktreeId)}
-          onnewworktree={(projectId) =>
-            void workspace.selectProject(projectId).then(() => creations.showForm())}
-          onaddproject={addProject}
-        />
-      {/if}
-    </aside>
 
-    <Splitter
-      value={sidebarWidth}
-      min={MIN_SIDEBAR}
-      max={MAX_SIDEBAR}
-      label="Resize the sidebar"
-      grows="right"
-      controls="worktree-sidebar"
-      hidden={sidebarCollapsed}
-      onresize={(width) => (sidebarWidth = width)}
-      oncommit={(width) =>
-        void commands.setPref(SIDEBAR_WIDTH_PREF, String(width)).catch(() => {})}
-      ondrag={(active) => (dragging = active)}
-    />
-
-    <main class="c-shell__col c-shell__col--detail">
-      <!--
+      <main class="c-shell__col c-shell__col--detail">
+        <!--
         Updates. A banner rather than a dialog, because the check runs by itself: a modal that
         appeared at launch, or on coming back to the window, would land on top of whatever the
         user came back to do — the same reasoning as the notification opt-in toast.
       -->
-      {#if updates.outcome?.kind === 'updated'}
-        <Banner variant="info">
-          Updated to {updates.outcome.version}.
-          {#snippet action()}
-            <Button
-              variant="inline"
-              onclick={() => updates.clearOutcome()}
-              ariaLabel="Dismiss"
-            >
-              <Icon name="close" size={12} />
-            </Button>
-          {/snippet}
-        </Banner>
-      {:else if updates.outcome?.kind === 'failed'}
-        <Banner>
-          The update to {updates.outcome.version} didn’t finish.
-          {#snippet action()}
-            <span class="o-row">
-              <Button variant="inline" onclick={() => updates.showFailure()}>Details</Button
-              >
+        {#if updates.outcome?.kind === 'updated'}
+          <Banner variant="info">
+            Updated to {updates.outcome.version}.
+            {#snippet action()}
               <Button
                 variant="inline"
                 onclick={() => updates.clearOutcome()}
@@ -612,52 +670,73 @@
               >
                 <Icon name="close" size={12} />
               </Button>
-            </span>
-          {/snippet}
-        </Banner>
-      {/if}
+            {/snippet}
+          </Banner>
+        {:else if updates.outcome?.kind === 'failed'}
+          <Banner>
+            The update to {updates.outcome.version} didn’t finish.
+            {#snippet action()}
+              <span class="o-row">
+                <Button variant="inline" onclick={() => updates.showFailure()}
+                  >Details</Button
+                >
+                <Button
+                  variant="inline"
+                  onclick={() => updates.clearOutcome()}
+                  ariaLabel="Dismiss"
+                >
+                  <Icon name="close" size={12} />
+                </Button>
+              </span>
+            {/snippet}
+          </Banner>
+        {/if}
 
-      {#if updates.offered && updates.status}
-        <Banner variant="info">
-          Worktree Manager {updates.status.latest} is available.
-          {#snippet action()}
-            <span class="o-row">
-              <Button variant="inline" onclick={() => updates.open()}>Update…</Button>
+        {#if updates.offered && updates.status}
+          <Banner variant="info">
+            Worktree Manager {updates.status.latest} is available.
+            {#snippet action()}
+              <span class="o-row">
+                <Button variant="inline" onclick={() => updates.open()}>Update…</Button>
+                <Button
+                  variant="inline"
+                  onclick={() => updates.dismiss()}
+                  ariaLabel="Dismiss"
+                >
+                  <Icon name="close" size={12} />
+                </Button>
+              </span>
+            {/snippet}
+          </Banner>
+        {/if}
+
+        {#if addError}
+          <Banner>
+            {addError}
+            {#snippet action()}
               <Button
                 variant="inline"
-                onclick={() => updates.dismiss()}
+                onclick={() => (addError = null)}
                 ariaLabel="Dismiss"
               >
                 <Icon name="close" size={12} />
               </Button>
-            </span>
-          {/snippet}
-        </Banner>
-      {/if}
+            {/snippet}
+          </Banner>
+        {/if}
 
-      {#if addError}
-        <Banner>
-          {addError}
-          {#snippet action()}
-            <Button variant="inline" onclick={() => (addError = null)} ariaLabel="Dismiss">
-              <Icon name="close" size={12} />
-            </Button>
-          {/snippet}
-        </Banner>
-      {/if}
+        {#if workspace.error}
+          <Banner>
+            {workspace.error}
+            {#snippet action()}
+              <Button variant="inline" onclick={() => workspace.refreshWorktrees()}
+                >Retry</Button
+              >
+            {/snippet}
+          </Banner>
+        {/if}
 
-      {#if workspace.error}
-        <Banner>
-          {workspace.error}
-          {#snippet action()}
-            <Button variant="inline" onclick={() => workspace.refreshWorktrees()}
-              >Retry</Button
-            >
-          {/snippet}
-        </Banner>
-      {/if}
-
-      <!--
+        <!--
         A session failure. Dismissed rather than retried: unlike a worktree list, there is nothing
         here to re-run — the turn, the approval or the close either happened or did not.
 
@@ -666,130 +745,155 @@
         the pane's own header would be better; that is a larger change than making them visible at
         all, which is what was actually missing.
       -->
-      {#if sessions.error}
-        <Banner>
-          {sessions.error}
-          {#snippet action()}
-            <Button
-              variant="inline"
-              onclick={() => (sessions.error = null)}
-              ariaLabel="Dismiss"
-            >
-              <Icon name="close" size={12} />
-            </Button>
-          {/snippet}
-        </Banner>
-      {/if}
+        {#if sessions.error}
+          <Banner>
+            {sessions.error}
+            {#snippet action()}
+              <Button
+                variant="inline"
+                onclick={() => (sessions.error = null)}
+                ariaLabel="Dismiss"
+              >
+                <Icon name="close" size={12} />
+              </Button>
+            {/snippet}
+          </Banner>
+        {/if}
 
-      {#each workspace.brokenProjects as project (project.id)}
-        <TrustBanner {project} />
-      {/each}
+        {#each workspace.brokenProjects as project (project.id)}
+          <TrustBanner {project} />
+        {/each}
 
-      {#if !booted}
-        <div class="c-placeholder"><p>Starting…</p></div>
-      {:else if view.home}
-        <!-- Home draws itself, below; nothing from the worktree chain shows over it. -->
-      {:else if view.current === 'new' && workspace.activeProjectId}
-        <NewWorktreePane
-          projectId={workspace.activeProjectId}
-          onclose={() => view.show(view.previous === 'home' ? 'home' : 'worktree')}
-        />
-      {:else if workspace.projects.length === 0}
-        <div class="c-placeholder">
-          <!-- The only screen with room to say what the app is, and the only one a first-run
+        {#if !booted}
+          <div class="c-placeholder"><p>Starting…</p></div>
+        {:else if view.home}
+          <!-- Home draws itself, below; nothing from the worktree chain shows over it. -->
+        {:else if view.current === 'new' && workspace.activeProjectId}
+          <PluginSlot region="new_worktree">
+            <NewWorktreePane
+              projectId={workspace.activeProjectId}
+              onclose={() => view.show(view.previous === 'home' ? 'home' : 'worktree')}
+            />
+          </PluginSlot>
+        {:else if workspace.projects.length === 0}
+          <div class="c-placeholder">
+            <!-- The only screen with room to say what the app is, and the only one a first-run
                user is guaranteed to see. Labelled rather than hidden: the heading beside it
                says "No projects yet", which names the state, not the product. -->
-          <Logo size={44} label="Worktree Manager" />
-          <h2 class="c-placeholder__title">No projects yet</h2>
-          <p class="c-placeholder__prose">
-            Add a git repository and its worktrees appear as tabs on the left. Any repo
-            works — a project can describe its own New Worktree form in a
-            <code>wtm.toml</code>, but nothing is required.
-          </p>
-          <Button variant="accent" size="lg" onclick={addProject}>Add a repository</Button>
-        </div>
-      {:else if workspace.selected && selectedRemoving}
-        <div class="c-placeholder" role="status">
-          <h2 class="c-placeholder__title">Removing {workspace.selected.dirname}…</h2>
-          <div
-            class="c-progress is-indeterminate c-placeholder__progress"
-            role="progressbar"
-            aria-label="Removal progress"
-          >
-            <div class="c-progress__fill"></div>
+            <Logo size={44} label="Worktree Manager" />
+            <h2 class="c-placeholder__title">No projects yet</h2>
+            <p class="c-placeholder__prose">
+              Add a git repository and its worktrees appear as tabs on the left. Any repo
+              works — a project can describe its own New Worktree form in a
+              <code>wtm.toml</code>, but nothing is required.
+            </p>
+            <Button variant="accent" size="lg" onclick={addProject}>Add a repository</Button
+            >
           </div>
-          <p class="c-placeholder__prose">
-            Its sessions are closed and the project's teardown steps are running. It leaves
-            the list when they finish, and you can carry on in other worktrees meanwhile.
-          </p>
-        </div>
-      {:else if workspace.selected}
-        <Detail
-          worktree={workspace.selected}
-          projectId={workspace.activeProjectId ?? ''}
-          view={view.current === 'database' || view.current === 'code'
-            ? view.current
-            : 'sessions'}
-          {sidebarCollapsed}
-          onsessions={() => view.show('worktree')}
-          ondatabase={() => view.show('database')}
-          oncode={() => view.show('code')}
-          onremove={() => {
-            if (workspace.activeProjectId && workspace.selected)
-              void worktreeRemoval.request({
-                projectId: workspace.activeProjectId,
-                worktree: workspace.selected,
-              });
-          }}
-          oninspect={() => (showInspector = true)}
-          onfavorite={() => {
-            const id = workspace.selected?.id;
-            if (id) workspace.toggleFavorite(id);
-          }}
-          onselect={(worktreeId) => {
-            // What picking a row in the sidebar does, since this is that list with the rail away.
-            workspace.select(worktreeId);
-            view.show('worktree');
-          }}
-          onnew={() => creations.showForm()}
-        />
-      {:else if !workspace.loadingWorktrees}
-        <div class="c-placeholder">
-          <p>Select a worktree on the left.</p>
-        </div>
-      {/if}
+        {:else if workspace.selected && selectedRemoving}
+          <div class="c-placeholder" role="status">
+            <h2 class="c-placeholder__title">Removing {workspace.selected.dirname}…</h2>
+            <div
+              class="c-progress is-indeterminate c-placeholder__progress"
+              role="progressbar"
+              aria-label="Removal progress"
+            >
+              <div class="c-progress__fill"></div>
+            </div>
+            <p class="c-placeholder__prose">
+              Its sessions are closed and the project's teardown steps are running. It
+              leaves the list when they finish, and you can carry on in other worktrees
+              meanwhile.
+            </p>
+          </div>
+        {:else if workspace.selected}
+          <PluginSlot region="worktree_bar">
+            <Detail
+              worktree={workspace.selected}
+              projectId={workspace.activeProjectId ?? ''}
+              view={view.current === 'database' || view.current === 'code'
+                ? view.current
+                : 'sessions'}
+              {sidebarCollapsed}
+              onsessions={() => view.show('worktree')}
+              ondatabase={() => view.show('database')}
+              oncode={() => view.show('code')}
+              onremove={() => {
+                if (workspace.activeProjectId && workspace.selected)
+                  void worktreeRemoval.request({
+                    projectId: workspace.activeProjectId,
+                    worktree: workspace.selected,
+                  });
+              }}
+              oninspect={() => (showInspector = true)}
+              onfavorite={() => {
+                const id = workspace.selected?.id;
+                if (id) workspace.toggleFavorite(id);
+              }}
+              onselect={(worktreeId) => {
+                // What picking a row in the sidebar does, since this is that list with the rail away.
+                workspace.select(worktreeId);
+                view.show('worktree');
+              }}
+              onnew={() => creations.showForm()}
+            />
+          </PluginSlot>
+        {:else if !workspace.loadingWorktrees}
+          <div class="c-placeholder">
+            <p>Select a worktree on the left.</p>
+          </div>
+        {/if}
 
-      <!--
+        <!--
         A sibling of the chain above, and unconditional, both deliberately. `Detail` unmounts
         whenever the chain picks another branch — the create view, or a project switch that lands
         on an empty cached list and leaves `selected` null for a moment — and a session that
         unmounts is a transcript that is gone. Mounted here it survives all of them, and is merely
         hidden while the create pane owns the screen.
       -->
-      <SessionSurface
-        visible={booted && view.current === 'worktree' && !selectedRemoving}
-      />
-      <DatabaseSurface
-        visible={booted && view.current === 'database' && !selectedRemoving}
-        onsessions={() => view.show('worktree')}
-      />
-      <CodeSurface
-        visible={booted && view.current === 'code' && !selectedRemoving}
-        onsessions={() => view.show('worktree')}
-      />
-      {#if view.homeMounted}
-        <HomeSurface
-          visible={booted && view.home}
-          onreveal={(pane) => void reveal(pane)}
-          onopenworktree={(projectId, worktreeId) => openWorktree(projectId, worktreeId)}
+        <PluginSlot
+          region="sessions"
+          visible={booted && view.current === 'worktree' && !selectedRemoving}
         >
-          {#snippet main()}
-            <HomeAgent visible={booted && view.home} />
-          {/snippet}
-        </HomeSurface>
-      {/if}
-    </main>
-  </div>
+          <SessionSurface
+            visible={booted && view.current === 'worktree' && !selectedRemoving}
+          />
+        </PluginSlot>
+        <PluginSlot
+          region="database"
+          visible={booted && view.current === 'database' && !selectedRemoving}
+        >
+          <DatabaseSurface
+            visible={booted && view.current === 'database' && !selectedRemoving}
+            onsessions={() => view.show('worktree')}
+          />
+        </PluginSlot>
+        <PluginSlot
+          region="code"
+          visible={booted && view.current === 'code' && !selectedRemoving}
+        >
+          <CodeSurface
+            visible={booted && view.current === 'code' && !selectedRemoving}
+            onsessions={() => view.show('worktree')}
+          />
+        </PluginSlot>
+        <PluginSlot region="home" visible={booted && view.home}>
+          {#if plugins.ready && plugins.enabled('wtm.home') && view.homeMounted}
+            <HomeSurface
+              visible={booted && view.home}
+              onreveal={(pane) => void reveal(pane)}
+              onopenworktree={(projectId, worktreeId) =>
+                openWorktree(projectId, worktreeId)}
+            >
+              {#snippet main()}
+                <HomeAgent visible={booted && view.home} />
+              {/snippet}
+            </HomeSurface>
+          {/if}
+        </PluginSlot>
+      </main>
+    </div>
+  </PluginSlot>
 
   {#if showAddProject}
     <AddProjectDialog onclose={() => (showAddProject = false)} />
@@ -848,3 +952,5 @@
     onclose={() => (shellRuns.permissions = null)}
   />
 {/if}
+
+<ChatEditDialog />

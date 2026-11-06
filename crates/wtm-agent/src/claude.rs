@@ -152,7 +152,7 @@ fn flag_settings(req: &SessionRequest) -> Option<String> {
 /// mean "ask", and the CLI's own help calls `manual` an accepted alias for `default`. Everything
 /// else passes through untouched, including a mode a future release adds and this build has never
 /// heard of — the field is a free string end to end for the same reason `model` is.
-fn canonical_mode(mode: &str) -> &str {
+pub(crate) fn canonical_mode(mode: &str) -> &str {
     if mode == "default" { "manual" } else { mode }
 }
 
@@ -591,7 +591,7 @@ impl Provider for Claude {
 /// is a fact about *this* CLI's flag: Codex takes the same set of servers as a pile of `-c` dotted
 /// overrides, and a caller that pre-serialized for one of them is the reason the other silently
 /// received nothing for an increment.
-fn mcp_config_json(servers: &BTreeMap<String, McpServer>) -> String {
+pub fn mcp_config_json(servers: &BTreeMap<String, McpServer>) -> String {
     let mut map = serde_json::Map::new();
     for (name, server) in servers {
         map.insert(

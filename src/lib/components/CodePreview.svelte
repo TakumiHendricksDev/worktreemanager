@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Find in Files' preview: the file around the highlighted result, read-only.
    *
@@ -100,8 +103,11 @@
   });
 </script>
 
-<div
-  class="c-code-editor c-code-editor--viewer c-find__preview"
-  class:is-hidden={text === null}
-  bind:this={host}
-></div>
+<ExtensionPoint target="component.code-preview" context={publicContext()}>
+  <div
+    use:extensionPart={{ target: 'component.code-preview', context: publicContext }}
+    class="c-code-editor c-code-editor--viewer c-find__preview"
+    class:is-hidden={text === null}
+    bind:this={host}
+  ></div>
+</ExtensionPoint>

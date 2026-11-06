@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Home: a place to work from that is not any one worktree.
    *
@@ -202,114 +205,117 @@
     </p>
   {/if}
 {/snippet}
-
-<section
-  class="c-home"
-  class:is-hidden={!visible}
-  class:is-narrow={narrow}
-  class:is-dragging={dragging}
-  bind:this={root}
-  aria-label="Home"
->
-  {#if narrow}
-    <div class="c-tabs c-tabs--inset" role="tablist" aria-label="Home">
-      {#each tabs as entry (entry.id)}
-        <button
-          class="c-tabs__tab"
-          class:is-active={tab === entry.id}
-          role="tab"
-          aria-selected={tab === entry.id}
-          aria-controls="home-{entry.id}"
-          onclick={() => (tab = entry.id)}
-        >
-          {entry.label}{#if entry.count}{' '}<span class="c-tabs__count">{entry.count}</span
-            >{/if}
-        </button>
-      {/each}
-    </div>
-  {/if}
-
-  <div
-    class="c-home__main"
-    id="home-home"
-    role={narrow ? 'tabpanel' : undefined}
-    hidden={narrow && tab !== 'home'}
+<ExtensionPoint target="component.home-surface" context={publicContext()}>
+  <section
+    use:extensionPart={{ target: 'component.home-surface', context: publicContext }}
+    class="c-home"
+    class:is-hidden={!visible}
+    class:is-narrow={narrow}
+    class:is-dragging={dragging}
+    bind:this={root}
+    aria-label="Home"
   >
-    {@render main()}
-  </div>
+    {#if narrow}
+      <div class="c-tabs c-tabs--inset" role="tablist" aria-label="Home">
+        {#each tabs as entry (entry.id)}
+          <button
+            class="c-tabs__tab"
+            class:is-active={tab === entry.id}
+            role="tab"
+            aria-selected={tab === entry.id}
+            aria-controls="home-{entry.id}"
+            onclick={() => (tab = entry.id)}
+          >
+            {entry.label}{#if entry.count}{' '}<span class="c-tabs__count"
+                >{entry.count}</span
+              >{/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
 
-  {#if narrow}
-    <div class="c-home__panel" id="home-inbox" role="tabpanel" hidden={tab !== 'inbox'}>
-      {#if fleet.needsYou.length + shellRuns.pending.length === 0}
-        <p class="c-home__hint">Nothing is waiting on you.</p>
-      {/if}
-      <NeedsYou onpeek={peek} {onreveal} />
-    </div>
-    <div class="c-home__panel" id="home-peek" role="tabpanel" hidden={tab !== 'peek'}>
-      {@render peekOrHint()}
-    </div>
     <div
-      class="c-home__panel"
-      id="home-activity"
-      role="tabpanel"
-      hidden={tab !== 'activity'}
+      class="c-home__main"
+      id="home-home"
+      role={narrow ? 'tabpanel' : undefined}
+      hidden={narrow && tab !== 'home'}
     >
-      <div class="c-home__inbox">
-        <InFlight onpeek={peek} />
-      </div>
-      <ActivityList />
+      {@render main()}
     </div>
-  {:else}
-    <Splitter
-      value={sideWidth}
-      min={SIDE_MIN}
-      max={sideMax}
-      label="Resize the side panel"
-      grows="left"
-      controls="home-side"
-      onresize={(next) => (chosen = next)}
-      oncommit={saveSide}
-      ondrag={(active) => (dragging = active)}
-    />
-    <aside
-      class="c-home__side"
-      id="home-side"
-      style:--home-side-w="{sideWidth}px"
-      aria-label="What Home is watching"
-    >
-      <div class="c-home__inbox">
-        <NeedsYou onpeek={peek} {onreveal} />
-        <InFlight onpeek={peek} />
-      </div>
-      <div class="c-tabs c-tabs--inset" role="tablist" aria-label="Side panel">
-        <button
-          class="c-tabs__tab"
-          class:is-active={side === 'peek'}
-          role="tab"
-          aria-selected={side === 'peek'}
-          aria-controls="home-side-panel"
-          onclick={() => (side = 'peek')}
-        >
-          Peek
-        </button>
-        <button
-          class="c-tabs__tab"
-          class:is-active={side === 'activity'}
-          role="tab"
-          aria-selected={side === 'activity'}
-          aria-controls="home-side-panel"
-          onclick={() => (side = 'activity')}
-        >
-          Activity
-        </button>
-      </div>
-      <div class="c-home__panel" id="home-side-panel" role="tabpanel">
-        {#if side === 'peek'}
-          {@render peekOrHint()}
-        {:else}
-          <ActivityList />
+
+    {#if narrow}
+      <div class="c-home__panel" id="home-inbox" role="tabpanel" hidden={tab !== 'inbox'}>
+        {#if fleet.needsYou.length + shellRuns.pending.length === 0}
+          <p class="c-home__hint">Nothing is waiting on you.</p>
         {/if}
+        <NeedsYou onpeek={peek} {onreveal} />
       </div>
-    </aside>
-  {/if}
-</section>
+      <div class="c-home__panel" id="home-peek" role="tabpanel" hidden={tab !== 'peek'}>
+        {@render peekOrHint()}
+      </div>
+      <div
+        class="c-home__panel"
+        id="home-activity"
+        role="tabpanel"
+        hidden={tab !== 'activity'}
+      >
+        <div class="c-home__inbox">
+          <InFlight onpeek={peek} />
+        </div>
+        <ActivityList />
+      </div>
+    {:else}
+      <Splitter
+        value={sideWidth}
+        min={SIDE_MIN}
+        max={sideMax}
+        label="Resize the side panel"
+        grows="left"
+        controls="home-side"
+        onresize={(next) => (chosen = next)}
+        oncommit={saveSide}
+        ondrag={(active) => (dragging = active)}
+      />
+      <aside
+        class="c-home__side"
+        id="home-side"
+        style:--home-side-w="{sideWidth}px"
+        aria-label="What Home is watching"
+      >
+        <div class="c-home__inbox">
+          <NeedsYou onpeek={peek} {onreveal} />
+          <InFlight onpeek={peek} />
+        </div>
+        <div class="c-tabs c-tabs--inset" role="tablist" aria-label="Side panel">
+          <button
+            class="c-tabs__tab"
+            class:is-active={side === 'peek'}
+            role="tab"
+            aria-selected={side === 'peek'}
+            aria-controls="home-side-panel"
+            onclick={() => (side = 'peek')}
+          >
+            Peek
+          </button>
+          <button
+            class="c-tabs__tab"
+            class:is-active={side === 'activity'}
+            role="tab"
+            aria-selected={side === 'activity'}
+            aria-controls="home-side-panel"
+            onclick={() => (side = 'activity')}
+          >
+            Activity
+          </button>
+        </div>
+        <div class="c-home__panel" id="home-side-panel" role="tabpanel">
+          {#if side === 'peek'}
+            {@render peekOrHint()}
+          {:else}
+            <ActivityList />
+          {/if}
+        </div>
+      </aside>
+    {/if}
+  </section>
+</ExtensionPoint>

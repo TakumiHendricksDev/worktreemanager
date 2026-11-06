@@ -1339,6 +1339,7 @@ pub fn session_request(
         env: BTreeMap::new(),
         resume: choices.resume,
         fork: None,
+        fork_through: None,
         ephemeral: false,
         mcp,
         instructions: Some(home_instructions()),
@@ -1357,6 +1358,9 @@ pub fn open(
     options: SessionOptions,
     fork: Option<String>,
 ) -> Reply<String> {
+    if !app.plugins.enabled("wtm.home") {
+        return Err(ErrorView::new("plugin", "Home is disabled"));
+    }
     let entry = wtm_agent::entry(agent_id).ok_or_else(|| {
         ErrorView::new(
             "exec",

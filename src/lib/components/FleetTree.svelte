@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import { extensionPart, extensionContext } from '../state/extensions.svelte';
+  const publicContext = extensionContext();
   /**
    * Home's left column: every project, its worktrees, and every agent session running in them, as
    * one compact location tree.
@@ -298,7 +301,7 @@
           option.label,
           () =>
             void sessions
-              .openAgent(projectId, worktreeId, option.id, 'right', undefined, option)
+              .openAgent(projectId, worktreeId, option.id, { repo: option })
               .then((paneId) => {
                 if (paneId) peek(paneId);
               }),
@@ -474,229 +477,234 @@
     </span>
   {/if}
 {/snippet}
-
-<nav
-  style:--fleet-row-height={treePrefs.density === 'compact' ? '26px' : '30px'}
-  class="c-fleet"
-  class:is-hidden={!visible}
-  aria-label="Sessions everywhere"
->
-  <div class="c-fleet__controls">
-    <div class="c-search" role="search">
-      <span class="c-search__icon"><Icon name="search" size={14} /></span>
-      <label class="u-visually-hidden" for="fleet-search">Filter sessions</label>
-      <input
-        id="fleet-search"
-        class="c-search__input"
-        type="search"
-        bind:this={searchEl}
-        bind:value={fleet.query}
-        placeholder="Filter sessions"
-        autocomplete="off"
-        spellcheck="false"
-      />
-      {#if fleet.query !== ''}
-        <button
-          class="c-search__clear"
-          onclick={() => (fleet.query = '')}
-          title="Clear the filter"
-        >
-          <Icon name="close" size={12} />
-          <span class="u-visually-hidden">Clear the filter</span>
-        </button>
-      {/if}
-    </div>
-  </div>
-
-  <div class="c-fleet__filter">
-    <label class="u-visually-hidden" for="fleet-status">Session status</label>
-    <select
-      id="fleet-status"
-      class="c-fleet__select"
-      value={fleet.only ?? ''}
-      onchange={(event) =>
-        (fleet.only = (event.currentTarget.value || null) as FleetOnly | null)}
-    >
-      <option value="">All sessions</option>
-      <option value="attention">Needs you</option>
-      <option value="working">Running</option>
-      <option value="done">Completed</option>
-      <option value="failed">Failed</option>
-    </select>
-    {#if fleet.only !== null || fleet.query !== ''}
-      <Button
-        variant="quiet"
-        size="sm"
-        onclick={() => {
-          fleet.only = null;
-          fleet.query = '';
-        }}>Clear</Button
-      >
-    {/if}
-  </div>
-
-  <div class="c-fleet__wrap">
-    <div class="c-fleet__scroll">
-      <!-- svelte-ignore a11y_interactive_supports_focus -->
-      <div
-        role="tree"
-        aria-label="Sessions everywhere"
-        aria-orientation="vertical"
-        class="c-fleet__tree"
-        bind:this={treeEl}
-        onkeydown={onKeydown}
-      >
-        {#each rows as row (row.key)}
-          {@const expanded = expandedOf(row)}
-          {@const status = statusOf(row)}
-          <!-- Keys are the tree's, which hears them bubble from the focused row; a click is the
-               mouse's route to the same activation. -->
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div
-            role="treeitem"
-            class="c-fleet__row c-fleet__row--{row.kind}"
-            class:is-selected={selected(row)}
-            class:has-key={(row.kind === 'worktree' || row.kind === 'creation') &&
-              !!row.worktree?.issueKey}
-            data-nav={row.key}
-            title={titleOf(row)}
-            aria-describedby={`fleet-detail-${row.key}`}
-            tabindex={row.key === tabKey ? 0 : -1}
-            aria-level={row.level}
-            aria-expanded={expanded ?? undefined}
-            aria-selected={selected(row)}
-            style:--fleet-level={row.level}
-            onclick={() => activate(row)}
-            oncontextmenu={(event) => {
-              event.preventDefault();
-              event.currentTarget.focus();
-              rowMenu(event, row, event.currentTarget);
-            }}
-            onfocus={() => {
-              focusKey = row.key;
-              fleet.focused = row.kind === 'session' ? row.session.id : null;
-            }}
-            onfocusout={(event) => {
-              if (
-                !(event.relatedTarget instanceof Node) ||
-                !treeEl?.contains(event.relatedTarget)
-              )
-                fleet.focused = null;
-            }}
+<ExtensionPoint target="component.fleet-tree" context={publicContext()}>
+  <nav
+    use:extensionPart={{ target: 'component.fleet-tree', context: publicContext }}
+    style:--fleet-row-height={treePrefs.density === 'compact' ? '26px' : '30px'}
+    class="c-fleet"
+    class:is-hidden={!visible}
+    aria-label="Sessions everywhere"
+  >
+    <div class="c-fleet__controls">
+      <div class="c-search" role="search">
+        <span class="c-search__icon"><Icon name="search" size={14} /></span>
+        <label class="u-visually-hidden" for="fleet-search">Filter sessions</label>
+        <input
+          id="fleet-search"
+          class="c-search__input"
+          type="search"
+          bind:this={searchEl}
+          bind:value={fleet.query}
+          placeholder="Filter sessions"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        {#if fleet.query !== ''}
+          <button
+            class="c-search__clear"
+            onclick={() => (fleet.query = '')}
+            title="Clear the filter"
           >
-            <span id={`fleet-detail-${row.key}`} class="u-visually-hidden"
-              >{titleOf(row)}</span
-            >
-            <span class="c-fleet__marker">
-              {#if row.kind === 'home'}<Icon name="home" size={14} />
-              {:else if status && status !== 'idle'}<SessionDot
-                  {status}
-                  labelled
-                  name={row.kind === 'creation' ? jobState(row.job).name : summaryName(row)}
-                  steady={row.kind === 'project' || row.kind === 'worktree'}
-                />{/if}
-            </span>
-            <span class="c-fleet__identity">
-              {@render twisty(row)}
-              {#if row.kind === 'home'}<span class="c-fleet__name">Home</span>
-              {:else if row.kind === 'project'}<span class="c-fleet__name"
-                  >{row.project.name}</span
-                >
-              {:else if row.kind === 'worktree'}
-                {@const identity = worktreeLabel(row.worktree)}
-                {#if identity.key}<span class="c-fleet__key">{identity.key}</span>{/if}
-                <span class="c-fleet__name">{identity.name}</span>
-              {:else if row.kind === 'settled'}<span class="c-fleet__name"
-                  >Idle / finished</span
-                >
-              {:else if row.kind === 'idle'}<span class="c-fleet__name">No sessions</span>
-              {:else if row.kind === 'creation' && row.worktree}
-                {@const identity = worktreeLabel(row.worktree)}
-                {#if identity.key}<span class="c-fleet__key">{identity.key}</span>{/if}
-                <span class="c-fleet__name">{identity.name}</span>
-              {:else if row.kind === 'creation'}<span class="c-fleet__name"
-                  >{row.job.title}</span
-                >
-              {:else}
-                <span class="c-fleet__name">{row.session.title}</span>
-                <span class="c-fleet__provider"
-                  >{row.session.agent.replace(' Code', '').replace(' Agent', '')}</span
-                >
-              {/if}
-            </span>
-            <span class="c-fleet__tag">
-              {#if row.kind === 'project' || row.kind === 'worktree'}
-                {#if row.counts.total > 0}<span
-                    title={countDetail(row)}
-                    aria-label={countDetail(row)}>{row.counts.total}</span
-                  >{/if}
-              {:else if row.kind === 'settled'}<span
-                  title={plural(row.count, 'idle or finished session')}
-                  aria-label={plural(row.count, 'idle or finished session')}
-                  >{row.count}</span
-                >
-              {:else if row.kind === 'idle'}<span
-                  title={`${plural(row.count, 'worktree')} without sessions`}
-                  aria-label={`${plural(row.count, 'worktree')} without sessions`}
-                  >{row.count}</span
-                >{/if}
-            </span>
-            <span class="c-fleet__actions">
-              {#if row.kind === 'project' || row.kind === 'worktree'}
-                <Button
-                  variant="quiet"
-                  icon="sm"
-                  title={row.kind === 'project'
-                    ? `More for ${row.project.name}`
-                    : `More for ${row.worktree.title}`}
-                  ariaLabel={row.kind === 'project'
-                    ? `More for ${row.project.name}`
-                    : `More for ${row.worktree.title}`}
-                  ariaHaspopup="menu"
-                  tabindex={-1}
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    rowMenu(event, row, event.currentTarget as Element);
-                  }}
-                >
-                  <Icon name="more" size={14} />
-                </Button>
-              {:else if row.kind === 'creation' && row.job.phase !== 'running'}
-                <Button
-                  variant="quiet"
-                  icon="sm"
-                  title="Dismiss"
-                  ariaLabel={`Dismiss ${jobLabel(row)}`}
-                  tabindex={-1}
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    dismiss(row);
-                  }}
-                >
-                  <Icon name="close" size={12} />
-                </Button>
-              {/if}
-            </span>
-          </div>
-        {/each}
+            <Icon name="close" size={12} />
+            <span class="u-visually-hidden">Clear the filter</span>
+          </button>
+        {/if}
       </div>
     </div>
-  </div>
 
-  <div class="c-fleet__foot">
-    <Button variant="neutral" full onclick={onaddproject}>
-      <Icon name="plus" size={14} /><span class="c-fleet__add-label">Add a repository…</span
+    <div class="c-fleet__filter">
+      <label class="u-visually-hidden" for="fleet-status">Session status</label>
+      <select
+        id="fleet-status"
+        class="c-fleet__select"
+        value={fleet.only ?? ''}
+        onchange={(event) =>
+          (fleet.only = (event.currentTarget.value || null) as FleetOnly | null)}
       >
-    </Button>
-  </div>
-</nav>
+        <option value="">All sessions</option>
+        <option value="attention">Needs you</option>
+        <option value="working">Running</option>
+        <option value="done">Completed</option>
+        <option value="failed">Failed</option>
+      </select>
+      {#if fleet.only !== null || fleet.query !== ''}
+        <Button
+          variant="quiet"
+          size="sm"
+          onclick={() => {
+            fleet.only = null;
+            fleet.query = '';
+          }}>Clear</Button
+        >
+      {/if}
+    </div>
 
-<!-- Gone by another route while it was open — Home closed it, say — and there is nothing to ask. -->
-{#if closing && sessions.paneById(closing.pane.id)}
-  {@const { pane, next } = closing}
-  <CloseSessionDialog
-    {pane}
-    onclose={() => (closing = null)}
-    onclosed={() => closed(pane, next)}
-  />
-{/if}
+    <div class="c-fleet__wrap">
+      <div class="c-fleet__scroll">
+        <!-- svelte-ignore a11y_interactive_supports_focus -->
+        <div
+          role="tree"
+          aria-label="Sessions everywhere"
+          aria-orientation="vertical"
+          class="c-fleet__tree"
+          bind:this={treeEl}
+          onkeydown={onKeydown}
+        >
+          {#each rows as row (row.key)}
+            {@const expanded = expandedOf(row)}
+            {@const status = statusOf(row)}
+            <!-- Keys are the tree's, which hears them bubble from the focused row; a click is the
+               mouse's route to the same activation. -->
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div
+              role="treeitem"
+              class="c-fleet__row c-fleet__row--{row.kind}"
+              class:is-selected={selected(row)}
+              class:has-key={(row.kind === 'worktree' || row.kind === 'creation') &&
+                !!row.worktree?.issueKey}
+              data-nav={row.key}
+              title={titleOf(row)}
+              aria-describedby={`fleet-detail-${row.key}`}
+              tabindex={row.key === tabKey ? 0 : -1}
+              aria-level={row.level}
+              aria-expanded={expanded ?? undefined}
+              aria-selected={selected(row)}
+              style:--fleet-level={row.level}
+              onclick={() => activate(row)}
+              oncontextmenu={(event) => {
+                event.preventDefault();
+                event.currentTarget.focus();
+                rowMenu(event, row, event.currentTarget);
+              }}
+              onfocus={() => {
+                focusKey = row.key;
+                fleet.focused = row.kind === 'session' ? row.session.id : null;
+              }}
+              onfocusout={(event) => {
+                if (
+                  !(event.relatedTarget instanceof Node) ||
+                  !treeEl?.contains(event.relatedTarget)
+                )
+                  fleet.focused = null;
+              }}
+            >
+              <span id={`fleet-detail-${row.key}`} class="u-visually-hidden"
+                >{titleOf(row)}</span
+              >
+              <span class="c-fleet__marker">
+                {#if row.kind === 'home'}<Icon name="home" size={14} />
+                {:else if status && status !== 'idle'}<SessionDot
+                    {status}
+                    labelled
+                    name={row.kind === 'creation'
+                      ? jobState(row.job).name
+                      : summaryName(row)}
+                    steady={row.kind === 'project' || row.kind === 'worktree'}
+                  />{/if}
+              </span>
+              <span class="c-fleet__identity">
+                {@render twisty(row)}
+                {#if row.kind === 'home'}<span class="c-fleet__name">Home</span>
+                {:else if row.kind === 'project'}<span class="c-fleet__name"
+                    >{row.project.name}</span
+                  >
+                {:else if row.kind === 'worktree'}
+                  {@const identity = worktreeLabel(row.worktree)}
+                  {#if identity.key}<span class="c-fleet__key">{identity.key}</span>{/if}
+                  <span class="c-fleet__name">{identity.name}</span>
+                {:else if row.kind === 'settled'}<span class="c-fleet__name"
+                    >Idle / finished</span
+                  >
+                {:else if row.kind === 'idle'}<span class="c-fleet__name">No sessions</span>
+                {:else if row.kind === 'creation' && row.worktree}
+                  {@const identity = worktreeLabel(row.worktree)}
+                  {#if identity.key}<span class="c-fleet__key">{identity.key}</span>{/if}
+                  <span class="c-fleet__name">{identity.name}</span>
+                {:else if row.kind === 'creation'}<span class="c-fleet__name"
+                    >{row.job.title}</span
+                  >
+                {:else}
+                  <span class="c-fleet__name">{row.session.title}</span>
+                  <span class="c-fleet__provider"
+                    >{row.session.agent.replace(' Code', '').replace(' Agent', '')}</span
+                  >
+                {/if}
+              </span>
+              <span class="c-fleet__tag">
+                {#if row.kind === 'project' || row.kind === 'worktree'}
+                  {#if row.counts.total > 0}<span
+                      title={countDetail(row)}
+                      aria-label={countDetail(row)}>{row.counts.total}</span
+                    >{/if}
+                {:else if row.kind === 'settled'}<span
+                    title={plural(row.count, 'idle or finished session')}
+                    aria-label={plural(row.count, 'idle or finished session')}
+                    >{row.count}</span
+                  >
+                {:else if row.kind === 'idle'}<span
+                    title={`${plural(row.count, 'worktree')} without sessions`}
+                    aria-label={`${plural(row.count, 'worktree')} without sessions`}
+                    >{row.count}</span
+                  >{/if}
+              </span>
+              <span class="c-fleet__actions">
+                {#if row.kind === 'project' || row.kind === 'worktree'}
+                  <Button
+                    variant="quiet"
+                    icon="sm"
+                    title={row.kind === 'project'
+                      ? `More for ${row.project.name}`
+                      : `More for ${row.worktree.title}`}
+                    ariaLabel={row.kind === 'project'
+                      ? `More for ${row.project.name}`
+                      : `More for ${row.worktree.title}`}
+                    ariaHaspopup="menu"
+                    tabindex={-1}
+                    onclick={(event) => {
+                      event.stopPropagation();
+                      rowMenu(event, row, event.currentTarget as Element);
+                    }}
+                  >
+                    <Icon name="more" size={14} />
+                  </Button>
+                {:else if row.kind === 'creation' && row.job.phase !== 'running'}
+                  <Button
+                    variant="quiet"
+                    icon="sm"
+                    title="Dismiss"
+                    ariaLabel={`Dismiss ${jobLabel(row)}`}
+                    tabindex={-1}
+                    onclick={(event) => {
+                      event.stopPropagation();
+                      dismiss(row);
+                    }}
+                  >
+                    <Icon name="close" size={12} />
+                  </Button>
+                {/if}
+              </span>
+            </div>
+          {/each}
+        </div>
+      </div>
+    </div>
+
+    <div class="c-fleet__foot">
+      <Button variant="neutral" full onclick={onaddproject}>
+        <Icon name="plus" size={14} /><span class="c-fleet__add-label"
+          >Add a repository…</span
+        >
+      </Button>
+    </div>
+  </nav>
+
+  <!-- Gone by another route while it was open — Home closed it, say — and there is nothing to ask. -->
+  {#if closing && sessions.paneById(closing.pane.id)}
+    {@const { pane, next } = closing}
+    <CloseSessionDialog
+      {pane}
+      onclose={() => (closing = null)}
+      onclosed={() => closed(pane, next)}
+    />
+  {/if}
+</ExtensionPoint>

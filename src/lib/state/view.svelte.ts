@@ -1,3 +1,4 @@
+import { interceptUiOperation } from '../extension-operations';
 /**
  * What the main column shows: Home, or one of a worktree's views.
  *
@@ -20,6 +21,7 @@
  * origin and a pane window has no Home to show.
  */
 
+import { plugins } from './plugins.svelte';
 import { inPaneWindow } from '../window-role';
 
 /** The main column's views. `home` is the only one with no worktree behind it. */
@@ -69,6 +71,20 @@ class View {
   }
 
   show(next: MainView): void {
+    if (
+      interceptUiOperation(
+        'ui.navigate',
+        { target: next },
+        { projectId: '', worktreeId: '' },
+        (args) => {
+          if (['home', 'worktree', 'database', 'code', 'new'].includes(String(args.target)))
+            this.show(args.target as MainView);
+        },
+      )
+    )
+      return;
+    const slot = next === 'new' ? 'new_worktree' : next === 'worktree' ? 'sessions' : next;
+    if (!plugins.available(slot)) return;
     if (next === this.current) return;
     this.previous = this.current;
     this.current = next;
