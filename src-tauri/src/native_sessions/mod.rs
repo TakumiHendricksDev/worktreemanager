@@ -162,6 +162,13 @@ pub trait Events: Send + Sync {
     fn changed(&self, snapshot: &Snapshot);
     /// One plugin event. Must return without waiting for any plugin.
     fn plugin(&self, name: &'static str, payload: Value, worktree: String);
+    /// Whether anything could receive a plugin event now, so a caller can skip building one.
+    ///
+    /// Asked of the seam rather than of the app, because only the host's seam knows: a test's
+    /// recording seam receives every event whether or not a plugin runtime is running.
+    fn wants_plugin_events(&self) -> bool {
+        true
+    }
 }
 
 struct PluginEvent {
@@ -173,17 +180,19 @@ struct PluginEvent {
 struct HostEvents {
     handle: tauri::AppHandle,
     plugins: mpsc::SyncSender<PluginEvent>,
+    app: Weak<App>,
 }
 
 impl HostEvents {
     fn new(handle: tauri::AppHandle, app: Weak<App>) -> Self {
         let (plugins, events) = mpsc::sync_channel::<PluginEvent>(PLUGIN_BACKLOG);
         let dispatcher = handle.clone();
+        let target = Weak::clone(&app);
         let spawned = std::thread::Builder::new()
             .name("wtm-native-plugins".into())
             .spawn(move || {
                 for event in events {
-                    let Some(app) = app.upgrade() else { return };
+                    let Some(app) = target.upgrade() else { return };
                     crate::extensions::Runtime::event(
                         &dispatcher,
                         &app,
@@ -196,13 +205,20 @@ impl HostEvents {
         if let Err(error) = spawned {
             tracing::warn!(%error, "native plugin events have no dispatcher");
         }
-        Self { handle, plugins }
+        Self {
+            handle,
+            plugins,
+            app,
+        }
     }
 }
 
 impl Events for HostEvents {
     fn changed(&self, snapshot: &Snapshot) {
         let _ = self.handle.emit(EVENT, snapshot);
+    }
+    fn wants_plugin_events(&self) -> bool {
+        self.app.upgrade().is_some_and(|app| !app.extensions.idle())
     }
     fn plugin(&self, name: &'static str, payload: Value, worktree: String) {
         let event = PluginEvent {
@@ -522,7 +538,7 @@ impl Session {
                 }
                 // The same skip as the WTM Chat sink: with no plugin runtime running, nothing
                 // would receive the payload, so it is not built.
-                if !app.extensions.idle() {
+                if self.events.wants_plugin_events() {
                     let payload = json!({
                         "session": state.session,
                         "seq": state.seq,

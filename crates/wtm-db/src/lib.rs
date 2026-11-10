@@ -517,7 +517,6 @@ fn sqlite_query(
 
     let columns = statement
         .columns()
-        .iter()
         .map(|column| QueryColumn {
             name: column.name().to_owned(),
             type_name: column.decl_type().map(str::to_owned),
