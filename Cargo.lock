@@ -5847,7 +5847,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-agent"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "parking_lot",
  "pretty_assertions",
@@ -5863,7 +5863,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-app"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "parking_lot",
  "regex",
@@ -5897,7 +5897,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-code"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "regex",
  "tempfile",
@@ -5908,7 +5908,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-config"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "etcetera",
  "insta",
@@ -5931,7 +5931,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-core"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "insta",
  "pretty_assertions",
@@ -5946,7 +5946,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-db"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "native-tls",
  "parking_lot",
@@ -5961,7 +5961,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-dictate"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "serde_json",
  "wtm-core",
@@ -5969,7 +5969,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-exec"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "nix 0.31.3",
  "parking_lot",
@@ -5987,7 +5987,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-git"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "insta",
  "pretty_assertions",
@@ -6002,7 +6002,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-notify"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "block2",
  "objc2",
@@ -6015,7 +6015,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-plugins"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "parking_lot",
  "regex",
@@ -6031,7 +6031,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-render"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "insta",
  "minijinja",
@@ -6045,7 +6045,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-testkit"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "parking_lot",
  "serde_json",
@@ -6055,7 +6055,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-update"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",
@@ -6063,7 +6063,7 @@ dependencies = [
 
 [[package]]
 name = "wtm-webview"
-version = "4.3.0"
+version = "4.4.0"
 dependencies = [
  "block2",
  "objc2",
