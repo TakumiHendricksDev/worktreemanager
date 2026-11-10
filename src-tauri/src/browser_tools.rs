@@ -426,10 +426,16 @@ fn place(caller: &Caller) -> Result<(&str, &str), String> {
 }
 
 /// Which browser a call means. A browser in another worktree answers exactly like one that does not
-/// exist — the tool must not be usable to probe panes outside the caller's view.
+/// exist — the tool must not be usable to probe panes outside the caller's view. A plugin's panel or
+/// view answers the same way: its page speaks with the plugin's access, so no agent may drive it.
 fn target(app: &App, caller: &Caller, args: &Value) -> Result<String, String> {
     let (_, worktree) = place(caller)?;
-    let here = app.browsers.ids_in(worktree);
+    let here: Vec<String> = app
+        .browsers
+        .agent_targets_in(worktree)
+        .into_iter()
+        .map(|view| view.id)
+        .collect();
     match args.get("browser").and_then(Value::as_str) {
         Some(id) if here.iter().any(|candidate| candidate == id) => Ok(id.to_owned()),
         Some(_) => Err(
@@ -817,7 +823,7 @@ fn list(app: &App, caller: &Caller) -> Result<Response, String> {
     use std::fmt::Write as _;
 
     let (_, worktree) = place(caller)?;
-    let panes = app.browsers.list(Some(worktree));
+    let panes = app.browsers.agent_targets_in(worktree);
     if panes.is_empty() {
         return Ok(Response::ok(
             "There is no browser pane in this worktree. `browser_open` with a URL makes one."

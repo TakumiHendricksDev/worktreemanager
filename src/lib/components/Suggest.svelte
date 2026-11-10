@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * The rows offered while `@` or `/` is open, inside the composer card.
    *
@@ -56,17 +53,9 @@
   });
 </script>
 
-<ExtensionPoint target="component.suggest" context={publicContext()}>
-  <div
-    use:extensionPart={{ target: 'component.suggest', context: publicContext }}
-    class="c-suggest"
-    {id}
-    role="listbox"
-    aria-label="Suggestions"
-    bind:this={list}
-  >
-    {#each items as item, i (item.value)}
-      <!--
+<div class="c-suggest" {id} role="listbox" aria-label="Suggestions" bind:this={list}>
+  {#each items as item, i (item.value)}
+    <!--
       `onmousedown` with `preventDefault`, not `onclick`. A click blurs the textarea first, which
       moves the caret out of the draft this is about to edit — and on some engines closes the strip
       before the click lands at all. This is the same trick `OpenInButton` uses on its menu.
@@ -76,23 +65,22 @@
       comes here at all. The textarea keeps it and names the active row with
       `aria-activedescendant`, which is what keeps the caret alive while the list is walked.
     -->
-      <div
-        class="c-suggest__row"
-        class:is-active={i === active}
-        id="{id}-{i}"
-        role="option"
-        aria-selected={i === active}
-        tabindex="-1"
-        onmousedown={(event) => {
-          event.preventDefault();
-          onpick(item.value);
-        }}
-      >
-        <span class="c-suggest__label">{item.label}</span>
-        {#if item.detail !== ''}
-          <span class="c-suggest__detail">{item.detail}</span>
-        {/if}
-      </div>
-    {/each}
-  </div>
-</ExtensionPoint>
+    <div
+      class="c-suggest__row"
+      class:is-active={i === active}
+      id="{id}-{i}"
+      role="option"
+      aria-selected={i === active}
+      tabindex="-1"
+      onmousedown={(event) => {
+        event.preventDefault();
+        onpick(item.value);
+      }}
+    >
+      <span class="c-suggest__label">{item.label}</span>
+      {#if item.detail !== ''}
+        <span class="c-suggest__detail">{item.detail}</span>
+      {/if}
+    </div>
+  {/each}
+</div>

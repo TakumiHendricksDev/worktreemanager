@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A strip across the top of a view reporting a problem, or — as `info` — offering something.
    *
@@ -24,11 +22,7 @@
 
 <!-- `status` for `info`: `alert` interrupts a screen reader mid-sentence, which a problem earns and
      an update available does not. -->
-<div
-  use:extensionPart={{ target: 'ui.banner', context: publicContext }}
-  class="c-banner c-banner--{variant}"
-  role={variant === 'info' ? 'status' : 'alert'}
->
+<div class="c-banner c-banner--{variant}" role={variant === 'info' ? 'status' : 'alert'}>
   <span>{@render children()}</span>
   <!-- The wrapper is what carries `margin-left: auto`. `_banner.scss` has styled `.c-banner__action`
        since it was written, but the snippet was rendered bare — so the rule matched nothing and

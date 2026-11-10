@@ -91,6 +91,39 @@ pub struct ReleasedSessions {
     pub sessions: Vec<String>,
 }
 
+/// What a host-initiated session needs from the window: a sink for its events, a pane that
+/// adopts it, and a way to say that a list the window shows has changed.
+///
+/// A trait for the reason `recipes::Host` is one. Plugin authoring and chat editing are worth
+/// exactly what they refuse to do twice — replay a brief, submit an edit — and proving that needs a
+/// real provider process and a real [`App`], but not a window, which a test binary cannot build.
+/// [`AppHandle`] is the real one.
+pub trait Window: Send + Sync {
+    /// The sink a new session's events go through.
+    fn sink(&self) -> Arc<dyn AgentSink>;
+    /// Ask the window to adopt a pane for a session it did not open itself.
+    fn announce(&self, spawned: &SpawnedSession);
+    /// Tell the window a list it shows changed, by the event name it listens for.
+    fn changed(&self, event: &str);
+}
+
+impl Window for AppHandle {
+    fn sink(&self) -> Arc<dyn AgentSink> {
+        AgentEventSink::new(self.clone())
+    }
+
+    fn announce(&self, spawned: &SpawnedSession) {
+        announce_spawn(self, spawned);
+    }
+
+    fn changed(&self, event: &str) {
+        // Same degradation as an unheard spawn: the next refresh reads the current state.
+        if let Err(err) = self.emit(event, ()) {
+            tracing::debug!(error = %err, event, "could not announce a change");
+        }
+    }
+}
+
 /// Tell the window to open a pane for a session that already exists.
 pub fn announce_spawn(handle: &AppHandle, spawned: &SpawnedSession) {
     if let Err(err) = handle.emit(AGENT_SPAWNED_EVENT, spawned) {
@@ -169,79 +202,122 @@ impl AgentEventSink {
     }
 }
 
-impl AgentEventSink {
-    /// Record a session as resumable, and note the provider's id on it.
-    ///
-    /// Driven from `SessionReady` rather than from the first reply, because that is the first moment
-    /// resuming is possible — so a session that fails mid-turn is still in the list, which is exactly
-    /// when someone wants it back.
-    fn remember(&self, session: &SessionId, event: &AgentEvent) {
-        let AgentEvent::SessionReady {
-            provider_session_id,
-            model,
-            effort,
-            ..
-        } = event
-        else {
-            return;
-        };
-        let Some(app) = &self.app else { return };
-        let Some(facts) = app
-            .live_agents()
-            .into_iter()
-            .find(|f| f.session == session.as_str())
-        else {
-            return;
-        };
+/// The half of handling an event that is the app's own bookkeeping, and needs no window.
+///
+/// Remembers the session for resuming, labels it, and buffers the event, returning the sequence
+/// number the buffer gave it. [`AgentEventSink`] calls this before it emits, so the window can
+/// never see an event the buffer does not have. Public so a test can drive a real provider
+/// process into a real [`App`] without a Tauri runtime; nothing else should need it.
+pub fn keep(app: &App, session: &SessionId, event: &AgentEvent) -> u64 {
+    // Before the emit, so a slow write cannot delay what the user sees.
+    remember(app, session, event);
+    title(app, session, event);
+    app.record_agent_event(session.as_str(), event)
+}
 
-        app.note_provider_session(session.as_str(), provider_session_id);
-        if facts.ephemeral {
-            return;
-        }
-        app.remember_session(wtm_config::SessionRecord {
-            provider: facts.provider,
-            worktree: facts.scope.resume_key().to_owned(),
-            provider_session: provider_session_id.clone(),
-            // The first turn can be submitted before the handshake. The live entry caches its
-            // label so SessionReady does not turn that ordinary race into “Untitled session”.
-            title: app.session_title_of(session.as_str()),
-            model: model.clone(),
-            effort: effort.clone(),
-            updated: Some(app.clock.now_iso()),
-            extra: std::collections::BTreeMap::new(),
-        });
+/// Record a session as resumable, and note the provider's id on it.
+///
+/// Driven from `SessionReady` rather than from the first reply, because that is the first moment
+/// resuming is possible — so a session that fails mid-turn is still in the list, which is exactly
+/// when someone wants it back.
+fn remember(app: &App, session: &SessionId, event: &AgentEvent) {
+    let AgentEvent::SessionReady {
+        provider_session_id,
+        model,
+        effort,
+        ..
+    } = event
+    else {
+        return;
+    };
+    let Some(facts) = app
+        .live_agents()
+        .into_iter()
+        .find(|f| f.session == session.as_str())
+    else {
+        return;
+    };
+
+    app.note_provider_session(session.as_str(), provider_session_id);
+    if facts.ephemeral {
+        return;
     }
+    app.remember_session(wtm_config::SessionRecord {
+        provider: facts.provider,
+        worktree: facts.scope.resume_key().to_owned(),
+        provider_session: provider_session_id.clone(),
+        // The first turn can be submitted before the handshake. The live entry caches its
+        // label so SessionReady does not turn that ordinary race into “Untitled session”.
+        title: app.session_title_of(session.as_str()),
+        model: model.clone(),
+        effort: effort.clone(),
+        updated: Some(app.clock.now_iso()),
+        extra: std::collections::BTreeMap::new(),
+    });
+}
 
-    /// Give a remembered session a label, from the first thing the user said to it.
+/// Give a remembered session a label, from the first thing the user said to it.
+///
+/// A session's own id is not something anyone recognises in a list, so the first prompt is the
+/// label. Truncated, because a prompt can be a whole stack trace.
+fn title(app: &App, session: &SessionId, event: &AgentEvent) {
+    let AgentEvent::UserEcho { text } = event else {
+        return;
+    };
+    let Some(facts) = app
+        .live_agents()
+        .into_iter()
+        .find(|f| f.session == session.as_str())
+    else {
+        return;
+    };
+    // wtm's news for Home is not something anyone said to it, so it names nothing.
+    if facts.ephemeral || text.starts_with(crate::home::FROM_WTM) {
+        return;
+    }
+    // A session Home opened hears its first prompt behind Home's label, and the label is not
+    // what the conversation is about.
+    let text = text
+        .strip_prefix(crate::home_tools::FROM_HOME)
+        .map_or(text.as_str(), str::trim_start);
+    let mut label: String = text.chars().take(72).collect();
+    if text.chars().count() > 72 {
+        label.push('…');
+    }
+    app.title_live_session(session.as_str(), &label);
+}
+
+impl AgentEventSink {
+    /// Hand an event to the plugin runtimes that subscribe to `chat.event`.
     ///
-    /// A session's own id is not something anyone recognises in a list, so the first prompt is the
-    /// label. Truncated, because a prompt can be a whole stack trace.
-    fn title(&self, session: &SessionId, event: &AgentEvent) {
-        let AgentEvent::UserEcho { text } = event else {
-            return;
-        };
-        let Some(app) = &self.app else { return };
-        let Some(facts) = app
-            .live_agents()
-            .into_iter()
-            .find(|f| f.session == session.as_str())
-        else {
-            return;
-        };
-        // wtm's news for Home is not something anyone said to it, so it names nothing.
-        if facts.ephemeral || text.starts_with(crate::home::FROM_WTM) {
+    /// Every streamed delta of every session passes through here, and the payload clones the
+    /// event into a JSON value, so it is built only after the scope lookup has found the session,
+    /// and the lookup clones nothing else.
+    ///
+    /// The scope is read without waiting for the provider to name its conversation, so a
+    /// subscriber hears the handshake as well. What it cannot hear is what a session said while it
+    /// was still opening — a resumed conversation's history, replayed from inside
+    /// `AgentSession::open` — because those events are numbered into the replay before the session
+    /// is registered here. A subscriber's first `seq` can therefore be greater than 1, and that
+    /// gap means "from before you could listen", not loss.
+    fn forward(&self, app: &App, session: &SessionId, seq: Option<u64>, event: &AgentEvent) {
+        // Every streamed delta passes through here. With no plugin runtime running nothing can
+        // receive the payload, so the scope lookup and the JSON clone are skipped outright.
+        if app.extensions.idle() {
             return;
         }
-        // A session Home opened hears its first prompt behind Home's label, and the label is not
-        // what the conversation is about.
-        let text = text
-            .strip_prefix(crate::home_tools::FROM_HOME)
-            .map_or(text.as_str(), str::trim_start);
-        let mut label: String = text.chars().take(72).collect();
-        if text.chars().count() > 72 {
-            label.push('…');
-        }
-        app.title_live_session(session.as_str(), &label);
+        let Some(scope) = app.agent_scope(session.as_str()) else {
+            return;
+        };
+        let payload = serde_json::json!({
+            "session": session.as_str(),
+            "seq": seq,
+            "event": event,
+            "projectId": scope.place().map(|(project, _)| project),
+            "worktreeId": scope.worktree_id(),
+        });
+        let worktree = scope.worktree_id().unwrap_or_default();
+        crate::extensions::Runtime::event(&self.handle, app, "chat.event", &payload, worktree);
     }
 }
 
@@ -257,17 +333,10 @@ impl AgentSink for AgentEventSink {
             return;
         }
 
-        // Before the emit, so a slow write cannot delay what the user sees.
-        self.remember(session, event);
-        self.title(session, event);
-
         // Buffered before it is emitted, and numbered by the same call, so the window can never
         // see an event the buffer does not have. The other order would leave a hole exactly the
         // size of a reload that landed between the two.
-        let seq = self
-            .app
-            .as_ref()
-            .map(|app| app.record_agent_event(session.as_str(), event));
+        let seq = self.app.as_ref().map(|app| keep(app, session, event));
 
         let payload = AgentEventPayload {
             session: session.as_str().to_owned(),
@@ -280,25 +349,9 @@ impl AgentSink for AgentEventSink {
             tracing::debug!(error = %err, "could not emit an agent event");
         }
 
-        // After the emit, so the turn's last event is on screen before its wire settles. Here
-        // rather than in `App` because settling announces, and only the sink holds a handle.
         if let Some(app) = &self.app {
-            match app.plugin_jobs.observe(app, session.as_str(), event) {
-                Ok(true) => {
-                    let _ = self.handle.emit("plugins:drafts", ());
-                }
-                Err(e) => tracing::warn!(error = %e.message, "could not save plugin conversation"),
-                Ok(false) => {}
-            }
-            if let Some(source) = app.agent_fork_source(session.as_str()) {
-                crate::extensions::Runtime::event(
-                    &self.handle,
-                    app,
-                    "chat.event",
-                    &serde_json::json!({"session":session.as_str(),"seq":seq,"event":event,"projectId":source.scope.place().map(|p|p.0),"worktreeId":source.scope.worktree_id()}),
-                    source.scope.worktree_id().unwrap_or_default(),
-                );
-            }
+            // After the emit, so the turn's last event is on screen before its wire settles. Here
+            // rather than in `App` because settling announces, and only the sink holds a handle.
             let settled = app.turns.observe(session.as_str(), event);
             crate::messages::settle_turns(&self.handle, app, &settled);
             // After the turns have settled, never before: a Home tool call waiting in person for
@@ -308,6 +361,10 @@ impl AgentSink for AgentEventSink {
             if matches!(event, AgentEvent::ApprovalRequested { .. }) {
                 crate::home::approval_requested(app, session.as_str());
             }
+            if app.plugin_jobs.observed(app, session.as_str(), event) {
+                Window::changed(&self.handle, crate::plugin_authoring::DRAFTS_EVENT);
+            }
+            self.forward(app, session, seq, event);
         }
     }
 

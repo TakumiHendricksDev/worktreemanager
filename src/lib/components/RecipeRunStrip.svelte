@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * The recipe running in this worktree, on one line above its panes.
    *
@@ -81,64 +78,62 @@
   }
 </script>
 
-<ExtensionPoint target="component.recipe-run-strip" context={publicContext()}>
-  {#if run}
-    <nav class="c-run-strip" aria-label="Recipe run" data-od-id="run-strip">
-      <span class="c-run-strip__heading">Recipe</span>
-      <span class="c-run-strip__name">{run.recipeName}</span>
-      <div class="c-run-strip__steps">
-        {#each run.steps as step, i (i)}
-          {#if i > 0}<span class="c-run-strip__sep" aria-hidden="true">›</span>{/if}
-          <button
-            type="button"
-            class="c-run-strip__step"
-            class:is-current={step.status === 'running'}
-            class:is-pending={step.status === 'pending' || step.status === 'skipped'}
-            class:is-failed={step.status === 'failed'}
-            title={detail(step)}
-            disabled={step.session === null}
-            onclick={() => show(step)}
-          >
-            {#if step.status === 'done'}
-              <span class="c-run-strip__done"><Icon name="check" size={12} /></span>
-            {:else if step.status === 'running'}
-              <SessionDot status="working" />
-            {:else if step.status === 'failed'}
-              <Icon name="warn" size={12} />
-            {/if}
-            {step.name}
-            {#if WORD[step.status]}<span class="c-run-strip__word">{WORD[step.status]}</span
-              >{/if}
-          </button>
-        {/each}
-      </div>
-      {#if run.missing.length > 0}
-        <span
-          class="c-run-strip__missing"
-          title="These were sent empty. The action that offered this recipe doesn't have them."
+{#if run}
+  <nav class="c-run-strip" aria-label="Recipe run" data-od-id="run-strip">
+    <span class="c-run-strip__heading">Recipe</span>
+    <span class="c-run-strip__name">{run.recipeName}</span>
+    <div class="c-run-strip__steps">
+      {#each run.steps as step, i (i)}
+        {#if i > 0}<span class="c-run-strip__sep" aria-hidden="true">›</span>{/if}
+        <button
+          type="button"
+          class="c-run-strip__step"
+          class:is-current={step.status === 'running'}
+          class:is-pending={step.status === 'pending' || step.status === 'skipped'}
+          class:is-failed={step.status === 'failed'}
+          title={detail(step)}
+          disabled={step.session === null}
+          onclick={() => show(step)}
         >
-          no value for {run.missing.map((m) => `{{${m}}}`).join(', ')}
-        </span>
-      {/if}
+          {#if step.status === 'done'}
+            <span class="c-run-strip__done"><Icon name="check" size={12} /></span>
+          {:else if step.status === 'running'}
+            <SessionDot status="working" />
+          {:else if step.status === 'failed'}
+            <Icon name="warn" size={12} />
+          {/if}
+          {step.name}
+          {#if WORD[step.status]}<span class="c-run-strip__word">{WORD[step.status]}</span
+            >{/if}
+        </button>
+      {/each}
+    </div>
+    {#if run.missing.length > 0}
       <span
-        class="c-run-strip__time"
-        class:is-failed={run.status === 'failed'}
-        title={summary}>{summary}</span
+        class="c-run-strip__missing"
+        title="These were sent empty. The action that offered this recipe doesn't have them."
       >
-      {#if run.status === 'running'}
-        <Button
-          variant="quiet"
-          size="sm"
-          title="Interrupt the current step and skip the rest"
-          onclick={() => void recipes.stop(run.id)}
-        >
-          <Icon name="stop" size={12} /> Stop recipe
-        </Button>
-      {:else}
-        <Button variant="quiet" size="sm" onclick={() => void recipes.dismiss(run.id)}>
-          <Icon name="close" size={12} /> Dismiss
-        </Button>
-      {/if}
-    </nav>
-  {/if}
-</ExtensionPoint>
+        no value for {run.missing.map((m) => `{{${m}}}`).join(', ')}
+      </span>
+    {/if}
+    <span
+      class="c-run-strip__time"
+      class:is-failed={run.status === 'failed'}
+      title={summary}>{summary}</span
+    >
+    {#if run.status === 'running'}
+      <Button
+        variant="quiet"
+        size="sm"
+        title="Interrupt the current step and skip the rest"
+        onclick={() => void recipes.stop(run.id)}
+      >
+        <Icon name="stop" size={12} /> Stop recipe
+      </Button>
+    {:else}
+      <Button variant="quiet" size="sm" onclick={() => void recipes.dismiss(run.id)}>
+        <Icon name="close" size={12} /> Dismiss
+      </Button>
+    {/if}
+  </nav>
+{/if}

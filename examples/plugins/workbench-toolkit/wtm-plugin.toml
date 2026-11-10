@@ -55,8 +55,8 @@ kind = "shell"
 [[extensions.content]]
 id = "workspace-note"
 title = "Workspace note"
-target = "component.session-surface"
-position = "before"
+target = "workspace.toolbar"
+position = "after"
 body = [{ kind = "text", text = "Workspace: ${context:worktreeId}" }]
 
 [[extensions.actions]]

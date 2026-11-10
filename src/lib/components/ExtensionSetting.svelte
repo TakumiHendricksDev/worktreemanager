@@ -1,10 +1,21 @@
 <script lang="ts">
+  /**
+   * One plugin setting, as an ordinary field: a checkbox, a select, or a text or number input.
+   *
+   * The value is namespaced by package and, when `scope` names one, by workspace; Rust validates
+   * it against the manifest's declaration before it is stored. Shown where the manifest put it
+   * (a settings section's `ExtensionPoint`, a content widget) and in the package's own details.
+   *
+   * A text field saves when it loses focus, and only if it changed. Every save rewrites the
+   * plugin registry on disk and replaces the snapshot everything plugin-related derives from, so
+   * saving on every blur did all of that for a Tab through an untouched form.
+   */
   import type { Contribution, ExtensionSetting, ExtensionContext } from '../extensions';
-  import { extensions } from '../state/extensions.svelte';
   import { errorMessage } from '../ipc/types';
+  import { extensions } from '../state/extensions.svelte';
+  import Choice from './ui/Choice.svelte';
   import Field from './ui/Field.svelte';
   import TextInput from './ui/TextInput.svelte';
-  import Choice from './ui/Choice.svelte';
 
   const {
     setting,
@@ -18,12 +29,14 @@
   let problem = $state('');
   let busy = $state(false);
   const value = $derived(
-    extensions.settings(setting.plugin, setting.value.id, {
+    extensions.settingValue(setting.plugin, setting.value.id, {
       ...context,
       worktreeId: scope,
     }),
   );
-  async function save(value: unknown) {
+
+  async function save(next: unknown) {
+    if (next === value) return;
     busy = true;
     problem = '';
     try {
@@ -31,7 +44,7 @@
         kind: 'setting',
         id: setting.value.id,
         worktree: scope,
-        value,
+        value: next,
       });
     } catch (e) {
       problem = errorMessage(e);
@@ -73,8 +86,8 @@
       value={String(value ?? '')}
       disabled={busy}
       onblur={(e) => {
-        const value = (e.currentTarget as HTMLInputElement).value;
-        void save(setting.value.kind === 'number' ? Number(value) : value);
+        const typed = (e.currentTarget as HTMLInputElement).value;
+        void save(setting.value.kind === 'number' ? Number(typed) : typed);
       }}
     />
   {/if}

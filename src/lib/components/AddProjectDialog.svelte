@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * Add a repository.
    *
@@ -102,33 +99,31 @@
   }
 </script>
 
-<ExtensionPoint target="component.add-project-dialog" context={publicContext()}>
-  <Dialog title="Add a repository" {onclose} {onsubmit} closeDisabled={busy}>
-    {#snippet body()}
-      <Field
-        id="repo-path"
-        label="Path to a git repository"
-        help="Any path inside the repository works — wtm resolves it to the root. Nothing is written to the repository itself."
-        errors={[error]}
-      >
-        <div class="c-add-project__row">
-          <TextInput
-            id="repo-path"
-            bind:value={path}
-            bind:element={input}
-            mono
-            placeholder="~/Sites/your-repo"
-          />
-          <Button variant="neutral" onclick={browse} disabled={busy}>Browse…</Button>
-        </div>
-      </Field>
-    {/snippet}
+<Dialog title="Add a repository" {onclose} {onsubmit} closeDisabled={busy}>
+  {#snippet body()}
+    <Field
+      id="repo-path"
+      label="Path to a git repository"
+      help="Any path inside the repository works — wtm resolves it to the root. Nothing is written to the repository itself."
+      errors={[error]}
+    >
+      <div class="c-add-project__row">
+        <TextInput
+          id="repo-path"
+          bind:value={path}
+          bind:element={input}
+          mono
+          placeholder="~/Sites/your-repo"
+        />
+        <Button variant="neutral" onclick={browse} disabled={busy}>Browse…</Button>
+      </div>
+    </Field>
+  {/snippet}
 
-    {#snippet footer()}
-      <Button variant="neutral" onclick={onclose}>Cancel</Button>
-      <Button type="submit" variant="accent" disabled={busy || path.trim() === ''}>
-        {busy ? 'Adding…' : 'Add'}
-      </Button>
-    {/snippet}
-  </Dialog>
-</ExtensionPoint>
+  {#snippet footer()}
+    <Button variant="neutral" onclick={onclose}>Cancel</Button>
+    <Button type="submit" variant="accent" disabled={busy || path.trim() === ''}>
+      {busy ? 'Adding…' : 'Add'}
+    </Button>
+  {/snippet}
+</Dialog>

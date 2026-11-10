@@ -1,18 +1,27 @@
 <script lang="ts">
-  import { setContext } from 'svelte';
-  import { EXTENSION_CONTEXT } from '/src/lib/state/extensions.svelte';
+  /**
+   * The plugins fixture: Settings → Plugins, and a chat page that renders real contributions.
+   *
+   * The chat page mounts through `PluginSlot`, as `App` mounts the whole workbench, because the
+   * slot once marked everything under it protected and no contribution rendered in the real window
+   * while every component mounted directly here passed.
+   */
+  import { paneContext, provideExtensionContext } from '/src/lib/state/extensions.svelte';
   import PluginSettings from '/src/lib/components/PluginSettings.svelte';
+  import PluginSlot from '/src/lib/components/PluginSlot.svelte';
   import AgentTranscript from '/src/lib/components/AgentTranscript.svelte';
   import ChatEditDialog from '/src/lib/components/ChatEditDialog.svelte';
   import ExtensionPoint from '/src/lib/components/ExtensionPoint.svelte';
   import Button from '/src/lib/components/ui/Button.svelte';
-  const context = () => ({
-    projectId: 'qa-project',
-    worktreeId: '/tmp/qa-workspace',
-    paneId: 'qa-pane',
-    session: 'qa-session',
-  });
-  setContext(EXTENSION_CONTEXT, context);
+
+  provideExtensionContext(() =>
+    paneContext({
+      id: 'qa-pane',
+      projectId: 'qa-project',
+      worktreeId: '/tmp/qa-workspace',
+      session: 'qa-session',
+    }),
+  );
   let page = $state('plugins');
   const events = [
     { kind: 'history_boundary', complete: true },
@@ -34,8 +43,13 @@
   >
 </nav>
 <p>Isolated UI verification · example transcript and mocked host responses</p>
-{#if page === 'plugins'}<PluginSettings />{:else}<ExtensionPoint
-    target="component.session-surface"
-    ><AgentTranscript events={events as any} /></ExtensionPoint
-  ><ExtensionPoint target="settings.appearance" />{/if}
+{#if page === 'plugins'}<PluginSettings />{:else}
+  <section aria-label="Through a plugin slot">
+    <PluginSlot region="workbench">
+      <ExtensionPoint target="workspace.toolbar" position="after" />
+      <AgentTranscript events={events as any} />
+      <ExtensionPoint target="settings.appearance" position="after" />
+    </PluginSlot>
+  </section>
+{/if}
 <ChatEditDialog />

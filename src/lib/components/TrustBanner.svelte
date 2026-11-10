@@ -1,7 +1,4 @@
 <script lang="ts">
-  import { setContext as setExtensionContext } from 'svelte';
-  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
-  setExtensionContext(EXTENSION_PROTECTED, true);
   /**
    * The trust prompt.
    *

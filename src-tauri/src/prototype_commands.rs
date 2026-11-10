@@ -3,6 +3,7 @@
 
 use crate::app::{AgentSessionFacts, AgentStatus, App};
 use crate::commands::{AppState, Reply, blocking};
+use crate::native_sessions::delivery::{DeliveryStatus, Resolution};
 use crate::prototype_context::{self as context, Discovery, SourceChoice, failure};
 use crate::prototypes::{self, Prototype};
 use crate::view::{BrowserView, ErrorView};
@@ -92,12 +93,62 @@ pub fn stale(app: &App, prototype: &Prototype) -> bool {
 pub struct PrototypeState {
     pub prototype: Prototype,
     pub stale: bool,
+    /// What became of this design's native delivery, if a native conversation was asked to
+    /// implement it. `None` in WTM Chat, whose turn is the delivery.
+    pub delivery: Option<PrototypeDelivery>,
 }
 
-pub fn state(app: &App, prototype: Prototype) -> PrototypeState {
+/// The receipt for a design's approval, as the review card needs it. The status is the receipt's
+/// own, so the card can say Delivered rather than repeat a phase written when it was sent.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrototypeDelivery {
+    pub receipt: String,
+    pub review: String,
+    pub status: DeliveryStatus,
+    pub error: Option<String>,
+    pub resolution: Option<Resolution>,
+}
+
+pub fn state(app: &App, mut prototype: Prototype) -> PrototypeState {
+    let review = prototype
+        .implemented_review
+        .clone()
+        .or_else(|| prototype.review.as_ref().map(|r| r.id.clone()));
+    let delivery = review.and_then(|review| {
+        let found = app
+            .native_sessions
+            .deliveries
+            .for_review(&prototype.id, &review)?;
+        Some(PrototypeDelivery {
+            receipt: found.id,
+            review,
+            status: found.status,
+            error: found.error,
+            resolution: found.resolution,
+        })
+    });
+    // A rejected native delivery leaves the design unimplemented, whoever rejected it, so the card
+    // offers Implement again. Derived here rather than written at each place a receipt can be
+    // rejected — a provider reply, a stale hook, the user — so none of them can forget.
+    if let Some(delivery) = &delivery
+        && delivery.status == DeliveryStatus::Rejected
+        && prototype.implemented_review.as_ref() == Some(&delivery.review)
+    {
+        prototype.implemented_review = None;
+    }
     PrototypeState {
         stale: stale(app, &prototype),
         prototype,
+        delivery,
+    }
+}
+
+/// Re-announce one prototype after its delivery changed outside this module. Best effort: the
+/// next listing says the same thing.
+pub fn refresh(handle: &tauri::AppHandle, app: &App, session: &str, id: &str) {
+    if let Ok(prototype) = record(app, session, id) {
+        announce(handle, app, session, &prototype);
     }
 }
 
@@ -360,41 +411,11 @@ pub async fn implement_prototype(
 ) -> Reply<()> {
     let app = Arc::clone(&app);
     blocking(move || {
+        if let Some(native) = app.native_sessions.get(&session) {
+            return implement_native(&handle, &app, &native, &session, &id, &review_id);
+        }
         let _guard = MUTATING.lock();
         let mut prototype = record(&app, &session, &id)?;
-        if let Some(native) = app.native_sessions.get(&session) {
-            if stale(&app, &prototype) {
-                return Err(failure(
-                    "Project context changed. Refresh and review the design first.",
-                ));
-            }
-            let prompt = prototypes::handoff(&prototype, &review_id)?;
-            let receipt = native
-                .send(
-                    "Implement reviewed design",
-                    &prompt,
-                    Some((&id, &review_id)),
-                )
-                .map_err(failure)?;
-            prototype.phase = match receipt.status {
-                crate::native_sessions::delivery::DeliveryStatus::Pending => {
-                    "Approval saved; continue in the native CLI"
-                }
-                crate::native_sessions::delivery::DeliveryStatus::Unknown => {
-                    "Approval delivery is unconfirmed; no automatic retry"
-                }
-                crate::native_sessions::delivery::DeliveryStatus::Delivered => {
-                    "Approval delivered to this native conversation"
-                }
-                crate::native_sessions::delivery::DeliveryStatus::Rejected => {
-                    "Approval was rejected by the provider"
-                }
-            }
-            .into();
-            prototypes::save(&prototype)?;
-            announce(&handle, &app, &session, &prototype);
-            return Ok(());
-        }
         if app
             .overview_of(&session)
             .is_none_or(|s| s.status != AgentStatus::Idle)
@@ -415,14 +436,7 @@ pub async fn implement_prototype(
                 app.send_agent_turn(&session, prompt, &[])
                     .map_err(|error| error.to_string())
             },
-            |prototype| {
-                // Session ownership alone also includes live app browsers, which must stay open.
-                for browser in app.browsers.list(Some(&prototype.worktree_id)) {
-                    if preview_belongs(prototype, &browser) {
-                        crate::browser::close(&handle, &app, &browser.id);
-                    }
-                }
-            },
+            |prototype| close_previews(&handle, &app, prototype),
         )?;
         app.note_user_turn(&session);
         announce(&handle, &app, &session, &prototype);
@@ -431,27 +445,121 @@ pub async fn implement_prototype(
     .await
 }
 
+fn close_previews(handle: &tauri::AppHandle, app: &Arc<App>, prototype: &Prototype) {
+    // Session ownership alone also includes live app browsers, which must stay open.
+    for browser in app.browsers.list(Some(&prototype.worktree_id)) {
+        if preview_belongs(prototype, &browser) {
+            crate::browser::close(handle, app, &browser.id);
+        }
+    }
+}
+
+/// Implement through a native conversation, whose delivery is a receipt rather than a turn.
+///
+/// `MUTATING` is released while the instruction is sent: Codex may take the whole reply timeout
+/// to answer, and every other design in every conversation would wait on it. The record is read
+/// again afterwards rather than trusted across that gap.
+fn implement_native(
+    handle: &tauri::AppHandle,
+    app: &Arc<App>,
+    native: &crate::native_sessions::Session,
+    session: &str,
+    id: &str,
+    review_id: &str,
+) -> Reply<()> {
+    let attempted = app.native_sessions.deliveries.for_review(id, review_id);
+    let prompt = {
+        let _guard = MUTATING.lock();
+        let mut prototype = record(app, session, id)?;
+        match &attempted {
+            // One exact review is one instruction, whichever conversation it went to.
+            Some(receipt) if receipt.status != DeliveryStatus::Rejected => None,
+            rejected => {
+                // Only a rejected attempt leaves this set without a live receipt; clearing it is
+                // what lets an explicit retry through `handoff`, never an automatic one.
+                if rejected.is_some() && prototype.implemented_review.as_deref() == Some(review_id)
+                {
+                    prototype.implemented_review = None;
+                }
+                if stale(app, &prototype) {
+                    return Err(failure(
+                        "Project context changed. Refresh and review the design first.",
+                    ));
+                }
+                Some(prototypes::handoff(&prototype, review_id)?)
+            }
+        }
+    };
+    let (status, error) = match prompt {
+        Some(prompt) => {
+            let receipt = native
+                .send("Implement reviewed design", &prompt, Some((id, review_id)))
+                .map_err(failure)?;
+            (receipt.status, receipt.error)
+        }
+        None => attempted.map_or((DeliveryStatus::Pending, None), |d| (d.status, d.error)),
+    };
+    let _guard = MUTATING.lock();
+    let mut prototype = record(app, session, id)?;
+    if status == DeliveryStatus::Rejected {
+        announce(handle, app, session, &prototype);
+        return Err(failure(format!(
+            "Implementation was not sent: {}. You can retry.",
+            error.unwrap_or_else(|| "the provider rejected it".into())
+        )));
+    }
+    // A newer revision prepared while this one was sent keeps its own review card.
+    let current = prototype.review.as_ref().is_some_and(|r| r.id == review_id);
+    if current && prototype.implemented_review.as_deref() != Some(review_id) {
+        prototype.implemented_review = Some(review_id.to_owned());
+        "implementation approved".clone_into(&mut prototype.phase);
+        prototypes::save(&prototype)?;
+    }
+    close_previews(handle, app, &prototype);
+    announce(handle, app, session, &prototype);
+    Ok(())
+}
+
+/// What cancelling a design did to the turn generating it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelOutcome {
+    /// WTM stopped the running turn itself.
+    pub interrupted: bool,
+    /// What is left for the user to do when it could not. The design is cancelled either way,
+    /// which is why this is not an error.
+    pub notice: Option<String>,
+}
+
 #[tauri::command]
 pub async fn cancel_prototype(
     handle: tauri::AppHandle,
     app: AppState<'_>,
     session: String,
     id: String,
-) -> Reply<()> {
+) -> Reply<CancelOutcome> {
     let app = Arc::clone(&app);
     blocking(move || {
-        let _guard = MUTATING.lock();
-        let mut prototype = record(&app, &session, &id)?;
-        prototypes::cancel(&mut prototype)?;
-        announce(&handle, &app, &session, &prototype);
+        {
+            let _guard = MUTATING.lock();
+            let mut prototype = record(&app, &session, &id)?;
+            prototypes::cancel(&mut prototype)?;
+            announce(&handle, &app, &session, &prototype);
+        }
+        // Outside `MUTATING`: an interrupt waits for the provider's answer.
         if let Some(native) = app.native_sessions.get(&session) {
-            return if native.snapshot().capabilities.stop {
-                native.interrupt().map_err(failure)
+            let notice = if native.capabilities().stop {
+                native
+                    .interrupt()
+                    .err()
+                    .map(|e| format!("Design cancelled. {e}"))
             } else {
-                Err(failure(
-                    "Design cancelled. Stop the current turn in the native CLI.",
-                ))
+                Some(crate::native_sessions::CLAUDE_STOP.to_owned())
             };
+            return Ok(CancelOutcome {
+                interrupted: notice.is_none(),
+                notice,
+            });
         }
         app.with_agent(&session, wtm_agent::AgentSession::interrupt)
             .map_err(|e| {
@@ -459,7 +567,10 @@ pub async fn cancel_prototype(
                     "Design cancelled; this chat could not be interrupted: {e}"
                 ))
             })?;
-        Ok(())
+        Ok(CancelOutcome {
+            interrupted: true,
+            notice: None,
+        })
     })
     .await
 }

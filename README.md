@@ -92,7 +92,7 @@ project's convention. With the variable unset the tests skip.
 [Keyboard shortcuts](#keyboard-shortcuts) · [Prerequisites](#prerequisites) · [Setup](#setup) ·
 [First run](#first-run) · [Dev workflow](#dev-workflow) · [Build & install](#build--install) ·
 [Troubleshooting](#troubleshooting) · [Logs](#logs) · [Dependencies](#dependencies) ·
-[Architecture](#architecture)
+[Architecture](#architecture) · [Plugins](#plugins)
 
 ---
 
@@ -1302,10 +1302,16 @@ declares.
 Design decisions, the crate layout, the ports, and why the toolchain is pinned the way it is live in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Plugins and mods
+## Plugins
 
-Use Settings → Plugins to manage Home, WTM Chat, Native CLI and user packages.
-Packages can replace the entire workbench or individual regions and add commands, terminal
-profiles, palettes, isolated panels and attachable session backends.
-See [the plugin guide](docs/plugins.md) for installation, trust, author examples, recovery
-and the current limits of remote-session support.
+Settings → Plugins manages the built-in features (Home, WTM Chat, Native CLI) and packages you
+install from a local folder or a public Git repository. A package can replace the whole workbench
+or one region, and add commands, terminal profiles, palettes, panels, session backends, and
+styles, actions and settings inside wtm's own screens. Nothing installs or updates without a
+review of the exact snapshot.
+
+**A plugin that runs a program or asks wtm to act for you is trusted native code, not a sandboxed
+program.** It runs as you, with your files and network, and its review says so. Install only code
+you trust. If one breaks the window, quit wtm and start it with every plugin off:
+`open -na "Worktree Manager" --args --safe-mode`. [The plugin guide](docs/plugins.md) covers
+installing, writing and recovering.

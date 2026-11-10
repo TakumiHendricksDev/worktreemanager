@@ -1,5 +1,12 @@
-// Derive the author-facing wire schemas from the typed entrypoints used by WTM itself.
+// Derive the author-facing wire schemas from the typed entrypoints wtm itself calls: the
+// `invoke` wrappers in src/lib/ipc/commands.ts and `WorkbenchOperations` in src/lib/extensions.ts,
+// for public operations only. `catalog.json` is the hand-written input that says which are public.
 // A stale generated contract fails verification rather than teaching agents an invented API.
+//
+// `$defs` are named after the TypeScript type (`AgentEvent`), or after where an anonymous one is
+// used (`code_read_file.arguments`). They used to be `t1`…`tN` in traversal order, so one changed
+// type renumbered every `$ref` after it, and a guide or an agent that had followed `t173` to a
+// file read was pointed at something else by the next build.
 import fs from 'node:fs';
 import ts from 'typescript';
 
@@ -15,9 +22,38 @@ const publicOperations = new Set(
 );
 const definitions = {};
 const named = new Map();
-let next = 0;
+/** Utility aliases name a shape only together with their arguments, so they do not name a def. */
+const GENERIC = new Set(['Record', 'Pick', 'Omit', 'Partial', 'Required', 'Readonly']);
 
-function schema(type, at, ancestors = new Set()) {
+/** A stable def name: the type's own, or `hint` for an anonymous one, made unique. */
+function defName(type, hint) {
+    const symbol = type.aliasSymbol ?? type.getSymbol();
+    const own =
+        symbol &&
+        !symbol.name.startsWith('__') &&
+        !GENERIC.has(symbol.name) &&
+        !(type.aliasTypeArguments?.length || type.typeArguments?.length)
+            ? symbol.name
+            : null;
+    const base = (own ?? hint).replace(/[^A-Za-z0-9_.-]/g, '_');
+    let name = base;
+    for (let n = 2; Object.hasOwn(definitions, name); n++) name = `${base}-${n}`;
+    return name;
+}
+
+/** A union member's tag (`kind`, `type` or `status`), so `AgentEvent.message_delta` keeps its name
+ * when another variant is added before it. */
+function variant(type, at) {
+    for (const key of ['kind', 'type', 'status']) {
+        const property = type.getProperty?.(key);
+        if (!property) continue;
+        const value = checker.getTypeOfSymbolAtLocation(property, property.valueDeclaration ?? at);
+        if (value.flags & ts.TypeFlags.StringLiteral) return value.value;
+    }
+    return null;
+}
+
+function schema(type, at, hint, ancestors = new Set()) {
     if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return {};
     if (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) return { type: 'null' };
     if (type.flags & ts.TypeFlags.Never) return false;
@@ -31,25 +67,29 @@ function schema(type, at, ancestors = new Set()) {
     if (type.flags & ts.TypeFlags.BooleanLike) return { type: 'boolean' };
     if (type.isUnion()) {
         const members = type.types.filter((t) => !(t.flags & ts.TypeFlags.Undefined));
-        return { anyOf: members.map((t) => schema(t, at, ancestors)) };
+        const alias = type.aliasSymbol?.name;
+        const base = alias && !GENERIC.has(alias) ? alias : hint;
+        return {
+            anyOf: members.map((t, i) => schema(t, at, `${base}.${variant(t, at) ?? i}`, ancestors)),
+        };
     }
     if (checker.isArrayType(type))
         return {
             type: 'array',
-            items: schema(checker.getTypeArguments(type)[0], at, ancestors),
+            items: schema(checker.getTypeArguments(type)[0], at, `${hint}.items`, ancestors),
         };
     if (checker.isTupleType(type))
         return {
             type: 'array',
             prefixItems: checker
                 .getTypeArguments(type)
-                .map((t) => schema(t, at, ancestors)),
+                .map((t, i) => schema(t, at, `${hint}.${i}`, ancestors)),
         };
     if (type.flags & ts.TypeFlags.Object || type.isIntersection()) {
         if (named.has(type)) return { $ref: `#/$defs/${named.get(type)}` };
         if (ancestors.has(type))
             throw Error(`Unresolved recursive type ${checker.typeToString(type)}`);
-        const name = `t${++next}`;
+        const name = defName(type, hint);
         named.set(type, name);
         definitions[name] = {};
         const branch = new Set([...ancestors, type]);
@@ -64,7 +104,7 @@ function schema(type, at, ancestors = new Set()) {
                 property.flags & ts.SymbolFlags.Optional ||
                 (value.isUnion() &&
                     value.types.some((t) => t.flags & ts.TypeFlags.Undefined));
-            properties[property.name] = schema(value, at, branch);
+            properties[property.name] = schema(value, at, `${name}.${property.name}`, branch);
             if (!optional) required.push(property.name);
         }
         const index = checker.getIndexTypeOfType(type, ts.IndexKind.String);
@@ -72,7 +112,7 @@ function schema(type, at, ancestors = new Set()) {
             type: 'object',
             properties,
             required,
-            additionalProperties: index ? schema(index, at, branch) : false,
+            additionalProperties: index ? schema(index, at, `${name}.values`, branch) : false,
         };
         return { $ref: `#/$defs/${name}` };
     }
@@ -92,9 +132,11 @@ function visit(node) {
             const result = node.typeArguments?.[0];
             operations[id] = {
                 arguments: args
-                    ? schema(checker.getTypeAtLocation(args), args)
+                    ? schema(checker.getTypeAtLocation(args), args, `${id}.arguments`)
                     : { type: 'object', properties: {}, additionalProperties: false },
-                result: result ? schema(checker.getTypeFromTypeNode(result), result) : {},
+                result: result
+                    ? schema(checker.getTypeFromTypeNode(result), result, `${id}.result`)
+                    : {},
             };
         }
     }
@@ -114,8 +156,8 @@ for (const member of ui.members) {
     const property = (key) =>
         checker.getTypeOfSymbolAtLocation(type.getProperty(key), member);
     operations[id] = {
-        arguments: schema(property('arguments'), member),
-        result: schema(property('result'), member),
+        arguments: schema(property('arguments'), member, `${id}.arguments`),
+        result: schema(property('result'), member, `${id}.result`),
     };
 }
 for (const id of publicOperations)

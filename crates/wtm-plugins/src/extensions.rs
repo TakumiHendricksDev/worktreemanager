@@ -136,32 +136,13 @@ impl Extensions {
         {
             return Err("Contribution manifest exceeds its item limit".into());
         }
-        let catalog: Value = serde_json::from_str(include_str!("../contracts/catalog.json"))
-            .map_err(|e| e.to_string())?;
-        let public = |op: &str| {
-            catalog["operations"].as_array().is_some_and(|ops| {
-                ops.iter()
-                    .any(|v| v["id"] == op && v["exposure"] == "public")
-            })
-        };
-        let target = |name: &str, kind: &str| {
-            catalog["surfaces"].as_array().is_some_and(|items| {
-                items.iter().any(|v| {
-                    v["id"] == name
-                        && v["kinds"]
-                            .as_array()
-                            .is_some_and(|k| k.iter().any(|k| k == kind))
-                })
-            })
-        };
+        let catalog = crate::catalog::catalog();
+        let public = |op: &str| catalog.public(op).is_some();
+        let target = |name: &str, kind: &str| catalog.surface(name, kind);
         if !self.events.is_empty() && self.runtime.is_empty() {
             return Err("Event subscriptions require a runtime".into());
         }
-        if self.events.iter().any(|name| {
-            !catalog["events"]
-                .as_array()
-                .is_some_and(|events| events.iter().any(|e| e["id"] == *name))
-        }) {
+        if self.events.iter().any(|name| !catalog.event(name)) {
             return Err("Unknown event subscription".into());
         }
         if self.access.iter().any(|op| !public(op)) {
@@ -212,6 +193,14 @@ impl Extensions {
         for content in &self.content {
             if !target(&content.target, "content") {
                 return Err(format!("Unsupported content boundary: {}", content.target));
+            }
+            // No surface takes replacement content and the frontend never renders it; a package
+            // that wants to own a whole region declares a view for it instead.
+            if content.position == Position::Replace {
+                return Err(format!(
+                    "Content {} cannot replace a surface; add before or after it, or declare a view",
+                    content.id
+                ));
             }
             self.validate_widgets(&content.body, 0)?;
         }
@@ -264,7 +253,14 @@ impl Setting {
         }
     }
 }
-/// Only paint/layout values reach the host; URLs, selectors, overlays and executable CSS do not.
+/// Paint, typography and inner spacing only. URLs, selectors, overlays and executable CSS never
+/// reach the host, and neither does anything that sets a box's own size, visibility or place.
+///
+/// Hidden surfaces are hidden by a toggled class (`.c-surface.is-hidden`), and an inline
+/// declaration beats a class: an allowed `display` would have unhidden whatever the host had
+/// hidden. Width, height and the grid's track sizes can collapse or swallow a neighbouring
+/// region just as well, and a negative margin can slide one box over another, which is an overlay
+/// by another name. Padding and gap only space out a box's own contents.
 pub fn validate_style(property: &str, value: &str) -> Result<(), String> {
     const PROPERTIES: &[&str] = &[
         "color",
@@ -288,33 +284,25 @@ pub fn validate_style(property: &str, value: &str) -> Result<(), String> {
         "padding",
         "padding-inline",
         "padding-block",
-        "margin",
-        "margin-inline",
-        "margin-block",
         "gap",
         "row-gap",
         "column-gap",
-        "width",
-        "max-width",
-        "min-width",
-        "height",
-        "min-height",
-        "max-height",
-        "display",
-        "flex-direction",
         "flex-wrap",
         "align-items",
         "justify-content",
-        "grid-template-columns",
         "white-space",
         "overflow-wrap",
     ];
+    // Function names, not substrings: a font called "Curlz MT" is not a URL. CSS function names
+    // are ASCII case-insensitive and admit no space before the parenthesis, and backslash escapes
+    // and comments, the two ways to split a name, are refused outright.
+    let lower = value.to_ascii_lowercase();
     if !PROPERTIES.contains(&property)
         || value.len() > 512
         || value.is_empty()
         || value.contains([';', '{', '}', '<', '>', '\\', '@', '!'])
-        || value.to_ascii_lowercase().contains("url")
-        || value.to_ascii_lowercase().contains("expression")
+        || lower.contains("url(")
+        || lower.contains("expression(")
         || value.contains("/*")
     {
         return Err(format!("Unsupported style declaration: {property}"));

@@ -121,7 +121,13 @@ fn exercise(
             if receipt.status != native_sessions::delivery::DeliveryStatus::Unknown {
                 return Err("A lost acknowledgment was reported as confirmed".into());
             }
-            session.refresh_delivery()?;
+            let check = session.check_delivery()?;
+            if !check.checked || !check.changed {
+                return Err(format!(
+                    "Check delivery did not confirm: {:?}",
+                    check.reason
+                ));
+            }
         }
         if app.native_sessions.deliveries.read(&receipt.id)?.status
             != native_sessions::delivery::DeliveryStatus::Delivered

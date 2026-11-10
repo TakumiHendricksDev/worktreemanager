@@ -5,6 +5,7 @@ import { extensions } from '/src/lib/state/extensions.svelte';
 import { workspace } from '/src/lib/state/workspace.svelte';
 import { sessions } from '/src/lib/state/sessions.svelte';
 import { chatEdit } from '/src/lib/state/chat-edit.svelte';
+import { settingsView } from '/src/lib/state/settings-view.svelte';
 import '/src/styles/main.scss';
 const qa = (window as any).qa;
 plugins.state = qa.snapshot;
@@ -37,5 +38,5 @@ extensions.ui = async (operation, args) => {
   }
   throw Error('Unexpected UI operation ' + operation);
 };
-Object.assign(qa, { plugins, extensions, chatEdit });
+Object.assign(qa, { plugins, extensions, chatEdit, settingsView });
 mount(Harness, { target: document.querySelector('#app')! });

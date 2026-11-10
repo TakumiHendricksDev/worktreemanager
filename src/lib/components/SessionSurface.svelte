@@ -1,9 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import NewAgentSessionDialog from './NewAgentSessionDialog.svelte';
-  let newSession = $state(false);
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * Every worktree's split tree, all mounted, all but the active one hidden.
    *
@@ -29,11 +24,18 @@
   import type { Brief } from '../ipc/types';
   import { browsers } from '../state/browsers.svelte';
   import { creations } from '../state/creations.svelte';
-  import { AT_CAPACITY, sessions } from '../state/sessions.svelte';
+  import { plugins } from '../state/plugins.svelte';
+  import {
+    AT_CAPACITY,
+    CHAT_DISABLED,
+    EXPERIENCE_NAME,
+    sessions,
+  } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import { STATUS_WORD } from '../status';
   import AgentsDialog from './AgentsDialog.svelte';
   import CreationRecord from './CreationRecord.svelte';
+  import NewAgentSessionDialog from './NewAgentSessionDialog.svelte';
   import RecipeRunStrip from './RecipeRunStrip.svelte';
   import AgentTree from './AgentTree.svelte';
   import PlanViewer from './PlanViewer.svelte';
@@ -52,6 +54,8 @@
   const activeId = $derived(workspace.selectedWorktreeId);
   /** Whether the full delegated-agent list is open. The rail only summarises. */
   let browsingAgents = $state(false);
+  /** Whether the experience picker for a new agent session is open. */
+  let newSession = $state(false);
   /** Worktrees that have any pane at all, so nothing renders an empty tree. */
   const occupied = $derived([...new Set(sessions.panes.map((p) => p.worktreeId))]);
   const activeLayout = $derived(sessions.layoutFor(activeId));
@@ -227,8 +231,8 @@
       if (event.key === 'j') {
         // "Get me to a terminal here", which is what it has always meant. With more than one shell
         // open, repeating it walks between them — see `focusOrOpenShell`. Opening a *second* shell
-        // is the pane's own Split control, deliberately: a shortcut that spawned a login shell on
-        // every press would be a way to hit the pane cap by holding a key down.
+        // is New → Shell or the pane's own Split control, deliberately: a shortcut that spawned a
+        // login shell on every press would be a way to hit the pane cap by holding a key down.
         event.preventDefault();
         event.stopPropagation();
         void sessions.focusOrOpenShell(project, worktree);
@@ -247,20 +251,13 @@
   });
 </script>
 
-<ExtensionPoint target="component.session-surface" context={publicContext()}>
-  <div
-    use:extensionPart={{ target: 'component.session-surface', context: publicContext }}
-    class="c-surface"
-    class:is-hidden={!visible}
-    role="region"
-    aria-label="Sessions"
-  >
-    {#if activeId}
-      <RecipeRunStrip worktreeId={activeId} />
-      <AgentTree worktreeId={activeId} onbrowse={() => (browsingAgents = true)} />
-    {/if}
-    {#if poppedOut.length > 0}
-      <!--
+<div class="c-surface" class:is-hidden={!visible} role="region" aria-label="Sessions">
+  {#if activeId}
+    <RecipeRunStrip worktreeId={activeId} />
+    <AgentTree worktreeId={activeId} onbrowse={() => (browsingAgents = true)} />
+  {/if}
+  {#if poppedOut.length > 0}
+    <!--
       Where a popped-out pane is reachable from here. A window of its own can end up behind this
       one, on another display, or minimised, and the tiling it left has no tile to click — so
       without this strip the pane would be findable only through the OS's window list. One line,
@@ -270,310 +267,326 @@
       it does in the rail, because a pane waiting on an approval in a window nobody is looking at is
       the case this exists for.
     -->
-      <nav class="c-popped" aria-label="Panes in their own windows">
-        <span class="c-popped__heading">In their own windows</span>
-        {#each poppedOut as pane (pane.id)}
-          {@const status = sessions.statusOfPane(pane)}
-          {@const label = sessions.labelOf(pane)}
-          <span class="c-popped__pane">
-            <button
-              class="c-popped__show"
-              type="button"
-              title="Bring {label}'s window forward"
-              onclick={() => sessions.focus(pane.worktreeId, pane.id)}
-            >
-              <SessionDot {status} />
-              <span class="c-popped__label">{label}</span>
-              {#if status !== 'idle'}
-                <span class="c-popped__status">{STATUS_WORD[status]}</span>
-              {/if}
-            </button>
-            <Button
-              variant="quiet"
-              size="sm"
-              icon="sm"
-              title="Put {label} back in this window"
-              ariaLabel="Put {label} back"
-              onclick={() => sessions.putPaneBack(pane.id)}
-            >
-              <Icon name="pop-in" size={12} />
-            </Button>
-          </span>
-        {/each}
-      </nav>
-    {/if}
-    {#each occupied as worktreeId (worktreeId)}
-      {@const layout = sessions.layoutFor(worktreeId)}
-      {#if layout}
-        <!--
+    <nav class="c-popped" aria-label="Panes in their own windows">
+      <span class="c-popped__heading">In their own windows</span>
+      {#each poppedOut as pane (pane.id)}
+        {@const status = sessions.statusOfPane(pane)}
+        {@const label = sessions.labelOf(pane)}
+        <span class="c-popped__pane">
+          <button
+            class="c-popped__show"
+            type="button"
+            title="Bring {label}'s window forward"
+            onclick={() => sessions.focus(pane.worktreeId, pane.id)}
+          >
+            <SessionDot {status} />
+            <span class="c-popped__label">{label}</span>
+            {#if status !== 'idle'}
+              <span class="c-popped__status">{STATUS_WORD[status]}</span>
+            {/if}
+          </button>
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title="Put {label} back in this window"
+            ariaLabel="Put {label} back"
+            onclick={() => sessions.putPaneBack(pane.id)}
+          >
+            <Icon name="pop-in" size={12} />
+          </Button>
+        </span>
+      {/each}
+    </nav>
+  {/if}
+  {#each occupied as worktreeId (worktreeId)}
+    {@const layout = sessions.layoutFor(worktreeId)}
+    {#if layout}
+      <!--
         Every worktree's tree stays mounted; all but the active one are `display: none`. See the
         header — this is the property the whole component exists for.
       -->
-        <div class="c-surface__tree" class:is-inactive={worktreeId !== activeId}>
-          <SessionTree {layout} {worktreeId} visible={visible && worktreeId === activeId} />
-        </div>
-      {/if}
-    {/each}
+      <div class="c-surface__tree" class:is-inactive={worktreeId !== activeId}>
+        <SessionTree {layout} {worktreeId} visible={visible && worktreeId === activeId} />
+      </div>
+    {/if}
+  {/each}
 
-    {#if !activeLayout}
-      <div class="c-surface__empty" class:has-record={record !== undefined}>
-        {#if sessions.atCapacity}
-          <!-- The same sentence the banner carries. This branch is reachable only when the worktree
+  {#if !activeLayout}
+    <div class="c-surface__empty" class:has-record={record !== undefined}>
+      {#if sessions.atCapacity}
+        <!-- The same sentence the banner carries. This branch is reachable only when the worktree
              has no panes of its own while some *other* worktree holds the global cap; the banner
              covers the far commoner case of being refused while looking at a full surface. -->
-          <p>{AT_CAPACITY}</p>
-        {:else if workspace.selected && workspace.activeProjectId}
-          {#if record}
-            <!-- How this worktree was just made, above the usual way to start working in it. -->
-            <CreationRecord creation={record} />
-            <div class="c-creation-record__divider">or start a session yourself</div>
-          {/if}
-          {#if poppedOut.length > 0}
-            <p>
-              Every pane in this worktree is in a window of its own. Put one back from the
-              strip above, or start another here.
-            </p>
-          {/if}
+        <p>{AT_CAPACITY}</p>
+      {:else if workspace.selected && workspace.activeProjectId}
+        {#if record}
+          <!-- How this worktree was just made, above the usual way to start working in it. -->
+          <CreationRecord creation={record} />
+          <div class="c-creation-record__divider">or start a session yourself</div>
+        {/if}
+        {#if poppedOut.length > 0}
           <p>
-            Start a session in <code>{workspace.selected.dirname}</code>. It runs in that
-            directory and can read and change the files there.
+            Every pane in this worktree is in a window of its own. Put one back from the
+            strip above, or start another here.
           </p>
-          <div class="o-row">
-            <Button size="sm" onclick={() => (newSession = true)}>New agent session…</Button
-            >
-            <!-- Every agent, including the ones that cannot start, each with the reason in its
+        {/if}
+        <p>
+          Start a session in <code>{workspace.selected.dirname}</code>. It runs in that
+          directory and can read and change the files there.
+        </p>
+        <div class="o-row">
+          <Button size="sm" onclick={() => (newSession = true)}>New agent session…</Button>
+          <!-- Every agent, including the ones that cannot start, each with the reason in its
                tooltip — the contract `list_agents` keeps and the diagnosis for this app's most
                likely failure. `offered` as well as `available`, because a repository declining an
-               agent used to leave an enabled button whose spawn was refused. -->
-            {#each sessions.options as option (option.id)}
-              {@const startable = option.available && option.offered}
-              <Button
-                variant={startable ? 'accent' : 'neutral'}
-                size="sm"
-                disabled={!startable}
-                title={option.detail ?? option.blurb}
-                onclick={() =>
-                  void sessions.openAgent(
-                    workspace.activeProjectId ?? '',
-                    workspace.selected?.id ?? '',
-                    option.id,
-                  )}
-              >
-                {option.label}
-              </Button>
-            {/each}
+               agent used to leave an enabled button whose spawn was refused. The tooltip also says
+               which experience a click opens, and an agent no enabled experience can open is
+               disabled with why: with WTM Chat off, Cursor Agent has nowhere to go. -->
+          {#each sessions.options as option (option.id)}
+            {@const opens =
+              option.available && option.offered
+                ? sessions.defaultExperience(option.id)
+                : null}
             <Button
-              variant="neutral"
+              variant={opens ? 'accent' : 'neutral'}
               size="sm"
-              title="Open a shell in this worktree"
+              disabled={!opens}
+              title={!option.available || !option.offered
+                ? (option.detail ?? option.blurb)
+                : opens
+                  ? `${option.blurb} Opens in ${EXPERIENCE_NAME[opens]}.`
+                  : (sessions.experienceProblem(option.id, 'chat') ?? option.blurb)}
               onclick={() =>
-                void sessions.openShell(
+                void sessions.openAgent(
                   workspace.activeProjectId ?? '',
                   workspace.selected?.id ?? '',
+                  option.id,
                 )}
             >
-              Shell
+              {option.label}
             </Button>
-            <!-- Disabled with the reason where a build cannot show one at all, the way an
+          {/each}
+          <Button
+            variant="neutral"
+            size="sm"
+            title="Open a shell in this worktree"
+            onclick={() =>
+              void sessions.openShell(
+                workspace.activeProjectId ?? '',
+                workspace.selected?.id ?? '',
+              )}
+          >
+            Shell
+          </Button>
+          <!-- Disabled with the reason where a build cannot show one at all, the way an
                uninstalled agent is. -->
-            <Button
-              variant="neutral"
-              size="sm"
-              title={browsers.unavailable ?? 'Open a browser pane in this worktree'}
-              disabled={browsers.unavailable !== null}
-              onclick={() =>
-                void sessions.openBrowser(
-                  workspace.activeProjectId ?? '',
-                  workspace.selected?.id ?? '',
-                )}
-            >
-              Browser
-            </Button>
-          </div>
-          {#if resumable.length > 0}
-            <!--
+          <Button
+            variant="neutral"
+            size="sm"
+            title={browsers.unavailable ?? 'Open a browser pane in this worktree'}
+            disabled={browsers.unavailable !== null}
+            onclick={() =>
+              void sessions.openBrowser(
+                workspace.activeProjectId ?? '',
+                workspace.selected?.id ?? '',
+              )}
+          >
+            Browser
+          </Button>
+        </div>
+        {#if resumable.length > 0}
+          <!--
             Offered rather than resumed automatically. These are conversations that were *not* open
             when wtm quit (those come back by themselves, in their panes), and re-establishing all of
             them would fork a CLI for every conversation the user ever finished with.
           -->
-            <h2 class="c-section-heading">Pick up where you left off</h2>
-            <ul class="o-plain-list c-surface__resume">
-              {#each resumable as record (record.provider + record.providerSession)}
-                <li class="o-row">
-                  <Button
-                    variant="neutral"
-                    size="sm"
-                    title="Resume this conversation on {record.model ?? 'its own model'}"
-                    onclick={() =>
-                      void sessions.resume(
-                        workspace.activeProjectId ?? '',
-                        workspace.selected?.id ?? '',
-                        record,
-                      )}
-                  >
-                    {resumeLabel(record)}
-                  </Button>
-                  <span class="c-status--subtle">{record.provider}</span>
-                  <button
-                    class="c-row-action"
-                    title="Stop offering this conversation"
-                    onclick={() =>
-                      void sessions.forget(workspace.selected?.id ?? '', record)}
-                  >
-                    forget
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
+          <h2 class="c-section-heading">Pick up where you left off</h2>
+          <ul class="o-plain-list c-surface__resume">
+            {#each resumable as record (record.provider + record.providerSession)}
+              <li class="o-row">
+                <!-- A resume opens a WTM Chat pane, which Rust refuses while Chat is off. -->
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  disabled={!plugins.enabled('wtm.chat')}
+                  title={plugins.enabled('wtm.chat')
+                    ? `Resume this conversation on ${record.model ?? 'its own model'}`
+                    : CHAT_DISABLED}
+                  onclick={() =>
+                    void sessions.resume(
+                      workspace.activeProjectId ?? '',
+                      workspace.selected?.id ?? '',
+                      record,
+                    )}
+                >
+                  {resumeLabel(record)}
+                </Button>
+                <span class="c-status--subtle">{record.provider}</span>
+                <button
+                  class="c-row-action"
+                  title="Stop offering this conversation"
+                  onclick={() => void sessions.forget(workspace.selected?.id ?? '', record)}
+                >
+                  forget
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
 
-          {#if briefs.length > 0}
-            <!--
+        {#if briefs.length > 0}
+          <!--
             Plans kept from a session that has ended. Handing one to another agent is the whole reason
             they are stored: the alternative is scrolling back through a transcript that may be gone.
           -->
-            <h2 class="c-section-heading">Plans</h2>
-            <ul class="o-plain-list c-surface__resume">
-              {#each briefs as brief (brief.id)}
-                <li class="o-row">
-                  <!-- A button, because the whole plan used to be reachable only as a native
+          <h2 class="c-section-heading">Plans</h2>
+          <ul class="o-plain-list c-surface__resume">
+            {#each briefs as brief (brief.id)}
+              <li class="o-row">
+                <!-- A button, because the whole plan used to be reachable only as a native
                      `title=` tooltip truncated to 400 characters — which is not reading a plan, it
                      is guessing at one. -->
-                  <button
-                    class="c-surface__brief"
-                    title="Read this plan"
-                    onclick={() => (reading = brief)}
-                  >
-                    {brief.title}
-                  </button>
-                  <span class="c-status--subtle">{brief.provider}</span>
-                  {#each startable as option (option.id)}
-                    <button
-                      class="c-row-action"
-                      title="Open a {option.label} session and hand it this plan"
-                      onclick={() =>
-                        void sessions.handOff(
-                          workspace.activeProjectId ?? '',
-                          workspace.selected?.id ?? '',
-                          option.id,
-                          brief,
-                        )}
-                    >
-                      → {option.label}
-                    </button>
-                  {/each}
+                <button
+                  class="c-surface__brief"
+                  title="Read this plan"
+                  onclick={() => (reading = brief)}
+                >
+                  {brief.title}
+                </button>
+                <span class="c-status--subtle">{brief.provider}</span>
+                {#each startable as option (option.id)}
+                  <!-- A hand-off is a WTM Chat pane with the plan as its first message. -->
                   <button
                     class="c-row-action"
+                    disabled={!plugins.enabled('wtm.chat')}
+                    title={plugins.enabled('wtm.chat')
+                      ? `Open a ${option.label} session and hand it this plan`
+                      : CHAT_DISABLED}
                     onclick={() =>
-                      void sessions.forgetBrief(
+                      void sessions.handOff(
                         workspace.activeProjectId ?? '',
                         workspace.selected?.id ?? '',
-                        brief.id,
+                        option.id,
+                        brief,
                       )}
                   >
-                    forget
+                    → {option.label}
                   </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
+                {/each}
+                <button
+                  class="c-row-action"
+                  onclick={() =>
+                    void sessions.forgetBrief(
+                      workspace.activeProjectId ?? '',
+                      workspace.selected?.id ?? '',
+                      brief.id,
+                    )}
+                >
+                  forget
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
 
-          {#if background.length > 0}
-            <!--
+        {#if background.length > 0}
+          <!--
             Claude Code only: Codex has no equivalent roster, and its long-running work is another live
             thread that already shows as a pane. The "as of the last check" is not hedging — there is no
             event when one of these finishes, so the count genuinely can be a few seconds stale, and
             saying so is better than a timer.
           -->
-            <h2 class="c-section-heading">
-              Background agents
-              <span class="c-status--subtle">
-                {stillRunning.length} running, as of the last check
-              </span>
-            </h2>
-            <ul class="o-plain-list c-surface__resume">
-              {#each background as task (task.id)}
-                <li class="o-row">
-                  <span class="c-surface__brief">{task.name}</span>
-                  <span
-                    class={task.state === 'failed'
-                      ? 'c-status--danger'
-                      : task.state === 'done'
-                        ? 'c-status--ok'
-                        : 'c-status--info'}
-                  >
-                    {task.state}
-                  </span>
-                </li>
-              {/each}
-            </ul>
-          {/if}
+          <h2 class="c-section-heading">
+            Background agents
+            <span class="c-status--subtle">
+              {stillRunning.length} running, as of the last check
+            </span>
+          </h2>
+          <ul class="o-plain-list c-surface__resume">
+            {#each background as task (task.id)}
+              <li class="o-row">
+                <span class="c-surface__brief">{task.name}</span>
+                <span
+                  class={task.state === 'failed'
+                    ? 'c-status--danger'
+                    : task.state === 'done'
+                      ? 'c-status--ok'
+                      : 'c-status--info'}
+                >
+                  {task.state}
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
 
-          <!-- Two messages rather than one, because the two ways of having nothing to start have
+        <!-- Two messages rather than one, because the two ways of having nothing to start have
              different fixes and only one of them is about this machine. Keyed on `available` alone
              first, so the PATH diagnosis keeps saying exactly what it always said. -->
-          {#if sessions.options.every((o) => !o.available)}
-            <p class="c-status--warn">
-              No agent CLI is on wtm's PATH. Settings → Advanced shows the PATH wtm
-              resolved.
-            </p>
-          {:else if startable.length === 0}
-            <p class="c-status--warn">
-              This repository's <code>wtm.toml</code> does not offer any of the agents installed
-              here. Hover a button above for which.
-            </p>
-          {/if}
-        {:else}
-          <p>Select a worktree to start a session in it.</p>
+        {#if sessions.options.every((o) => !o.available)}
+          <p class="c-status--warn">
+            No agent CLI is on wtm's PATH. Settings → Advanced shows the PATH wtm resolved.
+          </p>
+        {:else if startable.length === 0}
+          <p class="c-status--warn">
+            This repository's <code>wtm.toml</code> does not offer any of the agents installed
+            here. Hover a button above for which.
+          </p>
         {/if}
-      </div>
-    {/if}
-  </div>
+      {:else}
+        <p>Select a worktree to start a session in it.</p>
+      {/if}
+    </div>
+  {/if}
+</div>
 
-  <!-- Outside `.c-surface`, beside the plan viewer, because a dialog is not part of the pane
+<!-- Outside `.c-surface`, beside the plan viewer, because a dialog is not part of the pane
      geometry — and unmounted when shut, which is what makes it free. -->
-  {#if browsingAgents && activeId}
-    <AgentsDialog worktreeId={activeId} onclose={() => (browsingAgents = false)} />
-  {/if}
+{#if browsingAgents && activeId}
+  <AgentsDialog worktreeId={activeId} onclose={() => (browsingAgents = false)} />
+{/if}
 
-  {#if reading}
-    <!-- Outside the `visible` gate on purpose: this surface is hidden with `display: none` while the
+{#if reading}
+  <!-- Outside the `visible` gate on purpose: this surface is hidden with `display: none` while the
        create pane owns the screen, and a modal inside a hidden subtree is a scrim over nothing. -->
-    <PlanViewer
-      title={reading.title}
-      markdown={reading.markdown}
-      provider={reading.provider}
-      created={reading.created}
-      onclose={() => (reading = null)}
-    >
-      {#snippet actions()}
-        <!-- The same hand-off the row offers, repeated here because having just read the plan is
+  <PlanViewer
+    title={reading.title}
+    markdown={reading.markdown}
+    provider={reading.provider}
+    created={reading.created}
+    onclose={() => (reading = null)}
+  >
+    {#snippet actions()}
+      <!-- The same hand-off the row offers, repeated here because having just read the plan is
            exactly when you decide who should act on it. -->
-        {#each startable as option (option.id)}
-          <Button
-            variant="neutral"
-            size="sm"
-            title="Open a {option.label} session and hand it this plan"
-            onclick={() => {
-              const brief = reading;
-              reading = null;
-              if (brief) {
-                void sessions.handOff(
-                  workspace.activeProjectId ?? '',
-                  workspace.selected?.id ?? '',
-                  option.id,
-                  brief,
-                );
-              }
-            }}
-          >
-            → {option.label}
-          </Button>
-        {/each}
-      {/snippet}
-    </PlanViewer>
-  {/if}
-</ExtensionPoint>
+      {#each startable as option (option.id)}
+        <Button
+          variant="neutral"
+          size="sm"
+          disabled={!plugins.enabled('wtm.chat')}
+          title={plugins.enabled('wtm.chat')
+            ? `Open a ${option.label} session and hand it this plan`
+            : CHAT_DISABLED}
+          onclick={() => {
+            const brief = reading;
+            reading = null;
+            if (brief) {
+              void sessions.handOff(
+                workspace.activeProjectId ?? '',
+                workspace.selected?.id ?? '',
+                option.id,
+                brief,
+              );
+            }
+          }}
+        >
+          → {option.label}
+        </Button>
+      {/each}
+    {/snippet}
+  </PlanViewer>
+{/if}
 
 {#if newSession && workspace.activeProjectId && workspace.selected}{#key workspace.selected.id}<NewAgentSessionDialog
       projectId={workspace.activeProjectId}

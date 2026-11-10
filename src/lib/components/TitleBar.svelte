@@ -1,8 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
-  import { plugins } from '../state/plugins.svelte';
   /**
    * The window's top strip: project switcher on the left, window controls on the right.
    *
@@ -41,8 +37,13 @@
    * is the dock badge's: approvals waiting anywhere, which is the reason to go there. While Home is
    * up the project picker gives way to what Home is about, since the project it names is not what
    * is on screen.
+   *
+   * With Home turned off the count is still the only cross-worktree "needs you" in the window, so
+   * it moves into the project picker's name and tooltip, beside the ● its menu already puts on a
+   * project that is waiting, rather than going with Home's button.
    */
   import { fleet } from '../state/fleet.svelte';
+  import { plugins } from '../state/plugins.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { theme, type ThemeChoice } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
@@ -96,6 +97,14 @@
     return `${what}${count}${HOME_SHORTCUT ? ` (${HOME_SHORTCUT})` : ''}`;
   });
 
+  const homeShown = $derived(plugins.ready && plugins.available('home'));
+  /** "2 sessions waiting on you" for the project picker, when Home's badge is not there to say it. */
+  const waitingNote = $derived(
+    homeShown || sessions.waitingCount === 0
+      ? null
+      : `${sessions.waitingCount} ${sessions.waitingCount === 1 ? 'session' : 'sessions'} waiting on you`,
+  );
+
   const themeIcons: Record<ThemeChoice, IconName> = {
     system: 'theme-system',
     light: 'theme-light',
@@ -146,137 +155,133 @@
   }
 </script>
 
-<ExtensionPoint target="component.title-bar" context={publicContext()}>
-  <header
-    use:extensionPart={{ target: 'component.title-bar', context: publicContext }}
-    class="c-titlebar"
-    data-tauri-drag-region
-  >
-    <!-- Reserves space for the macOS traffic lights; a plain inset on Linux, where the
+<header class="c-titlebar" data-tauri-drag-region>
+  <!-- Reserves space for the macOS traffic lights; a plain inset on Linux, where the
        window manager draws the controls outside the webview. -->
-    <div class="c-titlebar__gutter" data-tauri-drag-region></div>
+  <div class="c-titlebar__gutter" data-tauri-drag-region></div>
 
-    <Button
-      variant="quiet"
-      icon="md"
-      onclick={ontogglesidebar}
-      title={sidebarLabel}
-      ariaLabel={sidebarLabel}
-      ariaExpanded={!sidebarCollapsed}
-      ariaControls="worktree-sidebar"
-    >
-      <Icon name="sidebar" />
-    </Button>
+  <Button
+    variant="quiet"
+    icon="md"
+    onclick={ontogglesidebar}
+    title={sidebarLabel}
+    ariaLabel={sidebarLabel}
+    ariaExpanded={!sidebarCollapsed}
+    ariaControls="worktree-sidebar"
+  >
+    <Icon name="sidebar" />
+  </Button>
 
-    {#if plugins.ready && plugins.available('home')}
-      <span class="c-titlebar__home">
-        <Button
-          variant="quiet"
-          icon="md"
-          onclick={ontogglehome}
-          title={homeLabel}
-          ariaLabel={homeLabel}
-          ariaPressed={home}
-        >
-          <Icon name="home" />
-        </Button>
-        {#if sessions.waitingCount > 0}
-          <!-- The number is in the button's name too; this copy is for the eye. -->
-          <span class="c-titlebar__count" aria-hidden="true">{sessions.waitingCount}</span>
-        {/if}
-      </span>
-    {/if}
+  {#if homeShown}
+    <span class="c-titlebar__home">
+      <Button
+        variant="quiet"
+        icon="md"
+        onclick={ontogglehome}
+        title={homeLabel}
+        ariaLabel={homeLabel}
+        ariaPressed={home}
+      >
+        <Icon name="home" />
+      </Button>
+      {#if sessions.waitingCount > 0}
+        <!-- The number is in the button's name too; this copy is for the eye. -->
+        <span class="c-titlebar__count" aria-hidden="true">{sessions.waitingCount}</span>
+      {/if}
+    </span>
+  {/if}
 
-    <!--
+  <!--
     Drag region on the container, not just the text: the path may be short, and the empty
     space beside it still has to move the window. Tauri only starts a drag when the event's
     own target carries the attribute, so the picker and its caret are unaffected.
   -->
-    <div class="c-titlebar__identity" data-tauri-drag-region>
-      {#if home}
-        <span class="c-titlebar__name c-titlebar__home-name" data-tauri-drag-region
-          >Home</span
-        >
-        <span class="c-titlebar__root" data-tauri-drag-region>
-          {fleet.summary.sessions}
-          {fleet.summary.sessions === 1 ? 'session' : 'sessions'} across {fleet.summary
-            .projects}
-          {fleet.summary.projects === 1 ? 'project' : 'projects'}
+  <div class="c-titlebar__identity" data-tauri-drag-region>
+    {#if home}
+      <span class="c-titlebar__name c-titlebar__home-name" data-tauri-drag-region>Home</span
+      >
+      <span class="c-titlebar__root" data-tauri-drag-region>
+        {fleet.summary.sessions}
+        {fleet.summary.sessions === 1 ? 'session' : 'sessions'} across {fleet.summary
+          .projects}
+        {fleet.summary.projects === 1 ? 'project' : 'projects'}
+      </span>
+    {:else}
+      <button
+        class="c-titlebar__project"
+        aria-label="Project: {workspace.activeProject?.name ?? 'none'}{waitingNote
+          ? ` — ${waitingNote}`
+          : ''}"
+        title={waitingNote ?? undefined}
+        aria-haspopup="menu"
+        onclick={projectMenu}
+        disabled={workspace.projects.length === 0}
+      >
+        <span class="c-titlebar__name">
+          {workspace.activeProject?.name ?? 'No projects yet'}
         </span>
-      {:else}
-        <button
-          class="c-titlebar__project"
-          aria-label="Project: {workspace.activeProject?.name ?? 'none'}"
-          aria-haspopup="menu"
-          onclick={projectMenu}
-          disabled={workspace.projects.length === 0}
-        >
-          <span class="c-titlebar__name">
-            {workspace.activeProject?.name ?? 'No projects yet'}
-          </span>
-          <Icon name="chevron-down" size={12} />
-        </button>
+        <Icon name="chevron-down" size={12} />
+      </button>
 
-        {#if workspace.activeProject}
-          <!--
+      {#if workspace.activeProject}
+        <!--
         The repository root, for orientation. Not `title`d: it is already the full string,
         and a tooltip repeating what is on screen is noise.
       -->
-          <span class="c-titlebar__root" data-tauri-drag-region>
-            {workspace.activeProject.root}
-          </span>
-        {/if}
+        <span class="c-titlebar__root" data-tauri-drag-region>
+          {workspace.activeProject.root}
+        </span>
       {/if}
-    </div>
+    {/if}
+  </div>
 
-    <div class="c-titlebar__actions">
-      <!--
+  <div class="c-titlebar__actions">
+    <!--
       Here rather than in the worktree bar, because the limits are the account's: the same figures
       hold in every project and every worktree, and the title bar is the one strip that does not
       change when either does. A pane's context card shows its own agent's limits too, for when
       you are looking at one session rather than choosing between them.
     -->
-      <Button
-        variant="quiet"
-        icon="md"
-        onclick={onusage}
-        title="Usage limits"
-        ariaLabel="Usage limits"
-      >
-        <Icon name="gauge" />
-      </Button>
+    <Button
+      variant="quiet"
+      icon="md"
+      onclick={onusage}
+      title="Usage limits"
+      ariaLabel="Usage limits"
+    >
+      <Icon name="gauge" />
+    </Button>
 
-      <!--
+    <!--
       Kept beside Settings rather than absorbed into it. Cycling light and dark is the one
       appearance change people make several times a day — chasing the sun, or a screen share
       — and putting it two clicks deep to avoid having two buttons would be the wrong trade.
       The same control appears in Settings as an explicit three-way choice, which is what the
       cycle cannot be in 24 pixels.
     -->
-      <Button
-        variant="quiet"
-        icon="md"
-        onclick={() => theme.cycle()}
-        title={labels[theme.choice]}
-        ariaLabel={labels[theme.choice]}
-      >
-        <Icon name={themeIcons[theme.choice]} />
-      </Button>
+    <Button
+      variant="quiet"
+      icon="md"
+      onclick={() => theme.cycle()}
+      title={labels[theme.choice]}
+      ariaLabel={labels[theme.choice]}
+    >
+      <Icon name={themeIcons[theme.choice]} />
+    </Button>
 
-      <!--
+    <!--
       On macOS this duplicates the app menu's Settings… item, deliberately. The menu is the
       convention and carries ⌘,; the button is how anyone finds it without knowing that. On
       Linux there is no app menu at all, so it is the only affordance.
     -->
-      <Button
-        variant="quiet"
-        icon="md"
-        onclick={onsettings}
-        title="Settings"
-        ariaLabel="Settings"
-      >
-        <Icon name="settings" />
-      </Button>
-    </div>
-  </header>
-</ExtensionPoint>
+    <Button
+      variant="quiet"
+      icon="md"
+      onclick={onsettings}
+      title="Settings"
+      ariaLabel="Settings"
+    >
+      <Icon name="settings" />
+    </Button>
+  </div>
+</header>

@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A checkbox or a radio with its label.
    *
@@ -43,11 +41,7 @@
   } = $props();
 </script>
 
-<label
-  use:extensionPart={{ target: 'ui.choice', context: publicContext }}
-  class="c-choice"
-  class:c-choice--sm={size === 'sm'}
->
+<label class="c-choice" class:c-choice--sm={size === 'sm'}>
   <input
     {id}
     {...{ type }}

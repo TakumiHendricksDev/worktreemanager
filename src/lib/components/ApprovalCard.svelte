@@ -1,7 +1,4 @@
 <script lang="ts">
-  import { setContext as setExtensionContext } from 'svelte';
-  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
-  setExtensionContext(EXTENSION_PROTECTED, true);
   /**
    * A session asking permission before it does something.
    *
@@ -45,6 +42,7 @@
    */
   import { untrack } from 'svelte';
   import type { ApprovalAnswer, ApprovalRequest } from '../ipc/types';
+  import { protectFromExtensions } from '../state/extensions.svelte';
   import Markdown from './Markdown.svelte';
   import Button from './ui/Button.svelte';
   import TextInput from './ui/TextInput.svelte';
@@ -69,6 +67,10 @@
     onread?: () => void;
     onanswer: (answer: ApprovalAnswer) => void;
   } = $props();
+
+  // Plugin styles may set `display` and `color`, and the Markdown parts below are public. Inside a
+  // permission request that would let a package hide or blank part of what is being approved.
+  protectFromExtensions();
 
   const uid = $props.id();
 

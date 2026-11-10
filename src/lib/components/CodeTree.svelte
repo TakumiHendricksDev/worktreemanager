@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * The Code tab's project tree.
    *
@@ -152,83 +149,75 @@
   }
 </script>
 
-<ExtensionPoint target="component.code-tree" context={publicContext()}>
-  <!--
+<!--
   Rows are buttons with the treeitem role, as the sidebar's are: a button is focusable and
   clickable without extra wiring, and the role is what makes the list a tree.
 
   The keys are handled here, on the tree, and arrive by bubbling from the focused row — the same
   split the sidebar's tree makes. The container itself is not a tab stop; the cursor row is.
 -->
-  <!-- svelte-ignore a11y_interactive_supports_focus -->
-  <div
-    use:extensionPart={{ target: 'component.code-tree', context: publicContext }}
-    class="c-code-tree"
-    role="tree"
-    aria-label="Files"
-    onkeydown={onKeydown}
-  >
-    {#each rows as row (row.node.path)}
-      {@const change =
-        row.node.kind === 'file' ? code.changeOf(worktreeId, row.node.path) : null}
-      <button
-        type="button"
-        id={rowId(row.node.path)}
-        class="c-code-tree__row"
-        class:is-cursor={row.node.path === cursor}
-        class:is-ignored={row.node.ignored}
-        class:is-missing={row.node.missing}
-        class:is-added={change?.kind === 'added' || change?.kind === 'untracked'}
-        class:is-modified={change?.kind === 'modified' ||
-          change?.kind === 'renamed' ||
-          change?.kind === 'other'}
-        class:is-deleted={change?.kind === 'deleted'}
-        role="treeitem"
-        aria-level={row.depth + 1}
-        aria-expanded={row.node.kind === 'dir' ? row.expanded : undefined}
-        aria-selected={row.node.path === cursor}
-        tabindex={row.node.path === cursor ? 0 : -1}
-        style:--depth={row.depth}
-        title={change
-          ? `${row.node.path} — ${WORDS[change.kind]}${change.from ? ` from ${change.from}` : ''}`
-          : row.node.missing
-            ? `${row.node.path} — deleted`
-            : row.node.path}
-        onclick={() => activate(row)}
-      >
-        <span class="c-code-tree__twisty" aria-hidden="true">
-          {#if row.node.kind === 'dir'}
-            <Icon name={row.expanded ? 'chevron-down' : 'chevron-right'} size={12} />
-          {/if}
+<!-- svelte-ignore a11y_interactive_supports_focus -->
+<div class="c-code-tree" role="tree" aria-label="Files" onkeydown={onKeydown}>
+  {#each rows as row (row.node.path)}
+    {@const change =
+      row.node.kind === 'file' ? code.changeOf(worktreeId, row.node.path) : null}
+    <button
+      type="button"
+      id={rowId(row.node.path)}
+      class="c-code-tree__row"
+      class:is-cursor={row.node.path === cursor}
+      class:is-ignored={row.node.ignored}
+      class:is-missing={row.node.missing}
+      class:is-added={change?.kind === 'added' || change?.kind === 'untracked'}
+      class:is-modified={change?.kind === 'modified' ||
+        change?.kind === 'renamed' ||
+        change?.kind === 'other'}
+      class:is-deleted={change?.kind === 'deleted'}
+      role="treeitem"
+      aria-level={row.depth + 1}
+      aria-expanded={row.node.kind === 'dir' ? row.expanded : undefined}
+      aria-selected={row.node.path === cursor}
+      tabindex={row.node.path === cursor ? 0 : -1}
+      style:--depth={row.depth}
+      title={change
+        ? `${row.node.path} — ${WORDS[change.kind]}${change.from ? ` from ${change.from}` : ''}`
+        : row.node.missing
+          ? `${row.node.path} — deleted`
+          : row.node.path}
+      onclick={() => activate(row)}
+    >
+      <span class="c-code-tree__twisty" aria-hidden="true">
+        {#if row.node.kind === 'dir'}
+          <Icon name={row.expanded ? 'chevron-down' : 'chevron-right'} size={12} />
+        {/if}
+      </span>
+      <span class="c-code-tree__icon" aria-hidden="true">
+        <Icon name={row.node.kind === 'dir' ? 'folder' : 'file'} size={14} />
+      </span>
+      <span class="c-code-tree__name">{row.node.name}</span>
+      {#if row.node.symlink}
+        <span class="c-code-tree__mark" title="A link to somewhere else">
+          <Icon name="symlink" size={12} label="link" />
         </span>
-        <span class="c-code-tree__icon" aria-hidden="true">
-          <Icon name={row.node.kind === 'dir' ? 'folder' : 'file'} size={14} />
+      {/if}
+      {#if change}
+        <span class="c-code-tree__status" aria-label={WORDS[change.kind]}>
+          {LETTERS[change.kind]}
         </span>
-        <span class="c-code-tree__name">{row.node.name}</span>
-        {#if row.node.symlink}
-          <span class="c-code-tree__mark" title="A link to somewhere else">
-            <Icon name="symlink" size={12} label="link" />
-          </span>
-        {/if}
-        {#if change}
-          <span class="c-code-tree__status" aria-label={WORDS[change.kind]}>
-            {LETTERS[change.kind]}
-          </span>
-        {/if}
-        {#if row.loading}
-          <span class="c-code-tree__note">Loading…</span>
-        {/if}
-      </button>
-    {:else}
-      <p class="c-code-tree__empty">
-        {#if code.loading[worktreeId]}
-          Reading the worktree…
-        {:else if view === 'changes'}
-          {changes ? 'Nothing has changed.' : 'git could not say what changed.'}
-        {:else}
-          No files.
-        {/if}
-      </p>
-    {/each}
-  </div>
-</ExtensionPoint>
+      {/if}
+      {#if row.loading}
+        <span class="c-code-tree__note">Loading…</span>
+      {/if}
+    </button>
+  {:else}
+    <p class="c-code-tree__empty">
+      {#if code.loading[worktreeId]}
+        Reading the worktree…
+      {:else if view === 'changes'}
+        {changes ? 'Nothing has changed.' : 'git could not say what changed.'}
+      {:else}
+        No files.
+      {/if}
+    </p>
+  {/each}
+</div>

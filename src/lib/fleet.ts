@@ -363,6 +363,7 @@ export function arrangeFleet(input: FleetInput, options: FleetOptions): FleetArr
           head: null,
           issueKey: null,
           isMain: false,
+          placeholder: true,
         };
         byId.set(stray.id, stray);
         order.push(stray);

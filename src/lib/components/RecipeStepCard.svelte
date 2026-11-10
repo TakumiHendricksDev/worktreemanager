@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * One step of a recipe in the editor: a summary that says who runs it and what they are asked,
    * and, when open, the form that changes it.
@@ -162,412 +159,402 @@
   }
 </script>
 
-<ExtensionPoint target="component.recipe-step-card" context={publicContext()}>
-  <li
-    use:extensionPart={{ target: 'component.recipe-step-card', context: publicContext }}
-    class="c-recipe-step"
-    class:is-open={open}
-  >
-    <div class="c-recipe-step__rail">
-      <span class="c-recipe-step__num">{index + 1}</span>
-    </div>
-    <div class="c-recipe-step__card">
-      <button
-        type="button"
-        class="c-recipe-step__summary"
-        aria-expanded={open}
-        aria-controls="{id}-edit"
-        onclick={ontoggle}
-      >
-        <span class="c-recipe-step__title">{step.name || `Step ${index + 1}`}</span>
-        <span class="c-recipe-step__who">
-          <span class="c-agent-mark c-agent-mark--{step.agent}" aria-hidden="true"
-            >{agentMark(step.agent)}</span
-          >
-          {who}
-        </span>
-        <span class="c-recipe-step__what">
-          <span class="c-recipe-step__kind"
-            >{step.kind === 'skill' ? 'Skill' : 'Prompt'}</span
-          >
-          <span class="c-recipe-step__text">
-            {#if step.kind === 'skill'}
-              <code>/{step.skill.replace(/^\//, '') || '…'}</code>
-              {#each parts(step.args) as part, i (i)}{#if part.variable}<code
-                    >{part.text}</code
-                  >{:else}{part.text}{/if}{/each}
-            {:else if step.prompt.trim() === ''}
-              …
-            {:else}
-              {#each parts(step.prompt) as part, i (i)}{#if part.variable}<code
-                    >{part.text}</code
-                  >{:else}{part.text}{/if}{/each}
-            {/if}
-          </span>
-        </span>
-        <span class="c-recipe-step__session">
-          {#if index > 0 && step.conversation === 'continue'}
-            <span
-              ><Icon name="comment" size={12} /> Continues step {previousNumber}’s
-              conversation</span
-            >
-          {:else}
-            <span><Icon name="plus" size={12} /> New session</span>
-          {/if}
-          {#if problems.length > 0}
-            <!-- On the summary too, so a closed step that will send a hole still says so. -->
-            <span class="c-status--warn"
-              ><Icon name="warn" size={12} />
-              {problems.length === 1
-                ? `{{${problems[0]?.name}}} won’t be filled`
-                : `${problems.length} variables won’t be filled`}</span
-            >
-          {/if}
-          {#if index > 0 && step.previousReply && step.conversation === 'new'}
-            <span><Icon name="link" size={12} /> Gets step {previousNumber}’s reply</span>
-          {/if}
-        </span>
-      </button>
-
-      {#if open}
-        <div class="c-recipe-step__edit" id="{id}-edit">
-          <div class="c-recipe-step__grid c-recipe-step__grid--2">
-            <Field id="{id}-name" label="Step name">
-              <TextInput
-                id="{id}-name"
-                value={step.name}
-                placeholder="Plan, Review, Fix…"
-                oninput={(e) =>
-                  onchange({ name: (e.currentTarget as HTMLInputElement).value })}
-              />
-            </Field>
-            <Field id="{id}-failure" label="If it fails">
-              <select
-                id="{id}-failure"
-                class="c-select"
-                value={step.onFailure}
-                onchange={(e) =>
-                  onchange({
-                    onFailure: (e.currentTarget as HTMLSelectElement).value as
-                      'stop' | 'continue',
-                  })}
-              >
-                <option value="stop">Stop the recipe</option>
-                <option value="continue">Carry on to the next step</option>
-              </select>
-            </Field>
-          </div>
-
-          <div class="c-recipe-step__grid">
-            <Field id="{id}-agent" label="Agent">
-              <select
-                id="{id}-agent"
-                class="c-select"
-                value={step.agent}
-                onchange={(e) => chooseAgent((e.currentTarget as HTMLSelectElement).value)}
-              >
-                {#each agents as agent (agent.id)}
-                  <option value={agent.id}
-                    >{agent.label}{agent.available ? '' : '  (not installed)'}</option
-                  >
-                {/each}
-              </select>
-            </Field>
-            <Field id="{id}-model" label="Model">
-              <select
-                id="{id}-model"
-                class="c-select"
-                value={step.model ?? ''}
-                disabled={!capability}
-                onchange={(e) => {
-                  const value = (e.currentTarget as HTMLSelectElement).value;
-                  onchange({ model: value === '' ? null : value, effort: null });
-                }}
-              >
-                <option value="">Default</option>
-                {#each capability?.models ?? [] as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-                {#if step.model !== null && !capability?.models.some((m) => m.id === step.model)}
-                  <option value={step.model}>{step.model}</option>
-                {/if}
-              </select>
-            </Field>
-            <Field id="{id}-effort" label="Effort">
-              <select
-                id="{id}-effort"
-                class="c-select"
-                value={step.effort ?? ''}
-                disabled={efforts.length === 0}
-                onchange={(e) => {
-                  const value = (e.currentTarget as HTMLSelectElement).value;
-                  onchange({ effort: value === '' ? null : value });
-                }}
-              >
-                <option value="">Default</option>
-                {#each efforts as option (option.effort)}
-                  <option value={option.effort}>{option.effort}</option>
-                {/each}
-              </select>
-            </Field>
-            <Field id="{id}-mode" label="Mode">
-              <select
-                id="{id}-mode"
-                class="c-select"
-                value={step.mode ?? ''}
-                disabled={!capability}
-                onchange={(e) => {
-                  const value = (e.currentTarget as HTMLSelectElement).value;
-                  onchange({ mode: value === '' ? null : value });
-                }}
-              >
-                <option value="">Default</option>
-                {#each capability?.modes ?? [] as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
-            </Field>
-          </div>
-          {#if unsandboxed}
-            <p class="c-field__help c-status--warn">
-              This mode runs with no approvals at all, unattended, for as long as the step
-              takes.
-            </p>
-          {/if}
-
-          <div class="c-field">
-            <span class="c-field__label" id="{id}-kind">It runs</span>
-            <div class="c-seg" role="radiogroup" aria-labelledby="{id}-kind">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={step.kind === 'skill'}
-                class="c-seg__option"
-                class:is-selected={step.kind === 'skill'}
-                onclick={() => onchange({ kind: 'skill' })}>A skill</button
-              >
-              <button
-                type="button"
-                role="radio"
-                aria-checked={step.kind === 'prompt'}
-                class="c-seg__option"
-                class:is-selected={step.kind === 'prompt'}
-                onclick={() => onchange({ kind: 'prompt' })}>A prompt</button
-              >
-            </div>
-          </div>
-
+<li class="c-recipe-step" class:is-open={open}>
+  <div class="c-recipe-step__rail"><span class="c-recipe-step__num">{index + 1}</span></div>
+  <div class="c-recipe-step__card">
+    <button
+      type="button"
+      class="c-recipe-step__summary"
+      aria-expanded={open}
+      aria-controls="{id}-edit"
+      onclick={ontoggle}
+    >
+      <span class="c-recipe-step__title">{step.name || `Step ${index + 1}`}</span>
+      <span class="c-recipe-step__who">
+        <span class="c-agent-mark c-agent-mark--{step.agent}" aria-hidden="true"
+          >{agentMark(step.agent)}</span
+        >
+        {who}
+      </span>
+      <span class="c-recipe-step__what">
+        <span class="c-recipe-step__kind">{step.kind === 'skill' ? 'Skill' : 'Prompt'}</span
+        >
+        <span class="c-recipe-step__text">
           {#if step.kind === 'skill'}
-            <div class="c-recipe-step__grid c-recipe-step__grid--2">
-              <div class="c-field">
-                <label class="c-field__label" for="{id}-skill-search">Skill</label>
-                <div class="c-skill">
-                  <div class="c-skill__search">
-                    <Icon name="search" size={14} />
-                    <input
-                      id="{id}-skill-search"
-                      class="c-skill__query"
-                      placeholder="Search {agentLabel(step.agent)}’s skills"
-                      bind:value={query}
-                      autocomplete="off"
-                      spellcheck="false"
-                    />
-                  </div>
-                  <div class="c-skill__list" role="listbox" aria-label="Skills">
-                    {#if asking}
-                      <p class="c-skill__note">
-                        Asking {agentLabel(step.agent)} for its skills, plugins included…
-                      </p>
-                    {/if}
-                    {#if skills === null}
-                      <p class="c-skill__note">Reading skills…</p>
-                    {:else if typed !== '' && shown.length === 0}
-                      <p class="c-skill__note">No skill matches “{typed}”.</p>
-                    {/if}
-                    {#each shown as option (option.value)}
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={step.skill === option.value}
-                        class="c-skill__opt"
-                        class:is-selected={step.skill === option.value}
-                        title={option.detail || undefined}
-                        onclick={() => onchange({ skill: option.value })}
-                      >
-                        <span class="c-skill__name">/{option.value}</span>
-                        <span class="c-skill__desc">{option.detail}</span>
-                        <span class="c-skill__scope">{option.scope}</span>
-                      </button>
-                    {/each}
-                    {#if typed !== '' && !listed.some((s) => s.name === typed)}
-                      <!-- Last, after the real matches: a name the agent did not report is the
-                         exception, and putting it first made it the thing the eye landed on. -->
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={step.skill === typed}
-                        class="c-skill__opt c-skill__opt--typed"
-                        class:is-selected={step.skill === typed}
-                        onclick={() => onchange({ skill: typed })}
-                      >
-                        <span class="c-skill__name">/{typed}</span>
-                        <span class="c-skill__desc"
-                          >Use it as typed — {agentLabel(step.agent)} didn’t list it</span
-                        >
-                      </button>
-                    {/if}
-                  </div>
-                </div>
-                <p class="c-field__help">
-                  {asking
-                    ? `Showing the skill folders while ${agentLabel(step.agent)} answers.`
-                    : `Listed by ${agentLabel(step.agent)} for ${place}, plugins included.`}
-                  A skill missing when the recipe runs fails this step.
-                </p>
-              </div>
-              <Field
-                id="{id}-args"
-                label="Arguments"
-                help="Sent as /{step.skill.replace(/^\//, '') ||
-                  'skill'} {step.args}, as the composer sends it."
-              >
-                <TextInput
-                  id="{id}-args"
-                  mono
-                  value={step.args}
-                  placeholder="optional"
-                  oninput={(e) =>
-                    onchange({ args: (e.currentTarget as HTMLInputElement).value })}
-                />
-              </Field>
-            </div>
+            <code>/{step.skill.replace(/^\//, '') || '…'}</code>
+            {#each parts(step.args) as part, i (i)}{#if part.variable}<code
+                  >{part.text}</code
+                >{:else}{part.text}{/if}{/each}
+          {:else if step.prompt.trim() === ''}
+            …
           {:else}
-            <Field id="{id}-prompt" label="Prompt">
-              <textarea
-                id="{id}-prompt"
-                class="c-textarea"
-                rows="4"
-                value={step.prompt}
-                oninput={(e) =>
-                  onchange({ prompt: (e.currentTarget as HTMLTextAreaElement).value })}
-              ></textarea>
-            </Field>
+            {#each parts(step.prompt) as part, i (i)}{#if part.variable}<code
+                  >{part.text}</code
+                >{:else}{part.text}{/if}{/each}
           {/if}
+        </span>
+      </span>
+      <span class="c-recipe-step__session">
+        {#if index > 0 && step.conversation === 'continue'}
+          <span
+            ><Icon name="comment" size={12} /> Continues step {previousNumber}’s
+            conversation</span
+          >
+        {:else}
+          <span><Icon name="plus" size={12} /> New session</span>
+        {/if}
+        {#if problems.length > 0}
+          <!-- On the summary too, so a closed step that will send a hole still says so. -->
+          <span class="c-status--warn"
+            ><Icon name="warn" size={12} />
+            {problems.length === 1
+              ? `{{${problems[0]?.name}}} won’t be filled`
+              : `${problems.length} variables won’t be filled`}</span
+          >
+        {/if}
+        {#if index > 0 && step.previousReply && step.conversation === 'new'}
+          <span><Icon name="link" size={12} /> Gets step {previousNumber}’s reply</span>
+        {/if}
+      </span>
+    </button>
 
-          <div class="c-vars">
-            <span>Insert</span>
-            {#each INSERTABLE as variable (variable)}
-              <button
-                type="button"
-                class="c-var"
-                title={variable === 'worktree.issue'
-                  ? 'The issue the worktree is for, read off its branch or directory name'
-                  : 'Filled in when the recipe starts'}
-                onclick={() => insert(variable)}>{`{{${variable}}}`}</button
-              >
-            {/each}
-            {#each formFields ?? [] as field (field.key)}
-              <button
-                type="button"
-                class="c-var"
-                title="{field.label} — from {projectName ??
-                  'the'} New Worktree form, only when Worktree created asks"
-                onclick={() => insert(`form.${field.key}`)}
-                >{`{{form.${field.key}}}`}</button
-              >
-            {/each}
-          </div>
-          {#each problems as problem (problem.name)}
-            <p class="c-field__help c-status--warn">
-              {`{{${problem.name}}}`} won’t be filled: {problem.why}.
-            </p>
-          {/each}
-          {#if usesForm && problems.length === 0}
-            <p class="c-field__help">
-              <code>{'{{form.…}}'}</code> comes from the New Worktree form, so it is only
-              filled when “Worktree created” or “Setup failed” asks. Run from a worktree’s
-              menu, use
-              <code>{'{{worktree.issue}}'}</code> for its issue.
-            </p>
-          {/if}
+    {#if open}
+      <div class="c-recipe-step__edit" id="{id}-edit">
+        <div class="c-recipe-step__grid c-recipe-step__grid--2">
+          <Field id="{id}-name" label="Step name">
+            <TextInput
+              id="{id}-name"
+              value={step.name}
+              placeholder="Plan, Review, Fix…"
+              oninput={(e) =>
+                onchange({ name: (e.currentTarget as HTMLInputElement).value })}
+            />
+          </Field>
+          <Field id="{id}-failure" label="If it fails">
+            <select
+              id="{id}-failure"
+              class="c-select"
+              value={step.onFailure}
+              onchange={(e) =>
+                onchange({
+                  onFailure: (e.currentTarget as HTMLSelectElement).value as
+                    'stop' | 'continue',
+                })}
+            >
+              <option value="stop">Stop the recipe</option>
+              <option value="continue">Carry on to the next step</option>
+            </select>
+          </Field>
+        </div>
 
-          {#if index > 0}
-            <div class="c-field">
-              <span class="c-field__label">Conversation</span>
-              <div class="c-recipe-step__radios">
-                <Choice
-                  type="radio"
-                  name="{id}-conversation"
-                  checked={step.conversation === 'new'}
-                  onchange={() => onchange({ conversation: 'new' })}
+        <div class="c-recipe-step__grid">
+          <Field id="{id}-agent" label="Agent">
+            <select
+              id="{id}-agent"
+              class="c-select"
+              value={step.agent}
+              onchange={(e) => chooseAgent((e.currentTarget as HTMLSelectElement).value)}
+            >
+              {#each agents as agent (agent.id)}
+                <option value={agent.id}
+                  >{agent.label}{agent.available ? '' : '  (not installed)'}</option
                 >
-                  Start a new {agentLabel(step.agent)} session
-                </Choice>
-                <Choice
-                  type="radio"
-                  name="{id}-conversation"
-                  checked={step.conversation === 'continue'}
-                  disabled={!continuable}
-                  onchange={() =>
-                    onchange({ conversation: 'continue', previousReply: false })}
-                >
-                  Continue step {previousNumber}’s conversation
-                  {#if !continuable}
-                    <span class="c-choice__hint"
-                      >— step {previousNumber} runs on {agentLabel(
-                        steps[index - 1]?.agent ?? '',
-                      )}</span
-                    >
-                  {/if}
-                </Choice>
-                <Choice
-                  checked={step.previousReply && step.conversation === 'new'}
-                  disabled={step.conversation === 'continue'}
-                  onchange={(checked) => onchange({ previousReply: checked })}
-                >
-                  Give it step {previousNumber}’s final reply
-                  <span class="c-choice__hint"
-                    >{step.conversation === 'continue'
-                      ? '— it already has it'
-                      : '— appended under the prompt'}</span
-                  >
-                </Choice>
-              </div>
-            </div>
-          {/if}
+              {/each}
+            </select>
+          </Field>
+          <Field id="{id}-model" label="Model">
+            <select
+              id="{id}-model"
+              class="c-select"
+              value={step.model ?? ''}
+              disabled={!capability}
+              onchange={(e) => {
+                const value = (e.currentTarget as HTMLSelectElement).value;
+                onchange({ model: value === '' ? null : value, effort: null });
+              }}
+            >
+              <option value="">Default</option>
+              {#each capability?.models ?? [] as option (option.id)}
+                <option value={option.id}>{option.label}</option>
+              {/each}
+              {#if step.model !== null && !capability?.models.some((m) => m.id === step.model)}
+                <option value={step.model}>{step.model}</option>
+              {/if}
+            </select>
+          </Field>
+          <Field id="{id}-effort" label="Effort">
+            <select
+              id="{id}-effort"
+              class="c-select"
+              value={step.effort ?? ''}
+              disabled={efforts.length === 0}
+              onchange={(e) => {
+                const value = (e.currentTarget as HTMLSelectElement).value;
+                onchange({ effort: value === '' ? null : value });
+              }}
+            >
+              <option value="">Default</option>
+              {#each efforts as option (option.effort)}
+                <option value={option.effort}>{option.effort}</option>
+              {/each}
+            </select>
+          </Field>
+          <Field id="{id}-mode" label="Mode">
+            <select
+              id="{id}-mode"
+              class="c-select"
+              value={step.mode ?? ''}
+              disabled={!capability}
+              onchange={(e) => {
+                const value = (e.currentTarget as HTMLSelectElement).value;
+                onchange({ mode: value === '' ? null : value });
+              }}
+            >
+              <option value="">Default</option>
+              {#each capability?.modes ?? [] as option (option.id)}
+                <option value={option.id}>{option.label}</option>
+              {/each}
+            </select>
+          </Field>
+        </div>
+        {#if unsandboxed}
+          <p class="c-field__help c-status--warn">
+            This mode runs with no approvals at all, unattended, for as long as the step
+            takes.
+          </p>
+        {/if}
 
-          <div class="c-recipe-step__tools">
-            <Button
-              variant="quiet"
-              size="sm"
-              disabled={index === 0}
-              onclick={() => onmove(-1)}
+        <div class="c-field">
+          <span class="c-field__label" id="{id}-kind">It runs</span>
+          <div class="c-seg" role="radiogroup" aria-labelledby="{id}-kind">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={step.kind === 'skill'}
+              class="c-seg__option"
+              class:is-selected={step.kind === 'skill'}
+              onclick={() => onchange({ kind: 'skill' })}>A skill</button
             >
-              <Icon name="chevron-up" size={12} /> Earlier
-            </Button>
-            <Button
-              variant="quiet"
-              size="sm"
-              disabled={index === steps.length - 1}
-              onclick={() => onmove(1)}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={step.kind === 'prompt'}
+              class="c-seg__option"
+              class:is-selected={step.kind === 'prompt'}
+              onclick={() => onchange({ kind: 'prompt' })}>A prompt</button
             >
-              <Icon name="chevron-down" size={12} /> Later
-            </Button>
-            <Button variant="quiet" size="sm" onclick={onduplicate}>
-              <Icon name="copy" size={12} /> Duplicate
-            </Button>
-            <span class="c-recipe-step__spacer"></span>
-            <Button
-              variant="quiet"
-              size="sm"
-              disabled={steps.length === 1}
-              onclick={onremove}
-            >
-              <Icon name="trash" size={12} /> Remove step
-            </Button>
           </div>
         </div>
-      {/if}
-    </div>
-  </li>
-</ExtensionPoint>
+
+        {#if step.kind === 'skill'}
+          <div class="c-recipe-step__grid c-recipe-step__grid--2">
+            <div class="c-field">
+              <label class="c-field__label" for="{id}-skill-search">Skill</label>
+              <div class="c-skill">
+                <div class="c-skill__search">
+                  <Icon name="search" size={14} />
+                  <input
+                    id="{id}-skill-search"
+                    class="c-skill__query"
+                    placeholder="Search {agentLabel(step.agent)}’s skills"
+                    bind:value={query}
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                </div>
+                <div class="c-skill__list" role="listbox" aria-label="Skills">
+                  {#if asking}
+                    <p class="c-skill__note">
+                      Asking {agentLabel(step.agent)} for its skills, plugins included…
+                    </p>
+                  {/if}
+                  {#if skills === null}
+                    <p class="c-skill__note">Reading skills…</p>
+                  {:else if typed !== '' && shown.length === 0}
+                    <p class="c-skill__note">No skill matches “{typed}”.</p>
+                  {/if}
+                  {#each shown as option (option.value)}
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={step.skill === option.value}
+                      class="c-skill__opt"
+                      class:is-selected={step.skill === option.value}
+                      title={option.detail || undefined}
+                      onclick={() => onchange({ skill: option.value })}
+                    >
+                      <span class="c-skill__name">/{option.value}</span>
+                      <span class="c-skill__desc">{option.detail}</span>
+                      <span class="c-skill__scope">{option.scope}</span>
+                    </button>
+                  {/each}
+                  {#if typed !== '' && !listed.some((s) => s.name === typed)}
+                    <!-- Last, after the real matches: a name the agent did not report is the
+                         exception, and putting it first made it the thing the eye landed on. -->
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={step.skill === typed}
+                      class="c-skill__opt c-skill__opt--typed"
+                      class:is-selected={step.skill === typed}
+                      onclick={() => onchange({ skill: typed })}
+                    >
+                      <span class="c-skill__name">/{typed}</span>
+                      <span class="c-skill__desc"
+                        >Use it as typed — {agentLabel(step.agent)} didn’t list it</span
+                      >
+                    </button>
+                  {/if}
+                </div>
+              </div>
+              <p class="c-field__help">
+                {asking
+                  ? `Showing the skill folders while ${agentLabel(step.agent)} answers.`
+                  : `Listed by ${agentLabel(step.agent)} for ${place}, plugins included.`}
+                A skill missing when the recipe runs fails this step.
+              </p>
+            </div>
+            <Field
+              id="{id}-args"
+              label="Arguments"
+              help="Sent as /{step.skill.replace(/^\//, '') ||
+                'skill'} {step.args}, as the composer sends it."
+            >
+              <TextInput
+                id="{id}-args"
+                mono
+                value={step.args}
+                placeholder="optional"
+                oninput={(e) =>
+                  onchange({ args: (e.currentTarget as HTMLInputElement).value })}
+              />
+            </Field>
+          </div>
+        {:else}
+          <Field id="{id}-prompt" label="Prompt">
+            <textarea
+              id="{id}-prompt"
+              class="c-textarea"
+              rows="4"
+              value={step.prompt}
+              oninput={(e) =>
+                onchange({ prompt: (e.currentTarget as HTMLTextAreaElement).value })}
+            ></textarea>
+          </Field>
+        {/if}
+
+        <div class="c-vars">
+          <span>Insert</span>
+          {#each INSERTABLE as variable (variable)}
+            <button
+              type="button"
+              class="c-var"
+              title={variable === 'worktree.issue'
+                ? 'The issue the worktree is for, read off its branch or directory name'
+                : 'Filled in when the recipe starts'}
+              onclick={() => insert(variable)}>{`{{${variable}}}`}</button
+            >
+          {/each}
+          {#each formFields ?? [] as field (field.key)}
+            <button
+              type="button"
+              class="c-var"
+              title="{field.label} — from {projectName ??
+                'the'} New Worktree form, only when Worktree created asks"
+              onclick={() => insert(`form.${field.key}`)}>{`{{form.${field.key}}}`}</button
+            >
+          {/each}
+        </div>
+        {#each problems as problem (problem.name)}
+          <p class="c-field__help c-status--warn">
+            {`{{${problem.name}}}`} won’t be filled: {problem.why}.
+          </p>
+        {/each}
+        {#if usesForm && problems.length === 0}
+          <p class="c-field__help">
+            <code>{'{{form.…}}'}</code> comes from the New Worktree form, so it is only
+            filled when “Worktree created” or “Setup failed” asks. Run from a worktree’s
+            menu, use
+            <code>{'{{worktree.issue}}'}</code> for its issue.
+          </p>
+        {/if}
+
+        {#if index > 0}
+          <div class="c-field">
+            <span class="c-field__label">Conversation</span>
+            <div class="c-recipe-step__radios">
+              <Choice
+                type="radio"
+                name="{id}-conversation"
+                checked={step.conversation === 'new'}
+                onchange={() => onchange({ conversation: 'new' })}
+              >
+                Start a new {agentLabel(step.agent)} session
+              </Choice>
+              <Choice
+                type="radio"
+                name="{id}-conversation"
+                checked={step.conversation === 'continue'}
+                disabled={!continuable}
+                onchange={() =>
+                  onchange({ conversation: 'continue', previousReply: false })}
+              >
+                Continue step {previousNumber}’s conversation
+                {#if !continuable}
+                  <span class="c-choice__hint"
+                    >— step {previousNumber} runs on {agentLabel(
+                      steps[index - 1]?.agent ?? '',
+                    )}</span
+                  >
+                {/if}
+              </Choice>
+              <Choice
+                checked={step.previousReply && step.conversation === 'new'}
+                disabled={step.conversation === 'continue'}
+                onchange={(checked) => onchange({ previousReply: checked })}
+              >
+                Give it step {previousNumber}’s final reply
+                <span class="c-choice__hint"
+                  >{step.conversation === 'continue'
+                    ? '— it already has it'
+                    : '— appended under the prompt'}</span
+                >
+              </Choice>
+            </div>
+          </div>
+        {/if}
+
+        <div class="c-recipe-step__tools">
+          <Button
+            variant="quiet"
+            size="sm"
+            disabled={index === 0}
+            onclick={() => onmove(-1)}
+          >
+            <Icon name="chevron-up" size={12} /> Earlier
+          </Button>
+          <Button
+            variant="quiet"
+            size="sm"
+            disabled={index === steps.length - 1}
+            onclick={() => onmove(1)}
+          >
+            <Icon name="chevron-down" size={12} /> Later
+          </Button>
+          <Button variant="quiet" size="sm" onclick={onduplicate}>
+            <Icon name="copy" size={12} /> Duplicate
+          </Button>
+          <span class="c-recipe-step__spacer"></span>
+          <Button
+            variant="quiet"
+            size="sm"
+            disabled={steps.length === 1}
+            onclick={onremove}
+          >
+            <Icon name="trash" size={12} /> Remove step
+          </Button>
+        </div>
+      </div>
+    {/if}
+  </div>
+</li>

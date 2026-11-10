@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A session's state, as a dot.
    *
@@ -56,7 +54,6 @@
 </script>
 
 <span
-  use:extensionPart={{ target: 'ui.session-dot', context: publicContext }}
   class="c-dot c-dot--{status}"
   class:c-dot--steady={steady}
   title={label}

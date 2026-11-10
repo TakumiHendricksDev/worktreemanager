@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * The left rail: a filter field, then worktrees as a tree of foldable groups.
    *
@@ -717,67 +714,62 @@
     onmenu={(event) => onRowMenu(event, worktree.id)}
   />
 {/snippet}
-<ExtensionPoint target="component.sidebar" context={publicContext()}>
-  <nav
-    use:extensionPart={{ target: 'component.sidebar', context: publicContext }}
-    class="c-sidebar"
-    class:is-hidden={hidden}
-    aria-label="Worktrees"
-  >
-    <div class="c-sidebar__controls">
-      <div class="c-search" role="search">
-        <span class="c-search__icon"><Icon name="search" size={14} /></span>
-        <label class="u-visually-hidden" for="worktree-search">Filter worktrees</label>
-        <input
-          id="worktree-search"
-          class="c-search__input"
-          type="search"
-          bind:this={searchEl}
-          bind:value={workspace.query}
-          onkeydown={onSearchKeydown}
-          placeholder="Filter worktrees"
-          autocomplete="off"
-          spellcheck="false"
-          disabled={!workspace.activeProject?.usable}
-        />
-        {#if workspace.query !== ''}
-          <button
-            class="c-search__clear"
-            onclick={() => (workspace.query = '')}
-            title="Clear the filter"
-          >
-            <Icon name="close" size={12} />
-            <span class="u-visually-hidden">Clear the filter</span>
-          </button>
-        {/if}
-      </div>
-    </div>
 
-    <div class="c-sidebar__list-wrap" bind:this={wrapEl}>
-      <!--
+<nav class="c-sidebar" class:is-hidden={hidden} aria-label="Worktrees">
+  <div class="c-sidebar__controls">
+    <div class="c-search" role="search">
+      <span class="c-search__icon"><Icon name="search" size={14} /></span>
+      <label class="u-visually-hidden" for="worktree-search">Filter worktrees</label>
+      <input
+        id="worktree-search"
+        class="c-search__input"
+        type="search"
+        bind:this={searchEl}
+        bind:value={workspace.query}
+        onkeydown={onSearchKeydown}
+        placeholder="Filter worktrees"
+        autocomplete="off"
+        spellcheck="false"
+        disabled={!workspace.activeProject?.usable}
+      />
+      {#if workspace.query !== ''}
+        <button
+          class="c-search__clear"
+          onclick={() => (workspace.query = '')}
+          title="Clear the filter"
+        >
+          <Icon name="close" size={12} />
+          <span class="u-visually-hidden">Clear the filter</span>
+        </button>
+      {/if}
+    </div>
+  </div>
+
+  <div class="c-sidebar__list-wrap" bind:this={wrapEl}>
+    <!--
       `loadingWorktrees` is true only when there is nothing on screen. A refresh over an
       existing list sets `revalidating` instead, which deliberately changes no layout — the
       list stays put and gets patched in place.
     -->
-      {#if workspace.loadingWorktrees && workspace.worktrees.length === 0}
-        <p class="c-sidebar__empty">Loading…</p>
-      {:else if workspace.projects.length === 0}
-        <p class="c-sidebar__empty">Add a git repository to get started.</p>
-      {:else if workspace.activeProject && !workspace.activeProject.usable}
-        <p class="c-sidebar__empty">
-          This project needs attention — see the panel on the right.
-        </p>
-      {:else if workspace.worktrees.length === 0}
-        <p class="c-sidebar__empty">No worktrees.</p>
-      {:else if workspace.matching.length === 0}
-        <p class="c-sidebar__empty">
-          Nothing matches <strong>{workspace.query}</strong>.
-          <Button variant="link" onclick={() => (workspace.query = '')}
-            >Clear the filter</Button
-          >
-        </p>
-      {:else}
-        <!--
+    {#if workspace.loadingWorktrees && workspace.worktrees.length === 0}
+      <p class="c-sidebar__empty">Loading…</p>
+    {:else if workspace.projects.length === 0}
+      <p class="c-sidebar__empty">Add a git repository to get started.</p>
+    {:else if workspace.activeProject && !workspace.activeProject.usable}
+      <p class="c-sidebar__empty">
+        This project needs attention — see the panel on the right.
+      </p>
+    {:else if workspace.worktrees.length === 0}
+      <p class="c-sidebar__empty">No worktrees.</p>
+    {:else if workspace.matching.length === 0}
+      <p class="c-sidebar__empty">
+        Nothing matches <strong>{workspace.query}</strong>.
+        <Button variant="link" onclick={() => (workspace.query = '')}
+          >Clear the filter</Button
+        >
+      </p>
+    {:else}
+      <!--
         The tree itself is deliberately not focusable. Per the ARIA tree pattern, focus lives
         on the items (roving tabindex, set on the rows) and the tree only listens for the keys
         that bubble up from them. Giving the container a tabindex would add a second, pointless
@@ -786,81 +778,80 @@
         Rows and headers render from one `arrange`, which is also what arrow keys walk — by way
         of the DOM order it produced — so screen order and keyboard order cannot drift.
       -->
-        <!-- svelte-ignore a11y_interactive_supports_focus -->
-        <div
-          role="tree"
-          aria-label="Worktrees"
-          aria-orientation="vertical"
-          class="c-sidebar__list"
-          class:is-dragging={dragging !== null}
-          bind:this={treeEl}
-          onkeydown={onTreeKeydown}
-        >
-          {#each arrangement.sections as section (section.id)}
-            {#if arrangement.headers}
-              <SidebarSection
-                {section}
-                status={hiddenStatus(section)}
-                renaming={renaming === section.id}
-                droptarget={rowDrop?.header === section.id}
-                dragging={dragging?.kind === 'group' && dragging.id === section.id}
-                ontoggle={() => toggle(section)}
-                onrename={(name) => commitRename(section.id, name)}
-                oncancelrename={() => cancelRename(section.id)}
-                onpress={(event) => startDrag(event, 'group', section.id)}
-                onmenu={(event) => onGroupMenu(event, section.id)}
-              >
-                {#each section.rows as worktree (worktree.id)}
-                  {@render row(worktree, section, 2)}
-                {/each}
-              </SidebarSection>
-            {:else}
+      <!-- svelte-ignore a11y_interactive_supports_focus -->
+      <div
+        role="tree"
+        aria-label="Worktrees"
+        aria-orientation="vertical"
+        class="c-sidebar__list"
+        class:is-dragging={dragging !== null}
+        bind:this={treeEl}
+        onkeydown={onTreeKeydown}
+      >
+        {#each arrangement.sections as section (section.id)}
+          {#if arrangement.headers}
+            <SidebarSection
+              {section}
+              status={hiddenStatus(section)}
+              renaming={renaming === section.id}
+              droptarget={rowDrop?.header === section.id}
+              dragging={dragging?.kind === 'group' && dragging.id === section.id}
+              ontoggle={() => toggle(section)}
+              onrename={(name) => commitRename(section.id, name)}
+              oncancelrename={() => cancelRename(section.id)}
+              onpress={(event) => startDrag(event, 'group', section.id)}
+              onmenu={(event) => onGroupMenu(event, section.id)}
+            >
               {#each section.rows as worktree (worktree.id)}
-                {@render row(worktree, section, 1)}
+                {@render row(worktree, section, 2)}
               {/each}
-            {/if}
-          {/each}
-
-          <!-- Where a new worktree lands: after everything, until its run is over and its own tab
-             takes this place. -->
-          {#each ghosts as ghost (ghost.id)}
-            <CreationTab
-              creation={ghost}
-              selected={ghostShown && creations.shown === ghost.id}
-              onselect={() => creations.show(ghost.id)}
-              ondiscard={() => creations.discard(ghost.id)}
-            />
-          {/each}
-
-          {#if line !== null}
-            <div class="c-sidebar__drop" style:top={`${line}px`} aria-hidden="true"></div>
+            </SidebarSection>
+          {:else}
+            {#each section.rows as worktree (worktree.id)}
+              {@render row(worktree, section, 1)}
+            {/each}
           {/if}
-        </div>
-      {/if}
-    </div>
+        {/each}
 
-    <div class="c-sidebar__foot">
-      <!--
+        <!-- Where a new worktree lands: after everything, until its run is over and its own tab
+             takes this place. -->
+        {#each ghosts as ghost (ghost.id)}
+          <CreationTab
+            creation={ghost}
+            selected={ghostShown && creations.shown === ghost.id}
+            onselect={() => creations.show(ghost.id)}
+            ondiscard={() => creations.discard(ghost.id)}
+          />
+        {/each}
+
+        {#if line !== null}
+          <div class="c-sidebar__drop" style:top={`${line}px`} aria-hidden="true"></div>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <div class="c-sidebar__foot">
+    <!--
       A live region rather than a spinner. The point of the cache is that a refresh is not an
       event worth reacting to; this exists so "the list may be a few seconds old" is still
       *knowable*, without anything moving.
     -->
-      <p class="c-sidebar__status" aria-live="polite">
-        {#if workspace.filtering}
-          {workspace.matching.length} of {workspace.worktrees.length}
-        {:else if workspace.revalidating}Refreshing…{:else if workspace.stale}Showing the
-          last known list.{/if}
-      </p>
-      <!-- Where a keyboard move landed. Hidden, because the row itself moving is the visual answer. -->
-      <p class="u-visually-hidden" aria-live="polite">{announcement}</p>
-      <Button
-        variant="accent"
-        full
-        onclick={onnew}
-        disabled={!workspace.activeProject?.usable}
-      >
-        <Icon name="plus" size={14} /> New Worktree
-      </Button>
-    </div>
-  </nav>
-</ExtensionPoint>
+    <p class="c-sidebar__status" aria-live="polite">
+      {#if workspace.filtering}
+        {workspace.matching.length} of {workspace.worktrees.length}
+      {:else if workspace.revalidating}Refreshing…{:else if workspace.stale}Showing the last
+        known list.{/if}
+    </p>
+    <!-- Where a keyboard move landed. Hidden, because the row itself moving is the visual answer. -->
+    <p class="u-visually-hidden" aria-live="polite">{announcement}</p>
+    <Button
+      variant="accent"
+      full
+      onclick={onnew}
+      disabled={!workspace.activeProject?.usable}
+    >
+      <Icon name="plus" size={14} /> New Worktree
+    </Button>
+  </div>
+</nav>

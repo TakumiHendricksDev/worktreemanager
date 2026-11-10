@@ -109,6 +109,30 @@ pub const CHECK_UPDATES_EVENT: &str = "wtm:check-updates";
 /// the convention for "go to the place everything else hangs off". ⌘H stays Hide.
 pub const HOME_EVENT: &str = "wtm:home";
 
+/// Enable Go › Home exactly when the Home region is shown.
+///
+/// Called when the menu is built and again whenever the plugin registry changes, because a
+/// disabled or hidden Home must not stay one keystroke away: ⇧⌘H reaches the window through
+/// `AppKit`, so hiding Home's button in the webview would leave the shortcut working. One function
+/// so the three places that change the registry cannot disagree about what "shown" means.
+///
+/// # Errors
+///
+/// If the menu item cannot be updated.
+pub fn sync_home_menu<R: tauri::Runtime>(
+    menu: &tauri::menu::Menu<R>,
+    app: &App,
+) -> tauri::Result<()> {
+    use wtm_plugins::contributions::{Binding, Slot};
+    match menu
+        .get(HOME_EVENT)
+        .and_then(|item| item.as_menuitem().cloned())
+    {
+        Some(item) => item.set_enabled(app.plugins.binding(Slot::Home) != Binding::Hidden),
+        None => Ok(()),
+    }
+}
+
 /// The application menu.
 ///
 /// # This exists to add one item, and most of it is not that item
@@ -198,17 +222,17 @@ pub fn application_context() -> tauri::Context<tauri::Wry> {
     tauri::generate_context!()
 }
 
-/// Start the application.
+/// Start the application. `safe_mode` is `wtm --safe-mode`: every user plugin package starts off.
 ///
 /// # Panics
 ///
 /// If the app cannot be constructed (no resolvable home directory) or Tauri fails to
 /// start. Both are unrecoverable at launch, and a window that appears but cannot do
 /// anything would be worse than a clear crash.
-pub fn run() {
+pub fn run(safe_mode: bool) {
     init_tracing();
 
-    let app = Arc::new(App::new().expect("initialize the application"));
+    let app = Arc::new(App::new(safe_mode).expect("initialize the application"));
 
     tauri::Builder::default()
         .manage(app)
@@ -232,20 +256,9 @@ pub fn run() {
             // now ships on macOS alone: an application menu is a macOS concept, and the
             // title bar's gear is the affordance that does not assume one.
             if std::env::consts::OS == "macos" {
+                use tauri::Manager;
                 let menu = build_menu(handle.handle())?;
-                {
-                    use tauri::Manager;
-                    if let Some(item) = menu.get(HOME_EVENT).and_then(|i| i.as_menuitem().cloned())
-                    {
-                        item.set_enabled(
-                            handle
-                                .state::<Arc<App>>()
-                                .plugins
-                                .binding(wtm_plugins::contributions::Slot::Home)
-                                != wtm_plugins::contributions::Binding::Hidden,
-                        )?;
-                    }
-                }
+                sync_home_menu(&menu, &handle.state::<Arc<App>>())?;
                 handle.set_menu(menu)?;
             }
 
@@ -298,6 +311,8 @@ pub fn run() {
             plugin_authoring::plugin_create,
             plugin_authoring::plugin_open_draft,
             plugin_authoring::plugin_review_draft,
+            plugin_authoring::plugin_delete_draft,
+            plugin_authoring::plugin_drafts_notice,
             plugins::plugins_state,
             plugin_views::plugin_bind,
             plugin_views::plugin_view,
@@ -384,6 +399,8 @@ pub fn run() {
             commands::open_agent_session,
             native_sessions::native_sessions,
             native_sessions::native_session,
+            native_sessions::check_native_delivery,
+            native_sessions::resolve_native_delivery,
             native_sessions::send_native_message,
             native_sessions::interrupt_native_turn,
             commands::open_agent_side_session,

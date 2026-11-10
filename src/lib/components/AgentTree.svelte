@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * WTM-owned delegated sessions, as one line.
    *
@@ -72,73 +69,71 @@
   }
 </script>
 
-<ExtensionPoint target="component.agent-tree" context={publicContext()}>
-  {#if groups.length > 0}
-    <nav class="c-agent-tree" aria-label="Delegated agents">
-      <span class="c-agent-tree__heading">Agents</span>
-      <div class="c-agent-tree__runs">
-        {#each shown as group (group.run)}
-          <div class="c-agent-tree__run">
-            <span class="c-agent-tree__run-label">{sessions.runLabel(group.run)}</span>
-            {#if group.parent}
-              <!-- The way back into the conversation that started this. Named as such, because as a
+{#if groups.length > 0}
+  <nav class="c-agent-tree" aria-label="Delegated agents">
+    <span class="c-agent-tree__heading">Agents</span>
+    <div class="c-agent-tree__runs">
+      {#each shown as group (group.run)}
+        <div class="c-agent-tree__run">
+          <span class="c-agent-tree__run-label">{sessions.runLabel(group.run)}</span>
+          {#if group.parent}
+            <!-- The way back into the conversation that started this. Named as such, because as a
                  bare provider label it read as a filter rather than a destination. -->
-              <button
-                class="c-agent-tree__parent"
-                class:is-selected={visible.has(group.parent.id)}
-                title="Back to {sessions.labelOf(
-                  group.parent,
-                )}, the session that started this run"
-                onclick={() => sessions.showRelated(group.parent?.id ?? '')}
-              >
-                {sessions.labelOf(group.parent)}
-              </button>
-              <span class="c-agent-tree__branch" aria-hidden="true">→</span>
-            {/if}
-            {#if group.children.length === 1 && group.children[0]}
-              <!-- One child is the `ask_agent` case, and it has a name worth showing. A count of one
+            <button
+              class="c-agent-tree__parent"
+              class:is-selected={visible.has(group.parent.id)}
+              title="Back to {sessions.labelOf(
+                group.parent,
+              )}, the session that started this run"
+              onclick={() => sessions.showRelated(group.parent?.id ?? '')}
+            >
+              {sessions.labelOf(group.parent)}
+            </button>
+            <span class="c-agent-tree__branch" aria-hidden="true">→</span>
+          {/if}
+          {#if group.children.length === 1 && group.children[0]}
+            <!-- One child is the `ask_agent` case, and it has a name worth showing. A count of one
                  would be strictly less information in the same space. -->
-              {@const only = group.children[0]}
-              {@const status = sessions.statusOfPane(only)}
-              <button
-                class="c-agent-tree__item"
-                class:is-selected={visible.has(only.id)}
-                title={detail(only)}
-                onclick={() => sessions.showRelated(only.id)}
+            {@const only = group.children[0]}
+            {@const status = sessions.statusOfPane(only)}
+            <button
+              class="c-agent-tree__item"
+              class:is-selected={visible.has(only.id)}
+              title={detail(only)}
+              onclick={() => sessions.showRelated(only.id)}
+            >
+              <SessionDot {status} />
+              <span class="c-agent-tree__label"
+                >{only.agentTitle ?? sessions.labelOf(only)}</span
               >
-                <SessionDot {status} />
-                <span class="c-agent-tree__label"
-                  >{only.agentTitle ?? sessions.labelOf(only)}</span
-                >
-                <span class="c-agent-tree__status">{STATUS_WORD[status] || 'idle'}</span>
-              </button>
-            {:else}
-              <button
-                class="c-agent-tree__item"
-                title="Show all {group.children.length} agents in this run"
-                onclick={onbrowse}
-              >
-                <span class="c-agent-tree__label">{group.children.length} agents</span>
-              </button>
-            {/if}
-          </div>
-        {/each}
-        {#if hidden > 0}
-          <span class="c-agent-tree__run-label">+{hidden} more</span>
-        {/if}
-      </div>
-      {#if blocked > 0}
-        <span class="c-agent-tree__tally c-agent-tree__tally--attention">
-          {blocked}
-          {blocked === 1 ? 'needs you' : 'need you'}
-        </span>
+              <span class="c-agent-tree__status">{STATUS_WORD[status] || 'idle'}</span>
+            </button>
+          {:else}
+            <button
+              class="c-agent-tree__item"
+              title="Show all {group.children.length} agents in this run"
+              onclick={onbrowse}
+            >
+              <span class="c-agent-tree__label">{group.children.length} agents</span>
+            </button>
+          {/if}
+        </div>
+      {/each}
+      {#if hidden > 0}
+        <span class="c-agent-tree__run-label">+{hidden} more</span>
       {/if}
-      {#if broken > 0}
-        <span class="c-agent-tree__tally c-agent-tree__tally--failed">{broken} failed</span>
-      {/if}
-      <Button variant="quiet" size="sm" onclick={onbrowse}>
-        All agents ({children.length})
-      </Button>
-    </nav>
-  {/if}
-</ExtensionPoint>
+    </div>
+    {#if blocked > 0}
+      <span class="c-agent-tree__tally c-agent-tree__tally--attention">
+        {blocked}
+        {blocked === 1 ? 'needs you' : 'need you'}
+      </span>
+    {/if}
+    {#if broken > 0}
+      <span class="c-agent-tree__tally c-agent-tree__tally--failed">{broken} failed</span>
+    {/if}
+    <Button variant="quiet" size="sm" onclick={onbrowse}>
+      All agents ({children.length})
+    </Button>
+  </nav>
+{/if}

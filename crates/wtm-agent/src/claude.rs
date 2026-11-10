@@ -123,7 +123,7 @@ fn fast_mode_refusal(reason: &str) -> String {
     }
 }
 
-/// The `--settings` overlay for this request, or `None` when it needs none.
+/// The keys this request adds to the `--settings` overlay, which may be none.
 ///
 /// **One flag carrying one object.** Two `--settings` occurrences is not a documented composition
 /// and the CLI's precedence between them is unverified — and since `ultracode` and `fastMode` can
@@ -132,7 +132,10 @@ fn fast_mode_refusal(reason: &str) -> String {
 /// Merged rather than replacing: `--help` calls this "additional settings", so a user's own
 /// `settings.json` survives. Key order is whatever `serde_json::Map` gives, which is stable for a
 /// given set — argv that reordered between identical launches would be noise in a trust prompt.
-fn flag_settings(req: &SessionRequest) -> Option<String> {
+///
+/// `fastMode` is only ever written as `true`. `Some(false)` means "the picker is off", and writing
+/// `false` would override a user who turned fast mode on in their own settings.
+fn flag_settings(req: &SessionRequest) -> serde_json::Map<String, Value> {
     let mut settings = serde_json::Map::new();
     if req.effort.as_deref() == Some(crate::capability::ULTRACODE) {
         settings.insert(ULTRACODE_KEY.to_owned(), Value::Bool(true));
@@ -140,10 +143,7 @@ fn flag_settings(req: &SessionRequest) -> Option<String> {
     if req.fast == Some(true) {
         settings.insert(FAST_MODE_KEY.to_owned(), Value::Bool(true));
     }
-    if settings.is_empty() {
-        return None;
-    }
-    Some(Value::Object(settings).to_string())
+    settings
 }
 
 /// The one mode this CLI spells two ways, resolved to the one the flag accepts.
@@ -152,7 +152,7 @@ fn flag_settings(req: &SessionRequest) -> Option<String> {
 /// mean "ask", and the CLI's own help calls `manual` an accepted alias for `default`. Everything
 /// else passes through untouched, including a mode a future release adds and this build has never
 /// heard of — the field is a free string end to end for the same reason `model` is.
-pub(crate) fn canonical_mode(mode: &str) -> &str {
+fn canonical_mode(mode: &str) -> &str {
     if mode == "default" { "manual" } else { mode }
 }
 
@@ -477,87 +477,7 @@ impl Provider for Claude {
         .iter()
         .map(|s| (*s).to_owned())
         .collect();
-
-        // Resume by id, or claim one. Claude is the provider that lets wtm *choose* the session id,
-        // which is why `SessionReady` reports whatever it ends up being rather than assuming.
-        if let Some(fork) = &req.fork {
-            argv.push("--resume".to_owned());
-            argv.push(fork.clone());
-            argv.push("--fork-session".to_owned());
-            if req.ephemeral {
-                // Claude's native `/btw` is one response over the parent's context with no tools,
-                // and neither side of the exchange belongs in the durable conversation list.
-                argv.push("--no-session-persistence".to_owned());
-                argv.push("--tools".to_owned());
-                argv.push(String::new());
-                // `--tools ""` is the built-in set only. Without this the user's own servers still
-                // load — 53 tools in one captured side session on 2.1.280 — and each is a call that
-                // can stop for an approval the side card has nowhere to show.
-                argv.push("--strict-mcp-config".to_owned());
-            }
-        } else if let Some(resume) = &req.resume {
-            argv.push("--resume".to_owned());
-            argv.push(resume.clone());
-        } else {
-            argv.push("--session-id".to_owned());
-            argv.push(uuid::Uuid::new_v4().to_string());
-        }
-
-        if let Some(model) = &req.model {
-            argv.push("--model".to_owned());
-            argv.push(model.clone());
-        }
-        // `ultracode` is the top rung of the CLI's own `/effort` ladder but the *flag* rejects it —
-        // `--effort` takes `low|medium|high|xhigh|max` and nothing else. The programmatic route is
-        // the `ultracode` settings key, which the CLI documents as settable "via --settings or
-        // apply_flag_settings", and `flag_settings` below carries it.
-        //
-        // `max` rather than the documented minimum of `xhigh`, because the ladder puts ultracode
-        // above max and a user who picks the top rung should not quietly get less reasoning than
-        // the rung below it.
-        if let Some(effort) = &req.effort {
-            argv.push("--effort".to_owned());
-            if effort == crate::capability::ULTRACODE {
-                argv.push("max".to_owned());
-            } else {
-                argv.push(effort.clone());
-            }
-        }
-        if let Some(mode) = &req.mode {
-            argv.push("--permission-mode".to_owned());
-            argv.push(canonical_mode(mode).to_owned());
-        }
-        // Every flag-settings key in one place, for the reasons on `flag_settings` — and note this
-        // is not merely a default for `fast`: without the overlay at spawn the CLI refuses fast
-        // mode for the rest of the session. See `FAST_MODE_KEY`.
-        if let Some(settings) = flag_settings(req) {
-            argv.push("--settings".to_owned());
-            argv.push(settings);
-        }
-        // One `--mcp-config` carrying every server as JSON. The flag accepts a file path or a
-        // literal object; the literal is used because the alternative is a temp file whose lifetime
-        // nothing here owns — the CLI reads it at some unspecified point after spawn, so deleting it
-        // is a race and leaving it is litter in a directory the user did not choose.
-        if !req.mcp.is_empty() {
-            argv.push("--mcp-config".to_owned());
-            argv.push(mcp_config_json(&req.mcp));
-        }
-
-        // `--append-system-prompt`, not `--system-prompt`. The latter replaces the CLI's own
-        // instructions wholesale, which would break far more than it fixed. See
-        // `SessionRequest::instructions`.
-        if let Some(instructions) = &req.instructions {
-            argv.push("--append-system-prompt".to_owned());
-            argv.push(instructions.clone());
-        }
-
-        // The cwd is already the worktree, but `--add-dir` is what puts it in the allow-list for
-        // tools that check one — without it an edit inside the session's own directory can be
-        // refused with `blocked_path`, which reads as a bug in wtm.
-        argv.push("--add-dir".to_owned());
-        argv.push(req.cwd.clone());
-
-        argv.extend(req.extra_args.iter().cloned());
+        argv.extend(launch_flags(req, serde_json::Map::new()));
         argv
     }
 
@@ -585,13 +505,111 @@ impl Provider for Claude {
     }
 }
 
+/// Every flag after the transport ones: identity, model, effort, mode, settings, tools, context.
+///
+/// Shared by [`Claude::argv`]'s stream-json launch and the native interactive launch in
+/// [`crate::native::claude_argv`], which differ only in how the CLI talks to wtm. A second copy
+/// had already drifted twice — it dropped `--add-dir` and wrote `fastMode: false` over the user's
+/// own setting — so the native path now swaps transports and adds its hooks, nothing more.
+///
+/// `overlay` is merged into the one `--settings` object for the reasons on [`flag_settings`]; the
+/// native launch passes its lifecycle hooks there.
+pub(crate) fn launch_flags(
+    req: &SessionRequest,
+    mut overlay: serde_json::Map<String, Value>,
+) -> Vec<String> {
+    let mut argv = Vec::new();
+    // Resume by id, or claim one. Claude is the provider that lets wtm *choose* the session id,
+    // which is why `SessionReady` reports whatever it ends up being rather than assuming.
+    if let Some(fork) = &req.fork {
+        argv.push("--resume".to_owned());
+        argv.push(fork.clone());
+        argv.push("--fork-session".to_owned());
+        if req.ephemeral {
+            // Claude's native `/btw` is one response over the parent's context with no tools,
+            // and neither side of the exchange belongs in the durable conversation list.
+            argv.push("--no-session-persistence".to_owned());
+            argv.push("--tools".to_owned());
+            argv.push(String::new());
+            // `--tools ""` is the built-in set only. Without this the user's own servers still
+            // load — 53 tools in one captured side session on 2.1.280 — and each is a call that
+            // can stop for an approval the side card has nowhere to show.
+            argv.push("--strict-mcp-config".to_owned());
+        }
+    } else if let Some(resume) = &req.resume {
+        argv.push("--resume".to_owned());
+        argv.push(resume.clone());
+    } else {
+        argv.push("--session-id".to_owned());
+        argv.push(uuid::Uuid::new_v4().to_string());
+    }
+
+    if let Some(model) = &req.model {
+        argv.push("--model".to_owned());
+        argv.push(model.clone());
+    }
+    // `ultracode` is the top rung of the CLI's own `/effort` ladder but the *flag* rejects it —
+    // `--effort` takes `low|medium|high|xhigh|max` and nothing else. The programmatic route is
+    // the `ultracode` settings key, which the CLI documents as settable "via --settings or
+    // apply_flag_settings", and `flag_settings` below carries it.
+    //
+    // `max` rather than the documented minimum of `xhigh`, because the ladder puts ultracode
+    // above max and a user who picks the top rung should not quietly get less reasoning than
+    // the rung below it.
+    if let Some(effort) = &req.effort {
+        argv.push("--effort".to_owned());
+        if effort == crate::capability::ULTRACODE {
+            argv.push("max".to_owned());
+        } else {
+            argv.push(effort.clone());
+        }
+    }
+    if let Some(mode) = &req.mode {
+        argv.push("--permission-mode".to_owned());
+        argv.push(canonical_mode(mode).to_owned());
+    }
+    // Every flag-settings key in one place, for the reasons on `flag_settings` — and note this
+    // is not merely a default for `fast`: without the overlay at spawn the CLI refuses fast
+    // mode for the rest of the session. See `FAST_MODE_KEY`.
+    overlay.extend(flag_settings(req));
+    if !overlay.is_empty() {
+        argv.push("--settings".to_owned());
+        argv.push(Value::Object(overlay).to_string());
+    }
+    // One `--mcp-config` carrying every server as JSON. The flag accepts a file path or a
+    // literal object; the literal is used because the alternative is a temp file whose lifetime
+    // nothing here owns — the CLI reads it at some unspecified point after spawn, so deleting it
+    // is a race and leaving it is litter in a directory the user did not choose.
+    if !req.mcp.is_empty() {
+        argv.push("--mcp-config".to_owned());
+        argv.push(mcp_config_json(&req.mcp));
+    }
+
+    // `--append-system-prompt`, not `--system-prompt`. The latter replaces the CLI's own
+    // instructions wholesale, which would break far more than it fixed. See
+    // `SessionRequest::instructions`.
+    if let Some(instructions) = &req.instructions {
+        argv.push("--append-system-prompt".to_owned());
+        argv.push(instructions.clone());
+    }
+
+    // The cwd is already the worktree, but `--add-dir` is what puts it in the allow-list for
+    // tools that check one — without it an edit inside the session's own directory can be
+    // refused with `blocked_path`, which reads as a bug in wtm.
+    argv.push("--add-dir".to_owned());
+    argv.push(req.cwd.clone());
+
+    argv.extend(req.extra_args.iter().cloned());
+    argv
+}
+
 /// Every MCP server as the one JSON object `--mcp-config` expects.
 ///
 /// `{"mcpServers": {name: {command, args, env}}}`. Built here rather than by the caller because it
 /// is a fact about *this* CLI's flag: Codex takes the same set of servers as a pile of `-c` dotted
 /// overrides, and a caller that pre-serialized for one of them is the reason the other silently
 /// received nothing for an increment.
-pub fn mcp_config_json(servers: &BTreeMap<String, McpServer>) -> String {
+fn mcp_config_json(servers: &BTreeMap<String, McpServer>) -> String {
     let mut map = serde_json::Map::new();
     for (name, server) in servers {
         map.insert(

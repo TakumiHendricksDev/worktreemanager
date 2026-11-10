@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * One cell's value at full length, beside the grid.
    *
@@ -50,40 +47,34 @@
   onDestroy(() => clearTimeout(copyTimer));
 </script>
 
-<ExtensionPoint target="component.database-value" context={publicContext()}>
-  <aside
-    use:extensionPart={{ target: 'component.database-value', context: publicContext }}
-    class="c-database__value"
-    aria-label="Value of {column}"
-  >
-    <header class="c-database__value-head">
-      <div>
-        <strong>{column}</strong>
-        {#if typeName}<span>{typeName}</span>{/if}
-      </div>
-      <Button
-        variant="quiet"
-        size="sm"
-        disabled={cell.value === null}
-        onclick={() => void copy()}
-      >
-        {copied ? 'Copied' : 'Copy'}
-      </Button>
-      <Button variant="inline" size="sm" ariaLabel="Close the value" onclick={onclose}>
-        <Icon name="close" size={12} />
-      </Button>
-    </header>
-    {#if cell.value === null}
-      <p class="c-database__value-note"><span class="c-database__null">NULL</span></p>
-    {:else}
-      <pre class="c-database__value-text">{laidOut ?? cell.value}</pre>
-      <p class="c-database__value-note">
-        {cell.value.length.toLocaleString()} character{cell.value.length === 1 ? '' : 's'}
-        {#if laidOut !== null}· JSON, laid out{/if}
-        {#if cell.truncated}
-          <span class="c-status--warn">· cut at 256 KB; the database holds more</span>
-        {/if}
-      </p>
-    {/if}
-  </aside>
-</ExtensionPoint>
+<aside class="c-database__value" aria-label="Value of {column}">
+  <header class="c-database__value-head">
+    <div>
+      <strong>{column}</strong>
+      {#if typeName}<span>{typeName}</span>{/if}
+    </div>
+    <Button
+      variant="quiet"
+      size="sm"
+      disabled={cell.value === null}
+      onclick={() => void copy()}
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </Button>
+    <Button variant="inline" size="sm" ariaLabel="Close the value" onclick={onclose}>
+      <Icon name="close" size={12} />
+    </Button>
+  </header>
+  {#if cell.value === null}
+    <p class="c-database__value-note"><span class="c-database__null">NULL</span></p>
+  {:else}
+    <pre class="c-database__value-text">{laidOut ?? cell.value}</pre>
+    <p class="c-database__value-note">
+      {cell.value.length.toLocaleString()} character{cell.value.length === 1 ? '' : 's'}
+      {#if laidOut !== null}· JSON, laid out{/if}
+      {#if cell.truncated}
+        <span class="c-status--warn">· cut at 256 KB; the database holds more</span>
+      {/if}
+    </p>
+  {/if}
+</aside>

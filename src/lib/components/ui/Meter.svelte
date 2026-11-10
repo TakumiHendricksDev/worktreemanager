@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A thin bar for how much of something is used: a context window, an account's usage limit.
    *
@@ -30,7 +28,6 @@
 </script>
 
 <div
-  use:extensionPart={{ target: 'ui.meter', context: publicContext }}
   class="c-meter c-meter--{tone}"
   role="progressbar"
   aria-label={label}

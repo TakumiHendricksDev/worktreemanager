@@ -105,8 +105,8 @@
             {
               id: 'workspace-note',
               title: 'Workspace note',
-              target: 'component.session-surface',
-              position: 'before',
+              target: 'workspace.toolbar',
+              position: 'after',
               body: [{ kind: 'text', text: 'Workspace: ${context:worktreeId}' }],
             },
             {
@@ -297,10 +297,33 @@
                 directory: '/snapshot',
               },
               replacing: null,
+              executable: true,
             };
           }
           if (command === 'plugin_cancel') return;
+          if (command === 'plugin_drafts_notice') return state.draftsNotice ?? null;
+          if (command === 'plugin_bind') {
+            if (state.refuseBind) throw { kind: 'fixture', message: 'That view is not available.' };
+            state.snapshot.registry.bindings[args.slot] = args.binding;
+            return structuredClone(state.snapshot);
+          }
+          if (command === 'plugin_delete_draft') {
+            state.jobs = state.jobs.filter((j) => j.id !== args.id);
+            window.emit('plugins:drafts', null);
+            return;
+          }
+          if (command === 'plugin_prepare') {
+            const current = state.snapshot.registry.installed[manifest.id]?.current;
+            return {
+              token: args.token,
+              package: { ...current, requested: args.revision || null },
+              replacing: current?.digest ?? null,
+              executable: true,
+            };
+          }
           if (command === 'plugin_change') {
+            if (args.action === 'enable' && state.refuseEnable)
+              throw { kind: 'fixture', message: 'Close this plugin’s sessions first.' };
             if (args.action === 'install') {
               state.jobs[0].installed = manifest.id;
               state.snapshot.registry.installed[manifest.id] = {

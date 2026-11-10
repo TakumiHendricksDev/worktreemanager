@@ -1,15 +1,25 @@
+/**
+ * The frontend-owned public operations, `ui.*`: panels, the composer, chat edits, navigation and
+ * Settings, as plugins and hooks see them.
+ *
+ * Each case validates what it is given against the context it runs in, because the arguments may
+ * have come from a package or been rewritten by a hook. Focus, move, resize and navigation call
+ * the stores' `apply*` methods, which skip interception: by the time a case runs, the hooks for
+ * its operation already have.
+ */
+import { listen } from '@tauri-apps/api/event';
 import type { ExtensionContext, WorkbenchPanel } from '../extensions';
+import { commands } from '../ipc/commands';
+import { errorMessage } from '../ipc/types';
+import { inPaneWindow } from '../window-role';
+import { chatEdit } from './chat-edit.svelte';
 import { extensions } from './extensions.svelte';
+import type { Target } from './layout.svelte';
 import { sessions, type Pane } from './sessions.svelte';
+import { settingsView, type SettingsSection } from './settings-view.svelte';
+import { isMainView, view } from './view.svelte';
 import { workspace } from './workspace.svelte';
 import { workspaceLabels } from './workspace-labels.svelte';
-import { settingsView, type SettingsSection } from './settings-view.svelte';
-import { chatEdit } from './chat-edit.svelte';
-import type { Target } from './layout.svelte';
-import { inPaneWindow } from '../window-role';
-import { commands } from '../ipc/commands';
-import { view, type MainView } from './view.svelte';
-import { listen } from '@tauri-apps/api/event';
 
 type Composer = {
   read: () => { text: string; revision: number };
@@ -30,7 +40,7 @@ function paneFor(args: Record<string, unknown>, context: ExtensionContext): Pane
     pane.projectId !== context.projectId ||
     pane.worktreeId !== context.worktreeId
   )
-    throw Error('Panel is no longer in this workspace');
+    throw Error('Panel is no longer in this worktree');
   return pane;
 }
 function string(args: Record<string, unknown>, key: string): string {
@@ -63,7 +73,7 @@ async function dispatch(
         .map(snapshot);
     case 'ui.panels.focus': {
       const p = paneFor(args, context);
-      sessions.focus(p.worktreeId, p.id);
+      sessions.applyFocus(p.worktreeId, p.id);
       return snapshot(p);
     }
     case 'ui.panels.move': {
@@ -74,11 +84,11 @@ async function dispatch(
       if ('paneId' in target) {
         const destination = sessions.paneById(target.paneId);
         if (!destination || destination.worktreeId !== p.worktreeId)
-          throw Error('Destination is outside this workspace');
+          throw Error('Destination is outside this worktree');
       }
       if ('side' in target && !['left', 'right', 'above', 'below'].includes(target.side))
         throw Error('Invalid placement');
-      sessions.movePane(p.worktreeId, p.id, target);
+      sessions.applyMove(p.worktreeId, p.id, target);
       return snapshot(p);
     }
     case 'ui.panels.resize': {
@@ -90,7 +100,7 @@ async function dispatch(
       )
         throw Error('Invalid split path or ratio');
       const ratio = Math.min(0.9, Math.max(0.1, args.ratio));
-      sessions.setRatio(context.worktreeId, path, ratio);
+      sessions.applyRatio(context.worktreeId, path, ratio);
       return { path, ratio };
     }
     case 'ui.panels.close': {
@@ -131,9 +141,8 @@ async function dispatch(
     }
     case 'ui.navigate': {
       const target = string(args, 'target');
-      if (!['home', 'worktree', 'code', 'database', 'new'].includes(target))
-        throw Error('Unknown view');
-      view.show(target as MainView);
+      if (!isMainView(target)) throw Error('Unknown view');
+      view.apply(target);
       return { target: view.current };
     }
     case 'ui.settings.show': {
@@ -168,20 +177,6 @@ async function dispatch(
       }
       return composer.read();
     }
-    case 'ui.chat.configure': {
-      const p = paneFor(args, context);
-      if (p.kind.kind !== 'agent') throw Error('Panel is not a WTM Chat session');
-      if ('mode' in args || 'provider' in args)
-        throw Error('Permission and provider changes require the host picker');
-      sessions.configure(p.id, {
-        provider: p.kind.provider,
-        model: typeof args.model === 'string' ? args.model : (p.model ?? ''),
-        effort: typeof args.effort === 'string' ? args.effort : (p.effort ?? ''),
-        fast: typeof args.fast === 'boolean' ? args.fast : p.fast,
-        mode: p.mode,
-      });
-      return snapshot(p);
-    }
     case 'ui.chat.snapshot': {
       const p = paneFor(args, context);
       if (!p.session) throw Error('Session is not live');
@@ -193,46 +188,74 @@ async function dispatch(
     }
     case 'ui.chat.edit': {
       const p = paneFor(args, context);
-      void chatEdit.open(
-        p.id,
-        String(args.messageId ?? context.messageId ?? ''),
-        typeof context.messageText === 'string' ? context.messageText : '',
-      );
+      const message = String(args.messageId ?? context.messageId ?? '');
+      // The text the review falls back to when the provider's snapshot lacks the message, found
+      // here rather than taken from the context, which no longer carries what a message says.
+      let text = '';
+      for (let at = p.events.length - 1; at >= 0; at -= 1) {
+        const event = p.events[at];
+        if (event?.kind === 'message_identity' && event.message === message) {
+          text = event.text;
+          break;
+        }
+      }
+      // Awaited, so a refusal ("An edit is already being prepared", "Session is not live")
+      // reaches the plugin that asked rather than being dropped behind `{ opened: true }`. A
+      // problem found once the dialog is open is shown in the dialog instead.
+      await chatEdit.open(p.id, message, text);
       return { opened: true };
     }
     default:
       throw Error(`Workbench operation is not available: ${operation}`);
   }
 }
+/**
+ * Make `ui.*` dispatchable, load workspace labels, and start the registry.
+ *
+ * Never rejects. It runs during boot, and a malformed config or a plugin that will not start is
+ * not worth a window that never finishes opening: the workbench runs without plugins, and the
+ * problem is recorded for Settings → Plugins.
+ */
 export async function initExtensionWorkbench(): Promise<() => void> {
   extensions.ui = dispatch;
-  await workspaceLabels.init();
-  const offLabels = await listen<{ key: string }>('wtm:pref-changed', (event) => {
-    if (event.payload.key === 'ui.workspace_labels') void workspaceLabels.init();
-  });
-  const off = await extensions.init();
-  const stop = $effect.root(() => {
-    if (inPaneWindow) return;
-    $effect(() => {
-      const context = extensions.context();
-      void commands
-        .extensionEvent('workspace.changed', context, context.worktreeId)
-        .catch(() => {});
-    });
-    $effect(() => {
-      const context = extensions.context();
-      const panels = sessions.panes
-        .filter((p) => p.worktreeId === context.worktreeId)
-        .map(snapshot);
-      void commands
-        .extensionEvent('panels.changed', { context, panels }, context.worktreeId)
-        .catch(() => {});
-    });
-  });
+  const offs: (() => void)[] = [];
+  try {
+    await workspaceLabels.init();
+    offs.push(
+      await listen<{ key: string }>('wtm:pref-changed', (event) => {
+        if (event.payload.key === 'ui.workspace_labels') void workspaceLabels.init();
+      }),
+    );
+    offs.push(await extensions.init());
+    if (!inPaneWindow)
+      offs.push(
+        $effect.root(() => {
+          // Each effect reads the panes only once a package subscribes, so without one a pane's
+          // every status change is not also an IPC call.
+          $effect(() => {
+            if (!extensions.subscribed('workspace.changed')) return;
+            const context = extensions.context();
+            void commands
+              .extensionEvent('workspace.changed', context, context.worktreeId)
+              .catch(() => {});
+          });
+          $effect(() => {
+            if (!extensions.subscribed('panels.changed')) return;
+            const context = extensions.context();
+            const panels = sessions.panes
+              .filter((p) => p.worktreeId === context.worktreeId)
+              .map(snapshot);
+            void commands
+              .extensionEvent('panels.changed', { context, panels }, context.worktreeId)
+              .catch(() => {});
+          });
+        }),
+      );
+  } catch (e) {
+    extensions.problems.host = errorMessage(e);
+  }
   return () => {
-    stop();
-    off();
-    offLabels();
+    for (const off of offs.reverse()) off();
     extensions.ui = null;
   };
 }

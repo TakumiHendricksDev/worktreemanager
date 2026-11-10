@@ -54,6 +54,12 @@
   min-height: 0;
   border-left: 1px solid var(--border);
   background: var(--bg-elevated);
+
+  /* A native CLI keeps its review aside mounted while hidden, so it hears a new revision; the
+     `display` above would otherwise win over the attribute. */
+  &[hidden] {
+    display: none;
+  }
 }
 
 .c-pane__aside-head {
@@ -155,6 +161,11 @@
  * CSS decides what is folded and `SessionPane` decides what the menu holds, and they agree because
  * the menu is built from the same conditions as the buttons, not from what is visible. That is why
  * this needs no measuring: nothing in script ever has to know how wide the pane is.
+ *
+ * A native pane's own rows (Connection info, New-session defaults) follow the same rule from the
+ * other side: their ⋯ is itself a foldable, and the folded menu takes the rows once it is gone. A
+ * menu that stayed on screen at every width used to repeat Restart, Split and Pop out beside the
+ * buttons it listed.
  */
 .c-pane__foldable {
   display: contents;
@@ -162,10 +173,6 @@
 
 .c-pane__more {
   display: none;
-}
-
-.c-pane__more.is-persistent {
-  display: contents;
 }
 
 @container pane-head (max-width: #{$pane-fold}) {

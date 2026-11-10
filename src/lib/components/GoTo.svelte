@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * Go to File, Class or Symbol: type part of a name, pick where to go.
    *
@@ -181,83 +178,81 @@
   );
 </script>
 
-<ExtensionPoint target="component.go-to" context={publicContext()}>
-  <Dialog title="Go to" shape="palette" {onclose}>
-    {#snippet body()}
-      <div class="c-goto">
-        <div class="c-goto__modes" role="group" aria-label="What to go to">
-          {#each MODES as m (m.id)}
-            <Button
-              variant={mode === m.id ? 'neutral' : 'quiet'}
-              size="sm"
-              ariaPressed={mode === m.id}
-              title={`${m.label} (${m.shortcut}) — Tab switches`}
-              onclick={() => {
-                mode = m.id;
-                input?.focus();
-              }}>{m.label}</Button
-            >
-          {/each}
-        </div>
-        <div class="c-goto__field">
-          <Icon name="search" size={14} />
-          <input
-            bind:this={input}
-            bind:value={query}
-            class="c-goto__input"
-            type="text"
-            {placeholder}
-            spellcheck="false"
-            autocomplete="off"
-            role="combobox"
-            aria-label={placeholder}
-            aria-expanded="true"
-            aria-controls="code-goto-results"
-            aria-activedescendant={rows[active] ? `code-goto-${active}` : undefined}
-            onkeydown={onKeydown}
-          />
-        </div>
-        <ul
-          bind:this={list}
-          id="code-goto-results"
-          class="c-goto__list"
-          role="listbox"
-          aria-label="Results"
-        >
-          {#each rows as row, i (row.key)}
-            <!-- Keys are the input's; a click here is the mouse's route to the same pick. -->
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <li
-              id={`code-goto-${i}`}
-              class="c-goto__row"
-              class:is-active={i === active}
-              role="option"
-              aria-selected={i === active}
-              onmousedown={(event) => {
-                event.preventDefault();
-                pick(i);
-              }}
-              onmousemove={() => (active = i)}
-            >
-              {#if row.kind}
-                <span class="c-goto__badge" title={row.kind}>{BADGES[row.kind]}</span>
-              {:else}
-                <Icon name="file" size={14} />
-              {/if}
-              <span class="c-goto__name">{row.name}</span>
-              <span class="c-goto__detail">{row.detail}</span>
-            </li>
-          {:else}
-            <li class="c-goto__empty">
-              {mode === 'file'
-                ? 'No file matches.'
-                : query.trim() === ''
-                  ? 'Type part of a name.'
-                  : 'Nothing is defined with that name.'}
-            </li>
-          {/each}
-        </ul>
+<Dialog title="Go to" shape="palette" {onclose}>
+  {#snippet body()}
+    <div class="c-goto">
+      <div class="c-goto__modes" role="group" aria-label="What to go to">
+        {#each MODES as m (m.id)}
+          <Button
+            variant={mode === m.id ? 'neutral' : 'quiet'}
+            size="sm"
+            ariaPressed={mode === m.id}
+            title={`${m.label} (${m.shortcut}) — Tab switches`}
+            onclick={() => {
+              mode = m.id;
+              input?.focus();
+            }}>{m.label}</Button
+          >
+        {/each}
       </div>
-    {/snippet}
-  </Dialog>
-</ExtensionPoint>
+      <div class="c-goto__field">
+        <Icon name="search" size={14} />
+        <input
+          bind:this={input}
+          bind:value={query}
+          class="c-goto__input"
+          type="text"
+          {placeholder}
+          spellcheck="false"
+          autocomplete="off"
+          role="combobox"
+          aria-label={placeholder}
+          aria-expanded="true"
+          aria-controls="code-goto-results"
+          aria-activedescendant={rows[active] ? `code-goto-${active}` : undefined}
+          onkeydown={onKeydown}
+        />
+      </div>
+      <ul
+        bind:this={list}
+        id="code-goto-results"
+        class="c-goto__list"
+        role="listbox"
+        aria-label="Results"
+      >
+        {#each rows as row, i (row.key)}
+          <!-- Keys are the input's; a click here is the mouse's route to the same pick. -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <li
+            id={`code-goto-${i}`}
+            class="c-goto__row"
+            class:is-active={i === active}
+            role="option"
+            aria-selected={i === active}
+            onmousedown={(event) => {
+              event.preventDefault();
+              pick(i);
+            }}
+            onmousemove={() => (active = i)}
+          >
+            {#if row.kind}
+              <span class="c-goto__badge" title={row.kind}>{BADGES[row.kind]}</span>
+            {:else}
+              <Icon name="file" size={14} />
+            {/if}
+            <span class="c-goto__name">{row.name}</span>
+            <span class="c-goto__detail">{row.detail}</span>
+          </li>
+        {:else}
+          <li class="c-goto__empty">
+            {mode === 'file'
+              ? 'No file matches.'
+              : query.trim() === ''
+                ? 'Type part of a name.'
+                : 'Nothing is defined with that name.'}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/snippet}
+</Dialog>

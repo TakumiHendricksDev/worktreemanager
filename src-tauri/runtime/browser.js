@@ -870,33 +870,84 @@
     });
   }
 
+  // ── plugin views ───────────────────────────────────────────────────────────────────────
+
+  // A plugin view's wrapper is a fixed document whose one sandboxed frame holds the plugin, and a
+  // request is honoured only from that frame's window. But `event.source` names a window, not a
+  // document: script in the wrapper's page world could give the same frame a new `srcdoc`, and the
+  // new document would post from the same window with the plugin's access. So the frame is pinned
+  // when it first appears, and any later change to its source or sandbox, its removal or a second
+  // frame ends request forwarding for the life of this document. Reopening the view starts afresh.
+  // Navigating the frame without touching its attributes cannot load script: the wrapper's CSP
+  // admits only `about:` frames, and the opaque sandbox refuses a parent's `javascript:` URL.
+  const PLUGIN_FRAME = 'iframe[data-wtm-plugin-view]';
+  let pluginFrame = null;
+  let pluginRevoked = false;
+
+  function checkPluginFrame() {
+    if (pluginRevoked) return;
+    const frames = document.getElementsByTagName('iframe');
+    if (!pluginFrame) {
+      const frame = document.querySelector(PLUGIN_FRAME);
+      if (!frame) return;
+      if (frames.length === 1) pluginFrame = frame;
+      else pluginRevoked = true;
+      return;
+    }
+    if (!pluginFrame.isConnected || frames.length !== 1 || frames[0] !== pluginFrame)
+      pluginRevoked = true;
+  }
+
+  function currentPluginFrame() {
+    checkPluginFrame();
+    return pluginRevoked ? null : pluginFrame;
+  }
+
+  // Every page gets this runtime, and an ordinary page's DOM churns, so the frame check runs only
+  // once a frame is pinned or a mutation brings in an iframe.
+  const holdsFrame = (node) =>
+    node.nodeName === 'IFRAME' ||
+    (node.nodeType === Node.ELEMENT_NODE && node.getElementsByTagName('iframe').length > 0);
+
+  new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        if (record.target === pluginFrame) pluginRevoked = true;
+      } else if (pluginFrame || Array.prototype.some.call(record.addedNodes, holdsFrame)) {
+        checkPluginFrame();
+      }
+    }
+  }).observe(document, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['src', 'srcdoc', 'sandbox', 'data-wtm-plugin-view'],
+  });
+
   // ── overlay: highlights, pins, the comment popover ─────────────────────────────────────
 
   let host = null;
   let shadow = null;
-  let theme = {
-    accent: '#3b82f6',
-    bg: '#111827',
-    fg: '#f9fafb',
-    border: '#374151',
-    font: 'system-ui, sans-serif',
-  };
+  // Exactly the tokens the host last sent, each applied as `--wtm-<name>`. The stylesheet below
+  // supplies fallbacks for the moment before the first theme arrives, under the same names, so
+  // nothing here invents a token a plugin frame would then be sent.
+  let tokens = {};
 
   const OVERLAY_CSS = `
-    :host { all: initial; position: fixed; inset: 0; pointer-events: none; z-index: 2147483647; font-family: var(--wtm-font); }
+    :host { all: initial; position: fixed; inset: 0; pointer-events: none; z-index: 2147483647; font-family: var(--wtm-font-ui); --wtm-accent: #3b82f6; --wtm-bg-elevated: #111827; --wtm-fg: #f9fafb; --wtm-border: #374151; --wtm-font-ui: system-ui, sans-serif; }
     .box { position: fixed; border: 2px solid var(--wtm-accent); border-radius: 3px; background: color-mix(in srgb, var(--wtm-accent) 12%, transparent); box-sizing: border-box; pointer-events: none; transition: opacity 120ms; }
     .box.flash { animation: wtm-flash 900ms ease-out forwards; }
     @keyframes wtm-flash { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
     .tag { position: absolute; top: -22px; left: -2px; padding: 2px 6px; font-size: 11px; line-height: 16px; color: var(--wtm-fg); background: var(--wtm-accent); border-radius: 3px 3px 3px 0; white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; }
-    .pin { position: fixed; width: 22px; height: 22px; border-radius: 11px 11px 11px 2px; background: var(--wtm-accent); color: var(--wtm-fg); font: 600 11px/22px var(--wtm-font); text-align: center; pointer-events: auto; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.35); border: 1.5px solid var(--wtm-fg); }
+    .pin { position: fixed; width: 22px; height: 22px; border-radius: 11px 11px 11px 2px; background: var(--wtm-accent); color: var(--wtm-fg); font: 600 11px/22px var(--wtm-font-ui); text-align: center; pointer-events: auto; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.35); border: 1.5px solid var(--wtm-fg); }
     .pin.resolved { opacity: .5; }
     .pin.detached { border-style: dashed; opacity: .7; }
-    .pop { position: fixed; width: 300px; padding: 10px; background: var(--wtm-bg); color: var(--wtm-fg); border: 1px solid var(--wtm-border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); pointer-events: auto; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+    .pop { position: fixed; width: 300px; padding: 10px; background: var(--wtm-bg-elevated); color: var(--wtm-fg); border: 1px solid var(--wtm-border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); pointer-events: auto; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
     .pop .what { font-size: 11px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .pop textarea { all: initial; font: 13px/1.4 var(--wtm-font); color: var(--wtm-fg); background: transparent; border: 1px solid var(--wtm-border); border-radius: 6px; padding: 6px 8px; min-height: 60px; resize: vertical; box-sizing: border-box; width: 100%; }
+    .pop textarea { all: initial; font: 13px/1.4 var(--wtm-font-ui); color: var(--wtm-fg); background: transparent; border: 1px solid var(--wtm-border); border-radius: 6px; padding: 6px 8px; min-height: 60px; resize: vertical; box-sizing: border-box; width: 100%; }
     .pop textarea:focus { outline: 2px solid var(--wtm-accent); outline-offset: 1px; }
     .pop .row { display: flex; gap: 6px; justify-content: flex-end; }
-    .pop button { all: initial; font: 500 12px/1 var(--wtm-font); padding: 6px 10px; border-radius: 6px; cursor: pointer; color: var(--wtm-fg); border: 1px solid var(--wtm-border); }
+    .pop button { all: initial; font: 500 12px/1 var(--wtm-font-ui); padding: 6px 10px; border-radius: 6px; cursor: pointer; color: var(--wtm-fg); border: 1px solid var(--wtm-border); }
     .pop button.add { background: var(--wtm-accent); border-color: var(--wtm-accent); }
     .pop .hint { font-size: 11px; opacity: .6; }
   `;
@@ -913,26 +964,29 @@
     return shadow;
   }
 
-  function applyTheme() {
+  function applyTheme(previous = {}) {
     if (!host) return;
-    host.style.setProperty('--wtm-accent', theme.accent);
-    host.style.setProperty('--wtm-bg', theme.bg);
-    host.style.setProperty('--wtm-fg', theme.fg);
-    host.style.setProperty('--wtm-border', theme.border);
-    host.style.setProperty('--wtm-font', theme.font);
+    for (const name of Object.keys(previous)) {
+      if (!(name in tokens)) host.style.removeProperty(`--wtm-${name}`);
+    }
+    for (const [name, value] of Object.entries(tokens)) {
+      host.style.setProperty(`--wtm-${name}`, value);
+    }
   }
 
-  function setTheme(tokens = {}) {
-    theme = {
-      ...theme,
-      ...Object.fromEntries(
-        Object.entries(tokens).filter(([, v]) => typeof v === 'string' && v),
+  function setTheme(next = {}) {
+    const previous = tokens;
+    tokens = Object.fromEntries(
+      Object.entries(next).filter(
+        ([name, value]) =>
+          /^[a-z][a-z-]*$/.test(name) && typeof value === 'string' && value,
       ),
-    };
-    applyTheme();
-    document
-      .querySelector('iframe[data-wtm-plugin-view]')
-      ?.contentWindow.postMessage({ channel: 'wtm.plugin.theme', tokens: theme }, '*');
+    );
+    applyTheme(previous);
+    currentPluginFrame()?.contentWindow.postMessage(
+      { channel: 'wtm.plugin.theme', tokens },
+      '*',
+    );
     return 'ok';
   }
 
@@ -1265,9 +1319,10 @@
 
   const methods = {
     pluginResponse: (args) => {
-      document
-        .querySelector('iframe[data-wtm-plugin-view]')
-        ?.contentWindow.postMessage({ ...args, channel: 'wtm.plugin.reply' }, '*');
+      currentPluginFrame()?.contentWindow.postMessage(
+        { ...args, channel: 'wtm.plugin.reply' },
+        '*',
+      );
     },
     snapshot,
     pageInfo,
@@ -1309,13 +1364,9 @@
   });
 
   addEventListener('message', (event) => {
-    const frame = document.querySelector('iframe[data-wtm-plugin-view]');
-    if (
-      !frame ||
-      event.source !== frame.contentWindow ||
-      event.data?.channel !== 'wtm.plugin.request'
-    )
-      return;
+    if (event.data?.channel !== 'wtm.plugin.request') return;
+    const frame = currentPluginFrame();
+    if (!frame || event.source !== frame.contentWindow) return;
     post({ event: 'plugin-request', request: event.data });
   });
   globalThis.__wtm = Object.freeze({ dispatch, version: 1 });

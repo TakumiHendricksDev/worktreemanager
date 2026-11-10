@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /** PostgreSQL-aware query editor with app-owned value and execution state. */
   import { indentWithTab } from '@codemirror/commands';
   import { PostgreSQL, sql } from '@codemirror/lang-sql';
@@ -128,11 +125,8 @@
   });
 </script>
 
-<ExtensionPoint target="component.sql-editor" context={publicContext()}>
-  <div
-    use:extensionPart={{ target: 'component.sql-editor', context: publicContext }}
-    class="c-database__editor c-code-editor"
-    class:has-selection={hasSelection}
-    bind:this={host}
-  ></div>
-</ExtensionPoint>
+<div
+  class="c-database__editor c-code-editor"
+  class:has-selection={hasSelection}
+  bind:this={host}
+></div>

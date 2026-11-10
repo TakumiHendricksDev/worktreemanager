@@ -21,21 +21,13 @@
   gap: var(--sp-3);
 }
 
+/* A contribution or contract entry. Ids are dotted words with no spaces, so they may break
+   anywhere rather than push the row wider than the sheet. */
 .c-extension-manager__row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: var(--sp-2);
   padding-block: var(--sp-2);
   border-bottom: 1px solid var(--border);
-}
-
-.c-extension-manager__meta {
-  color: var(--fg-muted);
-  font-size: var(--step--2);
   overflow-wrap: anywhere;
-}
-
-.c-chat-edit__input {
-  resize: vertical;
-  min-height: 160px;
 }

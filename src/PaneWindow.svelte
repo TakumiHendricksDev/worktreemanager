@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ChatEditDialog from './lib/components/ChatEditDialog.svelte';
-  import { initExtensionWorkbench } from './lib/state/extension-workbench.svelte';
-  let offExtensions: (() => void) | undefined;
   /**
    * The root of a window holding one popped-out pane.
    *
@@ -23,6 +20,7 @@
    */
   import { onMount } from 'svelte';
 
+  import ChatEditDialog from './lib/components/ChatEditDialog.svelte';
   import SessionPane from './lib/components/SessionPane.svelte';
   import Banner from './lib/components/ui/Banner.svelte';
   import Button from './lib/components/ui/Button.svelte';
@@ -32,8 +30,9 @@
   import { composerPrefs } from './lib/state/composer.svelte';
   import { dictation } from './lib/state/dictate.svelte';
   import { initPaneWindow, putBackFromWindow } from './lib/state/pane-windows.svelte';
-  import { sessions } from './lib/state/sessions.svelte';
+  import { initExtensionWorkbench } from './lib/state/extension-workbench.svelte';
   import { plugins } from './lib/state/plugins.svelte';
+  import { sessions } from './lib/state/sessions.svelte';
   import { theme } from './lib/state/theme.svelte';
   import { usage } from './lib/state/usage.svelte';
   import { workspace } from './lib/state/workspace.svelte';
@@ -50,6 +49,7 @@
     let gone = false;
     let offSessions: (() => void) | null = null;
     let offWindow: (() => void) | null = null;
+    let offExtensions: (() => void) | null = null;
     // The pane's context card shows its agent's limits, and this window has its own copy of the
     // store. Seeded from Rust's record, so it starts with what the main window already knows.
     const offUsage = usage.init();
@@ -67,6 +67,11 @@
       // for after the listeners exist, so nothing the session says in between falls through.
       offSessions = await sessions.init();
       offExtensions = await initExtensionWorkbench();
+      // An unmount during that await ran before this was assigned, so it could not release it.
+      if (gone) {
+        offExtensions();
+        return;
+      }
       const view = await commands.paneWindowState().catch(() => null);
       if (gone) return;
       if (!view || !(await sessions.adoptWindowState(view.state))) {

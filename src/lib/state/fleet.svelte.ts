@@ -90,6 +90,14 @@ class Fleet {
       $effect(() => {
         for (const id of this.arrived) untrack(() => this.dismissJob(id));
       });
+      // A session in a worktree its listing does not have yet: ask for the listing once, so the
+      // placeholder row becomes the worktree's real one. Only while Home is on screen, which is
+      // the only place that row is drawn.
+      $effect(() => {
+        if (!view.home || this.unlisted === '') return;
+        const keys = this.unlisted.split('\0');
+        untrack(() => this.relist(keys));
+      });
     });
     const off = () => {
       offMessages();
@@ -211,6 +219,42 @@ class Fleet {
       .map((job) => job.id),
   );
 
+  /**
+   * Every project and worktree a listed session is in that its project's listing lacks, as
+   * `project\nworktree` keys joined by NUL. A string, so the effect that reads it re-runs only when
+   * the set changes, not on every pane change that rebuilds `sessions`.
+   */
+  private unlisted = $derived.by((): string => {
+    const keys = new Set<string>();
+    for (const session of this.sessions) {
+      const list = this.worktreesOf(session.projectId);
+      // The active project's listing on its way is not a gap: it will have the worktree or not.
+      if (session.projectId === workspace.activeProjectId && workspace.loadingWorktrees)
+        continue;
+      if (list?.some((w) => w.id === session.worktreeId)) continue;
+      keys.add(`${session.projectId}\n${session.worktreeId}`);
+    }
+    return [...keys].sort().join('\0');
+  });
+
+  /** The gaps a listing has already been asked about, so a worktree that never appears is asked once. */
+  private relisted = new Set<string>();
+
+  /** Ask each project with a new gap for its listing, once per project however many gaps it has. */
+  private relist(keys: string[]): void {
+    const projects = new Set<string>();
+    for (const key of keys) {
+      if (this.relisted.has(key)) continue;
+      this.relisted.add(key);
+      projects.add(key.slice(0, key.indexOf('\n')));
+    }
+    for (const projectId of projects) {
+      if (!workspace.projects.some((p) => p.id === projectId && p.usable)) continue;
+      if (projectId === workspace.activeProjectId) void workspace.refreshWorktrees();
+      else void this.fetchOne(projectId);
+    }
+  }
+
   /** Fetch every usable project's listing, one at a time. Safe to call as often as Home likes. */
   refresh(): Promise<void> {
     this.refreshing ??= this.fetchAll().finally(() => {
@@ -281,6 +325,9 @@ class Fleet {
   sessions = $derived.by((): FleetSession[] =>
     sessions.panes.filter(listed).map((pane) => {
       const shell = pane.kind.kind === 'shell';
+      // A native CLI is a terminal to open, like a shell, but it is a Claude or Codex conversation
+      // and is named as one: it was listed as "Shell", titled "Shell".
+      const cli = pane.kind.kind === 'shell' && !!pane.kind.native;
       const run = shell ? shellRuns.forSession(pane.session) : undefined;
       const label = sessions.labelOf(pane);
       const status = run
@@ -290,13 +337,14 @@ class Fleet {
             ? 'idle'
             : 'working'
         : sessions.statusOfPane(pane);
-      const title = shell
-        ? run?.request.command.split('\n')[0] || 'Shell'
-        : (pane.agentTitle ??
-          pane.firstPrompt ??
-          (pane.error
-            ? `Couldn’t ${pane.detached ? 'restore' : 'start'} ${label} session`
-            : `New ${label} session`));
+      const title =
+        shell && !cli
+          ? run?.request.command.split('\n')[0] || 'Shell'
+          : (pane.agentTitle ??
+            pane.firstPrompt ??
+            (pane.error
+              ? `Couldn’t ${pane.detached ? 'restore' : 'start'} ${label} session`
+              : `New ${label} session`));
       return {
         id: pane.id,
         projectId: pane.projectId,
@@ -305,7 +353,7 @@ class Fleet {
         parentSession: pane.parentSession,
         status,
         title,
-        agent: shell ? 'Shell' : label,
+        agent: shell && !cli ? 'Shell' : label,
         model: pane.model,
         openedFromHome: pane.openedFromHome || run?.requester != null,
         kind: shell ? 'shell' : 'agent',

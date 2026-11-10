@@ -1,18 +1,30 @@
 <script lang="ts">
-  import { setContext as setExtensionContext } from 'svelte';
-  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
-  setExtensionContext(EXTENSION_PROTECTED, true);
+  /**
+   * A package's view in a workbench region: an isolated webview positioned over this box.
+   *
+   * The view is a fixed document in its own capability-less webview, the same boundary a panel
+   * has, so it can be any framework's output and still cannot reach the host's DOM or commands.
+   * This component only asks Rust to create it, keeps its bounds on this box, sends it the theme,
+   * and closes it on unmount. A failure to load offers Retry and the way to Settings → Plugins,
+   * because a broken replacement must never be a dead end.
+   *
+   * The view is recreated when its package's reviewed snapshot or the workspace on screen changes,
+   * and only then: `directory` is derived, because the registry snapshot is replaced whole on every
+   * plugin setting change, and reading it inside the effect closed and reopened every view each time.
+   */
   import { commands } from '../ipc/commands';
   import { errorMessage } from '../ipc/types';
-  import { plugins } from '../state/plugins.svelte';
-  import { workspace } from '../state/workspace.svelte';
-  import { browsers } from '../state/browsers.svelte';
-  import { overlay } from '../state/overlay.svelte';
-  import { settingsView } from '../state/settings-view.svelte';
-  import { theme } from '../state/theme.svelte';
   import type { PluginSlot } from '../plugins';
+  import { browsers } from '../state/browsers.svelte';
+  import { protectFromExtensions } from '../state/extensions.svelte';
+  import { overlay } from '../state/overlay.svelte';
+  import { plugins } from '../state/plugins.svelte';
+  import { settingsView } from '../state/settings-view.svelte';
+  import { pageThemeTokens, theme } from '../state/theme.svelte';
+  import { workspace } from '../state/workspace.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+
   const {
     slot,
     plugin,
@@ -30,22 +42,17 @@
     void theme.applied;
     void browsers.viewOf(id)?.loading;
     if (!id) return;
-    const styles = getComputedStyle(document.documentElement);
-    const tokens = Object.fromEntries(
-      ['accent', 'bg', 'fg', 'border', 'fg-muted', 'bg-elevated', 'danger', 'font-ui'].map(
-        (name) => [name, styles.getPropertyValue(`--${name}`).trim()],
-      ),
-    );
-    void commands.browserSetTheme(id, tokens).catch(() => {});
+    void commands.browserSetTheme(id, pageThemeTokens()).catch(() => {});
   });
+  const directory = $derived(plugins.state.registry.installed[plugin]?.current.directory);
   $effect(() => {
-    const directory = plugins.state.registry.installed[plugin]?.current.directory;
+    const reviewed = directory;
     const project = workspace.activeProjectId ?? '';
     const worktree = workspace.selectedWorktreeId ?? '';
     const attempt = retry;
     let gone = false;
     let owned: string | null = null;
-    if (directory && attempt >= 0) {
+    if (reviewed && attempt >= 0) {
       error = null;
       id = null;
       void commands
@@ -119,5 +126,5 @@
         onclick={() => settingsView.show('plugins')}>Plugin settings</Button
       >
     </div>
-  {:else if !id}<p class="c-plugins__muted">Loading plugin view…</p>{/if}
+  {:else if !id}<p class="c-note">Loading plugin view…</p>{/if}
 </section>

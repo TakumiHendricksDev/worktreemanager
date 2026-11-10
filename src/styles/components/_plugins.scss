@@ -1,4 +1,14 @@
-/* The registry owns this list; installed code never selects or styles the host's DOM. */
+/*
+ * Settings → Plugins, and the box a plugin's view is mounted in.
+ *
+ * Only wtm's own markup is styled here. A plugin never adds a rule to this sheet or selects the
+ * host's DOM: its panels and views are isolated pages, and the one way it changes how a host
+ * part looks is a reviewed style, which sets the custom properties it declares on the parts the
+ * public contract names (`extensionPart` in `extensions.svelte.ts`) and nothing else.
+ *
+ * Rows, stacks and definition lists are the shared objects (`o-row`, `o-stack`, `o-facts`) and
+ * secondary text is `c-note`; what is left below is what only this screen needs.
+ */
 .c-plugins {
   display: flex;
   flex-direction: column;
@@ -6,6 +16,26 @@
   flex: 1;
   overflow: hidden;
 }
+
+/* The section tabs and Add plugin. The strip's own baseline is dropped for the head's, so the
+   active tab's underline lands on the one line under the whole row. */
+.c-plugins__head {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-5) 0;
+  border-bottom: 1px solid var(--border);
+}
+.c-plugins__head > .c-tabs {
+  border-bottom: 0;
+}
+.c-plugins__add {
+  padding-bottom: var(--sp-2);
+}
+
 .c-plugins__toolbar {
   flex: none;
   display: flex;
@@ -20,10 +50,12 @@
   flex: 1;
   min-width: 180px;
 }
-.c-plugins__tabs {
+.c-plugins__body {
   display: flex;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
 }
 .c-plugins__split {
   min-height: 0;
@@ -53,91 +85,44 @@
   background: var(--bg-active);
   box-shadow: inset 2px 0 var(--accent);
 }
-.c-plugins__row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--sp-3);
-  flex-wrap: wrap;
-}
+/* Colour comes from `c-status--ok` when the plugin is on. */
 .c-plugins__status {
   color: var(--fg-muted);
   font-size: var(--step--2);
 }
-.c-plugins__status.is-enabled {
-  color: var(--ok);
-}
-.c-plugins__muted {
-  color: var(--fg-muted);
-  font-size: var(--step--1);
-  display: block;
+.c-plugins__empty {
+  padding: var(--sp-4);
 }
 .c-plugins__detail {
   overflow-y: auto;
   padding: var(--sp-5);
   min-width: 0;
 }
-.c-plugins__title {
-  font-size: var(--step-2);
-  font-weight: 600;
-}
-.c-plugins__description {
-  color: var(--fg-muted);
-  margin: var(--sp-4) 0 var(--sp-5);
-}
-.c-plugins__note {
-  padding: var(--sp-3);
-  background: var(--bg-code);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  margin: var(--sp-4) 0;
-  font-size: var(--step--1);
-}
-.c-plugins__section {
-  border-top: 1px solid var(--border);
-  padding-top: var(--sp-4);
-  margin-top: var(--sp-5);
-}
-.c-plugins__contribution {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding: var(--sp-3) 0;
-}
-.c-plugins__facts {
-  display: grid;
-  grid-template-columns: 95px minmax(0, 1fr);
-  gap: var(--sp-3);
-  font-size: var(--step--1);
-  margin-top: var(--sp-4);
-}
-.c-plugins__facts > dt {
-  color: var(--fg-muted);
-}
-.c-plugins__facts > dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.c-plugins__actions {
-  display: flex;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
-}
 .c-plugins__content {
   overflow-y: auto;
   padding: var(--sp-5);
   max-width: 850px;
 }
+/* A rule between the parts of a page; the stack it sits in owns the space above it. */
+.c-plugins__section {
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-4);
+}
+/* An `o-row` of buttons that may not fit one line in a narrow sheet. */
+.c-plugins__actions {
+  flex-wrap: wrap;
+}
+/* The two experience cards: equal height side by side, stacked when there is no room. */
 .c-plugins__choices {
-  display: flex;
-  gap: var(--sp-3);
-  padding: var(--sp-3) 0;
+  align-items: stretch;
   flex-wrap: wrap;
 }
 .c-plugins__choice {
   flex: 1;
   min-width: 200px;
+  display: grid;
+  align-content: start;
+  gap: var(--sp-1);
   padding: var(--sp-4);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
@@ -149,6 +134,11 @@
 }
 .c-plugins__choice:disabled {
   opacity: 0.45;
+}
+/* A text field with its button beside it: a folder and Choose folder…, a message and Send. */
+.c-plugins__inline > .c-input {
+  flex: 1;
+  min-width: 0;
 }
 .c-plugins__code {
   background: var(--bg-code);
@@ -167,15 +157,29 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--sp-3);
   flex-wrap: wrap;
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--border);
   color: var(--fg-muted);
   font-size: var(--step--1);
 }
-.c-plugins__empty {
-  padding: var(--sp-4);
-  color: var(--fg-muted);
+.c-plugins__drafts {
+  flex: none;
+  max-height: 180px;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+}
+.c-plugins__draft {
+  padding: var(--sp-3) var(--sp-5);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+.c-plugins__prompt {
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.5;
 }
 @container settings (max-width: 760px) {
   .c-plugins__split {
@@ -187,23 +191,18 @@
     grid-template-columns: 1fr;
   }
   .c-plugins__list {
-    display: flex;
     overflow: auto;
     border-right: 0;
     border-bottom: 1px solid var(--border);
+  }
+  .c-plugins__options {
+    display: flex;
   }
   .c-plugins__item {
     min-width: 170px;
   }
 }
 
-.c-plugins__body {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-}
 .c-plugin-view {
   position: relative;
   min-width: 0;
@@ -215,35 +214,4 @@
 .c-plugin-view.is-toolbar {
   flex: none;
   height: 48px;
-}
-
-.c-plugins__drafts {
-  flex: none;
-  max-height: 180px;
-  overflow-y: auto;
-  border-bottom: 1px solid var(--border);
-  background: var(--accent-soft);
-}
-.c-plugins__draft {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-5);
-  font-size: var(--step--1);
-  overflow-wrap: anywhere;
-}
-.c-plugins__folder {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-.c-plugins__folder > .c-input {
-  flex: 1;
-  min-width: 0;
-}
-.c-plugins__prompt {
-  resize: vertical;
-  min-height: 80px;
-  line-height: 1.5;
 }

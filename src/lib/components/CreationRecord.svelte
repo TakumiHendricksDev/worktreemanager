@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A new worktree's record of being made: how it went, its setup output, and what to do next.
    *
@@ -105,119 +102,116 @@
   });
 </script>
 
-<ExtensionPoint target="component.creation-record" context={publicContext()}>
-  {#if worktree}
-    <section
-      class="c-creation-record"
-      aria-label="How {creation.dirname} was made"
-      data-od-id="creation-record"
-    >
-      <div class="c-creation-record__head">
-        <span
-          class="c-creation-record__mark"
-          class:c-creation-record__mark--warn={failed && !creation.rerunning}
-        >
-          <Icon name={failed && !creation.rerunning ? 'warn' : 'check'} size={16} />
-        </span>
-        <div class="c-creation-record__titles">
-          {#if heading}
-            <p
-              class="c-creation-record__title"
-              class:c-status--warn={failed && !creation.rerunning}
-            >
-              {heading}
-            </p>
-            <p class="c-creation-record__sub">
-              The worktree <code>{creation.dirname}</code> was created and kept{#if ended}{` · ${ended}`}{/if}
-            </p>
-          {:else}
-            <p class="c-creation-record__title">Created <code>{creation.dirname}</code></p>
-            <p class="c-creation-record__sub">
-              on {worktree.branch ??
-                'a detached HEAD'}{#if took()}{` · took ${took()}`}{/if}
-            </p>
-          {/if}
-        </div>
-        <Button
-          variant="quiet"
-          size="sm"
-          title="Hide this record; the worktree stays"
-          disabled={creation.rerunning}
-          onclick={() => creations.dismiss(creation.id)}
-        >
-          Dismiss
-        </Button>
-      </div>
-
-      {#if creation.rerunning}
-        {#if step}
-          <p class="c-creation-record__step">
-            <Icon name="chevron-right" size={12} />
-            {step.label}
-            {#if creation.command}· <code>{creation.command.argv.join(' ')}</code>{/if}
+{#if worktree}
+  <section
+    class="c-creation-record"
+    aria-label="How {creation.dirname} was made"
+    data-od-id="creation-record"
+  >
+    <div class="c-creation-record__head">
+      <span
+        class="c-creation-record__mark"
+        class:c-creation-record__mark--warn={failed && !creation.rerunning}
+      >
+        <Icon name={failed && !creation.rerunning ? 'warn' : 'check'} size={16} />
+      </span>
+      <div class="c-creation-record__titles">
+        {#if heading}
+          <p
+            class="c-creation-record__title"
+            class:c-status--warn={failed && !creation.rerunning}
+          >
+            {heading}
+          </p>
+          <p class="c-creation-record__sub">
+            The worktree <code>{creation.dirname}</code> was created and kept{#if ended}{` · ${ended}`}{/if}
+          </p>
+        {:else}
+          <p class="c-creation-record__title">Created <code>{creation.dirname}</code></p>
+          <p class="c-creation-record__sub">
+            on {worktree.branch ?? 'a detached HEAD'}{#if took()}{` · took ${took()}`}{/if}
           </p>
         {/if}
-      {:else if failed}
-        <p class="c-note">
-          It has <strong>not</strong> been removed. Setup may already have written an environment
-          file, allocated ports or cloned a database volume — deleting the worktree would leak
-          those and lose work that is usually one command from fixed.
+      </div>
+      <Button
+        variant="quiet"
+        size="sm"
+        title="Hide this record; the worktree stays"
+        disabled={creation.rerunning}
+        onclick={() => creations.dismiss(creation.id)}
+      >
+        Dismiss
+      </Button>
+    </div>
+
+    {#if creation.rerunning}
+      {#if step}
+        <p class="c-creation-record__step">
+          <Icon name="chevron-right" size={12} />
+          {step.label}
+          {#if creation.command}· <code>{creation.command.argv.join(' ')}</code>{/if}
         </p>
-        <div class="o-row">
-          <Button
-            variant="neutral"
-            disabled={removing}
-            onclick={() => void creations.rerun(creation.id)}>Re-run setup</Button
-          >
-          <Button
-            variant="danger-outline"
-            disabled={removing || confirmingRemove}
-            onclick={() => (confirmingRemove = true)}
-            >{removing ? 'Removing…' : 'Remove the worktree'}</Button
-          >
-        </div>
       {/if}
+    {:else if failed}
+      <p class="c-note">
+        It has <strong>not</strong> been removed. Setup may already have written an environment
+        file, allocated ports or cloned a database volume — deleting the worktree would leak those
+        and lose work that is usually one command from fixed.
+      </p>
+      <div class="o-row">
+        <Button
+          variant="neutral"
+          disabled={removing}
+          onclick={() => void creations.rerun(creation.id)}>Re-run setup</Button
+        >
+        <Button
+          variant="danger-outline"
+          disabled={removing || confirmingRemove}
+          onclick={() => (confirmingRemove = true)}
+          >{removing ? 'Removing…' : 'Remove the worktree'}</Button
+        >
+      </div>
+    {/if}
 
-      {#if creation.session}
-        <div class="c-creation-record__output">
-          <button
-            type="button"
-            class="c-creation-record__toggle"
-            aria-expanded={showOutput}
-            onclick={() => (showOutput = !showOutput)}
-          >
-            <Icon name={showOutput ? 'chevron-down' : 'chevron-right'} size={12} />
-            <Icon name="terminal" size={14} />
-            Setup output
-          </button>
-          {#if showOutput}
-            <div class="c-creation-record__terminal">
-              {#key creation.session}
-                <Terminal session={creation.session} />
-              {/key}
-            </div>
-          {/if}
-        </div>
-      {/if}
+    {#if creation.session}
+      <div class="c-creation-record__output">
+        <button
+          type="button"
+          class="c-creation-record__toggle"
+          aria-expanded={showOutput}
+          onclick={() => (showOutput = !showOutput)}
+        >
+          <Icon name={showOutput ? 'chevron-down' : 'chevron-right'} size={12} />
+          <Icon name="terminal" size={14} />
+          Setup output
+        </button>
+        {#if showOutput}
+          <div class="c-creation-record__terminal">
+            {#key creation.session}
+              <Terminal session={creation.session} />
+            {/key}
+          </div>
+        {/if}
+      </div>
+    {/if}
 
-      {#if !creation.rerunning && !creation.offerDismissed}
-        <RecipeOffer
-          action={failed ? SETUP_FAILED : CREATED}
-          projectId={creation.projectId}
-          worktreeId={worktree.id}
-          place={creation.dirname}
-          vars={failed ? failureVars : formVars}
-          ondismiss={() => creations.dismissOffer(creation.id)}
-        />
-      {/if}
-    </section>
-
-    {#if confirmingRemove}
-      <RemoveWorktreeDialog
+    {#if !creation.rerunning && !creation.offerDismissed}
+      <RecipeOffer
+        action={failed ? SETUP_FAILED : CREATED}
         projectId={creation.projectId}
-        {worktree}
-        onclose={() => (confirmingRemove = false)}
+        worktreeId={worktree.id}
+        place={creation.dirname}
+        vars={failed ? failureVars : formVars}
+        ondismiss={() => creations.dismissOffer(creation.id)}
       />
     {/if}
+  </section>
+
+  {#if confirmingRemove}
+    <RemoveWorktreeDialog
+      projectId={creation.projectId}
+      {worktree}
+      onclose={() => (confirmingRemove = false)}
+    />
   {/if}
-</ExtensionPoint>
+{/if}

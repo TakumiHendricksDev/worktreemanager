@@ -312,3 +312,30 @@ class ThemeStore {
 }
 
 export const theme = new ThemeStore();
+
+/**
+ * The palette a webview WTM does not paint itself receives: browser panes for their comment
+ * overlay, plugin panels, and replacement views.
+ *
+ * Read from the live custom properties, so a custom palette and the current mode both arrive. Each
+ * key is the property's own name without `--`, and the page sees it as `--wtm-<key>`, which is the
+ * list `docs/plugins.md` promises authors. One list, because panels and views were each sent a
+ * different subset under different names.
+ */
+const PAGE_TOKENS = [
+  'accent',
+  'bg',
+  'fg',
+  'fg-muted',
+  'bg-elevated',
+  'border',
+  'danger',
+  'font-ui',
+] as const;
+
+export function pageThemeTokens(): Record<string, string> {
+  const style = getComputedStyle(document.documentElement);
+  return Object.fromEntries(
+    PAGE_TOKENS.map((name) => [name, style.getPropertyValue(`--${name}`).trim()]),
+  );
+}

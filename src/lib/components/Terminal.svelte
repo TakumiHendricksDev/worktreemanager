@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A live terminal attached to a PTY session.
    *
@@ -330,23 +327,18 @@
   });
 </script>
 
-<ExtensionPoint target="component.terminal" context={publicContext()}>
-  <div
-    use:extensionPart={{ target: 'component.terminal', context: publicContext }}
-    class="c-terminal"
-  >
-    <!-- Two elements rather than one: the fit addon measures xterm's parent, and that parent must
+<div class="c-terminal">
+  <!-- Two elements rather than one: the fit addon measures xterm's parent, and that parent must
        have no padding or border — see `.c-terminal__grid`. -->
-    <div class="c-terminal__screen">
-      <div
-        class="c-terminal__grid"
-        bind:this={host}
-        role="log"
-        aria-label="Terminal output"
-      ></div>
-    </div>
-    {#if status}
-      <p class="c-terminal__status" aria-live="polite">{status}</p>
-    {/if}
+  <div class="c-terminal__screen">
+    <div
+      class="c-terminal__grid"
+      bind:this={host}
+      role="log"
+      aria-label="Terminal output"
+    ></div>
   </div>
-</ExtensionPoint>
+  {#if status}
+    <p class="c-terminal__status" aria-live="polite">{status}</p>
+  {/if}
+</div>

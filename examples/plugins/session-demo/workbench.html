@@ -49,11 +49,29 @@
     </form>
     <p id="error" role="alert"></p>
     <script>
-      let active = false,
+      // `attachment` names the current attachment. Attach and Detach start a new one, and an
+      // answer that arrives for an older one is dropped: otherwise a poll still waiting when the
+      // user detaches would re-enable Send with a lease this view no longer holds, and attaching
+      // again while one waits would start a second polling loop.
+      let attachment = 0,
         lease = null,
         cursor = 0,
         timer;
       const element = (id) => document.getElementById(id);
+      // `crypto.randomUUID` needs a secure context, which an opaque frame may not be.
+      const uniqueId = () =>
+        Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
+          b.toString(16).padStart(2, '0'),
+        ).join('');
+      function canSend(enabled) {
+        element('message').disabled = element('send').disabled = !enabled;
+      }
+      function leave() {
+        attachment += 1;
+        clearTimeout(timer);
+        lease = null;
+        canSend(false);
+      }
       const rpc = (method, params = {}) =>
         wtm.request('session', {
           backend: 'demo',
@@ -70,7 +88,7 @@
             cursor = event.seq;
           }
         lease = update.lease;
-        element('message').disabled = element('send').disabled = !lease;
+        canSend(!!lease);
       }
       async function act(fn) {
         try {
@@ -80,42 +98,42 @@
           element('error').textContent = e.message;
         }
       }
-      async function poll() {
-        if (!active) return;
+      async function poll(current) {
         try {
-          render(await rpc('poll', { after: cursor }));
-          timer = setTimeout(poll, 1000);
+          const update = await rpc('poll', { after: cursor });
+          if (current !== attachment) return;
+          render(update);
+          timer = setTimeout(() => poll(current), 1000);
         } catch (e) {
-          active = false;
-          lease = null;
-          element('message').disabled = element('send').disabled = true;
+          if (current !== attachment) return;
+          leave();
           element('error').textContent = e.message;
         }
       }
       element('attach').onclick = () =>
         act(async () => {
-          clearTimeout(timer);
-          render(await rpc('attach', { after: cursor }));
-          active = true;
+          leave();
+          const current = attachment;
+          const update = await rpc('attach', { after: cursor });
+          if (current !== attachment) return;
+          render(update);
           element('control').disabled = element('detach').disabled = false;
-          timer = setTimeout(poll, 1000);
+          timer = setTimeout(() => poll(current), 1000);
         });
       element('control').onclick = () =>
         act(async () => {
-          lease = (await rpc('control')).lease;
-          element('message').disabled = element('send').disabled = !lease;
+          const current = attachment;
+          const granted = (await rpc('control')).lease;
+          if (current !== attachment) return;
+          lease = granted;
+          canSend(!!lease);
         });
       element('detach').onclick = () =>
         act(async () => {
-          active = false;
-          clearTimeout(timer);
-          await rpc('detach', { lease });
-          lease = null;
-          element('message').disabled =
-            element('send').disabled =
-            element('control').disabled =
-            element('detach').disabled =
-              true;
+          const held = lease;
+          leave();
+          element('control').disabled = element('detach').disabled = true;
+          await rpc('detach', { lease: held });
         });
       element('settings').onclick = () => wtm.request('navigate', { target: 'settings' });
       element('input').onsubmit = (event) => {
@@ -123,7 +141,7 @@
         act(async () => {
           const text = element('message').value;
           if (!lease || !text.trim()) return;
-          await rpc('input', { lease, text, input_id: crypto.randomUUID() });
+          await rpc('input', { lease, text, input_id: uniqueId() });
           element('message').value = '';
         });
       };

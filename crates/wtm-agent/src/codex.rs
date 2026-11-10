@@ -176,7 +176,7 @@ fn is_bare_key(name: &str) -> bool {
 /// side as TOML, and a JSON string and a TOML basic string are the same grammar, as are a JSON
 /// array of strings and a TOML array. A JSON *object* is not a TOML inline table — `:` versus `=` —
 /// which is why `env` is expanded into one assignment per variable rather than emitted whole.
-pub fn mcp_overrides(servers: &BTreeMap<String, McpServer>) -> Vec<String> {
+fn mcp_overrides(servers: &BTreeMap<String, McpServer>) -> Vec<String> {
     let mut argv = Vec::new();
     for (name, server) in servers {
         if !is_bare_key(name) {
@@ -1603,13 +1603,12 @@ pub fn parse_rate_limits(reply: &Value) -> Result<UsageLimits, String> {
     Ok(limits)
 }
 
-/// The whole of a resumed app-server thread, not just its prose.
+/// A user item's provider-issued id and turn, which the optimistic composer echo never has.
 ///
-/// A stored item is a *finished* one, so the paired kinds — a command, a tool call — are replayed as
-/// both of their edges in order, which is exactly the sequence the frontend folds back into one
-/// card. `reasoning` and `userMessage` are emitted here and skipped on the live path, because live
-/// they arrive as deltas and as the composer's own echo respectively, and a resumed thread has had
-/// neither.
+/// Editing a sent message forks the conversation through the turn *before* it, and only the
+/// provider's own ids can name that turn: a local display index stops matching the moment history
+/// is paginated or another client wrote to the thread. `None` when either id is missing, because an
+/// identity that cannot be forked from is worse than none — the edit would fork the wrong prefix.
 fn message_identity(item: &Value, turn: &str) -> Option<AgentEvent> {
     if item["type"] != "userMessage" {
         return None;
@@ -1637,6 +1636,14 @@ fn message_identity(item: &Value, turn: &str) -> Option<AgentEvent> {
         truncated: false,
     })
 }
+
+/// The whole of a resumed app-server thread, not just its prose.
+///
+/// A stored item is a *finished* one, so the paired kinds — a command, a tool call — are replayed as
+/// both of their edges in order, which is exactly the sequence the frontend folds back into one
+/// card. `reasoning` and `userMessage` are emitted here and skipped on the live path, because live
+/// they arrive as deltas and as the composer's own echo respectively, and a resumed thread has had
+/// neither.
 fn history_from_thread(thread: Option<&Value>) -> Vec<Step> {
     let Some(turns) = thread.and_then(|t| t["turns"].as_array()) else {
         return Vec::new();

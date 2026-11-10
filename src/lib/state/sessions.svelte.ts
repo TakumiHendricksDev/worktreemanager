@@ -1,6 +1,3 @@
-import { nativeSessions } from './native-sessions.svelte';
-import type { NativeSession } from '../native-sessions';
-import { interceptUiOperation } from '../extension-operations';
 import { tick } from 'svelte';
 /**
  * Every session in every worktree: shells and agent chats, in one list.
@@ -25,6 +22,7 @@ import { tick } from 'svelte';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 import { commands } from '../ipc/commands';
+import { interceptUiOperation } from '../extension-operations';
 import {
   type BrowserClosed,
   type BrowserComments,
@@ -50,12 +48,14 @@ import {
   type SpawnedSession,
   type Worktree,
 } from '../ipc/types';
-import { plugins } from './plugins.svelte';
 import { HOME, isHome, isWtmNotice } from '../home';
+import { NATIVE_PROVIDERS, supportsNative, type NativeSession } from '../native-sessions';
 import { statusOf, worse, type PaneStatus } from '../status';
 import { transferPrompt } from '../transfer';
 import { attention, type Announceable, type Announcement } from './attention.svelte';
 import { asShortcut, browsers } from './browsers.svelte';
+import { nativeSessions } from './native-sessions.svelte';
+import { plugins } from './plugins.svelte';
 import { restoreSessions } from './restore-sessions.svelte';
 import { workspace } from './workspace.svelte';
 import {
@@ -112,6 +112,19 @@ export const MAX_PANES_PER_WORKTREE = 20;
 export const MAX_PANES = 40;
 
 export type AgentExperience = 'native' | 'chat' | 'plain';
+
+/** What each experience is called wherever a person chooses one: the dialog, the New menu. */
+export const EXPERIENCE_NAME: Record<AgentExperience, string> = {
+  native: 'Native CLI',
+  chat: 'WTM Chat',
+  plain: 'plain terminal',
+};
+
+/**
+ * What a user-facing chat route says while WTM Chat is turned off. Rust's `CHAT_DISABLED`, word for
+ * word, so a refusal the window gives before asking reads the same as the one Rust would have given.
+ */
+export const CHAT_DISABLED = 'WTM Chat is disabled in Settings → Plugins.';
 
 interface AgentLaunchOptions {
   experience?: AgentExperience;
@@ -1026,8 +1039,11 @@ class Sessions {
         : undefined;
     if (native && !pane.error && !pane.ended) {
       if (native.status === 'needs_approval') return 'attention';
+      // Not `failed`: the CLI may well be running and mid-turn, and only WTM's view of it is lost.
+      // What is true is that something waits on the user, Reconnect or a look at the connection,
+      // and the header says which in the adapter's own words.
       if (native.status === 'disconnected' || native.status === 'unavailable')
-        return 'failed';
+        return 'attention';
       if (native.status === 'starting') return 'starting';
       if (native.status === 'ended') return 'ended';
       if (native.status === 'working') return 'working';
@@ -1073,14 +1089,25 @@ class Sessions {
     return [...grouped.values()];
   }
 
-  /** Catalogue label, or the raw provider id, or "Shell" — or, for a browser, the page. */
+  /** The catalogue's name for a provider, or its raw id before the catalogue has loaded. */
+  providerLabel(provider: string): string {
+    return this.options.find((option) => option.id === provider)?.label ?? provider;
+  }
+
+  /**
+   * Catalogue label, or the raw provider id, or "Shell" — or, for a browser, the page.
+   *
+   * A plain terminal says so. It runs the same CLI as an integrated pane, and two panes with one
+   * title side by side, one with WTM's tools and one without, invite typing an Open Design request
+   * into the one that cannot answer it.
+   */
   labelOf(pane: Pane): string {
     const kind = pane.kind;
     if (kind.kind === 'shell')
       return kind.profile
         ? kind.profile.title
         : kind.native
-          ? `${kind.native === 'claude' ? 'Claude Code' : 'Codex'} · CLI`
+          ? `${this.providerLabel(kind.native)} · CLI${kind.plain ? ' · plain' : ''}`
           : 'Shell';
     if (kind.kind === 'browser') {
       // The title once the page has one, its host until then, and "Browser" for an empty pane —
@@ -1088,9 +1115,56 @@ class Sessions {
       const view = browsers.viewOf(pane.session);
       return view?.title.trim() || hostOf(view?.url ?? pane.url) || 'Browser';
     }
-    return (
-      this.options.find((option) => option.id === kind.provider)?.label ?? kind.provider
-    );
+    return this.providerLabel(kind.provider);
+  }
+
+  /**
+   * Why `experience` cannot open `provider` here, or null when it can.
+   *
+   * The same answers Rust would give at the spawn, asked first so that a refused choice is a
+   * disabled option with its reason rather than a pane that opens only to say it could not start.
+   * A plain terminal is the vendor CLI with nothing of WTM's, so it is offered where Native CLI's
+   * adapter exists, whether or not the Native CLI built-in is on.
+   */
+  experienceProblem(provider: string, experience: AgentExperience): string | null {
+    if (experience === 'chat') return plugins.enabled('wtm.chat') ? null : CHAT_DISABLED;
+    if (!supportsNative(provider)) {
+      const which = NATIVE_PROVIDERS.map((id) => this.providerLabel(id)).join(' and ');
+      return experience === 'native'
+        ? `Native CLI has adapters for ${which}, not ${this.providerLabel(provider)}.`
+        : `A plain terminal is offered for ${which}, not ${this.providerLabel(provider)}.`;
+    }
+    if (experience === 'native' && !plugins.enabled('wtm.native-cli'))
+      return 'Native CLI is disabled in Settings → Plugins.';
+    return null;
+  }
+
+  /**
+   * What a launch with nothing chosen opens: the Workbench default where it can, WTM Chat where it
+   * cannot, and Native CLI if Chat is off. Null when neither can open this provider.
+   *
+   * One answer for every entry point — New, the empty worktree's buttons, Home's menu, the dialog's
+   * initial choice — which used to be computed in two places that could disagree.
+   */
+  defaultExperience(provider: string): AgentExperience | null {
+    const native = this.experienceProblem(provider, 'native') === null;
+    if (plugins.state.registry.experience === 'wtm.native-cli' && native) return 'native';
+    if (this.experienceProblem(provider, 'chat') === null) return 'chat';
+    return native ? 'native' : null;
+  }
+
+  /**
+   * A launch menu row's words: the agent, and which experience a click opens.
+   *
+   * Said in the row because the default can be Native CLI for one agent and WTM Chat for the next,
+   * and a menu row has no tooltip to say it in. A row nothing can open names why, for the caller to
+   * show disabled.
+   */
+  launchRow(provider: string, label: string): { text: string; enabled: boolean } {
+    const opens = this.defaultExperience(provider);
+    return opens
+      ? { text: `${label} (${EXPERIENCE_NAME[opens]})`, enabled: true }
+      : { text: `${label} (WTM Chat is off)`, enabled: false };
   }
 
   /**
@@ -1141,17 +1215,33 @@ class Sessions {
    * the selected one: panes carry a `projectId`, but the sidebar only lists the active project's
    * worktrees, so sidebar dots alone still hide a blocked session one project over.
    */
-  waitingCount = $derived(
-    this.panes.filter((p) => p.sideOf === null && p.approvals.length > 0).length,
-  );
+  waitingCount = $derived(this.panes.filter((p) => this.waitsOnYou(p)).length);
+
+  /**
+   * Whether a pane is held on a question only the user can answer.
+   *
+   * A native CLI's permission prompt counts. It is drawn by the vendor's terminal rather than
+   * arriving as an approval, so it is not on `pane.approvals`, and leaving it out made the badge
+   * say nobody was waiting while the sidebar's dot for the same pane said someone was.
+   */
+  private waitsOnYou(pane: Pane): boolean {
+    if (pane.sideOf !== null) return false;
+    if (pane.approvals.length > 0) return true;
+    return (
+      pane.session !== null &&
+      pane.kind.kind === 'shell' &&
+      !!pane.kind.native &&
+      !pane.kind.plain &&
+      nativeSessions.states[pane.session]?.status === 'needs_approval'
+    );
+  }
 
   /** Whether any pane in a project wants attention, for the project switcher's rows. */
   wantsAttentionIn(projectId: string): boolean {
     return this.panes.some(
       (p) =>
-        p.sideOf === null &&
         p.projectId === projectId &&
-        (p.approvals.length > 0 || p.error !== null),
+        (this.waitsOnYou(p) || (p.sideOf === null && p.error !== null)),
     );
   }
 
@@ -1180,9 +1270,55 @@ class Sessions {
     return this.layouts[worktreeId] ?? null;
   }
 
-  /** The worktree's shell panes, in creation order. */
+  /**
+   * The worktree's login-shell panes, in creation order.
+   *
+   * A Native CLI session, a plain agent terminal and a plugin's terminal profile are all `shell`
+   * panes too, because each is a PTY. None of them is the shell ⌘J means, and counting them made
+   * ⌘J keep focusing a running Claude Code terminal instead of opening a shell.
+   */
   shellsIn(worktreeId: string | null): Pane[] {
-    return this.panesIn(worktreeId).filter((p) => p.kind.kind === 'shell');
+    return this.panesIn(worktreeId).filter(
+      (p) => p.kind.kind === 'shell' && !p.kind.native && !p.kind.profile,
+    );
+  }
+
+  /**
+   * Fold an integrated native session's state into its pane.
+   *
+   * Only into a pane that is already an integrated native CLI. This used to rewrite `pane.kind` on
+   * every `native:changed`, which dropped `plain` and `profile`, so a plain terminal of the same
+   * provider could come back as an integrated one. And only the fields that changed: every write
+   * to a pane re-runs whatever reads it, and this arrives on each activity update.
+   */
+  private recordNative(state: NativeSession) {
+    const pane = this.paneBySession(state.session);
+    if (!pane || pane.kind.kind !== 'shell' || !pane.kind.native || pane.kind.plain) return;
+    const conversation = state.conversation || null;
+    const ready = !['starting', 'unavailable'].includes(state.status);
+    const working = ['working', 'needs_approval'].includes(state.status);
+    let changed = false;
+    if (pane.providerSession !== conversation) {
+      pane.providerSession = conversation;
+      changed = true;
+    }
+    if (pane.ready !== ready) pane.ready = ready;
+    if (pane.working !== working) {
+      pane.working = working;
+      changed = true;
+    }
+    if (pane.model !== state.model) {
+      pane.model = state.model;
+      changed = true;
+    }
+    if (JSON.stringify(pane.usage) !== JSON.stringify(state.usage))
+      pane.usage = state.usage;
+    if (state.title && pane.firstPrompt !== state.title) {
+      pane.firstPrompt = state.title;
+      changed = true;
+    }
+    // `remember` persists these four, not readiness or usage, so only these need a write.
+    if (changed) this.remember(pane.worktreeId);
   }
 
   /**
@@ -1193,19 +1329,6 @@ class Sessions {
    * transcript: Rust buffers each session's events for exactly this, so an adopted pane comes back
    * showing what it showed before rather than blank. See `agent_replay`.
    */
-  private recordNative(state: NativeSession) {
-    const pane = this.paneBySession(state.session);
-    if (!pane || pane.kind.kind !== 'shell') return;
-    pane.kind = { kind: 'shell', native: state.provider };
-    pane.providerSession = state.conversation || null;
-    pane.ready = !['starting', 'unavailable'].includes(state.status);
-    pane.working = ['working', 'needs_approval'].includes(state.status);
-    pane.model = state.model;
-    pane.usage = state.usage;
-    if (state.title) pane.firstPrompt = state.title;
-    this.remember(pane.worktreeId);
-  }
-
   async init(): Promise<UnlistenFn> {
     const offNative = await nativeSessions.init((state) => this.recordNative(state));
     const offAgent = await listen<AgentEventEnvelope>('agent:event', (e) => {
@@ -1833,6 +1956,11 @@ class Sessions {
     provider: string,
     brief: Brief,
   ): Promise<void> {
+    // A WTM Chat pane, which Rust would refuse inside a new pane while Chat is off.
+    if (!plugins.enabled('wtm.chat')) {
+      this.error = CHAT_DISABLED;
+      return;
+    }
     await this.openChat(projectId, worktreeId, provider, 'right');
     const pane = this.panesIn(worktreeId).at(-1);
     if (!pane) return;
@@ -2115,6 +2243,9 @@ class Sessions {
           pane.error === null &&
           !this.isOut(pane.id),
       );
+    // A chat pane is WTM Chat, and with Chat turned off Rust refuses the resume. Left detached,
+    // each keeps its card, which says why and comes back once Chat does.
+    if (!plugins.enabled('wtm.chat')) return;
     for (const pane of agents) {
       // Out of room is not a failure to resume: the rest keep their cards, the way an over-cap
       // shell stays detached, and `atCapacity` says why.
@@ -2432,15 +2563,6 @@ class Sessions {
     await commands.homeInterrupted(home.session, targets).catch(() => {});
   }
 
-  /**
-   * Put an already-running session back on screen, with everything it has already said.
-   *
-   * The transcript is replayed through `record` rather than assigned to `pane.events`, because the
-   * transcript is not the only thing a reload lost: whether the session is mid-turn, what it is
-   * blocked on, its usage, its skill list and its limit banner are all tracked *beside* the log and
-   * are rebuilt only by the same pass that wrote them. Assigning the array would give back a pane
-   * that reads correctly and behaves as though nothing were running.
-   */
   /** Reuse the normal pane and replay path even if Settings closed during the launch. */
   async showPluginDraft(job: {
     session: string | null;
@@ -2476,6 +2598,7 @@ class Sessions {
     return pane.id;
   }
 
+  /** A chat edit's new conversation: adopted like a session that outlived a reload, then shown. */
   async showExtensionSession(
     project: string,
     worktree: string,
@@ -2488,6 +2611,15 @@ class Sessions {
     if (pane) this.focus(worktree, pane.id);
   }
 
+  /**
+   * Put an already-running session back on screen, with everything it has already said.
+   *
+   * The transcript is replayed through `record` rather than assigned to `pane.events`, because the
+   * transcript is not the only thing a reload lost: whether the session is mid-turn, what it is
+   * blocked on, its usage, its skill list and its limit banner are all tracked *beside* the log and
+   * are rebuilt only by the same pass that wrote them. Assigning the array would give back a pane
+   * that reads correctly and behaves as though nothing were running.
+   */
   private async adopt(
     kind: SessionKind,
     projectId: string,
@@ -2897,12 +3029,38 @@ class Sessions {
                 cols: SPAWN_COLS,
               });
       await this.claimOrClose(pane.id, session, 'shell');
-      if (pane.kind.kind === 'shell' && pane.kind.native && !pane.kind.plain)
-        this.recordNative(await nativeSessions.load(session));
     } catch (e) {
       const live = this.paneById(pane.id);
       if (live) live.error = errorMessage(e);
+      return;
     }
+    // Apart from the spawn, because the process is running by now. A failed read here used to set
+    // `pane.error` on a live CLI, which disabled Split and said it could not start. The snapshot
+    // also arrives as `native:changed`, so a read that fails costs nothing but a moment.
+    if (pane.kind.kind === 'shell' && pane.kind.native && !pane.kind.plain) {
+      const session = this.paneById(pane.id)?.session;
+      if (session)
+        await nativeSessions
+          .load(session)
+          .then((state) => this.recordNative(state))
+          .catch(() => {});
+    }
+  }
+
+  /**
+   * Start a restored shell-kind pane that is still holding a place with nothing behind it.
+   *
+   * What `materialise` does for each such pane when its worktree is looked at, for one pane, on
+   * request. The route back for a pane that was refused for room then, which said nothing about
+   * it and stayed empty. Native CLI panes are shells here, and resume their saved conversation.
+   */
+  async startDetached(paneId: string): Promise<void> {
+    const pane = this.paneById(paneId);
+    if (!pane?.detached || pane.kind.kind !== 'shell' || this.isOut(paneId)) return;
+    if (!this.canFill(pane.worktreeId)) return;
+    pane.detached = false;
+    pane.error = null;
+    await this.fillShell(pane, pane.projectId, pane.worktreeId);
   }
 
   /**
@@ -2954,11 +3112,26 @@ class Sessions {
     provider: string,
     { experience, placement = 'right', beside, repo }: AgentLaunchOptions = {},
   ): Promise<string | null> {
-    experience ??=
-      plugins.state.registry.experience === 'wtm.native-cli' &&
-      ['claude', 'codex'].includes(provider)
-        ? 'native'
-        : 'chat';
+    // The main window owns the tiling, so a pane window asks it to open the pane there. There is
+    // no pane id to return from here; `null` is what every caller already treats as "not here".
+    if (inPaneWindow) {
+      toMain({
+        kind: 'openAgent',
+        projectId,
+        worktreeId,
+        provider,
+        experience: experience ?? null,
+      });
+      return null;
+    }
+    experience ??= this.defaultExperience(provider) ?? 'chat';
+    // Refused here, before a pane exists, rather than by Rust inside one: a pane that opens to say
+    // WTM Chat is off is a pane to close, and the banner says the same thing without one.
+    const problem = this.experienceProblem(provider, experience);
+    if (problem !== null) {
+      this.error = problem;
+      return null;
+    }
     if (experience !== 'chat') {
       return this.openNative(
         projectId,
@@ -3077,7 +3250,20 @@ class Sessions {
     }
   }
 
-  /** Programmatic prompts need the structured protocol even when manual launches use a CLI. */
+  /**
+   * Open a WTM Chat pane in a worktree, and return its pane id — or null when the cap refused it.
+   * Not idempotent — several in one worktree is the feature.
+   *
+   * Programmatic prompts come here even when manual launches use a native CLI, because they need
+   * the structured protocol.
+   *
+   * `beside` names the pane the new one lands next to. Pass it whenever the caller knows; see
+   * `place` for what goes wrong when it does not.
+   *
+   * `repo` is the repository's own settings for this agent. Omitted, they come from
+   * `this.options`, which only ever holds the *active* project's; Home opens sessions in any
+   * project, so it fetches that project's list itself and passes the entry here.
+   */
   async openChat(
     projectId: string,
     worktreeId: string,
@@ -3473,16 +3659,14 @@ class Sessions {
         'ui.panels.focus',
         { paneId },
         { projectId: pane.projectId, worktreeId, paneId },
-        (args) => {
-          if (
-            typeof args.paneId === 'string' &&
-            this.paneById(args.paneId)?.worktreeId === worktreeId
-          )
-            this.focus(worktreeId, args.paneId);
-        },
       )
     )
       return;
+    this.applyFocus(worktreeId, paneId);
+  }
+
+  /** `focus` without plugin hooks: what `ui.panels.focus` applies once they have run. */
+  applyFocus(worktreeId: string, paneId: string): void {
     // A pane in a window of its own is focused by bringing that window forward. It has no tile
     // here to put the caret in, and it must not become the target the next split lands beside.
     if (!inPaneWindow && this.isOut(paneId)) {
@@ -3554,10 +3738,14 @@ class Sessions {
         'ui.panels.move',
         { paneId, target },
         { projectId: pane.projectId, worktreeId, paneId },
-        () => this.movePane(worktreeId, paneId, target),
       )
     )
       return;
+    this.applyMove(worktreeId, paneId, target);
+  }
+
+  /** `movePane` without plugin hooks: what `ui.panels.move` applies once they have run. */
+  applyMove(worktreeId: string, paneId: string, target: Target): void {
     const layout = this.layoutFor(worktreeId);
     const next = move(layout, paneId, target);
     if (next === layout) return;
@@ -3574,13 +3762,14 @@ class Sessions {
         'ui.panels.resize',
         { path, ratio },
         { projectId: pane.projectId, worktreeId },
-        (args) => {
-          if (typeof args.ratio === 'number' && Number.isFinite(args.ratio))
-            this.setRatio(worktreeId, path, Math.min(0.9, Math.max(0.1, args.ratio)));
-        },
       )
     )
       return;
+    this.applyRatio(worktreeId, path, ratio);
+  }
+
+  /** `setRatio` without plugin hooks: what `ui.panels.resize` applies once they have run. */
+  applyRatio(worktreeId: string, path: string, ratio: number): void {
     const layout = this.layoutFor(worktreeId);
     if (!layout) return;
     this.layouts = { ...this.layouts, [worktreeId]: resize(layout, path, ratio) };
@@ -3635,7 +3824,7 @@ class Sessions {
         if (receipt.status === 'rejected' || receipt.status === 'unknown')
           throw new Error(
             receipt.error ??
-              'Delivery is unconfirmed. Inspect the native conversation; WTM will not retry.',
+              'Delivery is unconfirmed. Inspect the native conversation; wtm will not retry.',
           );
       } else await commands.sendTurn(pane.session, text, attachments);
       this.noteTyped(pane);
@@ -4351,7 +4540,9 @@ class Sessions {
         this.error = errorMessage(e);
       }
       if (pane.kind.kind === 'browser') browsers.forget(pane.session);
+      if (pane.kind.kind === 'shell') nativeSessions.forget(pane.session);
     }
+    nativeSessions.forgetPane(paneId);
 
     this.panes = this.panes.filter((p) => p.id !== paneId);
     this.layouts = {
@@ -4386,6 +4577,8 @@ class Sessions {
       }
     }
     if (pane.kind.kind === 'browser' && pane.session) browsers.forget(pane.session);
+    // The old process's state would otherwise outlive it under an id nothing will ever name again.
+    if (pane.kind.kind === 'shell') nativeSessions.forget(pane.session);
 
     pane.generation += 1;
     pane.session = null;

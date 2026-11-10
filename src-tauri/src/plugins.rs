@@ -1,9 +1,16 @@
 //! Plugin entry points share the same trust and process adapters as the rest of the app.
+use crate::app::App;
 use crate::commands::{AppState, Reply, blocking};
+use crate::extensions::Runtime;
+use crate::plugin_views::identity;
 use crate::view::ErrorView;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{AppHandle, Emitter};
 use wtm_plugins::{Review, Snapshot};
+
+const CLOSE_HOME_FIRST: &str =
+    "Close Home's running sessions before disabling Home. Saved conversations are kept.";
+
 fn error(message: String) -> ErrorView {
     ErrorView::new("plugin", message)
 }
@@ -13,30 +20,68 @@ pub async fn plugins_state(app: AppState<'_>) -> Reply<Snapshot> {
     let app = Arc::clone(&app);
     blocking(move || Ok(app.plugins.snapshot())).await
 }
+/// Prepare a review. `token`, a UUID the caller chose, lets [`plugin_cancel`] stop the
+/// preparation while a clone is still running; without one there is nothing to cancel until the
+/// review exists.
 #[tauri::command]
 pub async fn plugin_prepare(
     app: AppState<'_>,
     source: String,
     kind: String,
     revision: String,
+    token: Option<String>,
 ) -> Reply<Review> {
     let app = Arc::clone(&app);
+    // A local folder is typed the way the Create dialog's is, so `~` means the home folder in
+    // both. Git sources are URLs and are left exactly as given.
+    let source = if kind == "local" {
+        crate::app::expand_tilde(std::path::Path::new(&source))
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        source
+    };
     blocking(move || {
         app.plugins
-            .prepare(&source, &kind, &revision)
+            .prepare_as(&source, &kind, &revision, token.as_deref())
             .map_err(error)
     })
     .await
 }
+/// Stop a preparation in flight, or discard a finished review. Either way its copy is removed.
 #[tauri::command]
 pub async fn plugin_cancel(app: AppState<'_>, token: String) -> Reply<()> {
     let app = Arc::clone(&app);
     blocking(move || app.plugins.cancel(&token).map_err(error)).await
 }
 
+/// Close a package's panes and views and stop its runtime.
+///
+/// Disable, uninstall and recovery do this before they change the registry, which releases the
+/// package's sessions in the same step, and none of them is refused because a call is running: a
+/// misbehaving package must not be able to hold off the switch that turns it off. Calls still in
+/// flight fail their revalidation when they finish.
+fn revoke(handle: &AppHandle, app: &Arc<App>, plugin: &str) {
+    for view in app.browsers.list(None) {
+        let owner = view.opened_by.as_deref().and_then(identity);
+        if owner.is_some_and(|(owner, _, _)| owner == plugin) {
+            crate::browser::close(handle, app, &view.id);
+        }
+    }
+    app.extensions.reset(app, plugin);
+}
+
+fn directory(snapshot: &Snapshot, plugin: &str) -> Option<String> {
+    snapshot
+        .registry
+        .installed
+        .get(plugin)
+        .map(|p| p.current.directory.clone())
+}
+
 #[tauri::command]
 pub async fn plugin_change(
-    handle: tauri::AppHandle,
+    handle: AppHandle,
     app: AppState<'_>,
     action: String,
     id: String,
@@ -45,13 +90,25 @@ pub async fn plugin_change(
     let app = Arc::clone(&app);
     blocking(move || {
         if action == "enable" && !enabled && id == "wtm.home" && app.has_home_sessions() {
-            return Err(error("Close Home's running sessions before disabling Home. Saved conversations are kept.".into()));
+            return Err(error(CLOSE_HOME_FIRST.into()));
         }
         let before = app.plugins.snapshot();
-        // Revoke callbacks before replacing code; the old process must not answer for a new digest.
-        if ["rollback", "uninstall", "enable"].contains(&action.as_str()) { app.extensions.reset(&app, &id); }
-        if action == "recover" || action == "install" {
-            for plugin in before.registry.installed.keys() { app.extensions.stop(&app, plugin); }
+        match action.as_str() {
+            "recover" => {
+                for plugin in before.registry.installed.keys() {
+                    revoke(&handle, &app, plugin);
+                }
+            }
+            "uninstall" => revoke(&handle, &app, &id),
+            "enable" if !enabled => revoke(&handle, &app, &id),
+            // The old process must not answer for a new digest, so it stops before code changes.
+            "rollback" | "enable" => app.extensions.reset(&app, &id),
+            "install" => {
+                if let Some(review) = app.plugins.review(&id) {
+                    app.extensions.reset(&app, &review.package.manifest.id);
+                }
+            }
+            _ => {}
         }
         let result = match action.as_str() {
             "install" => app.plugins.install(&id),
@@ -62,30 +119,39 @@ pub async fn plugin_change(
             "recover" => app.plugins.recover(),
             _ => Err("Unknown plugin operation".into()),
         };
-        if result.is_err() { crate::extensions::Runtime::reconcile(&handle,&app); }
-        let result=result.map_err(error)?;
-        for (plugin, installed) in &result.registry.installed {
-            if before.registry.installed.get(plugin).map(|old| &old.current.directory) != Some(&installed.current.directory) { app.extensions.reset(&app, plugin); }
-        }
-        if let Some(menu) = handle.menu()
-            && let Some(item) = menu.get(crate::HOME_EVENT).and_then(|i| i.as_menuitem().cloned()) {
-            let _ = item.set_enabled(app.plugins.binding(wtm_plugins::contributions::Slot::Home) != wtm_plugins::contributions::Binding::Hidden);
-        }
-        for view in app.browsers.list(None) {
-            let owner = view.opened_by.as_deref().unwrap_or_default();
-            let plugin = owner.strip_prefix("plugin:").or_else(|| owner.strip_prefix(crate::plugin_views::PANEL_PREFIX).and_then(|s|s.split(':').next())).or_else(|| owner.strip_prefix(crate::plugin_views::OWNER_PREFIX).and_then(|s| s.split(':').next()));
-            if let Some(plugin) = plugin {
-                let old = before.registry.installed.get(plugin).map(|p| &p.current.directory);
-                let new = result.registry.installed.get(plugin).map(|p| &p.current.directory);
-                if old != new || !app.plugins.enabled(plugin) || action == "recover" {
-                    crate::browser::close(&handle, &app, &view.id);
-                }
+        let result = match result {
+            Ok(result) => result,
+            Err(e) => {
+                Runtime::reconcile(&handle, &app);
+                return Err(error(e));
+            }
+        };
+        for plugin in result.registry.installed.keys() {
+            if directory(&before, plugin) != directory(&result, plugin) {
+                app.extensions.reset(&app, plugin);
             }
         }
-        crate::extensions::Runtime::reconcile(&handle, &app);
+        // A view of a package whose code changed, or that is no longer enabled, is stale.
+        for view in app.browsers.list(None) {
+            let Some((plugin, _, _)) = view.opened_by.as_deref().and_then(identity) else {
+                continue;
+            };
+            if directory(&before, plugin) != directory(&result, plugin)
+                || !app.plugins.enabled(plugin)
+            {
+                crate::browser::close(&handle, &app, &view.id);
+            }
+        }
+        if let Some(menu) = handle.menu() {
+            // Best effort: a menu item that cannot be toggled is cosmetic, and failing here would
+            // report the plugin change itself as failed after it was saved.
+            let _ = crate::sync_home_menu(&menu, &app);
+        }
+        Runtime::reconcile(&handle, &app);
         let _ = handle.emit("plugins:changed", &result);
         Ok(result)
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -138,7 +204,6 @@ pub async fn plugin_panel(
         app.worktree(&project, &worktree_id)?;
         let _activation = app.plugins.activation(&plugin);
         let html = app.plugins.panel(&plugin, &contribution).map_err(error)?;
-        crate::prototypes::validate_artifact(&html)?;
         let doc = crate::plugin_views::document(&html);
         crate::browser::open_prototype(
             &handle,
@@ -171,12 +236,12 @@ pub async fn open_plugin_terminal(
         let _activation = app.plugins.activation(&plugin);
         let project = app.project(&project_id)?;
         let worktree = app.worktree(&project, &worktree_id)?;
-        let argv = app
+        let invocation = app
             .plugins
-            .terminal(&plugin, &contribution)
+            .terminal_invocation(&plugin, &contribution, &worktree.path)
             .map_err(error)?;
         let sink = crate::pty_bridge::EventSink::recording(handle, Arc::clone(&app));
-        app.open_shell(&worktree, &project_id, argv, 24, 100, sink)
+        app.open_native_terminal(&worktree, &project_id, invocation, sink)
             .map(|s| s.as_str().to_owned())
             .map_err(|e| error(e.to_string()))
     })

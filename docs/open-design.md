@@ -1,4 +1,4 @@
-# Open Design in WTM chat
+# Open Design in an agent chat
 
 Ask in an ordinary **worktree chat**, for example: “Prototype this registration
 export using our components.” The selected agent prepares project context and
@@ -18,7 +18,7 @@ worktree chat. It uses an existing conversation when one is available.
 
 ## Trigger and execution
 
-WTM supplies `prototype_prepare` and `prototype_publish` through its existing
+wtm supplies `prototype_prepare` and `prototype_publish` through its existing
 session-scoped MCP bridge and appends design-first guidance to the chat agent's
 instructions. That guidance applies to explicit design/mockup/prototype requests
 and substantial UI changes: screens, layouts, components and user flows. Backend
@@ -28,7 +28,7 @@ A session already running an older build needs to be resumed or restarted with
 the new build to receive its tools and instructions.
 
 There is no second agent loop. Authentication, model, effort, conversation context
-and permission mode are the ordinary WTM session's. No credentials are copied and
+and permission mode are the ordinary agent session's. No credentials are copied and
 no global agent/MCP configuration is installed. Project evidence goes to the
 user's existing coding provider as part of that conversation; nothing contacts
 Open Design Cloud or its telemetry/catalog services.
@@ -36,25 +36,25 @@ Open Design Cloud or its telemetry/catalog services.
 `prototype_prepare` collects bounded source evidence and returns the bundled Open
 Design design charter, extracted token evidence and a fresh revision ID. The
 agent supplies complete HTML and component reuse notes to `prototype_publish`.
-WTM writes these under its own data root, outside application source. The tools
+wtm writes these under its own data root, outside application source. The tools
 cannot approve implementation or write application files.
 
 The instruction to avoid application edits until approval is **prompt guidance**.
-WTM retains the selected provider's normal permission and write boundaries; it
+wtm retains the selected provider's normal permission and write boundaries; it
 does not add an OS filesystem sandbox to the whole conversation. A permissive
 agent mode is not made read-only by this feature. The explicit implementation
 action is the application's supported approval route.
 
 ## First use and upstream code
 
-The small design runtime is compiled into WTM. First use creates restricted local
+The small design runtime is compiled into wtm. First use creates restricted local
 artifact storage; it needs no downloads, Node, shell PATH lookup or service startup.
 The ordinary agent transcript and review card show generation progress. Cancel
 invalidates the generation ID and interrupts the same agent through its usual
 provider API. Retry uses the same conversation. A storage or preview failure
 reports an error; it does not ask for another CLI connection.
 
-WTM reuses Open Design 0.25.0 at revision
+wtm reuses Open Design 0.25.0 at revision
 [`7da9a8aaa2d406bf3aa0a1cb9d4e8e1cd24c9095`](https://github.com/nexu-io/open-design/tree/7da9a8aaa2d406bf3aa0a1cb9d4e8e1cd24c9095):
 
 - Adapted role, planning, resource reuse, verification and refinement sections of
@@ -94,7 +94,7 @@ invalidates earlier generation results and approvals. Changed source fingerprint
 require a refreshed design before publication or implementation.
 
 HTML and reuse notes are saved together as an immutable review. Before preview
-and implementation, WTM checks both against the recorded fingerprint. **Implement
+and implementation, wtm checks both against the recorded fingerprint. **Implement
 this design** additionally checks current source context, the requested review ID,
 conversation ownership and that the chat is idle, then sends one approval turn to
 that same session. Duplicate implementation clicks are refused. Restore reads
@@ -115,7 +115,7 @@ The frame has scripts but no same-origin permission. The wrapper's CSP blocks
 network requests, external assets, forms and base URLs; navigation and downloads
 are refused. The main app's CSP and capabilities are unchanged.
 
-The initial empty webview is not a successful review. WTM waits for an isolated-world
+The initial empty webview is not a successful review. wtm waits for an isolated-world
 signal that the sandboxed artifact frame loaded. Missing readiness, a native load
 failure or a crashed web content process produces a visible error with **Reload**
 or **Show preview** retry. Reload uses the retained validated document, without
@@ -124,7 +124,7 @@ calling an agent, changing saved bytes or granting implementation approval.
 The original script-based loader depended on a document-start script running on
 WebKit's initial `about:blank`; it could leave a white pane while reporting success.
 Existing saved designs remain compatible with the native loader. After rebuilding
-and relaunching WTM, use **Show preview** in the originating conversation; no new
+and relaunching wtm, use **Show preview** in the originating conversation; no new
 generation is required. This local work does not replace or restart an installed app.
 
 ## Validation

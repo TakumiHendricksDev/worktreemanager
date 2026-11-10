@@ -86,10 +86,45 @@ pub const SESSION_AWARENESS_PREF: &str = "ui.session_awareness";
 /// user can see, pause per pane, or close. See ARCHITECTURE §6c.
 pub const BROWSER_TOOLS_PREF: &str = "ui.browser_tools";
 
-/// One terminal-dock shell and what it belongs to.
+// ── State kept beside the user config ─────────────────────────────────────────
+//
+// Named here rather than added to `AppPaths`: that struct is what the config layer reads, and
+// none of these is config. They are the composition root's own records, and one list is where
+// someone asking "what does wtm write into my config directory?" can read the whole answer.
+
+/// Installed plugin packages, their reviewed snapshots and the registry. See `wtm_plugins::Store`.
+pub const PLUGINS_DIR: &str = "plugins";
+
+/// "Create with an agent" drafts. A file of its own, not part of the plugin registry, so
+/// recovering the registry can never lose the conversation that could repair a package.
+pub const PLUGIN_DRAFTS_FILE: &str = "plugin-drafts.json";
+
+/// One journal per chat edit, so a retried request returns its first outcome instead of
+/// submitting the edited message twice. See `chat_edit`.
+pub const CHAT_EDITS_DIR: &str = "chat-edits";
+
+/// Native CLI delivery receipts, which must outlive a restart: an unknown delivery is never
+/// retried automatically. See `native_sessions::delivery`.
+pub const NATIVE_DELIVERIES_DIR: &str = "native-deliveries";
+
+/// Scratch space for asking the installed Codex for its protocol schema. Emptied before every
+/// probe, so a probe killed halfway leaves nothing behind for longer than the next one.
+pub const CODEX_PROBES_DIR: &str = "codex-probes";
+
+/// What a user-facing WTM Chat route says when the built-in is turned off.
+pub const CHAT_DISABLED: &str = "WTM Chat is disabled in Settings → Plugins.";
+
+/// What a Home route says when the built-in is turned off, or when its WTM Chat dependency is.
+pub const HOME_DISABLED: &str = "Home is disabled in Settings → Plugins.";
+
+/// One terminal-dock PTY and what it belongs to.
 struct ShellEntry {
     project: String,
     worktree: String,
+    /// A login shell, as opposed to a Native CLI session, a plain agent terminal or a plugin's
+    /// terminal profile. Only a login shell may be offered as a Run target: typing a command into
+    /// anything else would be input injection into a program that never asked for it.
+    login: bool,
 }
 
 /// What the frontend needs to know about a live dock shell.
@@ -832,8 +867,15 @@ pub struct AgentForkSource {
 
 /// Everything the app needs, wired once at startup.
 pub struct App {
+    /// Installed packages and which built-ins they replace or disable. Here rather than behind a
+    /// command because the host enforces it on its own routes — opening a WTM Chat pane, Home's
+    /// menu item, a replacement view — and a check only the webview made would not be one.
     pub plugins: wtm_plugins::Store,
+    /// "Create with an agent" drafts. Apart from `plugins` so that abandoning a draft never
+    /// uninstalls anything and recovering the registry never loses a draft's conversation.
     pub plugin_jobs: crate::plugin_authoring::Jobs,
+    /// Running plugin runtimes (API 2). Owned here because the agent sink forwards `chat.event` to
+    /// them from a reader thread, and quitting has to stop them with everything else.
     pub extensions: crate::extensions::Runtime,
     pub git: Arc<dyn Git>,
     pub runner: Arc<dyn CommandRunner>,
@@ -900,6 +942,9 @@ pub struct App {
     /// minted while a session's config is built — and read on the socket thread. One owner for both
     /// is what keeps that from needing a channel.
     pub handoff: crate::handoff::Hub,
+    /// Native CLI sessions: a vendor's own terminal UI in a PTY, with WTM's tools and context. A
+    /// hub of their own rather than entries in `agents`, because a PTY is not an `AgentSession`
+    /// and must not be driven as one — yet peers, resume and scoped tools all have to see them.
     pub native_sessions: crate::native_sessions::Hub,
     /// Browser panes. Its own struct, like `handoff`, because it is consulted from the main thread's
     /// page-load callbacks as well as from commands — see `browser.rs` for the lock discipline.
@@ -964,12 +1009,29 @@ impl App {
     /// # Errors
     ///
     /// If the config directory cannot be determined.
-    pub fn new() -> Result<Self, ConfigError> {
+    ///
+    /// `safe_mode` is `wtm --safe-mode`, parsed by `main` with the rest of argv: the launch that
+    /// starts with every user package off, for when one of them broke the workbench.
+    pub fn new(safe_mode: bool) -> Result<Self, ConfigError> {
         let paths = AppPaths::discover()?;
-        Self::with_paths(paths)
+        Self::with_paths_in_mode(paths, safe_mode)
     }
 
-    /// Build with explicit config paths. Used by tests.
+    /// Build with explicit config paths, with plugins as the registry says. Used by tests.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::with_paths_in_mode`].
+    pub fn with_paths(paths: AppPaths) -> Result<Self, ConfigError> {
+        Self::with_paths_in_mode(paths, false)
+    }
+
+    /// Build with explicit config paths, optionally in plugin safe mode.
+    ///
+    /// The mode is a parameter rather than something read from the process's argv here, because
+    /// this is also every test's constructor: a test binary run with an argument that happened to
+    /// match would have started with its packages off, and a non-UTF-8 argument would have
+    /// panicked inside a constructor that has nothing to do with the command line.
     ///
     /// # Errors
     ///
@@ -979,9 +1041,9 @@ impl App {
     /// construction reads the filesystem and the next thing added here plausibly will
     /// fail; widening the signature later would churn every call site.
     #[allow(clippy::unnecessary_wraps)]
-    pub fn with_paths(paths: AppPaths) -> Result<Self, ConfigError> {
+    pub fn with_paths_in_mode(paths: AppPaths, safe_mode: bool) -> Result<Self, ConfigError> {
         // Captured before `paths` is moved into the config store below.
-        let plugins_root = paths.config_dir.join("plugins");
+        let plugins_root = paths.config_dir.join(PLUGINS_DIR);
         let sessions_file = paths.sessions_file.clone();
         let handles_file = paths.handles_file.clone();
 
@@ -1024,17 +1086,13 @@ impl App {
 
         Ok(Self {
             native_sessions: crate::native_sessions::Hub::new(
-                config.paths().config_dir.join("native-deliveries"),
+                config.paths().config_dir.join(NATIVE_DELIVERIES_DIR),
             ),
             extensions: crate::extensions::Runtime::default(),
             plugin_jobs: crate::plugin_authoring::Jobs::new(
-                config.paths().config_dir.join("plugin-drafts.json"),
+                config.paths().config_dir.join(PLUGIN_DRAFTS_FILE),
             ),
-            plugins: wtm_plugins::Store::new(
-                plugins_root,
-                Arc::clone(&runner),
-                std::env::args().any(|a| a == "--safe-mode"),
-            ),
+            plugins: wtm_plugins::Store::new(plugins_root, Arc::clone(&runner), safe_mode),
             git,
             runner,
             launcher,
@@ -1453,7 +1511,12 @@ impl App {
             .find_map(|candidate| self.runner.which(candidate.to_string_lossy().as_ref()))
     }
 
-    /// The palettes the user declared in `[ui.palettes]`, validated for Settings.
+    /// The palettes the user declared in `[ui.palettes]`, validated for Settings, followed by
+    /// those enabled plugin packages contribute, namespaced `<package>.<palette>`.
+    ///
+    /// A package's palettes are listed only while it is enabled, and are not validated again here:
+    /// parsing the manifest already refused a bad hue, chroma or brand colour, and
+    /// `Store::active` re-verifies the reviewed snapshot before anything is read from it.
     ///
     /// Reads the config file directly rather than going through `ConfigStore`, which is the
     /// same thing `with_paths` does for `exec.path` above. The port's own documentation is
@@ -1588,6 +1651,20 @@ impl App {
 
 // ═══════════════════════════ the terminal dock's shells ═══════════════════════════
 
+/// What a dock PTY is started as.
+///
+/// A struct because the tuple it replaced had grown to three positional fields, and two of them
+/// are optional strings and string maps a caller could swap without the compiler noticing.
+struct ShellLaunch {
+    argv: Vec<String>,
+    /// The Home session a Run shell belongs to, for admission. `None` for everything else.
+    owner: Option<String>,
+    /// Added to the resolved environment. A Native CLI session's scoped context arrives this way.
+    env: BTreeMap<String, String>,
+    /// See [`ShellEntry::login`].
+    login: bool,
+}
+
 impl App {
     /// Open an interactive shell in one worktree.
     ///
@@ -1613,16 +1690,19 @@ impl App {
         cols: u16,
         sink: Arc<dyn wtm_core::ports::pty::PtySink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
-        self.open_shell_inner(
-            worktree,
-            project_id,
-            (argv, None, BTreeMap::new()),
-            rows,
-            cols,
-            sink,
-        )
+        let launch = ShellLaunch {
+            argv,
+            owner: None,
+            env: BTreeMap::new(),
+            login: true,
+        };
+        self.open_shell_inner(worktree, project_id, launch, rows, cols, sink)
     }
 
+    /// Open a Native CLI session's terminal: the vendor's own interface, in a dock-style PTY.
+    ///
+    /// At the shared default size, because nothing has measured its pane yet; the pane's first
+    /// `pty_resize` replaces it a frame later, exactly as it does for a shell opened at 0×0.
     pub fn open_native_terminal(
         &self,
         worktree: &Worktree,
@@ -1630,14 +1710,14 @@ impl App {
         invocation: wtm_core::ports::exec::Invocation,
         sink: Arc<dyn wtm_core::ports::pty::PtySink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
-        self.open_shell_inner(
-            worktree,
-            project_id,
-            (invocation.argv, None, invocation.env),
-            24,
-            100,
-            sink,
-        )
+        let launch = ShellLaunch {
+            argv: invocation.argv,
+            owner: None,
+            env: invocation.env,
+            login: false,
+        };
+        let (rows, cols) = (crate::commands::DEFAULT_ROWS, crate::commands::DEFAULT_COLS);
+        self.open_shell_inner(worktree, project_id, launch, rows, cols, sink)
     }
 
     pub fn open_run_shell(
@@ -1649,27 +1729,31 @@ impl App {
         cols: u16,
         sink: Arc<dyn wtm_core::ports::pty::PtySink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
-        self.open_shell_inner(
-            worktree,
-            project_id,
-            (vec!["/bin/zsh".into(), "-l".into()], home, BTreeMap::new()),
-            rows,
-            cols,
-            sink,
-        )
+        let launch = ShellLaunch {
+            argv: vec!["/bin/zsh".into(), "-l".into()],
+            owner: home,
+            env: BTreeMap::new(),
+            login: true,
+        };
+        self.open_shell_inner(worktree, project_id, launch, rows, cols, sink)
     }
 
     fn open_shell_inner(
         &self,
         worktree: &Worktree,
         project_id: &str,
-        launch: (Vec<String>, Option<String>, BTreeMap<String, String>),
+        launch: ShellLaunch,
         rows: u16,
         cols: u16,
         sink: Arc<dyn wtm_core::ports::pty::PtySink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
         use wtm_core::ports::pty::PtyHost;
-        let (argv, owner, env) = launch;
+        let ShellLaunch {
+            argv,
+            owner,
+            env,
+            login,
+        } = launch;
 
         // Before the spawn, so descriptors a finished session is still holding are released
         // before a new pair is allocated. This is the app's only caller.
@@ -1761,6 +1845,7 @@ impl App {
             ShellEntry {
                 project: project_id.to_owned(),
                 worktree: worktree.id.as_str().to_owned(),
+                login,
             },
         );
         Ok(spawned.session)
@@ -1780,6 +1865,15 @@ impl App {
                 worktree: entry.worktree.clone(),
             })
             .collect()
+    }
+
+    /// Whether a dock PTY is a login shell. See [`ShellEntry::login`].
+    #[must_use]
+    pub fn is_login_shell(&self, session: &str) -> bool {
+        self.shells
+            .lock()
+            .iter()
+            .any(|(id, entry)| id.as_str() == session && entry.login)
     }
 
     /// Every dock shell in one worktree, for tearing the worktree down.
@@ -1893,6 +1987,14 @@ impl App {
     /// "not running" with nobody having to remember to clean up. Same rule as the shells map, for
     /// the same reason.
     ///
+    /// # Not gated on WTM Chat
+    ///
+    /// This is the engine every structured session runs on — recipes, handoff (including a call
+    /// from a Native CLI session), side questions and chat-edit branches — and none of those is
+    /// the user choosing WTM Chat as an experience. Turning the built-in off removes the ways to
+    /// *open a chat pane*, which ask [`Self::chat_pane_refusal`] themselves; refusing here once
+    /// made "Native CLI, with WTM Chat off" a setup in which no recipe or delegation could run.
+    ///
     /// # Errors
     ///
     /// If the provider is unknown to this build, or the CLI cannot be spawned.
@@ -1903,14 +2005,6 @@ impl App {
         scope: SessionScope,
         events: &Arc<dyn wtm_agent::session::AgentSink>,
     ) -> Result<wtm_core::model::SessionId, wtm_core::error::ExecError> {
-        if !self.plugins.enabled("wtm.chat")
-            || (scope == SessionScope::Home && !self.plugins.enabled("wtm.home"))
-        {
-            return Err(wtm_core::error::ExecError::Spawn {
-                argv: entry.id.into(),
-                message: "This feature is disabled in Plugins settings".into(),
-            });
-        }
         // Before the spawn, so descriptors a finished session still holds are released before a
         // new set is allocated. The pty host's only caller does the same, for the same reason.
         self.pipe.reap_finished(KEEP_FINISHED_SESSIONS);
@@ -2415,6 +2509,13 @@ impl App {
         self.shell_runs.forget_home(home);
     }
 
+    /// End what a quit would otherwise leave behind in a PTY: every Native CLI session, every Run
+    /// still in flight (each told why it stopped), and the admission state of every dock shell.
+    ///
+    /// Native sessions are closed one by one rather than left to the quit's group kill, because
+    /// closing one also stops its private relay process, revokes its WTM token and deletes the
+    /// launch-scoped directory its hooks and settings were written to — none of which a signal
+    /// to its terminal's process group would do.
     pub fn close_shell_runs(&self) {
         for state in self.native_sessions.list() {
             self.native_sessions.close(&state.session);
@@ -2584,6 +2685,9 @@ impl App {
         // handoff through a surviving one would open a pane and only then discover the directory is
         // gone. Failing before the pane is the better order.
         self.handoff.forget_worktree(worktree_id);
+        // Receipts name their worktree too. An unresolved one for a directory that no longer exists
+        // can never be checked or settled, and settled-receipt pruning never reaches it.
+        self.native_sessions.deliveries.forget_worktree(worktree_id);
 
         let _guard = self.resume.lock();
         let mut store = wtm_config::SessionStore::load(&self.sessions_file);
@@ -2687,6 +2791,38 @@ impl App {
         if let Some((provider, provider_session)) = destination {
             self.title_session(&provider, &provider_session, title);
         }
+    }
+
+    /// Why the user may not open a WTM Chat pane in `scope` right now, or `None` if they may.
+    ///
+    /// Asked by the routes a person uses to open a chat — a worktree's chat pane, Home, a plugin
+    /// draft's conversation — and deliberately not by [`Self::open_agent`]; see its docs. Home
+    /// is itself a WTM Chat conversation, so it needs both built-ins on. The registry already
+    /// refuses to turn Chat off while Home is on, so the second test is the backstop, not the rule.
+    #[must_use]
+    pub fn chat_pane_refusal(&self, scope: &SessionScope) -> Option<&'static str> {
+        if scope.is_home() && !self.plugins.enabled("wtm.home") {
+            return Some(HOME_DISABLED);
+        }
+        if !self.plugins.enabled("wtm.chat") {
+            return Some(if scope.is_home() {
+                HOME_DISABLED
+            } else {
+                CHAT_DISABLED
+            });
+        }
+        None
+    }
+
+    /// Where a live structured session belongs, from its first event on.
+    ///
+    /// Unlike [`Self::agent_fork_source`], this does not wait for the provider to name its
+    /// conversation, so a subscriber to `chat.event` hears a session's handshake as well as what
+    /// follows it. Only the scope is cloned: the agent sink asks this for every streamed delta.
+    #[must_use]
+    pub fn agent_scope(&self, session: &str) -> Option<SessionScope> {
+        let id = wtm_core::model::SessionId::new(session);
+        self.agents.lock().get(&id).map(|entry| entry.scope.clone())
     }
 
     /// Resolve everything needed to fork a live agent without exposing provider ids to the UI.
@@ -3005,6 +3141,74 @@ pub(crate) fn expand_tilde(path: &Path) -> PathBuf {
         };
     }
     path.to_path_buf()
+}
+
+/// Replace `path` with `bytes`, so a reader finds the old record or the new one and never part
+/// of either.
+///
+/// For the small JSON records the app keeps beside the user config (plugin drafts, chat-edit
+/// journals). Owner-only from the first byte, because they hold prompts and conversation ids;
+/// synced before the rename and the directory after it, because "this edit was submitted" is a
+/// promise a power cut must not quietly break; and the temporary is removed on any failure, so a
+/// full disk does not leave a `.tmp` behind for every attempt.
+///
+/// # Errors
+///
+/// Any filesystem error. On error `path` still holds what it held before.
+pub fn write_private_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    publish_private(path, bytes, true)
+}
+
+/// Create `path` holding `bytes`, or fail with `AlreadyExists` if anything is there already.
+///
+/// The create-new half of [`write_private_atomically`]: the record appears complete or not at
+/// all, so a crash can never leave an empty file that a later reader must guess the meaning of.
+/// A hard link is what makes "complete" and "only if absent" one step; `rename` would replace.
+///
+/// # Errors
+///
+/// `AlreadyExists` if `path` exists, otherwise any filesystem error.
+pub fn create_private_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    publish_private(path, bytes, false)
+}
+
+fn publish_private(path: &Path, bytes: &[u8], replace: bool) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("`{}` names no file", path.display()),
+        ));
+    };
+    // Dot-prefixed and next to the target, so the rename stays on one filesystem and a listing
+    // that globs `*.json` never mistakes a half-written temporary for a record.
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        name.to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
+    let written = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        if replace {
+            std::fs::rename(&temporary, path)?;
+        } else {
+            std::fs::hard_link(&temporary, path)?;
+            std::fs::remove_file(&temporary)?;
+        }
+        std::fs::File::open(parent)?.sync_all()
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
 }
 
 #[cfg(test)]
@@ -3433,6 +3637,47 @@ mod tests {
 
         assert_ne!(first, second, "asking twice is asking for two");
         assert_eq!(app.pty.kill_all(), 2, "both should be running");
+    }
+
+    /// A Native CLI session or a plugin terminal is a PTY in the dock, so it is listed for reload
+    /// adoption like any shell. It must never count as a login shell: that is what decides the Run
+    /// targets offered, and a command typed into an agent's terminal is input it never asked for.
+    #[test]
+    fn a_native_terminal_is_adopted_like_a_shell_but_is_never_a_login_shell() {
+        let (_fixture, _dir, app, project) = app_with_worktree();
+        let worktree = worktree_named(&app, &project, "shell-a");
+        let project_id = project.root.to_string_lossy().into_owned();
+
+        let shell = app
+            .open_shell(&worktree, &project_id, sleeper(), 24, 80, sink())
+            .expect("login shell");
+        let native = app
+            .open_native_terminal(
+                &worktree,
+                &project_id,
+                wtm_core::ports::exec::Invocation::new(sleeper(), &worktree.path, 30_000),
+                sink(),
+            )
+            .expect("native terminal");
+
+        let listed: Vec<String> = app.live_shells().into_iter().map(|s| s.session).collect();
+        assert!(
+            listed.contains(&native.as_str().to_owned()),
+            "a reload must adopt it"
+        );
+        assert!(app.is_login_shell(shell.as_str()));
+        assert!(!app.is_login_shell(native.as_str()));
+        let targets: Vec<String> =
+            crate::shell_commands::list_shells(&app, &project_id, worktree.id.as_str())
+                .into_iter()
+                .map(|s| s.session)
+                .collect();
+        assert_eq!(
+            targets,
+            vec![shell.as_str().to_owned()],
+            "only the login shell is a Run target"
+        );
+        app.pty.kill_all();
     }
 
     /// **The test that protects why `App::shells` exists.**

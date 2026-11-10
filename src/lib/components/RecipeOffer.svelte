@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * "Run a recipe in feature-x?" — the question an action asks when it has recipes bound.
    *
@@ -91,88 +88,86 @@
   }
 </script>
 
-<ExtensionPoint target="component.recipe-offer" context={publicContext()}>
-  {#if choices.length > 0}
-    <section
-      class="c-offer"
-      class:c-offer--toast={variant === 'toast'}
-      aria-label="Run a recipe"
-      data-od-id="recipe-offer"
-    >
-      <div class="c-offer__head">
-        <span class="c-offer__icon"><Icon name="recipe" /></span>
-        <div class="c-offer__titles">
-          <p class="c-offer__question">Run a recipe in <code>{place}</code>?</p>
-          <p class="c-offer__sub">
-            {action.name} offers {choices.length === 1 ? 'this' : 'these'}. Nothing runs
-            unless you pick one.
-          </p>
-        </div>
+{#if choices.length > 0}
+  <section
+    class="c-offer"
+    class:c-offer--toast={variant === 'toast'}
+    aria-label="Run a recipe"
+    data-od-id="recipe-offer"
+  >
+    <div class="c-offer__head">
+      <span class="c-offer__icon"><Icon name="recipe" /></span>
+      <div class="c-offer__titles">
+        <p class="c-offer__question">Run a recipe in <code>{place}</code>?</p>
+        <p class="c-offer__sub">
+          {action.name} offers {choices.length === 1 ? 'this' : 'these'}. Nothing runs
+          unless you pick one.
+        </p>
       </div>
+    </div>
 
-      <div class="c-offer__choices" role="radiogroup" aria-label="Recipes">
-        {#each choices as recipe (recipe.id)}
-          <label class="c-offer__choice" class:is-selected={pick?.id === recipe.id}>
-            <input
-              type="radio"
-              name="offer-{action.id}-{worktreeId}"
-              checked={pick?.id === recipe.id}
-              onchange={() => (picked = recipe.id)}
-            />
-            <span class="c-offer__name">{recipe.name}</span>
-            <span class="c-offer__steps">
-              {#each recipe.steps as step, i (i)}
-                {#if i > 0}<span class="c-offer__sep" aria-hidden="true">→</span>{/if}
-                <span class="c-agent-mark c-agent-mark--{step.agent}" aria-hidden="true"
-                  >{agentMark(step.agent)}</span
-                >
-                {step.name}
-              {/each}
-            </span>
-          </label>
-        {/each}
-      </div>
-
-      {#if showing}
-        <div class="c-offer__sent">
-          {#if sentError}
-            <p class="c-status--danger">{sentError}</p>
-          {:else if sent === null}
-            <p class="c-status--muted">Filling in the variables…</p>
-          {:else}
-            {#each sent as step, i (i)}
-              <div class="c-offer__line">
-                <span class="c-offer__number">{i + 1}</span>
-                <div class="c-offer__text">
-                  <code>{step.text}</code>
-                  {#if step.getsPrevious}
-                    <span class="c-offer__more">+ step {i}’s reply</span>
-                  {/if}
-                  {#each step.missing as name (name)}
-                    <span class="c-status--warn"
-                      >No value for {`{{${name}}}`} here; sent empty.</span
-                    >
-                  {/each}
-                </div>
-              </div>
+    <div class="c-offer__choices" role="radiogroup" aria-label="Recipes">
+      {#each choices as recipe (recipe.id)}
+        <label class="c-offer__choice" class:is-selected={pick?.id === recipe.id}>
+          <input
+            type="radio"
+            name="offer-{action.id}-{worktreeId}"
+            checked={pick?.id === recipe.id}
+            onchange={() => (picked = recipe.id)}
+          />
+          <span class="c-offer__name">{recipe.name}</span>
+          <span class="c-offer__steps">
+            {#each recipe.steps as step, i (i)}
+              {#if i > 0}<span class="c-offer__sep" aria-hidden="true">→</span>{/if}
+              <span class="c-agent-mark c-agent-mark--{step.agent}" aria-hidden="true"
+                >{agentMark(step.agent)}</span
+              >
+              {step.name}
             {/each}
-          {/if}
-        </div>
-      {/if}
+          </span>
+        </label>
+      {/each}
+    </div>
 
-      <div class="c-offer__foot">
-        <Button variant="accent" disabled={!pick || starting} onclick={() => void run()}>
-          <Icon name="play" size={12} />
-          {starting ? 'Starting…' : `Run ${pick?.name ?? ''}`}
-        </Button>
-        <Button variant="neutral" onclick={() => ondismiss?.()}>Not now</Button>
-        <span class="c-offer__spacer"></span>
-        {#if !preview && variant === 'card'}
-          <Button variant="quiet" size="sm" onclick={() => (showing = !showing)}>
-            {showing ? 'Hide' : 'Show'} what it will send
-          </Button>
+    {#if showing}
+      <div class="c-offer__sent">
+        {#if sentError}
+          <p class="c-status--danger">{sentError}</p>
+        {:else if sent === null}
+          <p class="c-status--muted">Filling in the variables…</p>
+        {:else}
+          {#each sent as step, i (i)}
+            <div class="c-offer__line">
+              <span class="c-offer__number">{i + 1}</span>
+              <div class="c-offer__text">
+                <code>{step.text}</code>
+                {#if step.getsPrevious}
+                  <span class="c-offer__more">+ step {i}’s reply</span>
+                {/if}
+                {#each step.missing as name (name)}
+                  <span class="c-status--warn"
+                    >No value for {`{{${name}}}`} here; sent empty.</span
+                  >
+                {/each}
+              </div>
+            </div>
+          {/each}
         {/if}
       </div>
-    </section>
-  {/if}
-</ExtensionPoint>
+    {/if}
+
+    <div class="c-offer__foot">
+      <Button variant="accent" disabled={!pick || starting} onclick={() => void run()}>
+        <Icon name="play" size={12} />
+        {starting ? 'Starting…' : `Run ${pick?.name ?? ''}`}
+      </Button>
+      <Button variant="neutral" onclick={() => ondismiss?.()}>Not now</Button>
+      <span class="c-offer__spacer"></span>
+      {#if !preview && variant === 'card'}
+        <Button variant="quiet" size="sm" onclick={() => (showing = !showing)}>
+          {showing ? 'Hide' : 'Show'} what it will send
+        </Button>
+      {/if}
+    </div>
+  </section>
+{/if}

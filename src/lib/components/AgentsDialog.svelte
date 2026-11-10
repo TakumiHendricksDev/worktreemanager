@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * Every delegated session in this worktree, with room to act on each one.
    *
@@ -71,108 +68,104 @@
   }
 </script>
 
-<ExtensionPoint target="component.agents-dialog" context={publicContext()}>
-  <Dialog title="Delegated agents" {onclose} wide>
-    {#snippet body()}
-      {#if groups.length === 0}
-        <p>No agent has been delegated to in this worktree.</p>
-      {:else}
-        {#each groups as group (group.run)}
-          <section class="c-agents__run">
-            <h3 class="c-section-heading">
-              {sessions.runLabel(group.run)}
-              <!-- Classed rather than a bare `small`, because the heading is `text-transform:
+<Dialog title="Delegated agents" {onclose} wide>
+  {#snippet body()}
+    {#if groups.length === 0}
+      <p>No agent has been delegated to in this worktree.</p>
+    {:else}
+      {#each groups as group (group.run)}
+        <section class="c-agents__run">
+          <h3 class="c-section-heading">
+            {sessions.runLabel(group.run)}
+            <!-- Classed rather than a bare `small`, because the heading is `text-transform:
                  uppercase` and an element selector under it would be a naked one. -->
-              <span class="c-agents__run-note">
-                {group.children.length}
-                {group.children.length === 1 ? 'agent' : 'agents'}
-                {#if group.parent}· started by {sessions.labelOf(group.parent)}{/if}
-              </span>
-            </h3>
+            <span class="c-agents__run-note">
+              {group.children.length}
+              {group.children.length === 1 ? 'agent' : 'agents'}
+              {#if group.parent}· started by {sessions.labelOf(group.parent)}{/if}
+            </span>
+          </h3>
 
-            <ul class="o-plain-list c-agents__list">
-              {#each group.children as child (child.id)}
-                {@const status = sessions.statusOfPane(child)}
-                <li class="c-agents__row" class:is-selected={visible.has(child.id)}>
-                  <SessionDot {status} />
-                  <span
-                    class="c-agents__name"
-                    title={child.agentTitle ?? sessions.labelOf(child)}
-                    >{child.agentTitle ?? sessions.labelOf(child)}</span
-                  >
-                  <span class="c-agents__meta">
-                    {sessions.labelOf(child)}{#if child.model}<span class="c-agents__model"
-                        >{child.model}</span
-                      >{/if}
-                  </span>
-                  <!-- Required beside the dot, not optional decoration: `_semantic.scss` forbids
+          <ul class="o-plain-list c-agents__list">
+            {#each group.children as child (child.id)}
+              {@const status = sessions.statusOfPane(child)}
+              <li class="c-agents__row" class:is-selected={visible.has(child.id)}>
+                <SessionDot {status} />
+                <span
+                  class="c-agents__name"
+                  title={child.agentTitle ?? sessions.labelOf(child)}
+                  >{child.agentTitle ?? sessions.labelOf(child)}</span
+                >
+                <span class="c-agents__meta">
+                  {sessions.labelOf(child)}{#if child.model}<span class="c-agents__model"
+                      >{child.model}</span
+                    >{/if}
+                </span>
+                <!-- Required beside the dot, not optional decoration: `_semantic.scss` forbids
                      state carried by colour alone, and `STATUS_WORD` is the other channel. -->
-                  <span class="c-agents__status">{STATUS_WORD[status] || 'idle'}</span>
-                  <span class="c-agents__actions">
-                    <Button
-                      variant="quiet"
-                      size="sm"
-                      disabled={visible.has(child.id)}
-                      title="Replace the current tile with this session"
-                      onclick={() => show(child.id, false)}
-                    >
-                      Show
-                    </Button>
-                    <Button
-                      variant="quiet"
-                      size="sm"
-                      disabled={visible.has(child.id) || atTileCap}
-                      title={atTileCap
-                        ? AT_TILE_CAP
-                        : 'Open this session beside the others'}
-                      onclick={() => show(child.id, true)}
-                    >
-                      Split
-                    </Button>
-                    <Button
-                      variant="danger-outline"
-                      size="sm"
-                      title="End this session and remove it"
-                      onclick={() => closeChild(child.id)}
-                    >
-                      Close
-                    </Button>
-                  </span>
-                </li>
-              {/each}
-            </ul>
-          </section>
-        {/each}
-      {/if}
-    {/snippet}
+                <span class="c-agents__status">{STATUS_WORD[status] || 'idle'}</span>
+                <span class="c-agents__actions">
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    disabled={visible.has(child.id)}
+                    title="Replace the current tile with this session"
+                    onclick={() => show(child.id, false)}
+                  >
+                    Show
+                  </Button>
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    disabled={visible.has(child.id) || atTileCap}
+                    title={atTileCap ? AT_TILE_CAP : 'Open this session beside the others'}
+                    onclick={() => show(child.id, true)}
+                  >
+                    Split
+                  </Button>
+                  <Button
+                    variant="danger-outline"
+                    size="sm"
+                    title="End this session and remove it"
+                    onclick={() => closeChild(child.id)}
+                  >
+                    Close
+                  </Button>
+                </span>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/each}
+    {/if}
+  {/snippet}
 
+  {#snippet footer()}
+    <Button variant="neutral" onclick={onclose}>Done</Button>
+  {/snippet}
+</Dialog>
+
+{#if closing}
+  <Dialog
+    title="Close session?"
+    onclose={() => (closingId = null)}
+    closeDisabled={closingBusy}
+  >
+    {#snippet body()}
+      <p>
+        Closing {closing.agentTitle ?? sessions.labelOf(closing)} ends that conversation and any
+        children it started.
+      </p>
+    {/snippet}
     {#snippet footer()}
-      <Button variant="neutral" onclick={onclose}>Done</Button>
+      <Button variant="neutral" onclick={() => (closingId = null)} disabled={closingBusy}
+        >Cancel</Button
+      >
+      <Button
+        variant="danger-solid"
+        onclick={() => void closeConfirmed()}
+        disabled={closingBusy}>{closingBusy ? 'Closing…' : 'Close'}</Button
+      >
     {/snippet}
   </Dialog>
-
-  {#if closing}
-    <Dialog
-      title="Close session?"
-      onclose={() => (closingId = null)}
-      closeDisabled={closingBusy}
-    >
-      {#snippet body()}
-        <p>
-          Closing {closing.agentTitle ?? sessions.labelOf(closing)} ends that conversation and
-          any children it started.
-        </p>
-      {/snippet}
-      {#snippet footer()}
-        <Button variant="neutral" onclick={() => (closingId = null)} disabled={closingBusy}
-          >Cancel</Button
-        >
-        <Button
-          variant="danger-solid"
-          onclick={() => void closeConfirmed()}
-          disabled={closingBusy}>{closingBusy ? 'Closing…' : 'Close'}</Button
-        >
-      {/snippet}
-    </Dialog>
-  {/if}
-</ExtensionPoint>
+{/if}

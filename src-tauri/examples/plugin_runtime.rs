@@ -1,5 +1,18 @@
 //! Opt-in native plugin regression. Uses an isolated config and a reviewed fixture; no provider,
 //! user repository, network connection or installed package is touched. Exits after its report.
+//!
+//! # Why this is an example and not a test
+//!
+//! What it checks needs a Tauri runtime with a real window: the plugin SDK inside a WebKit
+//! frame, the theme reaching that frame, a native view closing, an API 2 runtime answering host
+//! calls through window events, and the production agent sink persisting a draft's conversation
+//! id over a real `AppHandle`. A test binary cannot build any of that, so `just check` and CI do
+//! not run this; run it with `WTM_PLUGIN_CHECK_OUTPUT=<dir> cargo run --example plugin_runtime`.
+//!
+//! Everything about authoring and chat editing that does not need a window — the brief sent once,
+//! review refused while the agent works, the edit journal's retry, mismatch and unknown-outcome
+//! rules, the stale-revision fence, the first-message fresh conversation and the fork probe — is
+//! in `tests/plugin_authoring.rs` and `tests/chat_edit.rs`, which do run in CI. Keep it there.
 #![allow(clippy::disallowed_methods)]
 use std::{
     os::unix::fs::PermissionsExt,
@@ -8,7 +21,6 @@ use std::{
     time::{Duration, Instant},
 };
 use wtm_app_lib::{app::App, browser, plugin_views};
-use wtm_core::ports::config::ConfigStore;
 use wtm_plugins::contributions::{Binding, Slot};
 
 const HTML: &str = r#"<!doctype html><html><head><style>body{margin:0;padding:40px;font:15px system-ui;background:var(--wtm-bg);color:var(--wtm-fg)}h1{font-size:22px}pre{white-space:pre-wrap}button{padding:10px}</style></head><body><h1>WTM native plugin runtime</h1><p>This is an isolated test package using the public SDK.</p><pre id="result">Connecting to host…</pre><script>
@@ -147,12 +159,6 @@ fn exercise(
     )
     .map_err(|e| e.to_string())?;
     check_extensions(handle, app, root).map_err(|e| format!("Extensions: {e}"))?;
-    std::fs::write(
-        root.join("phase.txt"),
-        "Checking conversation branches and idempotency",
-    )
-    .map_err(|e| e.to_string())?;
-    check_chat_edit(handle, app, root).map_err(|e| format!("Chat editing: {e}"))?;
     Ok(())
 }
 
@@ -356,153 +362,6 @@ fn check_authoring(
     app.plugins.cancel(&review.token)?;
     Ok(())
 }
-fn wait_messages(
-    app: &App,
-    session: &str,
-    count: usize,
-) -> Result<wtm_app_lib::chat_edit::Snapshot, String> {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while Instant::now() < deadline {
-        if let Ok(snapshot) = wtm_app_lib::chat_edit::snapshot(app, session)
-            && snapshot.problem.is_none()
-            && snapshot.messages.len() == count
-            && snapshot.messages.iter().all(|m| m.problem.is_none())
-        {
-            return Ok(snapshot);
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    Err(format!(
-        "Conversation did not reach {count} completed messages: {:?}",
-        wtm_app_lib::chat_edit::snapshot(app, session)
-    ))
-}
-
-fn check_chat_edit(
-    handle: &tauri::AppHandle,
-    app: &Arc<App>,
-    root: &std::path::Path,
-) -> Result<(), String> {
-    use tauri::Manager;
-    use wtm_app_lib::chat_edit::{Edit, chat_edit};
-    app.config
-        .set_user_pref(wtm_app_lib::app::SESSION_AWARENESS_PREF, "on")
-        .map_err(|e| e.to_string())?;
-    let folder = root.join("edit-source");
-    let job = wtm_app_lib::plugin_authoring::prepare(
-        app,
-        &uuid::Uuid::new_v4().to_string(),
-        "codex",
-        "First original",
-        folder.to_str().ok_or("Invalid folder")?,
-    )
-    .map_err(|e| e.message)?;
-    let opened =
-        wtm_app_lib::plugin_authoring::open(handle, app, &job.id, false).map_err(|e| e.message)?;
-    let session = opened.session.ok_or("No source session")?;
-    wait_messages(app, &session, 1)?;
-    app.send_agent_turn(&session, "Second original", &[])
-        .map_err(|e| e.to_string())?;
-    let snapshot = wait_messages(app, &session, 2)?;
-    let original = app
-        .agent_fork_source(&session)
-        .ok_or("No source conversation")?
-        .provider_session;
-    let load = || -> Result<serde_json::Value, String> {
-        serde_json::from_slice(
-            &std::fs::read(folder.join(".git/provider.json")).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())
-    };
-    let before = load()?[&original].clone();
-    let edit = Edit {
-        id: uuid::Uuid::new_v4().to_string(),
-        session: session.clone(),
-        message: snapshot.messages[1].id.clone(),
-        revision: snapshot.revision,
-        text: "Second edited".into(),
-    };
-    let apply = |edit: Edit| {
-        tauri::async_runtime::block_on(chat_edit(handle.clone(), handle.state::<Arc<App>>(), edit))
-    };
-    let branch = apply(edit.clone()).map_err(|e| e.message)?;
-    if !branch.submitted || branch.original != session || branch.session == session {
-        return Err("Edit did not create a submitted separate branch".into());
-    }
-    let history = wait_messages(app, &branch.session, 2)?;
-    if history.messages[0].id != snapshot.messages[0].id
-        || history.messages[1].text != "Second edited"
-    {
-        return Err(
-            "Branch did not preserve exactly the prefix before the selected message".into(),
-        );
-    }
-    let retried = apply(edit.clone()).map_err(|e| e.message)?;
-    if retried.session != branch.session || !retried.submitted {
-        return Err("Retry did not return its recorded outcome".into());
-    }
-    let data = load()?;
-    if data[&original] != before || data.as_object().map_or(0, serde_json::Map::len) != 2 {
-        return Err("Editing or retry mutated the original or created an extra branch".into());
-    }
-    let requests = std::fs::read_to_string(folder.join(".git/author-turns.jsonl"))
-        .map_err(|e| e.to_string())?;
-    if requests.lines().count() != 3 {
-        return Err("An edit request submitted more than once".into());
-    }
-    let fork: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(folder.join(".git/fork.json")).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    if fork["lastTurnId"] != snapshot.messages[0].turn || fork["ephemeral"] != false {
-        return Err("Provider fork did not select the durable exact boundary".into());
-    }
-    let mismatch = Edit {
-        text: "Different retry".into(),
-        ..edit.clone()
-    };
-    if apply(mismatch).is_ok() {
-        return Err("One id accepted two different edits".into());
-    }
-    app.send_agent_turn(&session, "Third original", &[])
-        .map_err(|e| e.to_string())?;
-    wait_messages(app, &session, 3)?;
-    if apply(Edit {
-        id: uuid::Uuid::new_v4().to_string(),
-        ..edit
-    })
-    .is_ok()
-    {
-        return Err("Stale history accepted an edit".into());
-    }
-    app.close_agent(&branch.session);
-    app.close_agent(&session);
-    let resumed =
-        wtm_app_lib::plugin_authoring::open(handle, app, &job.id, false).map_err(|e| e.message)?;
-    let resumed = resumed.session.ok_or("No resumed original")?;
-    let restored = wait_messages(app, &resumed, 3)?;
-    if restored.messages[1].text != "Second original" {
-        return Err("Reopening the original showed edited history".into());
-    }
-    let first = apply(Edit {
-        id: uuid::Uuid::new_v4().to_string(),
-        session: resumed.clone(),
-        message: restored.messages[0].id.clone(),
-        revision: restored.revision,
-        text: "First edited".into(),
-    })
-    .map_err(|e| e.message)?;
-    let first_history = wait_messages(app, &first.session, 1)?;
-    if first_history.messages[0].text != "First edited"
-        || first_history.messages[0].previous.is_some()
-    {
-        return Err("First-message edit retained an unwanted history prefix".into());
-    }
-    app.close_agent(&first.session);
-    app.close_agent(&resumed);
-    Ok(())
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = PathBuf::from(std::env::var("WTM_PLUGIN_CHECK_OUTPUT")?);
     std::fs::create_dir_all(&root)?;
@@ -529,16 +388,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))?);
     let mut context = wtm_app_lib::application_context();
     context.config_mut().app.windows.clear();
-    tauri::Builder::default().manage(Arc::clone(&app)).setup(move |runtime| {
-        tauri::WindowBuilder::new(runtime, "main").title("WTM Plugin Runtime Check").inner_size(1000.0,700.0).build()?;
-        let handle = runtime.handle().clone();
-        std::thread::spawn(move || {
-            let result = exercise(&handle, &app, &root);
-            let (report, code) = match result { Ok(()) => ("PASS: native SDK, context, command ownership, opaque frame, theme, close, recovery, authoring resume, API 2 runtime/events/host calls, and durable chat branches with idempotent submission".to_owned(),0), Err(e) => (format!("FAIL: {e}"),1) };
-            let _ = std::fs::write(root.join("result.txt"), report);
-            handle.exit(code);
-        });
-        Ok(())
-    }).run(context)?;
+    tauri::Builder::default()
+        .manage(Arc::clone(&app))
+        .setup(move |runtime| {
+            tauri::WindowBuilder::new(runtime, "main")
+                .title("WTM Plugin Runtime Check")
+                .inner_size(1000.0, 700.0)
+                .build()?;
+            let handle = runtime.handle().clone();
+            std::thread::spawn(move || {
+                let (report, code) = match exercise(&handle, &app, &root) {
+                    Ok(()) => (PASS.to_owned(), 0),
+                    Err(e) => (format!("FAIL: {e}"), 1),
+                };
+                let _ = std::fs::write(root.join("result.txt"), report);
+                handle.exit(code);
+            });
+            Ok(())
+        })
+        .run(context)?;
     Ok(())
 }
+
+const PASS: &str = "PASS: native SDK, context, command ownership, opaque frame, theme, close, \
+    recovery, authoring resume through the production sink, and API 2 runtime/events/host calls";

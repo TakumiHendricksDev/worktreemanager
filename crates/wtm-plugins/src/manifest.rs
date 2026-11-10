@@ -2,6 +2,10 @@
 use crate::contributions::Slot;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::path::{Component, Path};
+
+const PALETTE: &str = "Palettes require a unique id, title, hue 0–360, chroma 0–2 and four \
+    #rrggbb brand colors";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -169,29 +173,38 @@ impl Manifest {
                         && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
                 })
             {
-                return Err("Palettes require a unique id, title, hue 0–360, chroma 0–2 and four #rrggbb brand colors".into());
+                return Err(PALETTE.into());
             }
         }
         Ok(value)
     }
+    /// Whether this package can act as native code, and so gets the same trust warning.
+    ///
+    /// Declared host access counts even without a program: the public operations still read
+    /// files, terminal output and transcripts, and change workspaces, with the user's authority.
+    /// The review UI applies this same rule; keep the two in step.
     pub fn executable(&self) -> bool {
         !self.extensions.runtime.is_empty()
+            || !self.extensions.access.is_empty()
             || !self.commands.is_empty()
             || !self.session_backends.is_empty()
             || !self.terminals.is_empty()
     }
 }
 
+/// A path inside the package, and never inside a `.git` directory.
+///
+/// `.git` is refused at any depth because preparation removes or skips the source's repository
+/// metadata: a reviewed manifest that named a file there would point at something the snapshot
+/// either lacks or that Git, not the author, wrote.
 pub fn relative(value: &str) -> Result<(), String> {
-    if value.is_empty()
-        || !std::path::Path::new(value).components().all(|c| {
-            matches!(
-                c,
-                std::path::Component::Normal(_) | std::path::Component::CurDir
-            )
-        })
-    {
-        return Err("Package paths must stay inside the package".into());
+    let inside = Path::new(value).components().all(|c| match c {
+        Component::Normal(name) => name != ".git",
+        Component::CurDir => true,
+        _ => false,
+    });
+    if value.is_empty() || !inside {
+        return Err("Package paths must stay inside the package, outside .git".into());
     }
     Ok(())
 }

@@ -37,15 +37,28 @@ wtm-config   wtm.toml schema, four-layer merge, validation, trust store.   impl 
 wtm-git      the git CLI, incl. the --porcelain -z parsers.                impl Git
 wtm-exec     the ONLY place a process is spawned: CommandRunner + PtyHost. impl both
 wtm-render   minijinja + a fixed, sandboxed filter set.                    impl TemplateEngine
-wtm-plugins  reviewed packages, named region composition and external session contracts.
+wtm-agent    agent CLI protocols: argv, handshake, wire events → domain events.
+wtm-db       database sessions and introspection, connections kept in Rust.
 wtm-code     reading, searching and indexing a worktree's files for the Code tab (§6e).
+wtm-plugins  plugin manifests, the reviewed package store and registry, the contract catalog,
+             region bindings and the session-backend RPC (§6i). Spawns nothing itself.
+wtm-dictate  recording speech and sending it to the compiled-in transcription host (§6a).
+wtm-update   noticing a newer release and handing the upgrade to Homebrew (§6a).
+wtm-notify   fenced FFI: native notifications whose clicks carry a payload back.
+wtm-webview  fenced FFI: the WebKit calls the browser pane needs and Tauri lacks (§6c).
 wtm-testkit  dev-only: in-memory fakes for every port + a real-git fixture builder.
 src-tauri    composition root. The only crate that knows Tauri exists.
 ```
 
-`wtm-core` depends on `serde`, `serde_json`, `thiserror` and nothing else. Each adapter crate depends on
-core plus exactly the one external concretion it wraps. `src-tauri` depends on all of them and nothing
-depends on it.
+`wtm-core` depends on `serde`, `serde_json`, `serde_json_path`, `thiserror` and nothing else. Every
+other crate depends on core at most, never on a sibling (dev-dependencies on `wtm-testkit` aside):
+`wtm-git` and `wtm-plugins` run their programs through a `CommandRunner` they are handed rather
+than depending on `wtm-exec`, and `wtm-update`, `wtm-notify` and `wtm-webview` depend on no wtm
+crate at all. That is the rule. What an adapter does depend on is the libraries its external thing
+needs, which is rarely exactly one:
+`wtm-config` reads TOML, hashes for trust and finds XDG paths; `wtm-exec` needs a PTY and signals;
+`wtm-plugins` parses manifests, hashes snapshots and matches documents. `src-tauri` depends on all
+of them and nothing depends on it.
 
 **The dependency rule is mechanically enforced, not documented and hoped for:**
 
@@ -237,6 +250,10 @@ for those two now, and the typed copy is gone, so there is one list to keep curr
 when `[agent.<id>.env]` started reaching the process — it had been parsed and never applied, which is
 the only reason it was not on the list already. An environment runs code as surely as an argument:
 `NODE_OPTIONS` loads a script into any CLI written in Node.
+
+Plugin packages are the other code a user approves, with a review of their own (§6i). The two
+gates do not meet: a repository's `wtm.toml` cannot install, approve or enable a package, and
+`wtm-config` knows nothing about plugins.
 
 ---
 
@@ -439,6 +456,15 @@ so they grant exactly the same thing. And no capability names a `browser-*` labe
 pins the first and third; the second is a unit test, and the spike that preceded the feature
 confirmed both by trying: a page's `invoke` was refused, and `location.href = 'tauri://localhost'`
 went nowhere.
+
+**Plugin panels and views live in the same kind of pane, behind the same fences, with one door
+added.** A plugin page is a fixed document loaded from memory, its HTML in a sandboxed `srcdoc`
+frame, so it still has no Tauri capability and no network. What it has that a web page does not is
+a request channel: the frame posts to the isolated runtime below, which relays the message to Rust
+only from the one frame it pinned, and Rust answers for the package the host recorded as the pane's
+owner when it opened it, never for one the page names. So "a browser pane has no capabilities" now
+means no Tauri capability; a plugin's pane carries its owner's plugin authority, which is why §6i
+keeps agents and other packages from driving one.
 
 **The runtime lives where the page cannot reach it.** Agents read the page through a script wtm
 installs in an isolated `WKContentWorld` — a scope that shares the DOM but none of the page's
@@ -954,7 +980,7 @@ needs no real checkout, because the property no longer depends on the data.
 ## 6g. Open Design in the existing chat
 
 Ordinary worktree chats receive `prototype_prepare` and `prototype_publish` through
-WTM's existing MCP bridge. Appended session guidance selects this flow for explicit
+wtm's existing MCP bridge. Appended session guidance selects this flow for explicit
 prototype requests and substantial UI work, leaving backend and trivial work alone.
 The optional New-menu shortcut sends into that conversation. There is no separate
 Open Design provider loop, CLI connection, daemon, download or cloud route.
@@ -967,7 +993,7 @@ authentication, context and permissions remain the selected chat's. Waiting befo
 application edits is prompt guidance under those existing permission boundaries,
 not a new OS sandbox.
 
-Tools write bounded artifacts only under WTM's data root, outside source. The native
+Tools write bounded artifacts only under wtm's data root, outside source. The native
 browser loads a fixed wrapper directly from memory, with the saved HTML in an opaque
 sandboxed frame under a network-denying CSP. WebKit's initial blank page cannot prove
 readiness: the isolated runtime must report the artifact frame loaded, or a bounded
@@ -1013,30 +1039,183 @@ renders nothing. The window may supply only `form.*` and `action.*` variables; w
 (`worktree.*`, `project.*`) is the backend's to say. One run per worktree at a time: two would be
 two writers in one checkout.
 
-## Native CLI session ownership
+## 6i. Plugins: reviewed packages, not code in the app
 
-The native renderer retains the vendor TUI and its approval prompts. `native_sessions` owns
-processes and receipts; `conversation_sessions()` exposes a common identity to scoped MCP tools
-and Open Design without pretending a PTY is a structured `AgentSession`. Native activity and
-normal WTM Chat use the same provider-event mapping and public plugin registries.
+A plugin package can replace any region of the workbench, add to wtm's own screens and run native
+programs, so the question this section answers is what wtm keeps for itself. The author-facing
+rules, limits and messages are in [the plugin guide](docs/plugins.md); this is why they are what
+they are. The crate is `wtm-plugins`: manifest, store, catalog, bindings and the session RPC. The
+host side is `src-tauri`'s `plugins.rs`, `plugin_views.rs` and `extensions.rs`.
 
-Codex's remote TUI connects to a private Unix WebSocket which relays the public protocol to
-one app-server stdio process. One connection avoids a second client competing for approvals
-or trying to resume a thread before its first rollout exists. WTM forwards provider requests
-unchanged and consumes only its own UUID-prefixed control replies. The `tungstenite` dependency
-has handshake support only: this adapter binds no TCP listener and adds no browser egress.
-Claude's launch-scoped settings add lifecycle hooks; its MCP server and context use the same
-session token as structured chats. No user config is overwritten and no terminal text is parsed.
+**wtm runs a reviewed snapshot, never the source.** Preparing a review copies a local folder, or
+clones one pinned commit of a public HTTPS repository, into `plugins/pending/<token>`, then hashes
+it, parses its manifest and checks its documents, and runs nothing. Installing moves that snapshot
+into `packages/`. Running the copy is the point: an editor save between approval and spawn would
+otherwise change what was approved, which is why a linked folder changes nothing until **Reload &
+review**. Nothing in the registry ever names `pending/`, so it is emptied at startup and an
+abandoned review leaves nothing. Git runs with no hooks and no transport but HTTPS, so a remote
+or submodule cannot switch to `ext::`, which runs a program, or `file://`, which reads a local
+path; and with no user or system configuration, so an `insteadOf`, an `include` or a credential
+helper cannot change what is fetched or run. The cost is deliberate: nothing can authenticate, so
+only public repositories work. The URL refuses `@` (credentials would be saved in the registry
+and shown in every review), `?` and `#` (Git appends paths to the string, so the request would
+differ from the URL reviewed) and line breaks (Git's config syntax would read a second setting).
+Those checks, and the cap of 16 reviews each pinning a copy on disk, run before anything is
+cloned, and a clone can be cancelled while it runs. The 1024-entry and 16 MiB caps bound what a
+hostile tree can make preparation walk, and what activation has to hash.
 
-An implementation instruction is saved with its project/worktree/provider/conversation and
-immutable prototype/review identity. The journal moves to unknown before dispatch or hook
-collection. Only a correlated provider response or scoped acknowledgment marks delivery;
-a Codex public-history read can also confirm the exact client-message ID and content. Missing
-history never proves non-delivery and cannot authorize another send;
-a timeout, restart or reconnect never authorizes replay. Claude collects pending context on
-explicit user submission. A rejected request can be explicitly retried; uncertain delivery
-remains visible. Reconnect closes the old local process and resumes the saved conversation.
-It does not promise SSH persistence, retroactive recovery, or restoration of an interrupted turn.
+**Integrity is checked where code starts, not on every request.** The digest is SHA-256 over every
+path and its bytes. It is recomputed at the activation boundaries: install, enable, rollback,
+choosing a view for a region, opening a view, panel or terminal profile, and starting the
+runtime. Requests in between trust a per-process record of what was verified, because views and
+runtimes make many requests a second and hashing up to 16 MiB for each bought nothing those
+boundaries do not. Verification also compares the registry's parsed manifest with the file's,
+since a hand-edited registry could widen what a package may do and still match the digest. A
+digest proves what was reviewed, not who wrote it.
+
+**One rule says what is native code.** `Manifest::executable` is true for any command, session
+backend, terminal profile, runtime, or declared host access. Access counts without a program
+because the public operations read files, terminal output and transcripts with the user's
+authority. The review shows the host's answer (`Review::executable`), and the frontend's
+`executes` mirrors it for installed packages; the two must stay in step.
+
+**A page's owner comes from the host, not the page.** Panels and views are browser panes (§6c)
+opened with an owner the host writes, `plugin-panel:<plugin>:<panel>` or
+`plugin-slot:<plugin>:<view>:<region>`, and `plugin_views::identity` reads back only that shape,
+so a lookalike cannot name another package. A page posts to its parent; the isolated runtime
+pins the one plugin frame when it appears and stops forwarding for good if its `src`, `srcdoc` or
+`sandbox` changes or a second frame appears, because a message names a window, not a document.
+Rust answers each request after checking that the view is still selected or the panel still
+declared, and the package still enabled, reading no files. A request over 64 KiB, or a
+seventeenth in flight for the package, is refused with an answer rather than dropped: a dropped
+request left the SDK waiting out its timeout and then reporting an unknown outcome that was never
+unknown.
+
+**The page is opaque and network-less.** The wrapper's policy is `default-src 'none'`, inline
+script and style only, `data:` images and fonts, `connect-src 'none'` and `form-action 'none'`,
+and the frame's sandbox is `allow-scripts allow-forms`, never `allow-same-origin`. So a page has
+no storage, no network and no route to wtm's DOM or Tauri. The document rule,
+`wtm_plugins::document::self_contained`, is shared with Open Design artifacts (§6g) and checked when
+a package is prepared, while its author is still there, and again when it is opened. It has no
+message of its own because the two callers owe their users different advice.
+
+**Operations are public only by name, and scope fails closed.** `contracts/catalog.json` is
+hand-written: every operation the frontend can invoke is `public`, `protected` or `internal`,
+each with its own reason (`src-tauri/tests/extension_catalog.rs` fails on an unclassified one).
+Everything native-equivalent is protected, so a package cannot reach through wtm what it would
+have to declare as a program. Each public operation declares how it stays inside a worktree, its
+`scope`, rather than wtm inferring it from argument names, because a name proves nothing:
+`worktreeId` is a path the command trusts and `id` is sometimes a browser and sometimes a comment.
+`extensions::Runtime::authorize` resolves every argument the catalog lists in `resources` against
+what wtm actually has and refuses one that resolves to nothing: "not found here" was how an earlier
+check let another worktree's database session, and arbitrary directories, through. A worktree id
+must belong to a registered project, and a project id must be registered, because `App::project`
+loads any directory with a config and Git then runs there. A plugin limited to chosen worktrees is
+refused every `global` operation outright, so those need no per-argument resolution. The rule that
+keeps the list honest is a test: every argument of a non-global public operation whose name says it
+names something (`worktreeId`, `projectId`, `session`, `paneId`, `path`, `id`, …) must be a
+declared resource, or appear in the `CONTAINED` table in `crates/wtm-plugins/tests/catalog.rs` with
+the reason it cannot leave the caller's worktree, and every entry there must still name a real
+argument. Adding to that table is a security decision, which is why each entry says why. The
+frontend checks access and schemas too, but Rust is the authority, and arguments a hook rewrote are
+authorized again (`extension_validate`). Mode arguments and an address on `ui.panels.open` are
+refused for the same reason the operations that carry them are protected.
+
+**Nothing applies on install.** A replacement view, an operation replacement and a competing
+style each wait for the user's choice. A sole replacement used to win by default, so enabling one
+package with `replaces` silently took over a built-in operation. Styles only add, so a sole style
+applies; two compete. Style choices are kept as `style:<target>` apart from replacement choices,
+because one key per target meant a package with both got neither and one select decided two
+things. What a plugin is told about where it is goes through `publicContext`, an allow-list of ids:
+the spread it replaced sent the registry's internal flags, a message's text, and once a tool row
+with up to 2 MiB of output, which broke the runtime's 1 MiB frame. `operation.completed` is never
+published for terminal input, replays, file and diff reads, database results, transcripts,
+attachments and snapshots, for volume or because every subscriber would receive contents not
+meant for it.
+
+**Revoke first, and never refuse the off switch.** Disable, uninstall and recovery close the
+package's panes and views, stop its runtime and drop its session attachments, then change the
+registry, and none of them waits for a running call: a misbehaving package must not be able to
+hold off the switch that turns it off. A call still in flight finds its package changed when it
+finishes and its answer is discarded. Only install and rollback wait, because they replace code a
+running call is using and a session would be answered by a backend it never attached to.
+
+**A runtime is told, not killed.** Events are notifications: a runtime that falls behind loses
+some and is told once, rather than being stopped for it, and a preference change arrives as a
+`settings.changed` event, because restarting would drop whatever the runtime was doing. A request
+it does not answer, an exit or closed input stops it until the user restarts it. Nothing is
+retried, because a plugin action's outcome after a timeout is unknown.
+
+**Safe mode is an overlay.** `--safe-mode`, and a registry that cannot be read, show every user
+package off and every region and built-in restored without rewriting the saved registry. An
+earlier version applied safe mode to the registry in memory, and the next unrelated change saved
+the wiped copy, so one launch in safe mode uninstalled a configuration. Changes made during safe
+mode are saved and unmask exactly what they touched. **Plugin recovery** is the saved reset, and
+keeps an unreadable registry as `registry-corrupt-<id>.json`. Settings → Plugins is never a region,
+its surface takes no contributions, and `settingsView.show` is never offered to hooks, so ⌘,
+always reaches it.
+
+**No agent drives a plugin's pane.** A plugin's page carries its owner's authority over the request
+bridge. So `plugin_views::plugin_owned` panes are left out of the panes agent browser tools can
+address, their **Agent access** cannot be turned on, and the resource resolver does not count them
+as sessions another package could name.
+
+**Where the design came from.** Manifest-first, language-independent contribution declarations
+follow [Herdr's plugin API](https://herdr.dev/tui/docs/plugins/); named contributions and execution
+kept apart from the UI follow
+[VS Code's extension architecture](https://code.visualstudio.com/api/advanced-topics/extension-host);
+built-ins that take part in the same customisation follow
+[Claude mods](https://code.claude.com/docs/en/plugins/mods/overview). [Herder](https://herder.sh/),
+a different project, informed separating session ownership from presentation, not the manifest.
+These are precedents for the shape, not evidence that executable packages are sandboxed: they are
+not.
+
+## 6j. Native CLI sessions: the vendor's terminal, wtm's ownership
+
+Native CLI opens Claude and Codex in their own terminal interfaces, with wtm's context and tools
+for that session; what a user sees and can do is in
+[the plugin guide](docs/plugins.md#built-in-features-home-wtm-chat-and-native-cli). The vendor
+TUI keeps its transcript and approval prompts. `native_sessions` owns the processes and the
+delivery receipts, and `conversation_sessions()` gives scoped MCP tools and Open Design one
+identity for native and structured sessions without pretending a PTY is a structured
+`AgentSession`. Native activity and WTM Chat use the same provider-event mapping and the same
+plugin registries. An adapter reports what it cannot see rather than estimating progress or
+parsing escape codes.
+
+Codex's remote TUI connects to a private Unix WebSocket, which relays the public protocol to one
+app-server stdio process. One connection avoids a second client competing for approvals or trying
+to resume a thread before its first rollout exists. wtm forwards provider requests unchanged and
+consumes only its own UUID-prefixed control replies, so the TUI stays the only permission
+responder. The `tungstenite` dependency has handshake support only: this adapter binds no TCP
+listener and adds no browser egress. Claude gets lifecycle hooks, its MCP server and context
+through launch arguments and the same session token structured chats use; no user config is
+overwritten, and nothing is typed into the terminal. Its wtm instructions are collected on the next
+message the user submits. A hook names the directory Claude is in, which follows a `cd` in its
+Bash tool, so any directory inside the worktree counts as the session's own.
+
+An implementation instruction is saved with its project, worktree, provider and conversation and
+the immutable prototype and review identity before anything is dispatched. Only a correlated
+provider reply, or Claude's conversation-bound acknowledgment, marks it delivered; a read of Codex's
+public history can also confirm an exact client-message id and content. Missing history never
+proves non-delivery, and a timeout, restart or reconnect never authorizes a replay, because
+reconnecting resumes the conversation, not the instruction. A pending or unknown receipt therefore
+blocks the next instruction in its conversation: sending another on top of an uncertain one is how
+a design gets implemented twice. The way out is the user's own evidence, **Mark not delivered** or
+**Withdraw**, which settles it as rejected and sends nothing. Provider evidence arriving later
+overturns "not delivered", which was a judgment made without it, but never a withdrawal, since
+nothing collected a withdrawn instruction. A pane that changes conversation keeps listing the
+earlier one's unresolved receipts. Settled receipts are pruned 30 days after their file was last
+written, when a native session opens (the receipt store is built before the app has a clock), and
+every receipt of a removed worktree goes with it. A disconnected or unavailable session shows as
+needing attention, not failed: the CLI may still be working.
+
+WTM Chat off removes the routes a person uses to open a chat pane, and nothing else.
+`App::open_agent` is the engine under recipes, delegation (including a Native CLI session's), side
+questions and chat-edit branches, and refusing there once made "Native CLI with WTM Chat off" a
+setup in which no recipe or delegation could run. Recipe steps open structured panes whatever the
+default experience is, because the runner sends each step and waits for its turn through one.
+
+This does not promise SSH persistence, retroactive recovery, or restoring an interrupted turn.
 
 ## 7. Toolchain policy
 
@@ -1212,6 +1391,14 @@ can't express this, which is why `etcetera` is the dependency.
 **Polling is banned.** No `setInterval` anywhere — polling a git repo is how these tools end up spinning
 a fan. v1 refreshes on demand and on window focus. A narrow `notify` watcher on `.git/worktrees` is a v2
 option; a naive watcher over a Docker-backed worktree tree would generate thousands of events.
+
+One exception, forced by a protocol rather than chosen: `PluginSessions.svelte`, the built-in
+viewer for a plugin's session backend (§6i). A backend is a helper that answers one JSON-RPC
+request and exits, so there is no stream to listen to, and every poll spawns that helper. So it
+polls as little as it can: a second after the last answer, doubling up to 15 seconds while nothing
+changes and back to a second when something does, one request at a time, and not at all while the
+window is hidden or unfocused; coming back asks at once. A plugin's own view that polls its backend
+is the plugin's code, not wtm's, and is bounded only by the request limits in §6i.
 
 **The terminal dock is mounted by the shell, not by the detail pane, and every pane stays mounted.** A
 terminal's transcript lives in its xterm instance, so unmounting one throws it away — Rust now keeps a
@@ -1469,9 +1656,10 @@ decision, and it belongs written down rather than discovered in eighteen months.
   `git2`'s worktree support is incomplete besides.
 - **An in-process third-party or WASM runtime.** The plugin use case now includes replacing the
   agent experience and attaching to an external session owner. `wtm-plugins` uses reviewed TOML
-  packages, the existing command runner, and isolated panels instead of injecting executable code
-  into the privileged webview. [The plugin contract](docs/plugins.md) records its current surfaces
-  and the distinction between attach/detach and create/stop. Not every built-in view is extracted yet.
+  packages, the existing command runner, and isolated pages instead of injecting executable code
+  into the privileged webview; §6i says what that keeps and what it does not.
+  [The plugin guide](docs/plugins.md) records the current surfaces and the distinction between
+  attach/detach and create/stop.
 - **A database.** The projects list, trust store, and window state are one JSON file written atomically
   (temp + rename).
 - **`--move-changes`** (stash/pop across worktrees). The one `create` feature with genuinely nasty

@@ -3,18 +3,19 @@
   <meta charset="utf-8" /><title>Scratch panel</title
   ><style>
     body {
-      font: 15px system-ui;
+      font: 15px var(--wtm-font-ui, system-ui);
       margin: 2rem;
-      background: Canvas;
-      color: CanvasText;
+      background: var(--wtm-bg, Canvas);
+      color: var(--wtm-fg, CanvasText);
     }
     textarea {
       font: inherit;
       width: 100%;
       height: 60vh;
       box-sizing: border-box;
-      background: Field;
-      color: FieldText;
+      background: var(--wtm-bg-elevated, Field);
+      color: inherit;
+      border: 1px solid var(--wtm-border, GrayText);
     }
     button {
       font: inherit;
@@ -23,8 +24,10 @@
   </style>
   <h1>Scratch panel</h1>
   <p>
-    This isolated panel can run its own UI. It cannot access WTM, files, or the network.
-    These notes last only as long as this panel.
+    This panel runs in an isolated frame with no network access and no storage, so these
+    notes last only as long as the panel is open. Through <code>wtm.request</code> it could
+    ask for its context and run this package's own <code>status</code> command; a panel in
+    an API 2 package can also call the host operations its manifest declares.
   </p>
   <label for="notes">Notes</label
   ><textarea id="notes"></textarea

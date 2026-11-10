@@ -127,7 +127,6 @@ impl PtySink for EventSink {
 
     fn on_exit(&self, session: &SessionId, outcome: &ExitOutcome) {
         if let Some(app) = &self.recorder {
-            app.native_sessions.ended(session.as_str());
             if let Some(run) = app.shell_runs.active(session.as_str()) {
                 crate::shell_control::cancel(
                     &self.app,

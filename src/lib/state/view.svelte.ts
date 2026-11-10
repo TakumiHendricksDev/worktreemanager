@@ -1,4 +1,3 @@
-import { interceptUiOperation } from '../extension-operations';
 /**
  * What the main column shows: Home, or one of a worktree's views.
  *
@@ -10,8 +9,17 @@ import { interceptUiOperation } from '../extension-operations';
  * value only `App` could read would have meant `App` telling `attention` on every switch, a second
  * copy of the state that can disagree with the first.
  *
- * So this imports nothing from the other stores. `attention` reads it, `sessions` reads it through
- * `attention`, and nothing here reads either of them back.
+ * So this imports none of the stores that read it. `attention` reads it, `sessions` reads it through
+ * `attention`, and nothing here reads either of them back. The plugin registry is the one store it
+ * does read, to refuse a view whose region is hidden, and that reads none of them. `workspace` and
+ * `settingsView` are read only by `navigate`, a plugin's request to go somewhere, and neither reads
+ * this.
+ *
+ * # Which region draws each view
+ *
+ * Stated once, in `VIEW_REGION`. The window used to spell the mapping out in three places — showing
+ * a view, falling back from a hidden one, a plugin navigating — and a view added to one and not the
+ * others is a view a plugin can hide with nowhere to go.
  *
  * # What is remembered
  *
@@ -21,11 +29,36 @@ import { interceptUiOperation } from '../extension-operations';
  * origin and a pane window has no Home to show.
  */
 
-import { plugins } from './plugins.svelte';
+import { errorMessage } from '../ipc/types';
+import { interceptUiOperation } from '../extension-operations';
+import type { PluginSlot } from '../plugins';
 import { inPaneWindow } from '../window-role';
+import { plugins } from './plugins.svelte';
+import { settingsView } from './settings-view.svelte';
+import { workspace } from './workspace.svelte';
 
 /** The main column's views. `home` is the only one with no worktree behind it. */
 export type MainView = 'home' | 'worktree' | 'database' | 'code' | 'new';
+
+/** The workbench region each view is drawn in, which a plugin can replace or hide. */
+export const VIEW_REGION: Record<MainView, PluginSlot> = {
+  home: 'home',
+  worktree: 'sessions',
+  database: 'database',
+  code: 'code',
+  new: 'new_worktree',
+};
+
+export function isMainView(target: string): target is MainView {
+  return Object.hasOwn(VIEW_REGION, target);
+}
+
+/**
+ * Where the window goes when the view on screen loses its region, first that still has one.
+ *
+ * Not `new`: the create form is a task someone starts, not a place to be put.
+ */
+const FALLBACK: readonly MainView[] = ['worktree', 'home', 'code', 'database'];
 
 const LAST_VIEW_KEY = 'wtm.view';
 
@@ -76,15 +109,15 @@ class View {
         'ui.navigate',
         { target: next },
         { projectId: '', worktreeId: '' },
-        (args) => {
-          if (['home', 'worktree', 'database', 'code', 'new'].includes(String(args.target)))
-            this.show(args.target as MainView);
-        },
       )
     )
       return;
-    const slot = next === 'new' ? 'new_worktree' : next === 'worktree' ? 'sessions' : next;
-    if (!plugins.available(slot)) return;
+    this.apply(next);
+  }
+
+  /** `show` without plugin hooks: what `ui.navigate` applies once they have run. */
+  apply(next: MainView): void {
+    if (!plugins.available(VIEW_REGION[next])) return;
     if (next === this.current) return;
     this.previous = this.current;
     this.current = next;
@@ -110,6 +143,43 @@ class View {
 
   peek(paneId: string | null): void {
     this.peeked = paneId;
+  }
+
+  /**
+   * Leave a view whose region has been hidden, for the first one that is still drawn.
+   *
+   * Through `apply`, past the plugin hooks: this is the host keeping the window on something it
+   * can draw, and a hook that vetoed it would leave the main column on a region that is gone.
+   * Home's surface is let go of too, so turning Home off unmounts it rather than hiding it.
+   */
+  settle(): void {
+    if (!plugins.ready) return;
+    if (!plugins.available('home')) this.homeMounted = false;
+    if (plugins.available(VIEW_REGION[this.current])) return;
+    const next = FALLBACK.find((candidate) => plugins.available(VIEW_REGION[candidate]));
+    if (next) this.apply(next);
+  }
+
+  /**
+   * A plugin's `plugins:navigate`: Settings → Plugins, or a project, a worktree and a view.
+   *
+   * Never rejects: it runs from an event listener, where a rejection reaches nobody. A project that
+   * fails to load says so in the window's banner, and the view is left where it was rather than
+   * moved onto a worktree that is not there.
+   */
+  async navigate(target: string, project?: string, worktree?: string): Promise<void> {
+    if (target === 'settings') {
+      settingsView.show('plugins');
+      return;
+    }
+    try {
+      if (project) await workspace.selectProject(project);
+    } catch (e) {
+      workspace.error = errorMessage(e);
+      return;
+    }
+    if (worktree) workspace.select(worktree);
+    if (isMainView(target)) this.show(target);
   }
 }
 

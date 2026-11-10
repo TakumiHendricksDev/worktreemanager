@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A worktree being made, standing in the list where it will land.
    *
@@ -48,56 +45,53 @@
   );
 </script>
 
-<ExtensionPoint target="component.creation-tab" context={publicContext()}>
-  <div
-    use:extensionPart={{ target: 'component.creation-tab', context: publicContext }}
-    class="c-worktree-tab c-worktree-tab--ghost"
-    class:c-worktree-tab--failed={!running}
-    role="presentation"
+<div
+  class="c-worktree-tab c-worktree-tab--ghost"
+  class:c-worktree-tab--failed={!running}
+  role="presentation"
+>
+  <button
+    role="treeitem"
+    aria-selected={selected}
+    aria-level={1}
+    tabindex={selected ? 0 : -1}
+    class="c-worktree-tab__button"
+    class:is-selected={selected}
+    data-nav="ghost:{creation.id}"
+    title={running ? 'Being created — click for its progress' : (creation.error ?? word)}
+    onclick={onselect}
   >
-    <button
-      role="treeitem"
-      aria-selected={selected}
-      aria-level={1}
-      tabindex={selected ? 0 : -1}
-      class="c-worktree-tab__button"
-      class:is-selected={selected}
-      data-nav="ghost:{creation.id}"
-      title={running ? 'Being created — click for its progress' : (creation.error ?? word)}
-      onclick={onselect}
-    >
-      <span class="c-worktree-tab__line">
-        {#if identity.key}<span class="c-worktree-tab__key">{identity.key}</span>{/if}
-        <span class="c-worktree-tab__name">{identity.name}</span>
-      </span>
-      <span class="c-worktree-tab__line c-worktree-tab__meta">
-        <span class="c-worktree-tab__branch">{creation.branch ?? creation.dirname}</span>
-      </span>
-      <span class="c-worktree-tab__line c-worktree-tab__flags">
-        {#if running}
-          <span class="c-status--muted c-worktree-tab__flag"
-            ><SessionDot status="working" />&nbsp;{word}</span
-          >
-        {:else}
-          <span class="c-status--danger c-worktree-tab__flag">✕&nbsp;{word}</span>
-        {/if}
-      </span>
+    <span class="c-worktree-tab__line">
+      {#if identity.key}<span class="c-worktree-tab__key">{identity.key}</span>{/if}
+      <span class="c-worktree-tab__name">{identity.name}</span>
+    </span>
+    <span class="c-worktree-tab__line c-worktree-tab__meta">
+      <span class="c-worktree-tab__branch">{creation.branch ?? creation.dirname}</span>
+    </span>
+    <span class="c-worktree-tab__line c-worktree-tab__flags">
       {#if running}
-        <span class="c-worktree-tab__progress" aria-hidden="true">
-          <span class="c-worktree-tab__progress-fill" style:width="{percent}%"></span>
-        </span>
+        <span class="c-status--muted c-worktree-tab__flag"
+          ><SessionDot status="working" />&nbsp;{word}</span
+        >
+      {:else}
+        <span class="c-status--danger c-worktree-tab__flag">✕&nbsp;{word}</span>
       {/if}
-    </button>
-    {#if !running}
-      <button
-        class="c-worktree-tab__close"
-        type="button"
-        title="Discard this attempt"
-        aria-label="Discard this attempt"
-        onclick={ondiscard}
-      >
-        <Icon name="close" size={12} />
-      </button>
+    </span>
+    {#if running}
+      <span class="c-worktree-tab__progress" aria-hidden="true">
+        <span class="c-worktree-tab__progress-fill" style:width="{percent}%"></span>
+      </span>
     {/if}
-  </div>
-</ExtensionPoint>
+  </button>
+  {#if !running}
+    <button
+      class="c-worktree-tab__close"
+      type="button"
+      title="Discard this attempt"
+      aria-label="Discard this attempt"
+      onclick={ondiscard}
+    >
+      <Icon name="close" size={12} />
+    </button>
+  {/if}
+</div>

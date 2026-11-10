@@ -179,3 +179,49 @@ fn no_crate_in_this_workspace_links_an_http_client() {
         "database protocols and dictation need no linked HTTP client; found: {offenders:?}"
     );
 }
+
+#[test]
+fn the_websocket_library_cannot_become_a_network_client() {
+    // `tungstenite` cannot go on the list above: Native CLI needs it to speak WebSocket to Codex's
+    // remote TUI over a private Unix socket. But its `handshake` feature also links
+    // `client::connect`, a plain TCP WebSocket client, so "no linked HTTP client" holds only while
+    // the build refuses to call that. Clippy's `disallowed-methods` is what refuses; this pins the
+    // ban, and the feature set that keeps TLS (and with it `wss://` to anywhere) out of the link.
+    let manifest: toml::Table = std::fs::read_to_string(repo_root().join("Cargo.toml"))
+        .expect("the workspace manifest")
+        .parse()
+        .expect("the workspace manifest is TOML");
+    let declared = &manifest["workspace"]["dependencies"]["tungstenite"];
+    assert_eq!(
+        declared
+            .get("default-features")
+            .and_then(toml::Value::as_bool),
+        Some(false),
+        "default features pull in a TLS stack: {declared}"
+    );
+    assert_eq!(
+        declared.get("features").and_then(toml::Value::as_array),
+        Some(&vec![toml::Value::from("handshake")]),
+        "only the handshake is needed to accept a connection on the private socket: {declared}"
+    );
+
+    let clippy: toml::Table = std::fs::read_to_string(repo_root().join("clippy.toml"))
+        .expect("clippy.toml")
+        .parse()
+        .expect("clippy.toml is TOML");
+    let banned: Vec<&str> = clippy["disallowed-methods"]
+        .as_array()
+        .expect("a list of disallowed methods")
+        .iter()
+        .filter_map(|entry| entry.get("path").and_then(toml::Value::as_str))
+        .collect();
+    for client in [
+        "tungstenite::client::connect",
+        "tungstenite::client::connect_with_config",
+    ] {
+        assert!(
+            banned.contains(&client),
+            "{client} must stay disallowed: {banned:?}"
+        );
+    }
+}

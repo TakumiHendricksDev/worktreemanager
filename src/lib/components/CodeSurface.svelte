@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * The Code tab: a worktree's files, read-only, for reviewing what an agent did.
    *
@@ -19,11 +16,13 @@
   import { item, popUp, under } from '../native-menu';
   import { code, type Popup } from '../state/code.svelte';
   import { codeRequests } from '../state/code-request.svelte';
+  import { extensions } from '../state/extensions.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
   import CodeTree from './CodeTree.svelte';
   import CodeReview from './CodeReview.svelte';
   import CodeViewer from './CodeViewer.svelte';
+  import ExtensionActions from './ExtensionActions.svelte';
   import FindInFiles from './FindInFiles.svelte';
   import GoTo from './GoTo.svelte';
   import Button from './ui/Button.svelte';
@@ -335,298 +334,291 @@
   });
 </script>
 
-<ExtensionPoint target="component.code-surface" context={publicContext()}>
-  <section
-    use:extensionPart={{ target: 'component.code-surface', context: publicContext }}
-    class="c-code-view"
-    class:is-hidden={!visible}
-    id="code-view"
-    aria-label="Code"
-  >
-    {#if projectId && worktreeId}
-      <div class="c-code-view__body">
-        <aside class="c-code-view__explorer" aria-label="Project files">
-          <header class="c-code-view__explorer-head">
-            <div class="c-code-view__views" role="group" aria-label="Tree">
-              <Button
-                variant={view === 'project' ? 'neutral' : 'quiet'}
-                size="sm"
-                ariaPressed={view === 'project'}
-                onclick={() => code.setView(worktreeId, 'project')}>Project</Button
-              >
-              <Button
-                variant={view === 'changes' ? 'neutral' : 'quiet'}
-                size="sm"
-                ariaPressed={view === 'changes'}
-                title="Only the files this worktree changed"
-                onclick={() => code.setView(worktreeId, 'changes')}
-                >Changes{#if changes && changes.changes.length > 0}<span
-                    class="c-code-view__count">{changes.changes.length}</span
-                  >{/if}</Button
-              >
-            </div>
-            <span class="c-code-view__spacer"></span>
+<section class="c-code-view" class:is-hidden={!visible} id="code-view" aria-label="Code">
+  {#if projectId && worktreeId}
+    <div class="c-code-view__body">
+      <aside class="c-code-view__explorer" aria-label="Project files">
+        <header class="c-code-view__explorer-head">
+          <div class="c-code-view__views" role="group" aria-label="Tree">
             <Button
-              variant="quiet"
+              variant={view === 'project' ? 'neutral' : 'quiet'}
               size="sm"
-              icon="sm"
-              title={`Find in files (${FIND_IN_FILES_SHORTCUT})`}
-              ariaLabel="Find in files"
-              onclick={() => code.ask('find')}><Icon name="search" size={14} /></Button
+              ariaPressed={view === 'project'}
+              onclick={() => code.setView(worktreeId, 'project')}>Project</Button
             >
             <Button
-              variant="quiet"
+              variant={view === 'changes' ? 'neutral' : 'quiet'}
               size="sm"
-              icon="sm"
-              title={`Go to file (${GO_TO_FILE_SHORTCUT})`}
-              ariaLabel="Go to file"
-              onclick={() => code.ask('file')}><Icon name="file" size={14} /></Button
+              ariaPressed={view === 'changes'}
+              title="Only the files this worktree changed"
+              onclick={() => code.setView(worktreeId, 'changes')}
+              >Changes{#if changes && changes.changes.length > 0}<span
+                  class="c-code-view__count">{changes.changes.length}</span
+                >{/if}</Button
             >
+          </div>
+          <span class="c-code-view__spacer"></span>
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title={`Find in files (${FIND_IN_FILES_SHORTCUT})`}
+            ariaLabel="Find in files"
+            onclick={() => code.ask('find')}><Icon name="search" size={14} /></Button
+          >
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title={`Go to file (${GO_TO_FILE_SHORTCUT})`}
+            ariaLabel="Go to file"
+            onclick={() => code.ask('file')}><Icon name="file" size={14} /></Button
+          >
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title="Select the open file in the tree"
+            ariaLabel="Select the open file in the tree"
+            disabled={!active}
+            onclick={locate}><Icon name="locate" size={14} /></Button
+          >
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title="Collapse all folders"
+            ariaLabel="Collapse all folders"
+            onclick={() => worktreeId && code.collapseAll(worktreeId)}
+            ><Icon name="collapse" size={14} /></Button
+          >
+          <Button
+            variant="quiet"
+            size="sm"
+            icon="sm"
+            title="Read the worktree again"
+            ariaLabel="Refresh"
+            onclick={refresh}><Icon name="restart" size={14} /></Button
+          >
+        </header>
+        {#if view === 'changes'}
+          <div class="c-code-view__scope">
+            <span class="c-code-view__against">
+              {#if changes?.scope === 'branch'}
+                Since <code>{changes.against}</code>
+              {:else}
+                Not yet committed
+              {/if}
+            </span>
             <Button
-              variant="quiet"
+              variant="link"
               size="sm"
-              icon="sm"
-              title="Select the open file in the tree"
-              ariaLabel="Select the open file in the tree"
-              disabled={!active}
-              onclick={locate}><Icon name="locate" size={14} /></Button
+              title={scope === 'branch'
+                ? 'Show only what is not committed yet'
+                : 'Show everything this branch changed since its base'}
+              onclick={() =>
+                projectId &&
+                code.setScope(
+                  projectId,
+                  worktreeId,
+                  scope === 'branch' ? 'uncommitted' : 'branch',
+                )}>{scope === 'branch' ? 'Uncommitted only' : 'Whole branch'}</Button
             >
-            <Button
-              variant="quiet"
-              size="sm"
-              icon="sm"
-              title="Collapse all folders"
-              ariaLabel="Collapse all folders"
-              onclick={() => worktreeId && code.collapseAll(worktreeId)}
-              ><Icon name="collapse" size={14} /></Button
-            >
-            <Button
-              variant="quiet"
-              size="sm"
-              icon="sm"
-              title="Read the worktree again"
-              ariaLabel="Refresh"
-              onclick={refresh}><Icon name="restart" size={14} /></Button
-            >
-          </header>
-          {#if view === 'changes'}
-            <div class="c-code-view__scope">
-              <span class="c-code-view__against">
-                {#if changes?.scope === 'branch'}
-                  Since <code>{changes.against}</code>
-                {:else}
-                  Not yet committed
-                {/if}
-              </span>
-              <Button
-                variant="link"
-                size="sm"
-                title={scope === 'branch'
-                  ? 'Show only what is not committed yet'
-                  : 'Show everything this branch changed since its base'}
-                onclick={() =>
-                  projectId &&
-                  code.setScope(
-                    projectId,
-                    worktreeId,
-                    scope === 'branch' ? 'uncommitted' : 'branch',
-                  )}>{scope === 'branch' ? 'Uncommitted only' : 'Whole branch'}</Button
-              >
-            </div>
-            {#if scope === 'branch' && changes?.scope === 'uncommitted'}
-              <p class="c-code-view__notice">
-                There is no base branch to compare with, so this is what is not committed
-                yet.
-              </p>
-            {/if}
-          {/if}
-          {#if error}
-            <p class="c-code-view__notice c-code-view__notice--error">{error}</p>
-          {/if}
-          {#if tree?.truncated}
+          </div>
+          {#if scope === 'branch' && changes?.scope === 'uncommitted'}
             <p class="c-code-view__notice">
-              This worktree lists more files than wtm reads at once, so some are missing
-              here.
+              There is no base branch to compare with, so this is what is not committed yet.
             </p>
           {/if}
-          <CodeTree bind:this={treeView} {projectId} {worktreeId} onopen={open} />
-        </aside>
+        {/if}
+        {#if error}
+          <p class="c-code-view__notice c-code-view__notice--error">{error}</p>
+        {/if}
+        {#if tree?.truncated}
+          <p class="c-code-view__notice">
+            This worktree lists more files than wtm reads at once, so some are missing here.
+          </p>
+        {/if}
+        <CodeTree bind:this={treeView} {projectId} {worktreeId} onopen={open} />
+      </aside>
 
-        <div class="c-code-view__main">
-          {#if tabs.length > 0}
-            <div class="c-code-view__tabbar">
-              <div class="c-code-view__tabs" role="tablist" aria-label="Open files">
-                {#each tabs as tab (tab)}
-                  {@const label = tabLabel(tab)}
-                  <div class="c-code-view__tab" class:is-active={tab === active}>
-                    <button
-                      type="button"
-                      role="tab"
-                      class="c-code-view__tab-name"
-                      aria-selected={tab === active}
-                      title={tab}
-                      onclick={() => projectId && code.activate(projectId, worktreeId, tab)}
-                      onauxclick={(event) => {
-                        if (event.button === 1) code.close(worktreeId, tab);
-                      }}
-                    >
-                      {label.name}
-                      {#if label.hint}<span class="c-code-view__tab-hint">{label.hint}</span
-                        >{/if}
-                    </button>
-                    <button
-                      type="button"
-                      class="c-code-view__tab-close"
-                      title="Close"
-                      aria-label={`Close ${label.name}`}
-                      onclick={() => code.close(worktreeId, tab)}
-                      ><Icon name="close" size={12} /></button
-                    >
-                  </div>
-                {/each}
-              </div>
-              <!-- Outside the scrolling strip, so it stays at the end however many tabs are open. -->
-              <span class="c-code-view__tabs-menu" bind:this={tabsMenu}>
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  icon="sm"
-                  title="Tab actions"
-                  ariaLabel="Tab actions"
-                  ariaHaspopup="menu"
-                  onclick={openTabsMenu}><Icon name="more-vertical" size={14} /></Button
-                >
-              </span>
-            </div>
-          {/if}
-
-          {#if active}
-            <div class="c-code-view__crumbs" title={active}>
-              {#each active.split('/') as part, i (i)}
-                {#if i > 0}<Icon name="chevron-right" size={10} />{/if}
-                <span>{part}</span>
+      <div class="c-code-view__main">
+        {#if tabs.length > 0}
+          <div class="c-code-view__tabbar">
+            <div class="c-code-view__tabs" role="tablist" aria-label="Open files">
+              {#each tabs as tab (tab)}
+                {@const label = tabLabel(tab)}
+                <div class="c-code-view__tab" class:is-active={tab === active}>
+                  <button
+                    type="button"
+                    role="tab"
+                    class="c-code-view__tab-name"
+                    aria-selected={tab === active}
+                    title={tab}
+                    onclick={() => projectId && code.activate(projectId, worktreeId, tab)}
+                    onauxclick={(event) => {
+                      if (event.button === 1) code.close(worktreeId, tab);
+                    }}
+                  >
+                    {label.name}
+                    {#if label.hint}<span class="c-code-view__tab-hint">{label.hint}</span
+                      >{/if}
+                  </button>
+                  <button
+                    type="button"
+                    class="c-code-view__tab-close"
+                    title="Close"
+                    aria-label={`Close ${label.name}`}
+                    onclick={() => code.close(worktreeId, tab)}
+                    ><Icon name="close" size={12} /></button
+                  >
+                </div>
               {/each}
-              {#if file?.status === 'ready' && file.file.outside}
-                <span class="c-code-view__flag">outside the worktree, through a link</span>
-              {/if}
-              {#if hunks && hunks.length > 0}
-                <span class="c-code-view__spacer"></span>
-                <span class="c-code-view__changes">
-                  {stepAt === null
-                    ? `${hunks.length} change${hunks.length === 1 ? '' : 's'}`
-                    : `${stepAt + 1} of ${hunks.length}`}
-                </span>
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  icon="sm"
-                  title="Previous change"
-                  ariaLabel="Previous change"
-                  onclick={() => stepChange(-1)}
-                  ><Icon name="chevron-up" size={12} /></Button
-                >
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  icon="sm"
-                  title="Next change"
-                  ariaLabel="Next change"
-                  onclick={() => stepChange(1)}
-                  ><Icon name="chevron-down" size={12} /></Button
-                >
-              {/if}
             </div>
-          {/if}
+            <!-- Outside the scrolling strip, so it stays at the end however many tabs are open. -->
+            <span class="c-code-view__tabs-menu" bind:this={tabsMenu}>
+              <Button
+                variant="quiet"
+                size="sm"
+                icon="sm"
+                title="Tab actions"
+                ariaLabel="Tab actions"
+                ariaHaspopup="menu"
+                onclick={openTabsMenu}><Icon name="more-vertical" size={14} /></Button
+              >
+            </span>
+          </div>
+        {/if}
 
-          {#if file?.status === 'base'}
-            <p class="c-code-view__notice">
-              Deleted. This is how it was on <code>{file.against}</code>.
-            </p>
-          {/if}
+        {#if active}
+          <div class="c-code-view__crumbs" title={active}>
+            {#each active.split('/') as part, i (i)}
+              {#if i > 0}<Icon name="chevron-right" size={10} />{/if}
+              <span>{part}</span>
+            {/each}
+            {#if file?.status === 'ready' && file.file.outside}
+              <span class="c-code-view__flag">outside the worktree, through a link</span>
+            {/if}
+            {#if hunks && hunks.length > 0}
+              <span class="c-code-view__spacer"></span>
+              <span class="c-code-view__changes">
+                {stepAt === null
+                  ? `${hunks.length} change${hunks.length === 1 ? '' : 's'}`
+                  : `${stepAt + 1} of ${hunks.length}`}
+              </span>
+              <Button
+                variant="quiet"
+                size="sm"
+                icon="sm"
+                title="Previous change"
+                ariaLabel="Previous change"
+                onclick={() => stepChange(-1)}><Icon name="chevron-up" size={12} /></Button
+              >
+              <Button
+                variant="quiet"
+                size="sm"
+                icon="sm"
+                title="Next change"
+                ariaLabel="Next change"
+                onclick={() => stepChange(1)}><Icon name="chevron-down" size={12} /></Button
+              >
+            {/if}
+            <!-- The file's actions are plugin actions; the bar is untouched until one exists. -->
+            {#if extensions.targets('code.actions')}
+              {#if !hunks?.length}<span class="c-code-view__spacer"></span>{/if}
+              <ExtensionActions target="code.actions" />
+            {/if}
+          </div>
+        {/if}
 
-          {#if file?.status === 'ready' && file.file.truncated}
-            <p class="c-code-view__notice">
-              Showing the first 5 MiB of {kib(file.file.size)}.
-            </p>
-          {/if}
+        {#if file?.status === 'base'}
+          <p class="c-code-view__notice">
+            Deleted. This is how it was on <code>{file.against}</code>.
+          </p>
+        {/if}
 
-          <CodeViewer
-            bind:this={viewer}
-            {worktreeId}
-            path={active}
-            {file}
-            {hunks}
-            comments={fileComments}
-            {composing}
-            {askLabel}
-            {actions}
-            ondefinition={goToDefinition}
-          />
-          {#if notice}<p class="c-code-view__notice" role="status">{notice}</p>{/if}
+        {#if file?.status === 'ready' && file.file.truncated}
+          <p class="c-code-view__notice">
+            Showing the first 5 MiB of {kib(file.file.size)}.
+          </p>
+        {/if}
 
-          {#if !active}
-            <div class="c-code-view__placeholder"><p>Choose a file on the left.</p></div>
-          {:else if !file || file.status === 'loading'}
-            <div class="c-code-view__placeholder"><p>Reading…</p></div>
-          {:else if file.status === 'gone'}
-            <div class="c-code-view__placeholder">
-              <p>This file is no longer in the worktree.</p>
-            </div>
-          {:else if file.status === 'error'}
-            <div class="c-code-view__placeholder"><p>{file.message}</p></div>
-          {:else if file.status === 'ready' && file.file.text === null}
-            <div class="c-code-view__placeholder">
-              <p>A binary file, {kib(file.file.size)}. Nothing to read here.</p>
-            </div>
-          {/if}
-        </div>
+        <CodeViewer
+          bind:this={viewer}
+          {worktreeId}
+          path={active}
+          {file}
+          {hunks}
+          comments={fileComments}
+          {composing}
+          {askLabel}
+          {actions}
+          ondefinition={goToDefinition}
+        />
+        {#if notice}<p class="c-code-view__notice" role="status">{notice}</p>{/if}
 
-        {#if comments.length > 0}
-          <CodeReview
-            {worktreeId}
-            {comments}
-            {outdated}
-            onjump={jumpTo}
-            onsend={sendComments}
-            oncopy={copyComments}
-          />
+        {#if !active}
+          <div class="c-code-view__placeholder"><p>Choose a file on the left.</p></div>
+        {:else if !file || file.status === 'loading'}
+          <div class="c-code-view__placeholder"><p>Reading…</p></div>
+        {:else if file.status === 'gone'}
+          <div class="c-code-view__placeholder">
+            <p>This file is no longer in the worktree.</p>
+          </div>
+        {:else if file.status === 'error'}
+          <div class="c-code-view__placeholder"><p>{file.message}</p></div>
+        {:else if file.status === 'ready' && file.file.text === null}
+          <div class="c-code-view__placeholder">
+            <p>A binary file, {kib(file.file.size)}. Nothing to read here.</p>
+          </div>
         {/if}
       </div>
-    {:else}
-      <div class="c-code-view__placeholder"><p>Select a worktree on the left.</p></div>
-    {/if}
-  </section>
 
-  {#if popup?.kind === 'find' && projectId && worktreeId}
-    <FindInFiles
-      {projectId}
-      {worktreeId}
-      initial={popup.query}
-      onopen={(hit) => {
-        const [from, to] = hit.ranges[0] ?? [0, 0];
-        if (projectId && worktreeId) {
-          code.open(projectId, worktreeId, hit.path, {
-            line: hit.line,
-            from: hit.offset + from,
-            to: hit.offset + to,
-          });
-        }
-      }}
-      onclose={() => (popup = null)}
-    />
-  {:else if popup && popup.kind !== 'find' && projectId && worktreeId}
-    <GoTo
-      {projectId}
-      {worktreeId}
-      paths={tree?.paths ?? []}
-      initial={popup.query}
-      mode={popup.kind}
-      onpick={(path, line) => {
-        if (projectId && worktreeId) {
-          code.open(projectId, worktreeId, path, line ? { line } : undefined);
-        }
-      }}
-      onclose={() => (popup = null)}
-    />
+      {#if comments.length > 0}
+        <CodeReview
+          {worktreeId}
+          {comments}
+          {outdated}
+          onjump={jumpTo}
+          onsend={sendComments}
+          oncopy={copyComments}
+        />
+      {/if}
+    </div>
+  {:else}
+    <div class="c-code-view__placeholder"><p>Select a worktree on the left.</p></div>
   {/if}
-</ExtensionPoint>
+</section>
+
+{#if popup?.kind === 'find' && projectId && worktreeId}
+  <FindInFiles
+    {projectId}
+    {worktreeId}
+    initial={popup.query}
+    onopen={(hit) => {
+      const [from, to] = hit.ranges[0] ?? [0, 0];
+      if (projectId && worktreeId) {
+        code.open(projectId, worktreeId, hit.path, {
+          line: hit.line,
+          from: hit.offset + from,
+          to: hit.offset + to,
+        });
+      }
+    }}
+    onclose={() => (popup = null)}
+  />
+{:else if popup && popup.kind !== 'find' && projectId && worktreeId}
+  <GoTo
+    {projectId}
+    {worktreeId}
+    paths={tree?.paths ?? []}
+    initial={popup.query}
+    mode={popup.kind}
+    onpick={(path, line) => {
+      if (projectId && worktreeId) {
+        code.open(projectId, worktreeId, path, line ? { line } : undefined);
+      }
+    }}
+    onclose={() => (popup = null)}
+  />
+{/if}

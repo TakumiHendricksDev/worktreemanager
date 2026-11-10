@@ -32,6 +32,7 @@ import { codeRequests } from './code-request.svelte';
 import { shellRuns } from './shell-runs.svelte';
 import { databaseConsole } from './database-console.svelte';
 import { sessions } from './sessions.svelte';
+import { settingsView } from './settings-view.svelte';
 import { theme } from './theme.svelte';
 
 /** Matches `pane_windows::{CLOSED,SYNCED,FOCUS}_EVENT`. */
@@ -146,6 +147,16 @@ async function obeyIntent(intent: PaneIntent): Promise<void> {
     case 'openInCode':
       await commands.focusPaneWindow(null).catch(() => {});
       codeRequests.open(intent.projectId, intent.worktreeId, intent.path, intent.line);
+      return;
+    case 'showSettings':
+      await commands.focusPaneWindow(null).catch(() => {});
+      settingsView.show(intent.section ?? undefined, intent.focus);
+      return;
+    case 'openAgent':
+      await commands.focusPaneWindow(null).catch(() => {});
+      await sessions.openAgent(intent.projectId, intent.worktreeId, intent.provider, {
+        experience: intent.experience ?? undefined,
+      });
       return;
   }
 }

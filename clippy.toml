@@ -26,6 +26,12 @@ disallowed-methods = [
   { path = "std::process::Command::new", reason = "spawn via wtm_exec::Runner so the call is timed, timed-out, PATH-resolved and traced" },
   { path = "std::time::SystemTime::now",  reason = "inject the Clock port instead, so use-cases are deterministic under test" },
   { path = "std::time::Instant::now",     reason = "inject the Clock port instead, so use-cases are deterministic under test" },
+  # `tungstenite` is linked for one thing: speaking WebSocket to Codex's remote TUI over a private
+  # Unix socket the app owns. Its `handshake` feature also links a plain TCP client, and "no linked
+  # HTTP client" (ARCHITECTURE §6a) must stay something the build enforces, not a habit.
+  # `tungstenite::connect` is a re-export of the first of these.
+  { path = "tungstenite::client::connect",             reason = "opens a TCP connection; network egress is an open-an-issue-first change (ARCHITECTURE §6a)" },
+  { path = "tungstenite::client::connect_with_config", reason = "opens a TCP connection; network egress is an open-an-issue-first change (ARCHITECTURE §6a)" },
 ]
 
 disallowed-types = [

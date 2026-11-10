@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * One group in the sidebar: a header you can fold, rename and drag, over its rows.
    *
@@ -107,61 +104,58 @@
   }
 </script>
 
-<ExtensionPoint target="component.sidebar-section" context={publicContext()}>
+<div
+  class="c-sidebar-group"
+  class:is-drop-target={droptarget}
+  class:is-dragging={dragging}
+  role="treeitem"
+  aria-level={1}
+  aria-expanded={section.open}
+  aria-selected={false}
+  aria-label={name}
+  tabindex="-1"
+  data-nav={`group:${section.id}`}
+  data-group-slot={section.kind === 'custom' ? section.id : undefined}
+>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div
-    use:extensionPart={{ target: 'component.sidebar-section', context: publicContext }}
-    class="c-sidebar-group"
-    class:is-drop-target={droptarget}
-    class:is-dragging={dragging}
-    role="treeitem"
-    aria-level={1}
-    aria-expanded={section.open}
-    aria-selected={false}
-    aria-label={name}
-    tabindex="-1"
-    data-nav={`group:${section.id}`}
-    data-group-slot={section.kind === 'custom' ? section.id : undefined}
+    class="c-sidebar-group__head"
+    data-slot="header"
+    data-group={section.id}
+    data-first={section.members[0]?.id ?? ''}
+    onclick={renaming ? undefined : ontoggle}
+    onpointerdown={renaming ? undefined : onpress}
+    oncontextmenu={onmenu}
   >
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div
-      class="c-sidebar-group__head"
-      data-slot="header"
-      data-group={section.id}
-      data-first={section.members[0]?.id ?? ''}
-      onclick={renaming ? undefined : ontoggle}
-      onpointerdown={renaming ? undefined : onpress}
-      oncontextmenu={onmenu}
-    >
-      <span class="c-sidebar-group__chevron">
-        <Icon name={section.open ? 'chevron-down' : 'chevron-right'} size={12} />
-      </span>
-      {#if renaming}
-        <input
-          bind:this={input}
-          class="c-sidebar-group__rename"
-          value={section.kind === 'custom' ? section.label : ''}
-          aria-label="Group name"
-          maxlength={80}
-          autocomplete="off"
-          spellcheck="false"
-          onkeydown={onRenameKeydown}
-          onblur={onRenameBlur}
-          onclick={(event) => event.stopPropagation()}
-        />
-      {:else}
-        <span class="c-sidebar-group__name" title={section.label}>{section.label}</span>
-      {/if}
-      {#if !section.open && count > 0}
-        <span class="c-sidebar-group__count" aria-hidden="true">{count}</span>
-      {/if}
-      {#if status}
-        <!-- Unlabelled: the tree item's name already says it, and would hide this one's anyway. -->
-        <SessionDot {status} />
-      {/if}
-    </div>
-
-    <div class="c-sidebar-group__rows" role="group">
-      {@render children()}
-    </div>
+    <span class="c-sidebar-group__chevron">
+      <Icon name={section.open ? 'chevron-down' : 'chevron-right'} size={12} />
+    </span>
+    {#if renaming}
+      <input
+        bind:this={input}
+        class="c-sidebar-group__rename"
+        value={section.kind === 'custom' ? section.label : ''}
+        aria-label="Group name"
+        maxlength={80}
+        autocomplete="off"
+        spellcheck="false"
+        onkeydown={onRenameKeydown}
+        onblur={onRenameBlur}
+        onclick={(event) => event.stopPropagation()}
+      />
+    {:else}
+      <span class="c-sidebar-group__name" title={section.label}>{section.label}</span>
+    {/if}
+    {#if !section.open && count > 0}
+      <span class="c-sidebar-group__count" aria-hidden="true">{count}</span>
+    {/if}
+    {#if status}
+      <!-- Unlabelled: the tree item's name already says it, and would hide this one's anyway. -->
+      <SessionDot {status} />
+    {/if}
   </div>
-</ExtensionPoint>
+
+  <div class="c-sidebar-group__rows" role="group">
+    {@render children()}
+  </div>
+</div>

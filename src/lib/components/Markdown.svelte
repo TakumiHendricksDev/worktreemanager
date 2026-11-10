@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * Renders what `markdown.ts` parsed, as elements.
    *
@@ -13,8 +10,12 @@
    * blockquote is ordinary markdown, so the renderer has to recurse somewhere; snippets keep it in
    * one file and cost no component instances per span, which matters when a streaming reply
    * re-renders many times a second.
+   *
+   * Paragraphs, links and inline code are public style parts (`chat.markdown.*`), attached with
+   * `extensionPart`, which costs an unstyled span one lookup and nothing else.
    */
   import { commands } from '../ipc/commands';
+  import { extensionContext, extensionPart } from '../state/extensions.svelte';
   import type { CodeRef } from '../code-links';
   import { parse, type Block, type Span } from '../markdown';
   import { onDestroy } from 'svelte';
@@ -50,6 +51,8 @@
      */
     codeLink?: CodeLink;
   } = $props();
+
+  const extension = extensionContext();
 
   /** The fence languages an agent tags SQL with. Untagged blocks get no Run: a guess would misfire. */
   const SQL = new Set([
@@ -122,45 +125,25 @@
   }
 </script>
 
-{#snippet spans(
-  list: Span[],
-)}{#each list as span, i (i)}{#if span.kind === 'text'}{span.text}{:else if span.kind === 'code'}{@const ref =
-        codeLink?.resolve(span.text)}{#if ref}<button
-          type="button"
-          class="c-markdown__code c-markdown__path"
-          title="Open in the Code tab"
-          onclick={() => codeLink?.open(ref)}>{span.text}</button
-        >{:else}<code
-          use:extensionPart={{ target: 'chat.markdown.code', context: publicContext }}
-          class="c-markdown__code">{span.text}</code
-        >{/if}{:else if span.kind === 'strong'}<strong>{@render spans(span.spans)}</strong
-      >{:else if span.kind === 'em'}<em>{@render spans(span.spans)}</em
-      >{:else if span.kind === 'strike'}<s>{@render spans(span.spans)}</s
-      >{:else if span.kind === 'link'}<a
-        use:extensionPart={{ target: 'chat.markdown.link', context: publicContext }}
-        href={span.href}
-        onclick={(event) => open(event, span.href)}>{@render spans(span.spans)}</a
-      >{:else if span.kind === 'file'}{@const ref = codeLink?.resolve(
-        span.target,
-      )}{@const name = pathLabel(span.spans)}{#if ref && name !== null}<button
-          type="button"
-          class="c-markdown__code c-markdown__path"
-          title="Open {span.target} in the Code tab"
-          onclick={() => codeLink?.open(ref)}>{name}</button
-        >{:else if ref}<button
-          type="button"
-          class="c-markdown__path"
-          title="Open {span.target} in the Code tab"
-          onclick={() => codeLink?.open(ref)}>{@render spans(span.spans)}</button
-        >{:else if name !== null}<code
-          use:extensionPart={{ target: 'chat.markdown.code', context: publicContext }}
-          class="c-markdown__code"
-          title={span.target}>{name}</code
-        >{:else}{@render spans(span.spans)}{/if}{/if}{/each}{/snippet}
+<!--
+  Kept on one line, and that is not a formatting accident.
+
+  Svelte turns the whitespace between template tags into text nodes, so breaking this across lines
+  puts a space on either side of every span — `**no**where` would render as "no where". Block level
+  below is free to breathe because those are block elements; this run is inline and is not.
+-->
+<!-- prettier-ignore -->
+{#snippet spans(list: Span[])}{#each list as span, i (i)}{#if span.kind === 'text'}{span.text}{:else if span.kind === 'code'}{@const ref = codeLink?.resolve(span.text)}{#if ref}<button type="button" class="c-markdown__code c-markdown__path" title="Open in the Code tab" onclick={() => codeLink?.open(ref)}>{span.text}</button>{:else}<code class="c-markdown__code" {@attach extensionPart('chat.markdown.code', extension)}>{span.text}</code>{/if}{:else if span.kind === 'strong'}<strong>{@render spans(span.spans)}</strong>{:else if span.kind === 'em'}<em>{@render spans(span.spans)}</em>{:else if span.kind === 'strike'}<s>{@render spans(span.spans)}</s>{:else if span.kind === 'link'}<a href={span.href} onclick={(event) => open(event, span.href)} {@attach extensionPart('chat.markdown.link', extension)}>{@render spans(span.spans)}</a>{:else if span.kind === 'file'}{@const ref = codeLink?.resolve(span.target)}{@const name = pathLabel(span.spans)}{#if ref && name !== null}<button type="button" class="c-markdown__code c-markdown__path" title="Open {span.target} in the Code tab" onclick={() => codeLink?.open(ref)}>{name}</button>{:else if ref}<button type="button" class="c-markdown__path" title="Open {span.target} in the Code tab" onclick={() => codeLink?.open(ref)}>{@render spans(span.spans)}</button>{:else if name !== null}<code class="c-markdown__code" title={span.target} {@attach extensionPart('chat.markdown.code', extension)}>{name}</code>{:else}{@render spans(span.spans)}{/if}{/if}{/each}{/snippet}
+
+<!--
+  `depth` is how many lists deep a block sits. It exists for one thing, the marker on a nested
+  bulleted list, which a selector could only reach as `.c-markdown ul ul`, one compound part past the
+  stylesheet's limit.
+-->
 {#snippet flow(list: Block[], depth: number)}
   {#each list as block, i (i)}
     {#if block.kind === 'paragraph'}
-      <p use:extensionPart={{ target: 'chat.markdown.paragraph', context: publicContext }}>
+      <p {@attach extensionPart('chat.markdown.paragraph', extension)}>
         {@render spans(block.spans)}
       </p>
     {:else if block.kind === 'heading'}
@@ -275,26 +258,5 @@
     {/if}
   {/each}
 {/snippet}
-<ExtensionPoint target="component.markdown" context={publicContext()}>
-  <!--
-  Kept on one line, and that is not a formatting accident.
 
-  Svelte turns the whitespace between template tags into text nodes, so breaking this across lines
-  puts a space on either side of every span — `**no**where` would render as "no where". Block level
-  below is free to breathe because those are block elements; this run is inline and is not.
--->
-  <!-- prettier-ignore -->
-
-  <!--
-  `depth` is how many lists deep a block sits. It exists for one thing, the marker on a nested
-  bulleted list, which a selector could only reach as `.c-markdown ul ul`, one compound part past the
-  stylesheet's limit.
--->
-
-  <div
-    use:extensionPart={{ target: 'component.markdown', context: publicContext }}
-    class="c-markdown"
-  >
-    {@render flow(blocks, 0)}
-  </div>
-</ExtensionPoint>
+<div class="c-markdown">{@render flow(blocks, 0)}</div>

@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * What Home has handed out and not heard back about: which session has it, what it was asked,
    * and since when.
@@ -35,44 +32,41 @@
   }
 </script>
 
-<ExtensionPoint target="component.in-flight" context={publicContext()}>
-  {#if fleet.delegations.length > 0}
-    <section class="c-inflight" aria-label="In flight">
-      <h2 class="c-inflight__heading">
-        In flight <span class="c-inflight__count">{fleet.delegations.length}</span>
-        <span class="c-inflight__note">Home hears back as each one ends</span>
-      </h2>
-      <ul class="o-plain-list c-inflight__list">
-        {#each fleet.delegations as exchange (exchange.id)}
-          {@const pane = sessions.paneBySession(exchange.to)}
-          {@const waiting = (pane?.approvals.length ?? 0) > 0}
-          <li class="c-inflight__item">
-            <button
-              class="c-inflight__row"
-              disabled={pane === null}
-              onclick={() => pane && onpeek(pane)}
-            >
-              <span class="c-inflight__head">
-                <SessionDot status={waiting ? 'attention' : 'working'} />
-                <span class="c-inflight__who">{fleet.nameOf(exchange.to)}</span>
-                <span class="c-inflight__state"
-                  >{waiting ? 'waiting on you' : 'working'}</span
-                >
-                <time
-                  class="c-inflight__time"
-                  datetime={new Date(exchange.sentAt).toISOString()}
-                >
-                  since {time.format(exchange.sentAt)}
-                </time>
-              </span>
-              {#if pane}
-                <span class="c-inflight__where">{where(pane)}</span>
-              {/if}
-              <span class="c-inflight__text">“{exchange.prompt}”</span>
-            </button>
-          </li>
-        {/each}
-      </ul>
-    </section>
-  {/if}
-</ExtensionPoint>
+{#if fleet.delegations.length > 0}
+  <section class="c-inflight" aria-label="In flight">
+    <h2 class="c-inflight__heading">
+      In flight <span class="c-inflight__count">{fleet.delegations.length}</span>
+      <span class="c-inflight__note">Home hears back as each one ends</span>
+    </h2>
+    <ul class="o-plain-list c-inflight__list">
+      {#each fleet.delegations as exchange (exchange.id)}
+        {@const pane = sessions.paneBySession(exchange.to)}
+        {@const waiting = (pane?.approvals.length ?? 0) > 0}
+        <li class="c-inflight__item">
+          <button
+            class="c-inflight__row"
+            disabled={pane === null}
+            onclick={() => pane && onpeek(pane)}
+          >
+            <span class="c-inflight__head">
+              <SessionDot status={waiting ? 'attention' : 'working'} />
+              <span class="c-inflight__who">{fleet.nameOf(exchange.to)}</span>
+              <span class="c-inflight__state">{waiting ? 'waiting on you' : 'working'}</span
+              >
+              <time
+                class="c-inflight__time"
+                datetime={new Date(exchange.sentAt).toISOString()}
+              >
+                since {time.format(exchange.sentAt)}
+              </time>
+            </span>
+            {#if pane}
+              <span class="c-inflight__where">{where(pane)}</span>
+            {/if}
+            <span class="c-inflight__text">“{exchange.prompt}”</span>
+          </button>
+        </li>
+      {/each}
+    </ul>
+  </section>
+{/if}

@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A labelled form field and the messages beneath it.
    *
@@ -52,11 +50,7 @@
   );
 </script>
 
-<div
-  use:extensionPart={{ target: 'ui.field', context: publicContext }}
-  class="c-field"
-  class:is-inert={inert}
->
+<div class="c-field" class:is-inert={inert}>
   <label class="c-field__label" for={id}>
     {label}
     {#if required}<span class="c-field__required" aria-label="required">*</span>{/if}

@@ -35,6 +35,8 @@ pub fn list_shells(app: &App, project: &str, worktree: &str) -> Vec<ShellView> {
     app.live_shells()
         .into_iter()
         .filter(|shell| shell.project == project && shell.worktree == worktree)
+        // A Native CLI or a plugin terminal is a PTY but not a shell to run commands in.
+        .filter(|shell| app.is_login_shell(&shell.session))
         .map(|shell| {
             let integration = app.shell_admission.get(&shell.session);
             let foreground = app

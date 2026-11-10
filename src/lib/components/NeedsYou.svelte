@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * Every approval waiting on you, in every session in every project, oldest first — answerable
    * here, without going to the worktree it came from.
@@ -80,74 +77,70 @@
   }
 </script>
 
-<ExtensionPoint target="component.needs-you" context={publicContext()}>
-  {#if fleet.needsYou.length + shellRuns.pending.length > 0}
-    <section class="c-inbox" aria-label="Needs you">
-      <h2 class="c-inbox__heading">
-        <Icon name="inbox" size={14} />
-        Needs you
-        <span class="c-inbox__count"
-          >{fleet.needsYou.length + shellRuns.pending.length}</span
-        >
-      </h2>
-      <ul class="o-plain-list c-inbox__list" bind:this={listEl}>
-        {#each shellRuns.pending as run (run.id)}
-          <li class="c-inbox__item">
-            <div class="c-inbox__row">
-              <button class="c-inbox__toggle" onclick={() => shellRuns.reviewHome(run)}>
-                <SessionDot status="attention" /><span class="c-inbox__what"
-                  >Home command</span
-                >
-                <span class="c-inbox__line" title={run.request.command}
-                  >{run.request.command}</span
-                >
-                <span class="c-inbox__who">{run.directory}</span>
-              </button><Button size="sm" onclick={() => shellRuns.reviewHome(run)}
-                >Review</Button
+{#if fleet.needsYou.length + shellRuns.pending.length > 0}
+  <section class="c-inbox" aria-label="Needs you">
+    <h2 class="c-inbox__heading">
+      <Icon name="inbox" size={14} />
+      Needs you
+      <span class="c-inbox__count">{fleet.needsYou.length + shellRuns.pending.length}</span>
+    </h2>
+    <ul class="o-plain-list c-inbox__list" bind:this={listEl}>
+      {#each shellRuns.pending as run (run.id)}
+        <li class="c-inbox__item">
+          <div class="c-inbox__row">
+            <button class="c-inbox__toggle" onclick={() => shellRuns.reviewHome(run)}>
+              <SessionDot status="attention" /><span class="c-inbox__what"
+                >Home command</span
               >
-            </div>
-          </li>
-        {/each}
-        {#each fleet.needsYou as waiting (waiting.approval.id)}
-          {@const summary = summarize(waiting.approval.request)}
-          {@const expanded = open?.approval.id === waiting.approval.id}
-          <li class="c-inbox__item" class:is-open={expanded}>
-            <div class="c-inbox__row">
-              <button
-                class="c-inbox__toggle"
-                aria-expanded={expanded}
-                onclick={() => (chosen = waiting.approval.id)}
+              <span class="c-inbox__line" title={run.request.command}
+                >{run.request.command}</span
               >
-                <SessionDot status="attention" />
-                <span class="c-inbox__what">{APPROVAL_WORD[summary.kind]}</span>
-                <span class="c-inbox__line" title={summary.line}>{summary.line}</span>
-                <span class="c-inbox__who">
-                  {waiting.pane.agentTitle ?? sessions.labelOf(waiting.pane)} in {where(
-                    waiting.pane,
-                  )}
-                </span>
-              </button>
-              <span class="c-inbox__actions">
-                <Button variant="quiet" size="sm" onclick={() => onpeek(waiting.pane)}
-                  >Peek</Button
-                >
-                <Button variant="quiet" size="sm" onclick={() => onreveal(waiting.pane)}
-                  >Open</Button
-                >
+              <span class="c-inbox__who">{run.directory}</span>
+            </button><Button size="sm" onclick={() => shellRuns.reviewHome(run)}
+              >Review</Button
+            >
+          </div>
+        </li>
+      {/each}
+      {#each fleet.needsYou as waiting (waiting.approval.id)}
+        {@const summary = summarize(waiting.approval.request)}
+        {@const expanded = open?.approval.id === waiting.approval.id}
+        <li class="c-inbox__item" class:is-open={expanded}>
+          <div class="c-inbox__row">
+            <button
+              class="c-inbox__toggle"
+              aria-expanded={expanded}
+              onclick={() => (chosen = waiting.approval.id)}
+            >
+              <SessionDot status="attention" />
+              <span class="c-inbox__what">{APPROVAL_WORD[summary.kind]}</span>
+              <span class="c-inbox__line" title={summary.line}>{summary.line}</span>
+              <span class="c-inbox__who">
+                {waiting.pane.agentTitle ?? sessions.labelOf(waiting.pane)} in {where(
+                  waiting.pane,
+                )}
               </span>
+            </button>
+            <span class="c-inbox__actions">
+              <Button variant="quiet" size="sm" onclick={() => onpeek(waiting.pane)}
+                >Peek</Button
+              >
+              <Button variant="quiet" size="sm" onclick={() => onreveal(waiting.pane)}
+                >Open</Button
+              >
+            </span>
+          </div>
+          {#if expanded}
+            <div class="c-inbox__card">
+              <ApprovalCard
+                request={waiting.approval.request}
+                focusOnMount={false}
+                onanswer={(reply) => void answer(waiting, reply)}
+              />
             </div>
-            {#if expanded}
-              <div class="c-inbox__card">
-                <ApprovalCard
-                  request={waiting.approval.request}
-                  focusOnMount={false}
-                  onanswer={(reply) => void answer(waiting, reply)}
-                />
-              </div>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    </section>
-  {/if}
-</ExtensionPoint>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  </section>
+{/if}

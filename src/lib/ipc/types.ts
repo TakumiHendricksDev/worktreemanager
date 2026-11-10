@@ -934,6 +934,35 @@ export type AgentEvent =
   | { kind: 'raw'; provider: string; event: string; payload: unknown };
 
 /**
+ * `chat_edit_snapshot` and `chat_edit`, mirroring `src-tauri/src/chat_edit.rs`.
+ *
+ * Here rather than beside the edit store because `commands.ts` and the public operation
+ * contract both name them, and neither should import a component-facing state module to do it.
+ */
+export type ChatEditMessage = {
+  id: string;
+  turn: string;
+  text: string;
+  previous: string | null;
+  problem: string | null;
+};
+export type ChatEditSnapshot = {
+  session: string;
+  revision: number;
+  messages: ChatEditMessage[];
+  problem: string | null;
+  status: 'ready' | 'busy' | 'unsupported';
+};
+export type ChatEditRequest = {
+  id: string;
+  session: string;
+  message: string;
+  revision: number;
+  text: string;
+};
+export type ChatEditOutcome = { session: string; original: string; submitted: boolean };
+
+/**
  * What the user answered.
  *
  * `allow_with_edits` is Claude Code only — its allow can carry a replacement payload and rewrite

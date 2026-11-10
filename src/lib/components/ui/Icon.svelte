@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * One icon from the set in `icons.ts`.
    *
@@ -36,7 +34,6 @@
 </script>
 
 <svg
-  use:extensionPart={{ target: 'ui.icon', context: publicContext }}
   class="c-icon"
   width={size}
   height={size}

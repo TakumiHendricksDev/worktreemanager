@@ -14,7 +14,7 @@ type Schema =
       prefixItems?: Schema[];
     };
 const definitions = wire.$defs as Record<string, Schema>;
-const operations = wire.operations as Record<string, { arguments: Schema }>;
+const operations = wire.operations as Record<string, { arguments: Schema; result: Schema }>;
 
 function matches(schema: Schema, value: unknown, depth: number): boolean {
   if (depth > 64) return false;
@@ -62,9 +62,27 @@ function matches(schema: Schema, value: unknown, depth: number): boolean {
   }
 }
 
+function contract(operation: string) {
+  return Object.hasOwn(operations, operation) ? operations[operation] : undefined;
+}
+
 /** Both plugin requests and hook transforms use the same published wire shapes as built-ins. */
 export function validateExtensionArguments(operation: string, args: unknown): void {
-  const contract = Object.hasOwn(operations, operation) ? operations[operation] : undefined;
-  if (!contract || !matches(contract.arguments, args, 0))
+  const published = contract(operation);
+  if (!published || !matches(published.arguments, args, 0))
     throw Error(`Arguments do not match the published contract for ${operation}`);
+}
+
+/**
+ * A replacement's answer, held to the result shape of the operation it stands in for.
+ *
+ * Its caller is built-in code typed against that shape, so an unchecked answer would surface as a
+ * crash somewhere far from the plugin that caused it.
+ */
+export function validateExtensionResult(operation: string, result: unknown): void {
+  const published = contract(operation);
+  if (!published || !matches(published.result, result, 0))
+    throw Error(
+      `A replacement's result does not match the published contract for ${operation}`,
+    );
 }

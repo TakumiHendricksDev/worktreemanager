@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * The product mark. `assets/brand/wtm-mark.svg` is the master; this is a hand-kept copy of
    * its paths, and the two drifting apart is the thing to watch for when either changes.
@@ -29,7 +27,6 @@
 </script>
 
 <svg
-  use:extensionPart={{ target: 'ui.logo', context: publicContext }}
   class="c-logo"
   width={size}
   height={size}

@@ -6,6 +6,14 @@
  * cannot invent a command name or get its arguments wrong silently.
  */
 
+import { invoke as nativeInvoke, type InvokeArgs } from '@tauri-apps/api/core';
+import { PUBLIC_OPERATIONS } from '../extensions';
+import type {
+  NativeDeliveryCheck,
+  NativeReceipt,
+  NativeResolution,
+  NativeSession,
+} from '../native-sessions';
 import type {
   PluginDraft,
   PluginDraftView,
@@ -14,37 +22,7 @@ import type {
   PluginSlot,
   PluginBinding,
 } from '../plugins';
-import { invoke as nativeInvoke, type InvokeArgs } from '@tauri-apps/api/core';
-import { catalog } from '../extensions';
-
-type OperationMiddleware = (
-  operation: string,
-  args: InvokeArgs,
-  next: (args: InvokeArgs) => Promise<unknown>,
-) => Promise<unknown>;
-let operationMiddleware: OperationMiddleware | null = null;
-export function setOperationMiddleware(middleware: OperationMiddleware | null) {
-  operationMiddleware = middleware;
-}
-function invoke<T>(operation: string, args: InvokeArgs = {}): Promise<T> {
-  if (
-    operationMiddleware &&
-    catalog.operations.some((o) => o.id === operation && o.exposure === 'public')
-  )
-    return operationMiddleware(operation, args, (next) =>
-      nativeInvoke(operation, next),
-    ) as Promise<T>;
-  return nativeInvoke<T>(operation, args);
-}
-export function dispatchExtensionOperation(
-  operation: string,
-  args: InvokeArgs,
-): Promise<unknown> {
-  if (!catalog.operations.some((o) => o.id === operation && o.exposure === 'public'))
-    return Promise.reject(new Error('Protected or unknown host operation'));
-  return nativeInvoke(operation, args);
-}
-import type { DesignDiscovery, PrototypeState } from '../open-design';
+import type { DesignDiscovery, PrototypeCancel, PrototypeState } from '../open-design';
 import type { ShellRun, ShellRunRequest, RunShell } from '../shell-script';
 
 import type {
@@ -74,6 +52,9 @@ import type {
   BrowserView,
   ApprovalAnswer,
   Capability,
+  ChatEditOutcome,
+  ChatEditRequest,
+  ChatEditSnapshot,
   CodeChanges,
   CodeComment,
   CodeEntry,
@@ -110,6 +91,45 @@ import type {
   Worktree,
 } from './types';
 
+/**
+ * Where plugin hooks, replacements and `operation.completed` join a public operation.
+ *
+ * `intercepts` is asked first, synchronously, and with nothing enabled that cares about an
+ * operation it says no and the call goes straight to Rust. That is every keystroke's `pty_write`
+ * and every file read, so the middleware must cost a set lookup there, not a promise and an event.
+ */
+export type OperationMiddleware = {
+  intercepts: (operation: string) => boolean;
+  run: (
+    operation: string,
+    args: InvokeArgs,
+    next: (args: InvokeArgs) => Promise<unknown>,
+  ) => Promise<unknown>;
+};
+let operationMiddleware: OperationMiddleware | null = null;
+export function setOperationMiddleware(middleware: OperationMiddleware | null) {
+  operationMiddleware = middleware;
+}
+
+function invoke<T>(operation: string, args: InvokeArgs = {}): Promise<T> {
+  const middleware = operationMiddleware;
+  if (middleware && PUBLIC_OPERATIONS.has(operation) && middleware.intercepts(operation))
+    return middleware.run(operation, args, (next) =>
+      nativeInvoke(operation, next),
+    ) as Promise<T>;
+  return nativeInvoke<T>(operation, args);
+}
+
+/** A plugin's own host request: only public operations, and never back through the middleware. */
+export function dispatchExtensionOperation(
+  operation: string,
+  args: InvokeArgs,
+): Promise<unknown> {
+  if (!PUBLIC_OPERATIONS.has(operation))
+    return Promise.reject(new Error('Protected or unknown host operation'));
+  return nativeInvoke(operation, args);
+}
+
 export const commands = {
   extensionValidate: (
     plugin: string,
@@ -124,11 +144,10 @@ export const commands = {
       context,
     }),
   chatEditSnapshot: (session: string) =>
-    invoke<import('../state/chat-edit.svelte').ChatEditSnapshot>('chat_edit_snapshot', {
+    invoke<ChatEditSnapshot>('chat_edit_snapshot', {
       session,
     }),
-  chatEdit: (edit: import('../state/chat-edit.svelte').ChatEditRequest) =>
-    invoke<import('../state/chat-edit.svelte').ChatEditOutcome>('chat_edit', { edit }),
+  chatEdit: (edit: ChatEditRequest) => invoke<ChatEditOutcome>('chat_edit', { edit }),
   extensionConfigure: (plugin: string, change: unknown) =>
     invoke<PluginsSnapshot>('extension_configure', { plugin, change }),
   extensionStart: () => invoke<Record<string, string>>('extension_start'),
@@ -152,6 +171,10 @@ export const commands = {
   extensionReply: (id: string, result: unknown, problem: string | null) =>
     invoke<void>('extension_reply', { id, result, problem }),
   pluginDrafts: () => invoke<PluginDraftView[]>('plugin_drafts'),
+  /** Set once a damaged drafts file was moved aside, saying where; otherwise null. */
+  pluginDraftsNotice: () => invoke<string | null>('plugin_drafts_notice'),
+  /** Forgets the draft record only; its folder and any registration stay. */
+  pluginDeleteDraft: (id: string) => invoke<void>('plugin_delete_draft', { id }),
   pluginCreate: (id: string, provider: string, brief: string, folder: string) =>
     invoke<PluginDraft>('plugin_create', { id, provider, brief, folder }),
   pluginOpenDraft: (id: string, fix = false) =>
@@ -174,8 +197,13 @@ export const commands = {
     project: string,
     worktree: string,
   ) => invoke<BrowserView>('plugin_view', { slot, plugin, view, project, worktree }),
-  pluginPrepare: (source: string, kind: string, revision: string) =>
-    invoke<PluginReview>('plugin_prepare', { source, kind, revision }),
+  /** `token` (a UUID) names the review up front, so `pluginCancel` can stop it mid-clone. */
+  pluginPrepare: (
+    source: string,
+    kind: string,
+    revision: string,
+    token: string | null = null,
+  ) => invoke<PluginReview>('plugin_prepare', { source, kind, revision, token }),
   pluginCancel: (token: string) => invoke<void>('plugin_cancel', { token }),
   pluginChange: (action: string, id: string, enabled: boolean) =>
     invoke<PluginsSnapshot>('plugin_change', { action, id, enabled }),
@@ -207,17 +235,20 @@ export const commands = {
       resume,
       integrated,
     }),
-  nativeSessions: () =>
-    invoke<import('../native-sessions').NativeSession[]>('native_sessions'),
-  nativeSession: (session: string) =>
-    invoke<import('../native-sessions').NativeSession>('native_session', { session }),
+  nativeSessions: () => invoke<NativeSession[]>('native_sessions'),
+  nativeSession: (session: string) => invoke<NativeSession>('native_session', { session }),
   sendNativeMessage: (session: string, text: string) =>
-    invoke<import('../native-sessions').NativeReceipt>('send_native_message', {
+    invoke<NativeReceipt>('send_native_message', {
       session,
       text,
     }),
   interruptNativeTurn: (session: string) =>
     invoke<void>('interrupt_native_turn', { session }),
+  checkNativeDelivery: (session: string) =>
+    invoke<NativeDeliveryCheck>('check_native_delivery', { session }),
+  /** The user's own verdict on an uncertain or pending receipt. Nothing is ever resent. */
+  resolveNativeDelivery: (session: string, receipt: string, resolution: NativeResolution) =>
+    invoke<NativeReceipt>('resolve_native_delivery', { session, receipt, resolution }),
   discoverDesignContext: (projectId: string, worktreeId: string) =>
     invoke<DesignDiscovery>('discover_design_context', { projectId, worktreeId }),
   listPrototypes: (session: string) =>
@@ -229,7 +260,7 @@ export const commands = {
   implementPrototype: (session: string, id: string, reviewId: string) =>
     invoke<void>('implement_prototype', { session, id, reviewId }),
   cancelPrototype: (session: string, id: string) =>
-    invoke<void>('cancel_prototype', { session, id }),
+    invoke<PrototypeCancel>('cancel_prototype', { session, id }),
   shellRunTarget: (projectId: string, worktreeId: string) =>
     invoke<string>('shell_run_target', { projectId, worktreeId }),
   listRunShells: (projectId: string, worktreeId: string) =>

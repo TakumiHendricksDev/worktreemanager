@@ -1358,8 +1358,9 @@ pub fn open(
     options: SessionOptions,
     fork: Option<String>,
 ) -> Reply<String> {
-    if !app.plugins.enabled("wtm.home") {
-        return Err(ErrorView::new("plugin", "Home is disabled"));
+    // Every Home session is a WTM Chat conversation, so Home is refused with either built-in off.
+    if let Some(refusal) = app.chat_pane_refusal(&SessionScope::Home) {
+        return Err(ErrorView::new("plugin", refusal));
     }
     let entry = wtm_agent::entry(agent_id).ok_or_else(|| {
         ErrorView::new(

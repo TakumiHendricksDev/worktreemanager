@@ -1,51 +1,67 @@
 <script lang="ts">
-  import { setContext as setExtensionContext } from 'svelte';
-  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
-  setExtensionContext(EXTENSION_PROTECTED, true);
-  import { onDestroy } from 'svelte';
-  import { open } from '@tauri-apps/plugin-dialog';
-  import { commands } from '../ipc/commands';
-  import { errorMessage } from '../ipc/types';
+  /**
+   * Settings → Plugins: built-in features and installed plugins, Workbench defaults, and Develop.
+   *
+   * This section is the way out of every plugin problem, which is why Settings itself is never
+   * offered to plugin hooks and why this section is never a region a plugin can replace. Install,
+   * update and roll back all go through a review of the exact snapshot and what it may run;
+   * nothing here runs package code while preparing it. Plugin recovery and safe mode turn user
+   * plugins off without uninstalling them.
+   *
+   * This file is the frame: the section tabs, the banners about the registry as a whole, the
+   * status line, and the dialogs that outlive the row that opened them. Each tab is its own
+   * component (`PluginList` and `PluginDetail`, `PluginWorkbenchDefaults`, `PluginDevelop`), and
+   * every dialog and page owns its own failure, so an error is shown once, where it happened.
+   *
+   * # Linking here
+   *
+   * `settingsView.show('plugins', focus)` opens a tab when `focus` names one (`defaults` is what
+   * New-session defaults… uses) or selects a plugin when it names one. The focus is consumed, so the
+   * same link works again after the user has moved on.
+   */
+  import { tick, untrack } from 'svelte';
   import {
-    PLUGIN_SLOTS,
-    type PluginReview,
-    type PluginSlot,
-    type PluginBinding,
-    type PluginDraftView,
+    type PluginInstalled,
+    type PluginReviewStart,
+    type PluginRow,
+    type PluginSourceKind,
   } from '../plugins';
   import { plugins } from '../state/plugins.svelte';
-  import { workspace } from '../state/workspace.svelte';
   import { settingsView } from '../state/settings-view.svelte';
-  import { sessions } from '../state/sessions.svelte';
-  import Button from './ui/Button.svelte';
-  import Choice from './ui/Choice.svelte';
-  import TextInput from './ui/TextInput.svelte';
-  import Field from './ui/Field.svelte';
   import Banner from './ui/Banner.svelte';
-  import Dialog from './ui/Dialog.svelte';
-  import PluginContributions from './PluginContributions.svelte';
-  import PluginSessions from './PluginSessions.svelte';
+  import Button from './ui/Button.svelte';
+  import TextInput from './ui/TextInput.svelte';
+  import ConfirmPluginAction from './ConfirmPluginAction.svelte';
   import PluginAuthoring from './PluginAuthoring.svelte';
+  import PluginDetail from './PluginDetail.svelte';
+  import PluginDevelop from './PluginDevelop.svelte';
+  import PluginList from './PluginList.svelte';
+  import PluginReviewDialog from './PluginReviewDialog.svelte';
+  import PluginWorkbenchDefaults from './PluginWorkbenchDefaults.svelte';
+
+  type Tab = 'installed' | 'defaults' | 'develop';
+  const TABS: { id: Tab; name: string }[] = [
+    { id: 'installed', name: 'Installed' },
+    { id: 'defaults', name: 'Workbench defaults' },
+    { id: 'develop', name: 'Develop a plugin' },
+  ];
+  type SourceFilter = 'all' | 'builtin' | PluginSourceKind;
+  type Confirming =
+    { action: 'uninstall' | 'rollback'; row: PluginRow } | { action: 'recover' };
 
   let authoring: PluginAuthoring;
-  let reviewDraft = $state<PluginDraftView | null>(null);
-  let tab = $state<'installed' | 'defaults' | 'develop'>('installed');
+  let tab = $state<Tab>('installed');
   let selected = $state('wtm.native-cli');
   let query = $state('');
-  let sourceFilter = $state('all');
-  let busy = $state(false);
-  let error = $state<string | null>(null);
-  let dialog = $state<
-    'add' | 'review' | 'manifest' | 'output' | 'remove' | 'recovery' | 'rollback' | null
-  >(null);
-  let source = $state('');
-  let kind = $state('local');
-  let revision = $state('main');
-  let review = $state<PluginReview | null>(null);
-  let gone = false;
-  let listElement = $state<HTMLElement | null>(null);
-  let output = $state('');
-  let backend = $state<{ plugin: string; id: string; title: string } | null>(null);
+  let sourceFilter = $state<SourceFilter>('all');
+  /** The last change that worked, for the status line. */
+  let notice = $state('');
+  let reviewing = $state<PluginReviewStart | null>(null);
+  let confirming = $state<Confirming | null>(null);
+  /** Recovery ran in this window, which is why safe mode is on if it is. */
+  let recovered = $state(false);
+  let tabList = $state<HTMLElement | null>(null);
+
   const rows = $derived(
     plugins.rows.filter(
       (p) =>
@@ -57,669 +73,283 @@
     ),
   );
   const current = $derived(plugins.rows.find((p) => p.id === selected));
-  $effect(() => {
-    void selected;
-    void rows;
-    const frame = requestAnimationFrame(() =>
-      listElement?.querySelector('.is-selected')?.scrollIntoView({ block: 'nearest' }),
-    );
-    return () => cancelAnimationFrame(frame);
-  });
-  const manifest = $derived(current?.installed?.current.manifest);
-  const projectId = $derived(workspace.activeProjectId);
-  const worktreeId = $derived(workspace.selectedWorktreeId);
-  const starter = `schema = 1\napi = 1\nid = "example.project-tools"\nname = "Project Tools"\nversion = "0.1.0"\n\n[[commands]]\nid = "summary"\ntitle = "Show project summary"\ncommand = ["git", "status", "--short"]`;
 
-  async function run(action: () => Promise<unknown>) {
-    if (busy) return;
-    busy = true;
-    error = null;
-    try {
-      await action();
-    } catch (e) {
-      error = errorMessage(e);
-    } finally {
-      busy = false;
-    }
-  }
-  async function close() {
-    if (busy) return;
-    if (review) {
-      const token = review.token;
-      review = null;
-      await commands.pluginCancel(token).catch(() => {});
-    }
-    dialog = null;
-  }
-  onDestroy(() => {
-    gone = true;
-    if (review) void commands.pluginCancel(review.token).catch(() => {});
+  $effect(() => {
+    const focus = settingsView.focus;
+    if (!focus) return;
+    untrack(() => {
+      const named = TABS.find((t) => t.id === focus);
+      if (named) show(named.id);
+      else if (plugins.rows.some((p) => p.id === focus)) {
+        show('installed');
+        selected = focus;
+      }
+    });
+    settingsView.focus = null;
   });
-  function add() {
-    dialog = null;
+
+  function show(next: Tab) {
+    if (next !== tab) notice = '';
+    tab = next;
+  }
+
+  function onTabKey(event: KeyboardEvent, id: Tab) {
+    const at = TABS.findIndex((t) => t.id === id);
+    let next = at;
+    if (event.key === 'ArrowRight') next = (at + 1) % TABS.length;
+    else if (event.key === 'ArrowLeft') next = (at - 1 + TABS.length) % TABS.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = TABS.length - 1;
+    else return;
+    event.preventDefault();
+    const target = TABS[next];
+    if (target) show(target.id);
+    void tick().then(() =>
+      tabList?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus(),
+    );
+  }
+
+  function create() {
+    reviewing = null;
     authoring.add();
   }
-  function sourceAdd(next: 'local' | 'git') {
-    reviewDraft = null;
-    source = '';
-    kind = next;
-    revision = 'main';
-    dialog = 'add';
+
+  function addFrom(kind: PluginSourceKind) {
+    reviewing = { step: 'source', kind, update: null };
   }
-  async function browse() {
-    await run(async () => {
-      const path = await open({
-        directory: true,
-        multiple: false,
-        title: 'Choose a plugin folder',
-      });
-      if (typeof path === 'string' && !gone) source = path;
-    });
+
+  function update(installed: PluginInstalled) {
+    reviewing = { step: 'source', kind: installed.current.kind, update: installed };
   }
-  async function prepare() {
-    await run(async () => {
-      const prepared = await commands.pluginPrepare(source, kind, revision);
-      if (gone) {
-        await commands.pluginCancel(prepared.token);
-        return;
+
+  function installed(id: string, message: string) {
+    reviewing = null;
+    show('installed');
+    if (!rows.some((r) => r.id === id)) {
+      query = '';
+      sourceFilter = 'all';
+    }
+    selected = id;
+    notice = message;
+    void authoring.refresh();
+  }
+
+  /**
+   * The row to show once `id` is gone: the next one, the one before, or the first built-in, with
+   * the search cleared when that is the only way to see it. Decided before the removal, while the
+   * list still says where `id` was; applied after it, so a refused uninstall moves nothing.
+   */
+  function after(id: string): () => void {
+    const visible = rows.map((r) => r.id);
+    const at = visible.indexOf(id);
+    const rest = visible.filter((r) => r !== id);
+    const next = rest[Math.min(Math.max(at, 0), rest.length - 1)];
+    return () => {
+      if (!next) {
+        query = '';
+        sourceFilter = 'all';
       }
-      review = prepared;
-      dialog = 'review';
-    });
-  }
-  function update() {
-    if (!current?.installed) return;
-    reviewDraft = null;
-    source = current.installed.current.source;
-    kind = current.installed.current.kind;
-    revision = current.installed.current.revision;
-    dialog = 'add';
-  }
-  async function install() {
-    if (!review) return;
-    const pending = review;
-    await run(async () => {
-      await plugins.change('install', pending.token);
-      selected = pending.package.manifest.id;
-      review = null;
-      dialog = null;
-      reviewDraft = null;
-      await authoring.refresh();
-    });
-  }
-  async function contribution(id: string, panel: boolean) {
-    if (!current || !projectId || !worktreeId) return;
-    const plugin = current.id;
-    await run(async () => {
-      if (panel) {
-        await commands.pluginPanel(projectId, worktreeId, plugin, id);
-        settingsView.close();
-      } else {
-        output = await commands.pluginRun(projectId, worktreeId, plugin, id);
-        dialog = 'output';
-      }
-    });
-  }
-  function choiceFor(slot: PluginSlot): string {
-    const b = plugins.binding(slot);
-    return b.kind === 'plugin' ? `${b.plugin}:${b.view}` : b.kind;
-  }
-  function chooseSlot(slot: PluginSlot, value: string) {
-    const [plugin = '', view = ''] = value.split(':');
-    const binding: PluginBinding =
-      value === 'builtin' || value === 'hidden'
-        ? { kind: value }
-        : { kind: 'plugin', plugin, view };
-    void run(() => plugins.bind(slot, binding));
+      selected = next ?? plugins.state.builtins[0]?.id ?? '';
+    };
   }
 </script>
 
 <div class="c-plugins">
-  <div class="c-plugins__toolbar">
-    <div class="c-plugins__tabs" aria-label="Plugin sections">
-      {#each [{ id: 'installed', name: 'Installed' }, { id: 'defaults', name: 'Workbench defaults' }, { id: 'develop', name: 'Develop a plugin' }] as item}
-        <Button
-          variant={tab === item.id ? 'neutral' : 'quiet'}
-          ariaPressed={tab === item.id}
-          onclick={() => {
-            tab = item.id as typeof tab;
-          }}>{item.name}</Button
+  <div class="c-plugins__head">
+    <div class="c-tabs" role="tablist" aria-label="Plugin sections" bind:this={tabList}>
+      {#each TABS as item (item.id)}
+        <button
+          class="c-tabs__tab"
+          class:is-active={tab === item.id}
+          role="tab"
+          id="plugin-tab-{item.id}"
+          aria-selected={tab === item.id}
+          aria-controls="plugin-panel"
+          tabindex={tab === item.id ? 0 : -1}
+          onclick={() => show(item.id)}
+          onkeydown={(event) => onTabKey(event, item.id)}>{item.name}</button
         >
       {/each}
     </div>
-    <Button variant="accent" onclick={add} disabled={busy}>Add plugin…</Button>
+    <div class="c-plugins__add">
+      <Button variant="accent" onclick={create}>Add plugin…</Button>
+    </div>
   </div>
   <PluginAuthoring
     bind:this={authoring}
     showAll={tab === 'develop'}
-    onsource={sourceAdd}
-    onreview={(prepared, draft) => {
-      review = prepared;
-      reviewDraft = draft;
-      error = null;
-      dialog = 'review';
+    onsource={addFrom}
+    onreview={(review, draft) => {
+      reviewing = { step: 'review', review, draft };
     }}
   />
-  {#if error}<Banner>{error}</Banner>{/if}
   {#if plugins.state.problem}<Banner>{plugins.state.problem}</Banner>{/if}
-  {#if plugins.state.registry.safe_mode}<Banner variant="info"
-      >User-installed plugins are disabled. Enable individual plugins when you are ready.</Banner
+  {#if plugins.state.safe_mode && !plugins.state.problem}<Banner variant="info"
+      >{recovered ? 'Plugin recovery ran.' : 'wtm started in safe mode.'} User plugins are off
+      for this run; changes you make here apply now and are saved for the next normal start.</Banner
     >{/if}
-  <div class="c-plugins__body">
+  <div
+    class="c-plugins__body"
+    id="plugin-panel"
+    role="tabpanel"
+    aria-labelledby="plugin-tab-{tab}"
+  >
     {#if tab === 'installed'}
       <div class="c-plugins__toolbar">
         <TextInput
           bind:value={query}
           type="search"
-          placeholder="Search installed plugins…"
-          ariaLabel="Search installed plugins"
+          placeholder="Search plugins…"
+          ariaLabel="Search plugins"
         />
-        <select class="c-input" aria-label="Filter plugins" bind:value={sourceFilter}
+        <select
+          class="c-input"
+          aria-label="Filter plugins by source"
+          bind:value={sourceFilter}
           ><option value="all">All sources</option><option value="builtin">Built-in</option
-          ><option value="git">Git</option><option value="local">Local</option></select
+          ><option value="git">Git</option><option value="local">Local folder</option
+          ></select
         >
       </div>
       <div class="c-plugins__split">
-        <div class="c-plugins__list" bind:this={listElement}>
-          {#each rows as p (p.id)}
-            <button
-              class="c-plugins__item"
-              class:is-selected={selected === p.id}
-              aria-pressed={selected === p.id}
-              onclick={() => {
-                selected = p.id;
-              }}
-            >
-              <span class="c-plugins__row"
-                ><strong>{p.name}</strong><span
-                  class="c-plugins__status"
-                  class:is-enabled={p.enabled}>{p.enabled ? 'On' : 'Off'}</span
-                ></span
-              ><span class="c-plugins__muted">{p.source}</span>
-            </button>
-          {:else}<p class="c-plugins__empty">No plugins match this search.</p>{/each}
-        </div>
-        <section class="c-plugins__detail">
+        <PluginList {rows} bind:selected onselect={() => (notice = '')} />
+        <section class="c-plugins__detail" aria-label={current?.name ?? 'Plugin'}>
           {#if current}
-            <div class="c-plugins__row">
-              <div>
-                <h2 class="c-plugins__title">
-                  {current.name} <span class="c-badge">{current.version}</span>
-                </h2>
-                <p class="c-plugins__muted">{current.id}</p>
-              </div>
-              <Choice
-                checked={current.enabled}
-                disabled={busy}
-                onchange={(enabled) =>
-                  void run(() => plugins.change('enable', current.id, enabled))}
-                >Enabled</Choice
-              >
-            </div>
-            <p class="c-plugins__description">{current.description}</p>
-            {#if current.id === 'wtm.native-cli'}
-              <p class="c-plugins__note">
-                Use the original CLI experience, including its own mods. WTM manages the
-                pane; the CLI manages the conversation.
-              </p>
-              <div class="c-plugins__section c-plugins__row">
-                <div>
-                  Default for new local sessions
-                  <p class="c-plugins__muted">
-                    Currently {plugins.state.registry.experience === 'wtm.chat'
-                      ? 'WTM Chat'
-                      : 'Native CLI'}
-                  </p>
-                </div>
-                <Button
-                  onclick={() => {
-                    tab = 'defaults';
-                  }}>Choose experience…</Button
-                >
-              </div>
-            {:else if current.id === 'wtm.home'}
-              <p class="c-plugins__note">
-                Disabling Home removes its entry points and prevents it from loading. Close
-                its running sessions first. Saved conversations and worktrees are kept.
-              </p>
-            {/if}
-            <div class="c-plugins__section">
-              <h3 class="c-section-heading">What this plugin adds</h3>
-              {#if manifest}
-                <PluginContributions plugin={manifest.id} />
-                {#each manifest.terminals as terminal}<div class="c-plugins__contribution">
-                    <span
-                      >{terminal.title}<small class="c-plugins__muted"
-                        >Terminal profile</small
-                      ></span
-                    ><Button
-                      size="sm"
-                      disabled={!current.enabled || !projectId || !worktreeId}
-                      onclick={() => {
-                        if (projectId && worktreeId) {
-                          void sessions.openPluginTerminal(
-                            projectId,
-                            worktreeId,
-                            current.id,
-                            terminal.id,
-                            terminal.title,
-                          );
-                          settingsView.close();
-                        }
-                      }}>Open terminal</Button
-                    >
-                  </div>{/each}
-                {#each manifest.views as v}<div class="c-plugins__contribution">
-                    <span
-                      >{v.title}<small class="c-plugins__muted"
-                        >Replacement view · {v.slots
-                          .map((s) => PLUGIN_SLOTS[s])
-                          .join(', ')}</small
-                      ></span
-                    ><Button
-                      size="sm"
-                      disabled={!current.enabled}
-                      onclick={() => (tab = 'defaults')}>Choose region…</Button
-                    >
-                  </div>{/each}
-                {#each manifest.palettes as palette}<div class="c-plugins__contribution">
-                    <span
-                      >{palette.title}<small class="c-plugins__muted">Palette</small></span
-                    ><Button
-                      size="sm"
-                      disabled={!current.enabled}
-                      onclick={() => settingsView.show('appearance')}
-                      >Choose palette…</Button
-                    >
-                  </div>{/each}
-                {#each manifest.commands as command}<div class="c-plugins__contribution">
-                    <span
-                      >{command.title}<small class="c-plugins__muted">Command</small></span
-                    ><Button
-                      size="sm"
-                      disabled={busy || !current.enabled || !worktreeId}
-                      onclick={() => void contribution(command.id, false)}>Run</Button
-                    >
-                  </div>{/each}
-                {#each manifest.panels as panel}<div class="c-plugins__contribution">
-                    <span
-                      >{panel.title}<small class="c-plugins__muted">Isolated panel</small
-                      ></span
-                    ><Button
-                      size="sm"
-                      disabled={busy || !current.enabled || !worktreeId}
-                      onclick={() => void contribution(panel.id, true)}>Open</Button
-                    >
-                  </div>{/each}
-                {#each manifest.session_backends as b}<div class="c-plugins__contribution">
-                    <span
-                      >{b.title}<small class="c-plugins__muted">Session backend</small
-                      ></span
-                    ><Button
-                      size="sm"
-                      disabled={!current.enabled}
-                      onclick={() => {
-                        backend = { plugin: current.id, id: b.id, title: b.title };
-                      }}>Browse sessions…</Button
-                    >
-                  </div>{/each}
-                {#if !worktreeId && (manifest.commands.length || manifest.panels.length)}<p
-                    class="c-plugins__muted"
-                  >
-                    Select a worktree to use its commands and panels.
-                  </p>{/if}
-              {:else}<p>
-                  {current.description}
-                </p>{/if}
-            </div>
-            <div class="c-plugins__section">
-              <h3 class="c-section-heading">Access &amp; source</h3>
-              <p class="c-plugins__muted">
-                {manifest &&
-                (manifest.commands.length ||
-                  manifest.session_backends.length ||
-                  manifest.terminals.length ||
-                  manifest.extensions.runtime.length)
-                  ? 'Runs executable code as your user, with access to files and the network. This is not sandboxed.'
-                  : manifest
-                    ? 'Isolated local UI. Replacement views use the public Plugin API; no private app DOM or direct network access.'
-                    : 'WTM-managed feature.'}
-              </p>
-              <dl class="c-plugins__facts">
-                <dt>Source</dt>
-                <dd>{current.installed?.current.source ?? 'Bundled with WTM'}</dd>
-                <dt>Revision</dt>
-                <dd>{current.installed?.current.revision ?? 'Follows your WTM release'}</dd>
-                <dt>Compatibility</dt>
-                <dd>Plugin API {manifest?.api ?? 1}</dd>
-                <dt>Status</dt>
-                <dd>{current.enabled ? 'Enabled' : 'Disabled'}</dd>
-              </dl>
-            </div>
-            {#if current.installed}<div class="c-plugins__section c-plugins__actions">
-                <Button onclick={update} disabled={busy}
-                  >{current.installed.current.kind === 'git'
-                    ? 'Review update…'
-                    : 'Reload & review…'}</Button
-                >{#if current.installed.previous}<Button
-                    onclick={() => {
-                      dialog = 'rollback';
-                    }}>Roll back…</Button
-                  >{/if}<Button
-                  onclick={() => {
-                    dialog = 'manifest';
-                  }}>View manifest</Button
-                ><Button
-                  variant="quiet"
-                  onclick={() => {
-                    dialog = 'remove';
-                  }}>Uninstall…</Button
-                >
-              </div>{/if}
+            {#key current.id}
+              <PluginDetail
+                row={current}
+                onupdate={update}
+                onrollback={(row) => (confirming = { action: 'rollback', row })}
+                onuninstall={(row) => (confirming = { action: 'uninstall', row })}
+                ondefaults={() => show('defaults')}
+                onnotice={(message) => (notice = message)}
+              />
+            {/key}
           {/if}
         </section>
       </div>
     {:else if tab === 'defaults'}
-      <div class="c-plugins__content">
-        <h2 class="c-plugins__title">Choose how you work</h2>
-        <p class="c-plugins__description">
-          Choose where sessions run and how you interact with them independently.
-        </p>
-        <div class="c-plugins__section">
-          <h3 class="c-section-heading">Session host</h3>
-          <p>This computer</p>
-          <p class="c-plugins__muted">
-            Installed session backends expose their own hosts through Browse sessions.
-            Attaching to an existing session keeps its host.
-          </p>
-        </div>
-        <div class="c-plugins__section">
-          <h3 class="c-section-heading">Local agent experience</h3>
-          <div class="c-plugins__choices">
-            {#each ['wtm.chat', 'wtm.native-cli'] as id}<button
-                class="c-plugins__choice"
-                class:is-selected={plugins.state.registry.experience === id}
-                aria-pressed={plugins.state.registry.experience === id}
-                disabled={busy || !plugins.enabled(id)}
-                onclick={() => void run(() => plugins.change('experience', id))}
-                ><strong>{id === 'wtm.chat' ? 'WTM Chat' : 'Native CLI'}</strong><span
-                  class="c-plugins__muted"
-                  >{id === 'wtm.chat'
-                    ? 'WTM’s transcript, tools, approvals, and delegation.'
-                    : 'The vendor’s terminal UI, commands, and permission prompts.'}</span
-                ></button
-              >{/each}
-          </div>
-        </div>
-        <p class="c-plugins__note">
-          Native CLI uses the installed claude or codex command directly. Structured WTM
-          approvals, delegation, and turn status remain features of WTM Chat. Existing
-          sessions keep their current experience.
-        </p>
-        <div class="c-plugins__section">
-          <h3 class="c-section-heading">Feature replacements</h3>
-          <p>Installing a plugin never silently replaces your selected experience.</p>
-          {#each Object.entries(PLUGIN_SLOTS) as [key, label]}
-            {@const slot = key as PluginSlot}
-            <Field id={`plugin-slot-${slot}`} {label}>
-              <select
-                id={`plugin-slot-${slot}`}
-                class="c-input"
-                value={choiceFor(slot)}
-                disabled={busy}
-                onchange={(e) => chooseSlot(slot, e.currentTarget.value)}
-              >
-                <option value="builtin">Built-in</option><option value="hidden"
-                  >Hidden</option
-                >
-                {#each Object.values(plugins.state.registry.installed) as p}
-                  {#if plugins.enabled(p.current.manifest.id)}
-                    {#each p.current.manifest.views.filter( (v) => v.slots.includes(slot) ) as v}
-                      <option value={`${p.current.manifest.id}:${v.id}`}
-                        >{p.current.manifest.name} · {v.title}</option
-                      >
-                    {/each}
-                  {/if}
-                {/each}
-              </select>
-            </Field>
-          {/each}
-          <p class="c-plugins__note">
-            A replacement owns its region's UI. Settings, permission checks and recovery
-            stay with WTM. Disabling or removing a replacement restores the built-in when
-            enabled. Hiding a view preserves its data and running sessions.
-          </p>
-        </div>
-      </div>
+      <PluginWorkbenchDefaults onnotice={(message) => (notice = message)} />
     {:else}
-      <div class="c-plugins__content">
-        <h2 class="c-plugins__title">Build a plugin with an agent</h2>
-        <p class="c-plugins__description">
-          Describe a customization and keep refining it in a dedicated Claude or Codex
-          conversation.
-        </p>
-        <Button variant="accent" onclick={add}>Create with an agent…</Button>
-        <h2 class="c-plugins__title c-plugins__section">A folder is a plugin</h2>
-        <p class="c-plugins__description">
-          Create wtm-plugin.toml in a folder. Add styles, actions, settings, content and
-          behavior inside existing features, or declare commands, panels, replacement views
-          and session backends. Use the public contracts below to choose what to customize.
-        </p>
-        <pre class="c-plugins__code">{starter}</pre>
-        <PluginContributions inventory />
-        <p class="c-plugins__muted">
-          Start with the examples/plugins packages and docs/plugins.md in the WTM source.
-          Session backends speak versioned JSON-RPC over stdin and stdout; your
-          implementation can use SSH to reach a persistent session host.
-        </p>
-        <div class="c-plugins__section">
-          <Button variant="accent" onclick={() => sourceAdd('local')}
-            >Link development folder…</Button
-          >
-        </div>
-        <p class="c-plugins__note">
-          Validate → review access → enable → reload. WTM runs a reviewed snapshot, so
-          editing a linked folder does not silently change trusted code.
-        </p>
-        <PluginContributions inventory />
-      </div>
+      <PluginDevelop oncreate={create} onlink={() => addFrom('local')} />
     {/if}
   </div>
   <footer class="c-plugins__footer">
-    <span>Running sessions keep their current backend.</span><Button
+    <span role="status">{notice}</span><Button
       variant="quiet"
       size="sm"
-      onclick={() => {
-        dialog = 'recovery';
-      }}>Plugin recovery…</Button
+      onclick={() => (confirming = { action: 'recover' })}>Plugin recovery…</Button
     >
   </footer>
 </div>
 
-{#if dialog}
-  <Dialog
-    title={dialog === 'add'
-      ? 'Add plugin'
-      : dialog === 'review'
-        ? 'Review plugin'
-        : dialog === 'recovery'
-          ? 'Plugin recovery'
-          : dialog === 'remove'
-            ? 'Uninstall plugin?'
-            : dialog === 'rollback'
-              ? 'Roll back plugin?'
-              : dialog === 'manifest'
-                ? 'Manifest'
-                : 'Command output'}
-    onclose={() => void close()}
-    closeDisabled={busy}
-  >
-    {#snippet body()}
-      <div class="o-stack">
-        {#if error}<Banner>{error}</Banner>{/if}
-        {#if dialog === 'add'}
-          <div class="c-plugins__tabs" aria-label="How to add a plugin">
-            <Button size="sm" variant="quiet" disabled={busy} onclick={add}
-              >Create with an agent</Button
-            >
-            <Button
-              size="sm"
-              variant={kind === 'local' ? 'neutral' : 'quiet'}
-              ariaPressed={kind === 'local'}
-              disabled={busy}
-              onclick={() => {
-                kind = 'local';
-              }}>Local folder</Button
-            >
-            <Button
-              size="sm"
-              variant={kind === 'git' ? 'neutral' : 'quiet'}
-              ariaPressed={kind === 'git'}
-              disabled={busy}
-              onclick={() => {
-                kind = 'git';
-              }}>Git repository</Button
-            >
-          </div>
-          <Field id="plugin-kind" label="Source"
-            ><select id="plugin-kind" class="c-input" bind:value={kind}
-              ><option value="local">Local development folder</option><option value="git"
-                >Git repository (HTTPS)</option
-              ></select
-            ></Field
-          >
-          <Field
-            id="plugin-source"
-            label={kind === 'git' ? 'Repository URL' : 'Absolute folder path'}
-            ><TextInput
-              id="plugin-source"
-              bind:value={source}
-              placeholder={kind === 'git'
-                ? 'https://github.com/owner/plugin'
-                : '/path/to/my-plugin'}
-            /></Field
-          >
-          {#if kind === 'local'}<Button disabled={busy} onclick={() => void browse()}
-              >Choose folder…</Button
-            >{/if}
-          {#if kind === 'git'}<Field
-              id="plugin-revision"
-              label="Tag, branch or commit"
-              help="Review resolves this to an immutable commit. No automatic updates."
-              ><TextInput id="plugin-revision" bind:value={revision} /></Field
-            >{/if}
-          <p class="c-field__help">Nothing in the package runs before review.</p>
-        {:else if dialog === 'review' && review}
-          {#if reviewDraft}<p class="c-plugins__muted">
-              Created with {reviewDraft.provider === 'claude' ? 'Claude' : 'Codex'} · Manifest
-              and packaged files pass validation.
-            </p>{/if}
-          <PluginContributions review={review.package.manifest.extensions} />
-          <h3>{review.package.manifest.name} · {review.package.manifest.version}</h3>
-          <p>{review.package.manifest.description}</p>
-          <dl class="c-plugins__facts">
-            <dt>Source</dt>
-            <dd>{review.package.source}</dd>
-            <dt>Revision</dt>
-            <dd>{review.package.revision}</dd>
-            <dt>Digest</dt>
-            <dd>{review.package.digest}</dd>
-          </dl>
-          {#if review.package.manifest.commands.length || review.package.manifest.session_backends.length || review.package.manifest.terminals.length || review.package.manifest.extensions.runtime.length}<Banner
-              variant="warn"
-              >This plugin runs code as your user. It can access your files and the network.
-              Install only code you trust.</Banner
-            >{/if}
-          {#each [...review.package.manifest.commands, ...review.package.manifest.session_backends, ...review.package.manifest.terminals] as c}<p
-            >
-              <strong>{c.title}</strong>
-            </p>
-            <pre class="c-plugins__code">{JSON.stringify(c.command)}</pre>{/each}
-          {#each review.package.manifest.panels as p}<p>
-              Panel: {p.title} · {p.file}
-            </p>{/each}
-          {#if reviewDraft}<p class="c-plugins__note">
-              Installation saves this reviewed snapshot. Later edits need a new review.
-              Validation checks packaging, not whether the plugin behaves correctly. Your
-              selected feature replacements stay unchanged.
-            </p>{/if}
-          {#each review.package.manifest.views as v}<p>
-              View: {v.title} · {v.slots.map((s) => PLUGIN_SLOTS[s]).join(', ')}
-            </p>{/each}
-        {:else if dialog === 'manifest'}<pre class="c-plugins__code">{JSON.stringify(
-              manifest,
-              null,
-              2,
-            )}</pre>
-        {:else if dialog === 'output'}<pre class="c-plugins__code">{output ||
-              '(No output)'}</pre>
-        {:else if dialog === 'recovery'}<p>
-            Disable all user-installed plugins. Keep packages and settings. Built-in
-            worktree access remains available. You can also start WTM with --safe-mode.
-          </p>
-        {:else if dialog === 'rollback'}<p>
-            Restore {current?.installed?.previous?.manifest.version}. Its content must still
-            match the previously reviewed digest.
-          </p>
-        {:else}<p>
-            Remove {current?.name} and its contributions. Keep package snapshots and saved data.
-            Linked source folders and remote sessions are not deleted.
-          </p>{/if}
-      </div>
-    {/snippet}
-    {#snippet footer()}
-      <Button disabled={busy} onclick={() => void close()}
-        >{dialog === 'review' && reviewDraft ? 'Keep draft' : 'Cancel'}</Button
-      >
-      {#if dialog === 'review' && reviewDraft}<Button
-          disabled={busy}
-          onclick={() => {
-            const id = reviewDraft?.id;
-            void close().then(() => {
-              if (id) authoring.resume(id);
-            });
-          }}>Refine with agent…</Button
-        >{/if}
-      {#if dialog === 'add'}<Button
-          variant="accent"
-          disabled={busy || !source.trim()}
-          onclick={() => void prepare()}>{busy ? 'Reading…' : 'Review plugin'}</Button
-        >
-      {:else if dialog === 'review'}<Button
-          variant="accent"
-          disabled={busy}
-          onclick={() => void install()}>Install &amp; enable</Button
-        >
-      {:else if dialog === 'recovery' || dialog === 'remove' || dialog === 'rollback'}<Button
-          variant="accent"
-          disabled={busy}
-          onclick={() =>
-            void run(async () => {
-              await plugins.change(
-                dialog === 'recovery'
-                  ? 'recover'
-                  : dialog === 'remove'
-                    ? 'uninstall'
-                    : 'rollback',
-                selected,
-              );
-              dialog = null;
-            })}
-          >{dialog === 'recovery'
-            ? 'Disable user plugins'
-            : dialog === 'remove'
-              ? 'Uninstall'
-              : 'Roll back'}</Button
-        >
-      {:else}<Button variant="accent" onclick={() => void close()}>Done</Button>{/if}
-    {/snippet}
-  </Dialog>
+{#if reviewing}
+  <PluginReviewDialog
+    start={reviewing}
+    oncreate={create}
+    onrefine={(id) => authoring.resume(id)}
+    oninstalled={installed}
+    onclose={() => (reviewing = null)}
+  />
 {/if}
-{#if backend}<PluginSessions
-    plugin={backend.plugin}
-    backend={backend.id}
-    title={backend.title}
-    onclose={() => {
-      backend = null;
+
+{#if confirming?.action === 'uninstall'}
+  {@const row = confirming.row}
+  {@const kind = row.installed?.current.kind}
+  <ConfirmPluginAction
+    title={`Uninstall ${row.name}?`}
+    confirm="Uninstall"
+    working="Uninstalling…"
+    action={async () => {
+      const reselect = after(row.id);
+      await plugins.uninstall(row.id);
+      reselect();
     }}
-  />{/if}
+    ondone={() => {
+      // Before `confirming` is cleared: `row` is derived from it, and reads null after.
+      notice = `Uninstalled ${row.name}. Its snapshots and saved data are kept.`;
+      confirming = null;
+    }}
+    onclose={() => (confirming = null)}
+  >
+    <p>
+      wtm closes {row.name}’s panels and views, stops its runtime and lets go of its
+      sessions, then removes it from this list. Any region it filled shows its built-in view
+      again.
+    </p>
+    <p>
+      Its reviewed snapshots and saved data stay in ~/.config/wtm/plugins/{kind === 'local'
+        ? ', and its source folder is left as it is'
+        : ''}. Sessions on other hosts keep running.
+    </p>
+  </ConfirmPluginAction>
+{:else if confirming?.action === 'rollback'}
+  {@const row = confirming.row}
+  {@const previous = row.installed?.previous}
+  <ConfirmPluginAction
+    title={`Roll back ${row.name}?`}
+    confirm="Roll back"
+    working="Rolling back…"
+    action={() => plugins.rollback(row.id)}
+    ondone={() => {
+      notice = `Rolled ${row.name} back to ${previous?.manifest.version ?? 'its previous version'}.`;
+      confirming = null;
+    }}
+    onclose={() => (confirming = null)}
+  >
+    <p>
+      Go back to {previous?.manifest.version ?? 'the previous version'}, the one installed
+      before
+      {row.version}. wtm first checks that its files still match the digest you reviewed,
+      and the version you have now becomes the one you can roll back to.
+    </p>
+    <p>
+      Its runtime restarts on the older version. wtm can’t roll back while one of the
+      plugin’s commands is running or one of its sessions is attached.
+    </p>
+  </ConfirmPluginAction>
+{:else if confirming?.action === 'recover'}
+  <ConfirmPluginAction
+    title="Plugin recovery"
+    confirm="Turn off user plugins"
+    working="Recovering…"
+    action={() => plugins.recover()}
+    ondone={() => {
+      confirming = null;
+      recovered = true;
+      notice =
+        'Recovery finished. User plugins are off and every region shows wtm’s own view.';
+    }}
+    onclose={() => (confirming = null)}
+  >
+    <p>Recovery turns off every plugin you installed and puts wtm’s own parts back:</p>
+    <ul>
+      <li>Every region shows its built-in view again, including any you hid.</li>
+      <li>
+        Home, WTM Chat and Native CLI are turned back on, and new sessions open in WTM Chat.
+      </li>
+      <li>
+        Choices that picked a plugin’s style or replacement are cleared. Choices of wtm’s
+        default stay.
+      </li>
+      <li>
+        Plugin panels and views close, plugin runtimes stop and their attached sessions are
+        let go. Sessions on other hosts keep running.
+      </li>
+    </ul>
+    <p>
+      Plugins stay installed, with their snapshots, settings and saved data, so you can turn
+      each one back on here. Until wtm restarts it stays in safe mode, which keeps a user
+      plugin off unless you turn it on.
+    </p>
+    {#if plugins.state.problem}<p>
+        The unreadable plugin registry is kept beside the new one in ~/.config/wtm/plugins/,
+        as registry-corrupt-….json, for you to inspect.
+      </p>{/if}
+    <p class="c-note">
+      If a plugin stops wtm from opening or hides this screen, quit wtm and start it in safe
+      mode from Terminal: <code>open -na "Worktree Manager" --args --safe-mode</code>. User
+      plugins stay off for that run.
+    </p>
+  </ConfirmPluginAction>
+{/if}

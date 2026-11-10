@@ -1,13 +1,31 @@
 <script lang="ts">
-  import { setContext as setExtensionContext } from 'svelte';
-  import { EXTENSION_PROTECTED } from '../state/extensions.svelte';
-  setExtensionContext(EXTENSION_PROTECTED, true);
+  /**
+   * Add plugin → Create with an agent, and the drafts it leaves behind.
+   *
+   * A draft is a visible WTM Chat conversation in a separate repository folder of its own, so the
+   * agent never writes into the one you were working in, and the conversation survives closing
+   * Settings or a restart. Finishing a turn never activates anything: Review plugin runs the
+   * ordinary package validation and review, and only Install & enable there turns the result on.
+   *
+   * Drafts are re-read when Rust says they changed (`plugins:drafts`) and when one of their own
+   * conversations starts or finishes a turn or asks for approval. Every session's events used to
+   * trigger a read, so any busy chat elsewhere in the window kept re-listing drafts.
+   *
+   * Removing a draft forgets its record only. Its folder, its files and its place in the sidebar
+   * stay, and Rust refuses while its conversation is still open, because the record is the only
+   * thing that ties that conversation's events back to the draft.
+   */
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { open } from '@tauri-apps/plugin-dialog';
   import { commands } from '../ipc/commands';
-  import { errorMessage, type AgentOption } from '../ipc/types';
-  import type { PluginDraftView, PluginReview } from '../plugins';
+  import {
+    errorMessage,
+    type AgentEventEnvelope,
+    type AgentExit,
+    type AgentOption,
+  } from '../ipc/types';
+  import type { PluginDraftView, PluginReview, PluginSourceKind } from '../plugins';
   import { plugins } from '../state/plugins.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { workspace } from '../state/workspace.svelte';
@@ -25,12 +43,12 @@
     onreview,
   }: {
     showAll?: boolean;
-    onsource: (kind: 'local' | 'git') => void;
+    onsource: (kind: PluginSourceKind) => void;
     onreview: (review: PluginReview, draft: PluginDraftView) => void;
   } = $props();
   let jobs = $state<PluginDraftView[]>([]);
   let agents = $state<AgentOption[]>([]);
-  let dialog = $state<'create' | 'progress' | null>(null);
+  let dialog = $state<'create' | 'progress' | 'remove' | null>(null);
   let selected = $state<string | null>(null);
   let brief = $state('');
   let provider = $state('claude');
@@ -44,6 +62,10 @@
   const visible = $derived(showAll ? jobs : jobs.filter((j) => !j.installed));
   const available = $derived(agents.filter((a) => ['claude', 'codex'].includes(a.id)));
   const selectedAgent = $derived(available.find((a) => a.id === provider));
+  /** The draft's own banner already says this; the same text twice is one problem, not two. */
+  const extra = $derived(
+    problem && problem !== (current?.validationError ?? current?.problem) ? problem : null,
+  );
   const label = (job: PluginDraftView) =>
     ({
       starting: 'Starting agent',
@@ -53,6 +75,15 @@
       idle: 'Agent finished · Review files',
       stopped: 'Draft saved · Agent not running',
     })[job.status];
+  const providerName = (job: PluginDraftView) =>
+    job.provider === 'claude' ? 'Claude' : 'Codex';
+
+  function title(): string {
+    if (dialog === 'create') return 'Add plugin';
+    if (dialog === 'remove') return 'Remove draft?';
+    if (current?.problem || current?.validationError) return 'Plugin needs attention';
+    return current ? label(current) : 'Plugin development';
+  }
 
   export async function refresh() {
     const version = ++refreshVersion;
@@ -88,13 +119,21 @@
         if (!gone) problem = errorMessage(e);
       });
   }
+  /** Whether a session is one of the drafts' own conversations. */
+  function drafting(session: string): boolean {
+    return jobs.some((j) => j.session === session);
+  }
   onMount(() => {
     void refresh();
-    const events = ['plugins:drafts', 'plugins:changed', 'agent:exit'];
-    const off = events.map((event) => listen(event, () => void refresh()));
-    off.push(
-      listen<{ event: { kind: string } }>('agent:event', (e) => {
+    const off = [
+      listen('plugins:drafts', () => void refresh()),
+      listen('plugins:changed', () => void refresh()),
+      listen<AgentExit>('agent:exit', (e) => {
+        if (drafting(e.payload.session)) void refresh();
+      }),
+      listen<AgentEventEnvelope>('agent:event', (e) => {
         if (
+          drafting(e.payload.session) &&
           [
             'turn_started',
             'turn_finished',
@@ -105,7 +144,7 @@
         )
           void refresh();
       }),
-    );
+    ];
     return () => {
       gone = true;
       for (const unsubscribe of off) void unsubscribe.then((f) => f());
@@ -135,6 +174,14 @@
     if (!gone && typeof result === 'string') folder = result;
   }
   async function start() {
+    if (
+      busy ||
+      !brief.trim() ||
+      !folder.trim() ||
+      !selectedAgent?.available ||
+      !plugins.enabled('wtm.chat')
+    )
+      return;
     await perform(async () => {
       const job = await commands.pluginCreate(
         requestId,
@@ -175,16 +222,25 @@
       onreview(prepared, job);
     });
   }
+  async function remove() {
+    const id = selected;
+    if (!id) return;
+    await perform(async () => {
+      await commands.pluginDeleteDraft(id);
+      dialog = null;
+      selected = null;
+    });
+  }
 </script>
 
 {#if problem && !dialog}<Banner>{problem}</Banner>{/if}
 {#if visible.length}
-  <div class="c-plugins__drafts" aria-label="Plugin development tasks">
+  <ul class="o-plain-list c-plugins__drafts" aria-label="Plugin drafts">
     {#each visible as job (job.id)}
-      <div class="c-plugins__draft">
-        <div>
-          <strong>{label(job)}</strong><span class="c-plugins__muted"
-            >{job.provider === 'claude' ? 'Claude' : 'Codex'} · {job.folder} · {job.installed
+      <li class="o-row o-row--between c-plugins__draft">
+        <div class="o-stack o-stack--tight">
+          <strong>{label(job)}</strong><span class="c-note"
+            >{providerName(job)} · {job.folder} · {job.installed
               ? 'Installed snapshot'
               : 'Not installed'}</span
           >
@@ -197,35 +253,33 @@
             dialog = 'progress';
           }}>View creation…</Button
         >
-      </div>
+      </li>
     {/each}
-  </div>
+  </ul>
 {/if}
 
 {#if dialog}
   <Dialog
     wide
-    title={dialog === 'create'
-      ? 'Add plugin'
-      : current?.problem || current?.validationError
-        ? 'Plugin needs attention'
-        : current
-          ? label(current)
-          : 'Plugin development'}
+    title={title()}
     onclose={() => {
       dialog = null;
     }}
     closeDisabled={busy}
+    onsubmit={(event) => {
+      event.preventDefault();
+      if (dialog === 'create') void start();
+    }}
   >
     {#snippet body()}
       <div class="o-stack">
-        {#if problem}<Banner>{problem}</Banner>{/if}
         {#if dialog === 'create'}
-          <div class="c-plugins__tabs" aria-label="How to add a plugin">
+          <div class="o-row" role="group" aria-label="How to add a plugin">
             <Button size="sm" ariaPressed={true}>Create with an agent</Button>
             <Button
               size="sm"
               variant="quiet"
+              ariaPressed={false}
               disabled={busy}
               onclick={() => {
                 dialog = null;
@@ -235,6 +289,7 @@
             <Button
               size="sm"
               variant="quiet"
+              ariaPressed={false}
               disabled={busy}
               onclick={() => {
                 dialog = null;
@@ -242,14 +297,14 @@
               }}>Git repository</Button
             >
           </div>
-          <p class="c-plugins__muted">
+          <p class="c-note">
             Describe what you want to add or change. Build it with Claude or Codex, then
             review it before installing.
           </p>
           <Field
             id="plugin-brief"
             label="What should your plugin do?"
-            help="WTM gives the agent its plugin guide and examples. You can keep refining the result in chat."
+            help="wtm gives the agent its plugin guide and examples. You can keep refining the result in chat."
           >
             <textarea
               id="plugin-brief"
@@ -257,7 +312,7 @@
               rows="4"
               bind:value={brief}
               disabled={busy}
-              placeholder="Describe what you want WTM to do or change…"></textarea>
+              placeholder="Describe what you want wtm to do or change…"></textarea>
           </Field>
           <Field
             id="plugin-agent"
@@ -275,40 +330,51 @@
             >{/if}
           {#if !plugins.enabled('wtm.chat')}<Banner variant="warn"
               >Enable WTM Chat in Plugins to create with an agent. Your default agent
-              experience can remain Native CLI.</Banner
+              experience can stay Native CLI.</Banner
             >{/if}
           <Field
             id="plugin-create-folder"
             label="Plugin folder"
-            help="Creates a separate Git workspace in a new or empty folder and adds it to WTM. Your current project is unchanged."
+            help="A new or empty folder; ~ is your home folder. wtm makes it a separate Git repository and adds it to the sidebar. Your current project is unchanged."
           >
-            <div class="c-plugins__folder">
+            <div class="o-row c-plugins__inline">
               <TextInput
                 id="plugin-create-folder"
                 bind:value={folder}
                 mono
                 disabled={busy}
+                placeholder="~/Plugins/my-plugin"
               /><Button disabled={busy} onclick={() => void perform(chooseFolder)}
-                >Choose…</Button
+                >Choose folder…</Button
               >
             </div>
           </Field>
-          <p class="c-plugins__note">
+          <p class="c-note">
             The agent writes code in this folder. The plugin stays uninstalled until you
             review and enable it.
           </p>
+        {:else if dialog === 'remove' && current}
+          <p>
+            wtm stops listing this draft under Develop a plugin and forgets its link to the
+            {providerName(current)} conversation.
+          </p>
+          <p>
+            The folder {current.folder} and everything in it are kept, and so is its place in
+            the sidebar. {current.installed
+              ? 'The installed plugin built from it stays installed.'
+              : ''}
+          </p>
         {:else if current}
-          <div class="c-plugins__row">
-            <strong
-              >{current.provider === 'claude' ? 'Claude' : 'Codex'} · Plugin development</strong
-            ><span class="c-plugins__muted"
+          <div class="o-row o-row--between">
+            <strong>{providerName(current)} · Plugin development</strong><span
+              class="c-note"
               >{current.installed ? 'Installed snapshot' : 'Not installed'}</span
             >
           </div>
           {#if current.validationError || current.problem}<Banner variant="warn"
               >{current.validationError ?? current.problem}</Banner
             >{/if}
-          <dl class="c-plugins__facts">
+          <dl class="o-facts">
             <dt>Request</dt>
             <dd>{current.brief}</dd>
             <dt>Folder</dt>
@@ -316,48 +382,70 @@
             <dt>Status</dt>
             <dd>{label(current)}</dd>
           </dl>
-          <p class="c-plugins__muted">
+          <p class="c-note">
             Open the agent chat to answer questions, review permission requests, stop work
             or refine the plugin.
           </p>
-          <p class="c-plugins__note">
-            Closing this dialog keeps the task and conversation available in Develop a
-            plugin. Review checks the package's files; an agent finishing does not mean they
-            are valid.
+          <p class="c-note">
+            Closing this dialog keeps the draft and its conversation in Develop a plugin.
+            Review checks the plugin’s files; an agent finishing does not mean they are
+            valid.
           </p>
         {/if}
+        {#if extra}<Banner>{extra}</Banner>{/if}
       </div>
     {/snippet}
     {#snippet footer()}
-      <Button
-        disabled={busy}
-        onclick={() => {
-          dialog = null;
-        }}>{dialog === 'create' ? 'Cancel' : 'Close'}</Button
-      >
-      {#if dialog === 'create'}
+      {#if dialog === 'remove'}
         <Button
-          variant="accent"
-          disabled={busy ||
-            !brief.trim() ||
-            !folder.trim() ||
-            !selectedAgent?.available ||
-            !plugins.enabled('wtm.chat')}
-          onclick={() => void start()}>{busy ? 'Starting…' : 'Start building'}</Button
+          disabled={busy}
+          onclick={() => {
+            problem = null;
+            dialog = 'progress';
+          }}>Cancel</Button
         >
-      {:else if current}
-        <Button disabled={busy} onclick={() => void openChat(!!current?.validationError)}
-          >{current.validationError
-            ? 'Ask agent to fix'
-            : current.status === 'stopped'
-              ? 'Reopen agent chat'
-              : 'Open agent chat'}</Button
+        <Button variant="danger-solid" disabled={busy} onclick={() => void remove()}
+          >{busy ? 'Removing…' : 'Remove draft'}</Button
         >
+      {:else}
         <Button
-          variant="accent"
-          disabled={busy || ['building', 'starting', 'waiting'].includes(current.status)}
-          onclick={() => void review()}>{busy ? 'Reading…' : 'Review plugin'}</Button
+          disabled={busy}
+          onclick={() => {
+            dialog = null;
+          }}>{dialog === 'create' ? 'Cancel' : 'Close'}</Button
         >
+        {#if dialog === 'create'}
+          <Button
+            type="submit"
+            variant="accent"
+            disabled={busy ||
+              !brief.trim() ||
+              !folder.trim() ||
+              !selectedAgent?.available ||
+              !plugins.enabled('wtm.chat')}>{busy ? 'Starting…' : 'Start building'}</Button
+          >
+        {:else if current}
+          <Button
+            variant="quiet"
+            disabled={busy}
+            onclick={() => {
+              problem = null;
+              dialog = 'remove';
+            }}>Remove draft…</Button
+          >
+          <Button disabled={busy} onclick={() => void openChat(!!current?.validationError)}
+            >{current.validationError
+              ? 'Ask agent to fix'
+              : current.status === 'stopped'
+                ? 'Reopen agent chat'
+                : 'Open agent chat'}</Button
+          >
+          <Button
+            variant="accent"
+            disabled={busy || ['building', 'starting', 'waiting'].includes(current.status)}
+            onclick={() => void review()}>{busy ? 'Reading…' : 'Review plugin'}</Button
+          >
+        {/if}
       {/if}
     {/snippet}
   </Dialog>

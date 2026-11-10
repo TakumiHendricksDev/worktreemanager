@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { extensionPart, extensionContext } from '../../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * The app's button.
    *
@@ -77,7 +75,6 @@
 </script>
 
 <button
-  use:extensionPart={{ target: 'ui.button', context: publicContext }}
   {type}
   {disabled}
   {title}

@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * The right pane: the worktree's bar, and nothing else.
    *
@@ -55,33 +52,30 @@
   } = $props();
 </script>
 
-<ExtensionPoint target="component.detail" context={publicContext()}>
-  <!--
+<!--
   A region named by its row in the sidebar tree. It was a `tabpanel` while the sidebar was a
   tablist; a tree has no panel role, and `region` is what a landmark labelled by the item that
   controls it is.
 -->
-  <div
-    use:extensionPart={{ target: 'component.detail', context: publicContext }}
-    class="c-detail"
-    id="worktree-detail"
-    role="region"
-    aria-labelledby={`tab-${worktree.id}`}
-    tabindex="-1"
-  >
-    <WorktreeBar
-      {worktree}
-      {projectId}
-      {view}
-      {sidebarCollapsed}
-      {onsessions}
-      {ondatabase}
-      {oncode}
-      {onremove}
-      {onfavorite}
-      {oninspect}
-      {onselect}
-      {onnew}
-    />
-  </div>
-</ExtensionPoint>
+<div
+  class="c-detail"
+  id="worktree-detail"
+  role="region"
+  aria-labelledby={`tab-${worktree.id}`}
+  tabindex="-1"
+>
+  <WorktreeBar
+    {worktree}
+    {projectId}
+    {view}
+    {sidebarCollapsed}
+    {onsessions}
+    {ondatabase}
+    {oncode}
+    {onremove}
+    {onfavorite}
+    {oninspect}
+    {onselect}
+    {onnew}
+  />
+</div>

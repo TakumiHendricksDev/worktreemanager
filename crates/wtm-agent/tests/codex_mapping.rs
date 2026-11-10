@@ -96,6 +96,7 @@ fn writes(steps: &[Step]) -> Vec<serde_json::Value> {
 
 #[test]
 fn a_durable_edit_fork_uses_the_previous_provider_turn_and_rehydrates_only_the_fork_reply() {
+    const FORKED: &str = r#"{"id":2,"result":{"thread":{"id":"branch","historyMode":"legacy","turns":[{"id":"turn-before-edit","status":"completed","items":[{"id":"user-before","type":"userMessage","content":[{"type":"text","text":"Previous message"}]}]}]}}}"#;
     let mut driver = Codex.protocol(&SessionRequest {
         cwd: "/tmp/workspace".into(),
         fork: Some("original".into()),
@@ -111,8 +112,12 @@ fn a_durable_edit_fork_uses_the_previous_provider_turn_and_rehydrates_only_the_f
     assert_eq!(frames[1]["params"]["threadId"], "original");
     assert_eq!(frames[1]["params"]["lastTurnId"], "turn-before-edit");
     assert_eq!(frames[1]["params"]["ephemeral"], false);
-    let reply=driver.on_line(r#"{"id":2,"result":{"thread":{"id":"branch","historyMode":"legacy","turns":[{"id":"turn-before-edit","status":"completed","items":[{"id":"user-before","type":"userMessage","content":[{"type":"text","text":"Previous message"}]}]}]}}}"#);
-    assert!(events(&reply).iter().any(|event|matches!(event,AgentEvent::MessageIdentity{message,turn,..} if message=="user-before"&&turn=="turn-before-edit")));
+    let reply = driver.on_line(FORKED);
+    assert!(events(&reply).iter().any(|event| matches!(
+        event,
+        AgentEvent::MessageIdentity { message, turn, .. }
+            if message == "user-before" && turn == "turn-before-edit"
+    )));
     assert_eq!(echoes(&reply), vec!["Previous message", "Edited message"]);
     let sent = writes(&reply);
     let turn = sent

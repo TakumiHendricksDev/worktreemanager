@@ -1,9 +1,4 @@
 <script lang="ts">
-  import ExtensionActions from './ExtensionActions.svelte';
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { messageIdentities } from '../message-identities';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A session's transcript, folded out of its flat event list.
    *
@@ -34,6 +29,11 @@
   import type { ShellSnippet } from '../shell-script';
   import { diffHeaderPath } from '../code-links';
   import { isWtmNotice, readWtmNotice } from '../home';
+  import { MessageIdentities } from '../message-identities';
+  import type { ExtensionContext } from '../extensions';
+  import { extensionContext, extensionPart, extensions } from '../state/extensions.svelte';
+  import ExtensionActions from './ExtensionActions.svelte';
+  import ExtensionPoint from './ExtensionPoint.svelte';
 
   const {
     events,
@@ -70,6 +70,20 @@
   const firstVisible = $derived(Math.max(0, events.length - visibleEvents));
   const disclosures = $state<Record<string, boolean>>({});
   const diffLimits = $state<Record<string, number>>({});
+  /** Which provider message each echo is, kept up to date as the log grows. */
+  const identities = new MessageIdentities();
+
+  /**
+   * The pane's plugin context, narrowed to one message or tool call. Null under a protected host.
+   *
+   * Identity only: a message's id and a tool call's id, never its text or output. Those used to
+   * ride along, and a tool row's output can be 2 MiB.
+   */
+  const extension = extensionContext();
+  function about(narrower: Partial<ExtensionContext>): (() => ExtensionContext) | null {
+    const base = extension;
+    return base && (() => ({ ...base(), ...narrower }));
+  }
 
   function toggle(key: string, event: Event): void {
     const target = event.currentTarget;
@@ -84,16 +98,25 @@
    * shape would be mostly nulls.
    */
   type Row =
+    /** `messageId` is the provider's, once it has said which message this echo was. */
     | { key: string; kind: 'user'; text: string; messageId?: string }
     /** wtm's news for Home, which arrives as a turn but is not the user's. See `WTM_NOTICE`. */
     | { key: string; kind: 'wtm'; summary: string; body: string }
     | { key: string; kind: 'attachments'; attachments: AgentAttachment[] }
     | { key: string; kind: 'assistant'; text: string }
     | { key: string; kind: 'thinking'; text: string }
-    | { key: string; kind: 'command'; command: string; output: string; exit: number | null }
+    | {
+        key: string;
+        kind: 'command';
+        id: string;
+        command: string;
+        output: string;
+        exit: number | null;
+      }
     | {
         key: string;
         kind: 'tool';
+        id: string;
         name: string;
         title: string | null;
         done: boolean;
@@ -142,14 +165,17 @@
       return last !== undefined && last.kind === 'thinking' ? last : null;
     }
 
-    const identities = messageIdentities(events);
+    identities.update(events);
     events.slice(firstVisible).forEach((event) => {
       const index = identity(event);
       switch (event.kind) {
+        // Read by `identities` above, and nothing to draw: a provider's id for an echo, and the
+        // edges of the history a resumed conversation replayed.
         case 'message_identity':
         case 'history_boundary':
         case 'historical_turn':
           break;
+
         case 'attachments':
           out.push({
             key: `h${index}`,
@@ -163,12 +189,11 @@
           if (isWtmNotice(event.text)) {
             out.push({ key: `u${index}`, kind: 'wtm', ...readWtmNotice(event.text) });
           } else {
-            const messageId = identities.get(event);
             out.push({
-              key: messageId ?? `u${index}`,
+              key: `u${index}`,
               kind: 'user',
               text: event.text,
-              messageId,
+              messageId: identities.get(event),
             });
           }
           break;
@@ -221,6 +246,7 @@
           const row: Extract<Row, { kind: 'command' }> = {
             key: `c:${event.id}:${index}`,
             kind: 'command',
+            id: event.id,
             command: event.command,
             output: '',
             exit: null,
@@ -246,6 +272,7 @@
           const row: Extract<Row, { kind: 'tool' }> = {
             key: `tool:${event.id}:${index}`,
             kind: 'tool',
+            id: event.id,
             name: event.name,
             title: event.title,
             done: false,
@@ -787,12 +814,248 @@
   }
 </script>
 
-{#snippet toolName(title: string)}{@const part =
-    toolTitle(title)}{#if part.path !== null}<span class="c-transcript__tool-verb"
-      >{part.lead}</span
-    ><span class="c-transcript__tool-path">{part.path}</span
-    >{part.rest}{:else}{part.lead}{/if}{/snippet}
+<div
+  class="c-transcript"
+  bind:this={root}
+  {@attach extensionPart('chat.transcript', extension)}
+>
+  <ExtensionPoint target="chat.transcript" position="before" />
+  {#if firstVisible > 0}
+    <div class="c-transcript__paging">
+      <Button variant="quiet" size="sm" onclick={() => void showEarlier()}>
+        Show {Math.min(EVENT_PAGE, firstVisible).toLocaleString()} earlier events
+      </Button>
+    </div>
+  {/if}
+  {#each rows as row (row.key)}
+    {#if row.kind === 'user'}
+      {@const message = about({ messageId: row.messageId })}
+      <!-- Guarded here as well as inside, because these repeat per message and the guard is a map
+           lookup where a mounted point is a component. -->
+      {#if extensions.targets('chat.message')}
+        <ExtensionPoint target="chat.message" position="before" context={message} />
+      {/if}
+      {#if row.text.length > PROMPT_PREVIEW}
+        <!--
+          Open, the summary is a control and *not* a second copy of the opening.
+
+          It used to be both: the clipped preview stayed mounted and the full text was appended
+          under it, so the first 320 characters appeared twice — and not even alike, because
+          `promptPreview` collapses whitespace while `.c-transcript__user` is `pre-wrap`. A run-on
+          paragraph followed by the same words correctly broken reads as two different messages.
+
+          The `thinking` row below has the same shape on purpose, and the difference is length: one
+          sentence repeated as a heading is a prefix, a repeated paragraph is a duplicate.
+
+          The body stays in the `<p>` rather than moving into the `<summary>`. A drag-select that
+          ends inside a `<summary>` still fires a click, so a prompt long enough to need this is a
+          prompt that would collapse itself the moment you tried to copy it.
+        -->
+        <details class="c-transcript__prompt" ontoggle={(event) => toggle(row.key, event)}>
+          {#if disclosures[row.key]}
+            <summary class="c-transcript__prompt-toggle">Show less</summary>
+            <p class="c-transcript__user" {@attach extensionPart('chat.message', message)}>
+              {row.text}
+            </p>
+          {:else}
+            <summary
+              class="c-transcript__user"
+              {@attach extensionPart('chat.message', message)}
+            >
+              {promptPreview(row.text)}
+            </summary>
+          {/if}
+        </details>
+      {:else}
+        <p class="c-transcript__user" {@attach extensionPart('chat.message', message)}>
+          {row.text}
+        </p>
+      {/if}
+      {#if extensions.targets('chat.message')}
+        <ExtensionPoint target="chat.message" position="after" context={message} />
+      {/if}
+      {#if message && extensions.targets('chat.message.actions') && extensions.actions('chat.message.actions', message()).length > 0}
+        <!-- On the user's side, under the bubble it acts on. A bare button would stretch: the
+             transcript is a column flexbox. -->
+        <div class="o-row o-row--end">
+          <ExtensionActions target="chat.message.actions" context={message} />
+        </div>
+      {/if}
+    {:else if row.kind === 'wtm'}
+      <!-- Not the user's bubble: drawn on the agent's side, as something the agent was told, and
+           closed by default — the summary is what happened, and the body is the start of each
+           reply, which the session's own pane holds in full. -->
+      <details class="c-transcript__wtm" ontoggle={(event) => toggle(row.key, event)}>
+        <summary class="c-transcript__wtm-head">
+          <span class="c-transcript__wtm-from">wtm</span>
+          {row.summary}
+        </summary>
+        {#if disclosures[row.key]}
+          <p class="c-transcript__wtm-body">{row.body}</p>
+        {/if}
+      </details>
+    {:else if row.kind === 'attachments'}
+      <div class="c-transcript__attachments" aria-label="User attachments">
+        {#each row.attachments as attachment (attachment.path)}
+          <figure class="c-transcript__attachment">
+            {#if attachment.mime.startsWith('image/')}
+              <img
+                src="data:{attachment.mime};base64,{attachment.dataBase64}"
+                alt="{attachment.name} attachment"
+              />
+            {:else}
+              <span class="c-transcript__attachment-file"
+                >{attachment.name.split('.').at(-1)}</span
+              >
+            {/if}
+            <figcaption>
+              <span class="c-transcript__attachment-name" title={attachment.name}
+                >{attachment.name}</span
+              >
+              <small class="c-transcript__attachment-size"
+                >{formatBytes(attachment.size)}</small
+              >
+            </figcaption>
+          </figure>
+        {/each}
+      </div>
+    {:else if row.kind === 'assistant'}
+      <!-- The one place arbitrary document structure appears. Rendered as elements rather than a
+           string of HTML, so nothing a model writes can become markup — see `markdown.ts`. -->
+      <div class="c-transcript__said">
+        <Markdown source={row.text} {onrunsql} {onrunshell} {codeLink} />
+      </div>
+    {:else if row.kind === 'thinking'}
+      <!--
+        The narration line, and the reason it is one line rather than the word `Thinking`.
+
+        A run of reasoning is what the model was about to do and why, which is the one thing a reader
+        scanning a turn actually wants — so its opening sentence is on screen rather than behind a
+        marker that says only which *category* of thing is hidden. The rest is still one click away,
+        and the summary is a prefix of the body rather than a name for it, so opening it never
+        contradicts what was already read.
+
+        Still a `<details>` rather than a state class, because the browser owns the disclosure — and
+        still collapsed by default: a whole reasoning block is useful when you want it and a wall when
+        you do not.
+      -->
+      <details class="c-transcript__thinking" ontoggle={(event) => toggle(row.key, event)}>
+        <summary>{firstLine(row.text)}</summary>
+        {#if disclosures[row.key]}<p>{row.text}</p>{/if}
+      </details>
+    {:else if isStep(row)}
+      {@render step(row)}
+    {:else if row.kind === 'steps'}
+      <!--
+        A run of work, as one line.
+
+        Collapsed always, including while it is being added to. A turn that ran forty tools showed
+        forty rows and pushed the answer off the screen entirely; the count plus the step currently
+        underway is the part anyone reads, and the rest is a click away. Nothing is dropped — the
+        body below is exactly the list that used to be inline.
+
+        A run now ends at the next thing the model *says*, reasoning included, so these are the gaps
+        between narration rather than one box per turn. See `group()`.
+      -->
+      <details class="c-transcript__group" ontoggle={(event) => toggle(row.key, event)}>
+        <summary class="c-transcript__group-name">
+          <span class="c-transcript__group-count">
+            {row.steps.length}
+            {row.steps.length === 1 ? 'step' : 'steps'}
+          </span>
+          {#if row.failed > 0}
+            <!-- Surfaced on the closed row, because a collapsed group must not be able to hide a
+                 failure — that would make folding a way to lose information rather than defer it. -->
+            <span class="c-status--danger">{row.failed} failed</span>
+          {/if}
+          {#if row.live}
+            <span class="c-transcript__group-now"
+              >{labelOf(row.steps[row.steps.length - 1]!)}</span
+            >
+          {/if}
+        </summary>
+        {#if disclosures[row.key]}
+          <div class="c-transcript__group-body">
+            {#each row.steps as member (member.key)}
+              {@render step(member)}
+            {/each}
+          </div>
+        {/if}
+      </details>
+    {:else if row.kind === 'patch'}
+      <details class="c-transcript__patch" ontoggle={(event) => toggle(row.key, event)}>
+        <summary>Code changes · {formatBytes(row.diff.length * 2)}</summary>
+        {#if disclosures[row.key]}
+          {@const page = diffPage(row.diff, diffLimits[row.key] ?? 300)}
+          <pre class="c-transcript__diff">{#each page.lines as line, i (i)}{@const ref =
+                line.cls === 'is-meta' ? fileRef(line.text) : null}<span
+                class="c-transcript__diff-line {line.cls}"
+                >{#if ref}<button
+                    type="button"
+                    class="c-transcript__diff-file"
+                    title="Open in the Code tab"
+                    onclick={() => codeLink?.open(ref)}>{line.text}</button
+                  >{:else}{line.text}{/if}
+</span>{/each}</pre>
+          {#if page.more}
+            <div class="c-transcript__paging">
+              <Button
+                variant="quiet"
+                size="sm"
+                onclick={() => (diffLimits[row.key] = (diffLimits[row.key] ?? 300) + 300)}
+                >Show 300 more lines</Button
+              >
+            </div>
+          {/if}
+        {/if}
+      </details>
+    {:else if row.kind === 'agenda'}
+      <div class="c-transcript__card">
+        {#if row.explanation}<p>{row.explanation}</p>{/if}
+        <ol class="c-transcript__steps">
+          {#each row.steps as step, i (i)}
+            <!-- The status is a word as well as a class: nothing in this app encodes state in
+                 colour alone, and a checked-off step is exactly where that rule bites. -->
+            <li class="c-transcript__step {stepClass(step.status)}">
+              {step.text}
+              <span class="c-transcript__step-state">{stepLabel(step.status)}</span>
+            </li>
+          {/each}
+        </ol>
+      </div>
+    {:else if row.kind === 'notice'}
+      <p class={noteClass(row.level)}>{row.text}</p>
+    {:else if row.kind === 'approval'}
+      <p class="c-transcript__approval-receipt">{row.text}</p>
+    {:else if row.kind === 'usage'}
+      <p class="c-transcript__usage">
+        {tokens(row.usage)}{#if cost(row.costUsd)}&nbsp;· {cost(row.costUsd)}{/if}
+      </p>
+    {/if}
+  {/each}
+  <ExtensionPoint target="chat.transcript" position="after" />
+</div>
+
+<!--
+  One machinery item, wherever it appears.
+
+  Rendered from a snippet because a step shows up in two places — loose, when its run was too short
+  to fold, and inside a group when it was not — and the two must be indistinguishable. Two copies of
+  this markup is how they would stop being.
+
+  Every kind is the same shape: one line that discloses. That uniformity is what lets a group hold a
+  mix of tool calls, shell commands and unknown events without reading as three different things.
+-->
+<!-- One line, for the reason `Markdown.svelte`'s span run is: whitespace between these tags would
+     become a space inside the title. See `toolTitle`. -->
+<!-- prettier-ignore -->
+{#snippet toolName(title: string)}{@const part = toolTitle(title)}{#if part.path !== null}<span class="c-transcript__tool-verb">{part.lead}</span><span class="c-transcript__tool-path">{part.path}</span>{part.rest}{:else}{part.lead}{/if}{/snippet}
+
 {#snippet step(row: Step)}
+  {@const tool = about({ toolId: row.kind === 'raw' ? undefined : row.id })}
+  {#if extensions.targets('chat.tool')}
+    <ExtensionPoint target="chat.tool" position="before" context={tool} />
+  {/if}
   {#if row.kind === 'command'}
     <!--
       The command, not the argv that delivered it.
@@ -803,9 +1066,9 @@
       first thing inside, because a label you cannot verify is worse than no label.
     -->
     <details
-      use:extensionPart={{ target: 'chat.tool', context: publicContext }}
       class="c-transcript__tool"
       ontoggle={(event) => toggle(row.key, event)}
+      {@attach extensionPart('chat.tool', tool)}
     >
       <summary class="c-transcript__tool-name">
         <code class="c-transcript__cmd">{shortCommand(row.command)}</code>
@@ -821,7 +1084,11 @@
   {:else if row.kind === 'raw'}
     <!-- An event this build does not know. Shown, because dropping it would lose information with
          no trace, and collapsed, because it is usually not interesting. -->
-    <details class="c-transcript__raw" ontoggle={(event) => toggle(row.key, event)}>
+    <details
+      class="c-transcript__raw"
+      ontoggle={(event) => toggle(row.key, event)}
+      {@attach extensionPart('chat.tool', tool)}
+    >
       <summary>{row.provider} · {row.event}</summary>
       {#if disclosures[row.key]}<pre>{JSON.stringify(row.payload, null, 2)}</pre>{/if}
     </details>
@@ -835,9 +1102,9 @@
       `failed` is what tells you to click.
     -->
     <details
-      use:extensionPart={{ target: 'chat.tool', context: publicContext }}
       class="c-transcript__tool"
       ontoggle={(event) => toggle(row.key, event)}
+      {@attach extensionPart('chat.tool', tool)}
     >
       <summary class="c-transcript__tool-name" title={row.title ?? row.name}>
         {@render toolName(row.title ?? row.name)}
@@ -851,6 +1118,7 @@
     <p
       class="c-transcript__tool-name c-transcript__tool-name--bare"
       title={row.title ?? row.name}
+      {@attach extensionPart('chat.tool', tool)}
     >
       {@render toolName(row.title ?? row.name)}
       {#if !row.done}
@@ -860,255 +1128,7 @@
       {/if}
     </p>
   {/if}
+  {#if extensions.targets('chat.tool')}
+    <ExtensionPoint target="chat.tool" position="after" context={tool} />
+  {/if}
 {/snippet}
-<ExtensionPoint target="component.agent-transcript" context={publicContext()}>
-  <ExtensionPoint target="chat.transcript" context={publicContext()}>
-    <div
-      use:extensionPart={{
-        target: ['component.agent-transcript', 'chat.transcript'],
-        context: publicContext,
-      }}
-      class="c-transcript"
-      bind:this={root}
-    >
-      {#if firstVisible > 0}
-        <div class="c-transcript__paging">
-          <Button variant="quiet" size="sm" onclick={() => void showEarlier()}>
-            Show {Math.min(EVENT_PAGE, firstVisible).toLocaleString()} earlier events
-          </Button>
-        </div>
-      {/if}
-      {#each rows as row (row.key)}
-        {#if row.kind === 'user'}
-          <ExtensionPoint
-            target="chat.message"
-            context={{
-              ...publicContext(),
-              messageId: row.messageId,
-              messageText: row.text,
-            }}
-          >
-            {#if row.text.length > PROMPT_PREVIEW}
-              <!--
-          Open, the summary is a control and *not* a second copy of the opening.
-
-          It used to be both: the clipped preview stayed mounted and the full text was appended
-          under it, so the first 320 characters appeared twice — and not even alike, because
-          `promptPreview` collapses whitespace while `.c-transcript__user` is `pre-wrap`. A run-on
-          paragraph followed by the same words correctly broken reads as two different messages.
-
-          The `thinking` row below has the same shape on purpose, and the difference is length: one
-          sentence repeated as a heading is a prefix, a repeated paragraph is a duplicate.
-
-          The body stays in the `<p>` rather than moving into the `<summary>`. A drag-select that
-          ends inside a `<summary>` still fires a click, so a prompt long enough to need this is a
-          prompt that would collapse itself the moment you tried to copy it.
-        -->
-              <details
-                class="c-transcript__prompt"
-                ontoggle={(event) => toggle(row.key, event)}
-              >
-                {#if disclosures[row.key]}
-                  <summary class="c-transcript__prompt-toggle">Show less</summary>
-                  <p
-                    use:extensionPart={{ target: 'chat.message', context: publicContext }}
-                    class="c-transcript__user"
-                  >
-                    {row.text}
-                  </p>
-                {:else}
-                  <summary class="c-transcript__user">{promptPreview(row.text)}</summary>
-                {/if}
-              </details>
-            {:else}
-              <p
-                use:extensionPart={{ target: 'chat.message', context: publicContext }}
-                class="c-transcript__user"
-              >
-                {row.text}
-              </p>
-            {/if}
-            <ExtensionActions
-              target="chat.message.actions"
-              context={{
-                ...publicContext(),
-                messageId: row.messageId,
-                messageText: row.text,
-              }}
-            />
-          </ExtensionPoint>
-        {:else if row.kind === 'wtm'}
-          <!-- Not the user's bubble: drawn on the agent's side, as something the agent was told, and
-           closed by default — the summary is what happened, and the body is the start of each
-           reply, which the session's own pane holds in full. -->
-          <details class="c-transcript__wtm" ontoggle={(event) => toggle(row.key, event)}>
-            <summary class="c-transcript__wtm-head">
-              <span class="c-transcript__wtm-from">wtm</span>
-              {row.summary}
-            </summary>
-            {#if disclosures[row.key]}
-              <p class="c-transcript__wtm-body">{row.body}</p>
-            {/if}
-          </details>
-        {:else if row.kind === 'attachments'}
-          <div class="c-transcript__attachments" aria-label="User attachments">
-            {#each row.attachments as attachment (attachment.path)}
-              <figure class="c-transcript__attachment">
-                {#if attachment.mime.startsWith('image/')}
-                  <img
-                    src="data:{attachment.mime};base64,{attachment.dataBase64}"
-                    alt="{attachment.name} attachment"
-                  />
-                {:else}
-                  <span class="c-transcript__attachment-file"
-                    >{attachment.name.split('.').at(-1)}</span
-                  >
-                {/if}
-                <figcaption>
-                  <span class="c-transcript__attachment-name" title={attachment.name}
-                    >{attachment.name}</span
-                  >
-                  <small class="c-transcript__attachment-size"
-                    >{formatBytes(attachment.size)}</small
-                  >
-                </figcaption>
-              </figure>
-            {/each}
-          </div>
-        {:else if row.kind === 'assistant'}
-          <!-- The one place arbitrary document structure appears. Rendered as elements rather than a
-           string of HTML, so nothing a model writes can become markup — see `markdown.ts`. -->
-          <div class="c-transcript__said">
-            <Markdown source={row.text} {onrunsql} {onrunshell} {codeLink} />
-          </div>
-        {:else if row.kind === 'thinking'}
-          <!--
-        The narration line, and the reason it is one line rather than the word `Thinking`.
-
-        A run of reasoning is what the model was about to do and why, which is the one thing a reader
-        scanning a turn actually wants — so its opening sentence is on screen rather than behind a
-        marker that says only which *category* of thing is hidden. The rest is still one click away,
-        and the summary is a prefix of the body rather than a name for it, so opening it never
-        contradicts what was already read.
-
-        Still a `<details>` rather than a state class, because the browser owns the disclosure — and
-        still collapsed by default: a whole reasoning block is useful when you want it and a wall when
-        you do not.
-      -->
-          <details
-            class="c-transcript__thinking"
-            ontoggle={(event) => toggle(row.key, event)}
-          >
-            <summary>{firstLine(row.text)}</summary>
-            {#if disclosures[row.key]}<p>{row.text}</p>{/if}
-          </details>
-        {:else if isStep(row)}
-          <ExtensionPoint target="chat.tool" context={{ ...publicContext(), tool: row }}
-            >{@render step(row)}</ExtensionPoint
-          >
-        {:else if row.kind === 'steps'}
-          <!--
-        A run of work, as one line.
-
-        Collapsed always, including while it is being added to. A turn that ran forty tools showed
-        forty rows and pushed the answer off the screen entirely; the count plus the step currently
-        underway is the part anyone reads, and the rest is a click away. Nothing is dropped — the
-        body below is exactly the list that used to be inline.
-
-        A run now ends at the next thing the model *says*, reasoning included, so these are the gaps
-        between narration rather than one box per turn. See `group()`.
-      -->
-          <details class="c-transcript__group" ontoggle={(event) => toggle(row.key, event)}>
-            <summary class="c-transcript__group-name">
-              <span class="c-transcript__group-count">
-                {row.steps.length}
-                {row.steps.length === 1 ? 'step' : 'steps'}
-              </span>
-              {#if row.failed > 0}
-                <!-- Surfaced on the closed row, because a collapsed group must not be able to hide a
-                 failure — that would make folding a way to lose information rather than defer it. -->
-                <span class="c-status--danger">{row.failed} failed</span>
-              {/if}
-              {#if row.live}
-                <span class="c-transcript__group-now"
-                  >{labelOf(row.steps[row.steps.length - 1]!)}</span
-                >
-              {/if}
-            </summary>
-            {#if disclosures[row.key]}
-              <div class="c-transcript__group-body">
-                {#each row.steps as member (member.key)}
-                  {@render step(member)}
-                {/each}
-              </div>
-            {/if}
-          </details>
-        {:else if row.kind === 'patch'}
-          <details class="c-transcript__patch" ontoggle={(event) => toggle(row.key, event)}>
-            <summary>Code changes · {formatBytes(row.diff.length * 2)}</summary>
-            {#if disclosures[row.key]}
-              {@const page = diffPage(row.diff, diffLimits[row.key] ?? 300)}
-              <pre class="c-transcript__diff">{#each page.lines as line, i (i)}{@const ref =
-                    line.cls === 'is-meta' ? fileRef(line.text) : null}<span
-                    class="c-transcript__diff-line {line.cls}"
-                    >{#if ref}<button
-                        type="button"
-                        class="c-transcript__diff-file"
-                        title="Open in the Code tab"
-                        onclick={() => codeLink?.open(ref)}>{line.text}</button
-                      >{:else}{line.text}{/if}
-</span>{/each}</pre>
-              {#if page.more}
-                <div class="c-transcript__paging">
-                  <Button
-                    variant="quiet"
-                    size="sm"
-                    onclick={() =>
-                      (diffLimits[row.key] = (diffLimits[row.key] ?? 300) + 300)}
-                    >Show 300 more lines</Button
-                  >
-                </div>
-              {/if}
-            {/if}
-          </details>
-        {:else if row.kind === 'agenda'}
-          <div class="c-transcript__card">
-            {#if row.explanation}<p>{row.explanation}</p>{/if}
-            <ol class="c-transcript__steps">
-              {#each row.steps as step, i (i)}
-                <!-- The status is a word as well as a class: nothing in this app encodes state in
-                 colour alone, and a checked-off step is exactly where that rule bites. -->
-                <li class="c-transcript__step {stepClass(step.status)}">
-                  {step.text}
-                  <span class="c-transcript__step-state">{stepLabel(step.status)}</span>
-                </li>
-              {/each}
-            </ol>
-          </div>
-        {:else if row.kind === 'notice'}
-          <p class={noteClass(row.level)}>{row.text}</p>
-        {:else if row.kind === 'approval'}
-          <p class="c-transcript__approval-receipt">{row.text}</p>
-        {:else if row.kind === 'usage'}
-          <p class="c-transcript__usage">
-            {tokens(row.usage)}{#if cost(row.costUsd)}&nbsp;· {cost(row.costUsd)}{/if}
-          </p>
-        {/if}
-      {/each}
-    </div>
-
-    <!--
-  One machinery item, wherever it appears.
-
-  Rendered from a snippet because a step shows up in two places — loose, when its run was too short
-  to fold, and inside a group when it was not — and the two must be indistinguishable. Two copies of
-  this markup is how they would stop being.
-
-  Every kind is the same shape: one line that discloses. That uniformity is what lets a group hold a
-  mix of tool calls, shell commands and unknown events without reading as three different things.
--->
-    <!-- One line, for the reason `Markdown.svelte`'s span run is: whitespace between these tags would
-     become a space inside the title. See `toolTitle`. -->
-    <!-- prettier-ignore -->
-  </ExtensionPoint>
-</ExtensionPoint>

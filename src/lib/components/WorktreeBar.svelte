@@ -1,9 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import NewAgentSessionDialog from './NewAgentSessionDialog.svelte';
-  let newSession = $state(false);
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * One row above the sessions: what this worktree is, and what you can do to it.
    *
@@ -46,6 +41,7 @@
    * missing from it because a group was folded in a rail nobody can see would just be missing.
    */
   import { browsers } from '../state/browsers.svelte';
+  import { extensionPart, provideExtensionContext } from '../state/extensions.svelte';
   import { plugins } from '../state/plugins.svelte';
   import { sessions } from '../state/sessions.svelte';
   import { INSPECTOR_SHORTCUT, SHELL_SHORTCUT } from '../state/sessions.svelte';
@@ -65,6 +61,9 @@
   import type { WorktreeView } from '../worktree-view';
   import LinksButton from './LinksButton.svelte';
   import DesignFirstDialog from './DesignFirstDialog.svelte';
+  import ExtensionActions from './ExtensionActions.svelte';
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import NewAgentSessionDialog from './NewAgentSessionDialog.svelte';
   import OpenInButton from './OpenInButton.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -101,6 +100,11 @@
   } = $props();
 
   let designing = $state(false);
+  /** Whether the experience picker for a new agent session is open. */
+  let newSession = $state(false);
+
+  /** Plugins see the worktree this bar is for, which is the selected one, by its props. */
+  const extension = provideExtensionContext(() => ({ projectId, worktreeId: worktree.id }));
 
   /** In the Favorites group. A lookup, since a star is where a worktree sits, not a field on it. */
   const favorite = $derived(workspace.isFavorite(worktree.id));
@@ -165,11 +169,15 @@
       // moment of choosing between them, and the agent near its limit is the one not to start a
       // long task on. Only what Rust already holds: opening a menu does not ask anyone, and a
       // menu row is text, so there is no bar.
+      //
+      // Each also says which experience it opens, since the default differs by agent.
       ...startable.map((option) => {
         const window = tightest(usage.accounts[option.id], now);
+        const row = sessions.launchRow(option.id, option.label);
         return item(
-          window ? `${option.label}  ·  ${summaryText(window)}` : option.label,
+          window ? `${row.text}  ·  ${summaryText(window)}` : row.text,
           () => void sessions.openAgent(projectId, worktree.id, option.id),
+          row.enabled,
         );
       }),
       ...Object.values(plugins.state.registry.installed)
@@ -204,10 +212,10 @@
           ),
         ]),
       separator,
-      // The call ⌘J makes, as the Shell button this replaced did, so the two never disagree: a
-      // shortcut that focused the open shell beside a menu row that spawned another login shell per
-      // click would leak one for every habituated pick.
-      item('Shell', () => void sessions.focusOrOpenShell(projectId, worktree.id)),
+      // Always a new shell, like every other row in a menu called New. ⌘J is the way back to an
+      // open one; this used to make the same focus-or-open call, which read as the menu doing
+      // nothing whenever a shell (or, by mistake, a Native CLI terminal) was already open.
+      item('Shell', () => void sessions.openShell(projectId, worktree.id)),
       item(
         'Browser',
         () => void sessions.openBrowser(projectId, worktree.id),
@@ -229,137 +237,133 @@
   }
 </script>
 
-<ExtensionPoint target="component.worktree-bar" context={publicContext()}>
-  <header
-    use:extensionPart={{
-      target: ['component.worktree-bar', 'workspace.toolbar'],
-      context: publicContext,
-    }}
-    class="c-worktree-bar"
-  >
-    <!--
+<ExtensionPoint target="workspace.toolbar" position="before" />
+<header class="c-worktree-bar" {@attach extensionPart('workspace.toolbar', extension)}>
+  <!--
     Duplicated from the sidebar on purpose: the one there only appears on hover, which is not
     somewhere a control can be *found*. This is where you learn it exists, and while the sidebar
     is hidden it is the only star there is.
   -->
-    <button
-      class="c-detail__star"
-      class:is-on={favorite}
-      aria-pressed={favorite}
-      title={favorite ? 'Remove from favorites' : 'Add to favorites'}
-      onclick={onfavorite}
-    >
-      <Icon name={favorite ? 'star' : 'star-outline'} size={18} />
-      <span class="u-visually-hidden">Favorite</span>
-    </button>
+  <button
+    class="c-detail__star"
+    class:is-on={favorite}
+    aria-pressed={favorite}
+    title={favorite ? 'Remove from favorites' : 'Add to favorites'}
+    onclick={onfavorite}
+  >
+    <Icon name={favorite ? 'star' : 'star-outline'} size={18} />
+    <span class="u-visually-hidden">Favorite</span>
+  </button>
 
-    {#if sidebarCollapsed}
-      <h1 class="c-worktree-bar__picker">
-        <button
-          class="c-worktree-bar__switch"
-          aria-label="Switch worktree: {worktree.title}"
-          aria-haspopup="menu"
-          onclick={switchMenu}
-        >
-          <span class="c-worktree-bar__name">{worktree.title}</span>
-          <Icon name="chevron-down" size={12} />
-        </button>
-      </h1>
-    {:else}
-      <h1 class="c-worktree-bar__title">{worktree.title}</h1>
-    {/if}
+  {#if sidebarCollapsed}
+    <h1 class="c-worktree-bar__picker">
+      <button
+        class="c-worktree-bar__switch"
+        aria-label="Switch worktree: {worktree.title}"
+        aria-haspopup="menu"
+        onclick={switchMenu}
+      >
+        <span class="c-worktree-bar__name">{worktree.title}</span>
+        <Icon name="chevron-down" size={12} />
+      </button>
+    </h1>
+  {:else}
+    <h1 class="c-worktree-bar__title">{worktree.title}</h1>
+  {/if}
 
-    <div class="c-worktree-bar__facts">
-      <!-- Shown with the sidebar open as well, although the selected tab there repeats it, so the
+  <div class="c-worktree-bar__facts">
+    <!-- Shown with the sidebar open as well, although the selected tab there repeats it, so the
          bar does not change shape each time the rail is toggled. -->
-      {#if worktree.branch}
-        <code class="c-worktree-bar__branch" title={worktree.branch}>{worktree.branch}</code
-        >
-      {:else}
-        <span class="c-status--muted">detached</span>
-      {/if}
-      <!-- No "main worktree" badge and no "modified". The selected tab directly to the left already
+    {#if worktree.branch}
+      <code class="c-worktree-bar__branch" title={worktree.branch}>{worktree.branch}</code>
+    {:else}
+      <span class="c-status--muted">detached</span>
+    {/if}
+    <!-- No "main worktree" badge and no "modified". The selected tab directly to the left already
          shows both — it has a `main` pill and carries the dirty state — so here they repeated the
          one thing on screen the user had just clicked. -->
-      <!-- The `↑N↓N` divergence counter was here and is gone for the same reason it left
+    <!-- The `↑N↓N` divergence counter was here and is gone for the same reason it left
          `WorktreeTab`: it is a measurement presented as a status, and this header is the one place
          where the Inspector — which reports ahead, behind, staged and unstaged properly — is a
          single click away. -->
 
-      {#each visibleBadges as badge, i (`${badge.label}:${i}`)}
-        <span class="c-badge" title={badge.label}>{badge.label}: {badge.value}</span>
-      {/each}
+    {#each visibleBadges as badge, i (`${badge.label}:${i}`)}
+      <span class="c-badge" title={badge.label}>{badge.label}: {badge.value}</span>
+    {/each}
+  </div>
+
+  <div class="c-worktree-bar__actions">
+    <div class="c-worktree-bar__view-switch" aria-label="Worktree view">
+      <!-- A view whose region is hidden in Workbench defaults has nothing to switch to. -->
+      {#if plugins.available('sessions')}
+        <Button
+          variant={view === 'sessions' ? 'neutral' : 'quiet'}
+          size="sm"
+          ariaPressed={view === 'sessions'}
+          onclick={onsessions}>Sessions</Button
+        >
+      {/if}
+      {#if plugins.available('database')}
+        <Button
+          variant={view === 'database' ? 'neutral' : 'quiet'}
+          size="sm"
+          ariaPressed={view === 'database'}
+          onclick={ondatabase}>Database</Button
+        >
+      {/if}
+      {#if plugins.available('code')}
+        <Button
+          variant={view === 'code' ? 'neutral' : 'quiet'}
+          size="sm"
+          ariaPressed={view === 'code'}
+          onclick={oncode}>Code</Button
+        >
+      {/if}
     </div>
 
-    <div class="c-worktree-bar__actions">
-      <div class="c-worktree-bar__view-switch" aria-label="Worktree view">
-        {#if plugins.available('sessions')}
-          <Button
-            variant={view === 'sessions' ? 'neutral' : 'quiet'}
-            size="sm"
-            ariaPressed={view === 'sessions'}
-            onclick={onsessions}>Sessions</Button
-          >
-        {/if}
-        {#if plugins.available('database')}
-          <Button
-            variant={view === 'database' ? 'neutral' : 'quiet'}
-            size="sm"
-            ariaPressed={view === 'database'}
-            onclick={ondatabase}>Database</Button
-          >
-        {/if}
-        {#if plugins.available('code')}
-          <Button
-            variant={view === 'code' ? 'neutral' : 'quiet'}
-            size="sm"
-            ariaPressed={view === 'code'}
-            onclick={oncode}>Code</Button
-          >
-        {/if}
-      </div>
+    <Button
+      variant="quiet"
+      size="sm"
+      title="Open an agent, a shell ({SHELL_SHORTCUT}) or a browser in this worktree"
+      ariaHaspopup="menu"
+      onclick={newMenu}
+    >
+      New <Icon name="chevron-down" size={11} />
+    </Button>
 
-      <Button
-        variant="quiet"
-        size="sm"
-        title="Open an agent, a shell ({SHELL_SHORTCUT}) or a browser in this worktree"
-        ariaHaspopup="menu"
-        onclick={newMenu}
-      >
-        New <Icon name="chevron-down" size={11} />
-      </Button>
+    <OpenInButton {projectId} worktreeId={worktree.id} />
 
-      <OpenInButton {projectId} worktreeId={worktree.id} />
+    <LinksButton {projectId} worktreeId={worktree.id} links={worktree.links} />
 
-      <LinksButton {projectId} worktreeId={worktree.id} links={worktree.links} />
+    <ExtensionActions target="workspace.actions" />
 
-      <Button
-        variant="quiet"
-        size="sm"
-        icon="sm"
-        title="Details ({INSPECTOR_SHORTCUT}) and Remove"
-        ariaLabel="More actions for this worktree"
-        ariaHaspopup="menu"
-        onclick={moreMenu}
-      >
-        <Icon name="more" size={13} />
-      </Button>
-      <ExtensionPoint target="workspace.actions" context={publicContext()} />
-      <ExtensionPoint target="workspace.toolbar" context={publicContext()} />
-    </div>
-  </header>
+    <Button
+      variant="quiet"
+      size="sm"
+      icon="sm"
+      title="Details ({INSPECTOR_SHORTCUT}) and Remove"
+      ariaLabel="More actions for this worktree"
+      ariaHaspopup="menu"
+      onclick={moreMenu}
+    >
+      <Icon name="more" size={13} />
+    </Button>
+  </div>
+</header>
+<ExtensionPoint target="workspace.toolbar" position="after" />
 
-  {#if designing}
-    {#key worktree.id}<DesignFirstDialog
-        {projectId}
-        {worktree}
-        onclose={() => (designing = false)}
-      />{/key}
-  {/if}
-</ExtensionPoint>
+{#if designing}
+  {#key worktree.id}<DesignFirstDialog
+      {projectId}
+      {worktree}
+      onclose={() => (designing = false)}
+    />{/key}
+{/if}
 
-{#if newSession}{#key worktree.id}<NewAgentSessionDialog
+{#if newSession}
+  {#key worktree.id}<NewAgentSessionDialog
       {projectId}
       worktreeId={worktree.id}
       onclose={() => (newSession = false)}
-    />{/key}{/if}
+    />{/key}
+{/if}

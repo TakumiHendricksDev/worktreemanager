@@ -399,7 +399,11 @@ fn run(
 /// cannot shorten what the model receives. This is deliberately the shared session seam rather
 /// than three provider implementations: a fourth provider must not be able to reintroduce a
 /// multi-megabyte prompt, diff or tool result merely by forgetting a UI-specific convention.
-fn bound_transcript_event(event: &mut AgentEvent) {
+///
+/// Crate-visible because the native adapters in [`crate::native`] produce the same events without
+/// a `Step`, and plugins receive them as the same `chat.event`: an unbounded copy there would
+/// reintroduce exactly what this seam exists to stop.
+pub(crate) fn bound_transcript_event(event: &mut AgentEvent) {
     const PROMPT_BYTES: usize = 64 * 1024;
     const OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
@@ -548,9 +552,13 @@ mod tests {
 
     #[test]
     fn editable_message_metadata_hides_application_context_and_marks_any_truncated_text() {
+        const ANNOTATED: &str = "fix the parser\n\n<wtm_session_awareness>\nCodex is working.\n</wtm_session_awareness>";
         let mut event = AgentEvent::MessageIdentity {
-            message: "m1".into(), turn: "t1".into(), attachments: false, truncated: false,
-            text: "fix the parser\n\n<wtm_session_awareness>\nCodex is working.\n</wtm_session_awareness>".into(),
+            message: "m1".into(),
+            turn: "t1".into(),
+            attachments: false,
+            truncated: false,
+            text: ANNOTATED.into(),
         };
         bound_transcript_event(&mut event);
         let AgentEvent::MessageIdentity {

@@ -85,6 +85,20 @@ export type PaneIntent =
       worktreeId: string;
       path: string;
       line: number | null;
+    }
+  /** Open Settings, which only the main window mounts, at a section and an optional focus. */
+  | {
+      kind: 'showSettings';
+      section: import('./state/settings-view.svelte').SettingsSection | null;
+      focus: string | null;
+    }
+  /** Open an agent pane in the main window's tiling, which a pane window cannot reach. */
+  | {
+      kind: 'openAgent';
+      projectId: string;
+      worktreeId: string;
+      provider: string;
+      experience: import('./state/sessions.svelte').AgentExperience | null;
     };
 
 /** What the main window tells a pane window's frontend. */

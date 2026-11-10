@@ -4,10 +4,10 @@
   "operations": {
     "chat_edit_snapshot": {
       "arguments": {
-        "$ref": "#/$defs/t1"
+        "$ref": "#/$defs/chat_edit_snapshot.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t2"
+        "$ref": "#/$defs/ChatEditSnapshot"
       }
     },
     "plugin_drafts": {
@@ -19,7 +19,7 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t4"
+          "$ref": "#/$defs/PluginDraftView"
         }
       }
     },
@@ -30,15 +30,7 @@
         "additionalProperties": false
       },
       "result": {
-        "$ref": "#/$defs/t5"
-      }
-    },
-    "open_native_cli": {
-      "arguments": {
-        "$ref": "#/$defs/t35"
-      },
-      "result": {
-        "type": "string"
+        "$ref": "#/$defs/PluginsSnapshot"
       }
     },
     "native_sessions": {
@@ -50,80 +42,72 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t36"
+          "$ref": "#/$defs/NativeSession"
         }
       }
     },
     "native_session": {
       "arguments": {
-        "$ref": "#/$defs/t41"
+        "$ref": "#/$defs/native_session.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t36"
-      }
-    },
-    "send_native_message": {
-      "arguments": {
-        "$ref": "#/$defs/t42"
-      },
-      "result": {
-        "$ref": "#/$defs/t40"
+        "$ref": "#/$defs/NativeSession"
       }
     },
     "interrupt_native_turn": {
       "arguments": {
-        "$ref": "#/$defs/t43"
+        "$ref": "#/$defs/interrupt_native_turn.arguments"
       },
       "result": {
         "type": "null"
       }
     },
-    "discover_design_context": {
+    "check_native_delivery": {
       "arguments": {
-        "$ref": "#/$defs/t44"
+        "$ref": "#/$defs/check_native_delivery.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t45"
+        "$ref": "#/$defs/NativeDeliveryCheck"
+      }
+    },
+    "discover_design_context": {
+      "arguments": {
+        "$ref": "#/$defs/discover_design_context.arguments"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignDiscovery"
       }
     },
     "list_prototypes": {
       "arguments": {
-        "$ref": "#/$defs/t47"
+        "$ref": "#/$defs/list_prototypes.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t48"
+          "$ref": "#/$defs/PrototypeState"
         }
       }
     },
     "dismiss_prototype": {
       "arguments": {
-        "$ref": "#/$defs/t51"
+        "$ref": "#/$defs/dismiss_prototype.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t48"
-      }
-    },
-    "open_prototype_preview": {
-      "arguments": {
-        "$ref": "#/$defs/t52"
-      },
-      "result": {
-        "$ref": "#/$defs/t53"
+        "$ref": "#/$defs/PrototypeState"
       }
     },
     "cancel_prototype": {
       "arguments": {
-        "$ref": "#/$defs/t54"
+        "$ref": "#/$defs/cancel_prototype.arguments"
       },
       "result": {
-        "type": "null"
+        "$ref": "#/$defs/PrototypeCancel"
       }
     },
     "shell_run_target": {
       "arguments": {
-        "$ref": "#/$defs/t55"
+        "$ref": "#/$defs/shell_run_target.arguments"
       },
       "result": {
         "type": "string"
@@ -131,21 +115,13 @@
     },
     "list_run_shells": {
       "arguments": {
-        "$ref": "#/$defs/t56"
+        "$ref": "#/$defs/list_run_shells.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t57"
+          "$ref": "#/$defs/RunShell"
         }
-      }
-    },
-    "prepare_shell_run": {
-      "arguments": {
-        "$ref": "#/$defs/t58"
-      },
-      "result": {
-        "$ref": "#/$defs/t60"
       }
     },
     "list_shell_runs": {
@@ -157,13 +133,13 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t60"
+          "$ref": "#/$defs/ShellRun"
         }
       }
     },
     "cancel_shell_run": {
       "arguments": {
-        "$ref": "#/$defs/t66"
+        "$ref": "#/$defs/cancel_shell_run.arguments"
       },
       "result": {
         "type": "null"
@@ -171,7 +147,7 @@
     },
     "focus_run_shell": {
       "arguments": {
-        "$ref": "#/$defs/t67"
+        "$ref": "#/$defs/focus_run_shell.arguments"
       },
       "result": {
         "type": "null"
@@ -179,12 +155,12 @@
     },
     "list_home_shell_grants": {
       "arguments": {
-        "$ref": "#/$defs/t68"
+        "$ref": "#/$defs/list_home_shell_grants.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t69"
+          "$ref": "#/$defs/HomeShellGrant"
         }
       }
     },
@@ -197,160 +173,65 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t70"
-        }
-      }
-    },
-    "register_project": {
-      "arguments": {
-        "$ref": "#/$defs/t73"
-      },
-      "result": {
-        "$ref": "#/$defs/t74"
-      }
-    },
-    "unregister_project": {
-      "arguments": {
-        "$ref": "#/$defs/t75"
-      },
-      "result": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/t70"
+          "$ref": "#/$defs/Project"
         }
       }
     },
     "list_worktrees": {
       "arguments": {
-        "$ref": "#/$defs/t76"
+        "$ref": "#/$defs/list_worktrees.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t77"
+          "$ref": "#/$defs/Worktree"
         }
       }
     },
     "sidebar_layout": {
       "arguments": {
-        "$ref": "#/$defs/t81"
+        "$ref": "#/$defs/sidebar_layout.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t82"
+        "$ref": "#/$defs/SidebarLayout"
       }
     },
     "set_sidebar_layout": {
       "arguments": {
-        "$ref": "#/$defs/t84"
+        "$ref": "#/$defs/set_sidebar_layout.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t82"
+        "$ref": "#/$defs/SidebarLayout"
       }
     },
     "worktree_form": {
       "arguments": {
-        "$ref": "#/$defs/t85"
+        "$ref": "#/$defs/worktree_form.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t86"
-      }
-    },
-    "field_options": {
-      "arguments": {
-        "$ref": "#/$defs/t89"
-      },
-      "result": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
+        "$ref": "#/$defs/Form"
       }
     },
     "list_actions": {
       "arguments": {
-        "$ref": "#/$defs/t90"
+        "$ref": "#/$defs/list_actions.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t88"
+          "$ref": "#/$defs/Action"
         }
-      }
-    },
-    "preview_worktree": {
-      "arguments": {
-        "$ref": "#/$defs/t91"
-      },
-      "result": {
-        "$ref": "#/$defs/t92"
-      }
-    },
-    "create_worktree": {
-      "arguments": {
-        "$ref": "#/$defs/t95"
-      },
-      "result": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/t96"
-          },
-          {
-            "$ref": "#/$defs/t97"
-          },
-          {
-            "$ref": "#/$defs/t101"
-          }
-        ]
       }
     },
     "remove_preflight": {
       "arguments": {
-        "$ref": "#/$defs/t102"
+        "$ref": "#/$defs/remove_preflight.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t93"
+          "$ref": "#/$defs/Preflight"
         }
-      }
-    },
-    "remove_worktree": {
-      "arguments": {
-        "$ref": "#/$defs/t103"
-      },
-      "result": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/t104"
-          },
-          {
-            "$ref": "#/$defs/t106"
-          }
-        ]
-      }
-    },
-    "run_setup": {
-      "arguments": {
-        "$ref": "#/$defs/t107"
-      },
-      "result": {
-        "$ref": "#/$defs/t108"
-      }
-    },
-    "run_action": {
-      "arguments": {
-        "$ref": "#/$defs/t109"
-      },
-      "result": {
-        "type": "string"
-      }
-    },
-    "open_terminal": {
-      "arguments": {
-        "$ref": "#/$defs/t110"
-      },
-      "result": {
-        "type": "string"
       }
     },
     "list_terminals": {
@@ -362,13 +243,13 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t111"
+          "$ref": "#/$defs/TerminalSession"
         }
       }
     },
     "terminal_replay": {
       "arguments": {
-        "$ref": "#/$defs/t112"
+        "$ref": "#/$defs/terminal_replay.arguments"
       },
       "result": {
         "anyOf": [
@@ -376,38 +257,14 @@
             "type": "null"
           },
           {
-            "$ref": "#/$defs/t113"
+            "$ref": "#/$defs/TerminalReplay"
           }
         ]
       }
     },
-    "close_terminal": {
-      "arguments": {
-        "$ref": "#/$defs/t114"
-      },
-      "result": {
-        "type": "null"
-      }
-    },
-    "pty_write": {
-      "arguments": {
-        "$ref": "#/$defs/t115"
-      },
-      "result": {
-        "type": "null"
-      }
-    },
     "pty_resize": {
       "arguments": {
-        "$ref": "#/$defs/t116"
-      },
-      "result": {
-        "type": "null"
-      }
-    },
-    "pty_kill": {
-      "arguments": {
-        "$ref": "#/$defs/t117"
+        "$ref": "#/$defs/pty_resize.arguments"
       },
       "result": {
         "type": "null"
@@ -415,29 +272,13 @@
     },
     "list_agents": {
       "arguments": {
-        "$ref": "#/$defs/t118"
+        "$ref": "#/$defs/list_agents.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t119"
+          "$ref": "#/$defs/AgentOption"
         }
-      }
-    },
-    "open_agent_session": {
-      "arguments": {
-        "$ref": "#/$defs/t120"
-      },
-      "result": {
-        "type": "string"
-      }
-    },
-    "open_home_session": {
-      "arguments": {
-        "$ref": "#/$defs/t122"
-      },
-      "result": {
-        "type": "string"
       }
     },
     "home_jobs": {
@@ -449,40 +290,32 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t124"
+          "$ref": "#/$defs/HomeJob"
         }
       }
     },
     "home_dismiss_job": {
       "arguments": {
-        "$ref": "#/$defs/t126"
+        "$ref": "#/$defs/home_dismiss_job.arguments"
       },
       "result": {
         "type": "boolean"
       }
     },
-    "open_agent_side_session": {
-      "arguments": {
-        "$ref": "#/$defs/t127"
-      },
-      "result": {
-        "type": "string"
-      }
-    },
     "list_resumable": {
       "arguments": {
-        "$ref": "#/$defs/t129"
+        "$ref": "#/$defs/list_resumable.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t130"
+          "$ref": "#/$defs/Resumable"
         }
       }
     },
     "forget_session": {
       "arguments": {
-        "$ref": "#/$defs/t131"
+        "$ref": "#/$defs/forget_session.arguments"
       },
       "result": {
         "type": "null"
@@ -490,10 +323,10 @@
     },
     "agent_capability": {
       "arguments": {
-        "$ref": "#/$defs/t132"
+        "$ref": "#/$defs/agent_capability.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t133"
+        "$ref": "#/$defs/Capability"
       }
     },
     "usage_limits": {
@@ -505,48 +338,16 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t137"
+          "$ref": "#/$defs/AccountUsage"
         }
       }
     },
     "refresh_usage_limits": {
       "arguments": {
-        "$ref": "#/$defs/t140"
+        "$ref": "#/$defs/refresh_usage_limits.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t137"
-      }
-    },
-    "send_turn": {
-      "arguments": {
-        "$ref": "#/$defs/t141"
-      },
-      "result": {
-        "type": "null"
-      }
-    },
-    "steer_turn": {
-      "arguments": {
-        "$ref": "#/$defs/t143"
-      },
-      "result": {
-        "type": "null"
-      }
-    },
-    "prepare_agent_attachment": {
-      "arguments": {
-        "$ref": "#/$defs/t144"
-      },
-      "result": {
-        "$ref": "#/$defs/t142"
-      }
-    },
-    "stage_agent_attachment": {
-      "arguments": {
-        "$ref": "#/$defs/t145"
-      },
-      "result": {
-        "$ref": "#/$defs/t142"
+        "$ref": "#/$defs/AccountUsage"
       }
     },
     "dictation_status": {
@@ -556,17 +357,7 @@
         "additionalProperties": false
       },
       "result": {
-        "$ref": "#/$defs/t146"
-      }
-    },
-    "start_dictation": {
-      "arguments": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "null"
+        "$ref": "#/$defs/DictationStatus"
       }
     },
     "stop_dictation": {
@@ -581,7 +372,7 @@
     },
     "check_for_update": {
       "arguments": {
-        "$ref": "#/$defs/t147"
+        "$ref": "#/$defs/check_for_update.arguments"
       },
       "result": {
         "anyOf": [
@@ -589,24 +380,14 @@
             "type": "null"
           },
           {
-            "$ref": "#/$defs/t148"
+            "$ref": "#/$defs/UpdateStatus"
           }
         ]
       }
     },
-    "prepare_update": {
-      "arguments": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "string"
-      }
-    },
     "list_worktree_files": {
       "arguments": {
-        "$ref": "#/$defs/t149"
+        "$ref": "#/$defs/list_worktree_files.arguments"
       },
       "result": {
         "type": "array",
@@ -617,7 +398,7 @@
     },
     "save_brief": {
       "arguments": {
-        "$ref": "#/$defs/t150"
+        "$ref": "#/$defs/save_brief.arguments"
       },
       "result": {
         "type": "string"
@@ -625,18 +406,18 @@
     },
     "list_briefs": {
       "arguments": {
-        "$ref": "#/$defs/t151"
+        "$ref": "#/$defs/list_briefs.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t152"
+          "$ref": "#/$defs/Brief"
         }
       }
     },
     "remove_brief": {
       "arguments": {
-        "$ref": "#/$defs/t153"
+        "$ref": "#/$defs/remove_brief.arguments"
       },
       "result": {
         "type": "null"
@@ -644,18 +425,18 @@
     },
     "list_background_tasks": {
       "arguments": {
-        "$ref": "#/$defs/t154"
+        "$ref": "#/$defs/list_background_tasks.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t155"
+          "$ref": "#/$defs/BackgroundTask"
         }
       }
     },
     "interrupt_turn": {
       "arguments": {
-        "$ref": "#/$defs/t156"
+        "$ref": "#/$defs/interrupt_turn.arguments"
       },
       "result": {
         "type": "null"
@@ -670,18 +451,18 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t157"
+          "$ref": "#/$defs/AgentSession"
         }
       }
     },
     "agent_replay": {
       "arguments": {
-        "$ref": "#/$defs/t158"
+        "$ref": "#/$defs/agent_replay.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t159"
+          "$ref": "#/$defs/SeqEvent"
         }
       }
     },
@@ -694,21 +475,13 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t196"
+          "$ref": "#/$defs/AgentExchange"
         }
-      }
-    },
-    "close_agent_session": {
-      "arguments": {
-        "$ref": "#/$defs/t197"
-      },
-      "result": {
-        "type": "null"
       }
     },
     "get_pref": {
       "arguments": {
-        "$ref": "#/$defs/t198"
+        "$ref": "#/$defs/get_pref.arguments"
       },
       "result": {
         "anyOf": [
@@ -721,14 +494,6 @@
         ]
       }
     },
-    "set_pref": {
-      "arguments": {
-        "$ref": "#/$defs/t199"
-      },
-      "result": {
-        "type": "null"
-      }
-    },
     "list_palettes": {
       "arguments": {
         "type": "object",
@@ -738,7 +503,7 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t200"
+          "$ref": "#/$defs/Palette"
         }
       }
     },
@@ -749,88 +514,31 @@
         "additionalProperties": false
       },
       "result": {
-        "$ref": "#/$defs/t201"
+        "$ref": "#/$defs/Doctor"
       }
     },
     "list_database_connections": {
       "arguments": {
-        "$ref": "#/$defs/t203"
+        "$ref": "#/$defs/list_database_connections.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t204"
+          "$ref": "#/$defs/DatabaseConnection"
         }
-      }
-    },
-    "connect_database": {
-      "arguments": {
-        "$ref": "#/$defs/t205"
-      },
-      "result": {
-        "$ref": "#/$defs/t206"
       }
     },
     "disconnect_database": {
       "arguments": {
-        "$ref": "#/$defs/t207"
+        "$ref": "#/$defs/disconnect_database.arguments"
       },
       "result": {
         "type": "null"
       }
     },
-    "database_schemas": {
-      "arguments": {
-        "$ref": "#/$defs/t208"
-      },
-      "result": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/t209"
-        }
-      }
-    },
-    "database_relations": {
-      "arguments": {
-        "$ref": "#/$defs/t210"
-      },
-      "result": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/t211"
-        }
-      }
-    },
-    "database_columns": {
-      "arguments": {
-        "$ref": "#/$defs/t212"
-      },
-      "result": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/t213"
-        }
-      }
-    },
-    "run_database_query": {
-      "arguments": {
-        "$ref": "#/$defs/t214"
-      },
-      "result": {
-        "$ref": "#/$defs/t215"
-      }
-    },
-    "database_table_page": {
-      "arguments": {
-        "$ref": "#/$defs/t218"
-      },
-      "result": {
-        "$ref": "#/$defs/t215"
-      }
-    },
     "cancel_database_query": {
       "arguments": {
-        "$ref": "#/$defs/t220"
+        "$ref": "#/$defs/cancel_database_query.arguments"
       },
       "result": {
         "type": "null"
@@ -838,61 +546,61 @@
     },
     "code_tree": {
       "arguments": {
-        "$ref": "#/$defs/t221"
+        "$ref": "#/$defs/code_tree.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t222"
+        "$ref": "#/$defs/CodeTree"
       }
     },
     "code_list_dir": {
       "arguments": {
-        "$ref": "#/$defs/t223"
+        "$ref": "#/$defs/code_list_dir.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t224"
+          "$ref": "#/$defs/CodeEntry"
         }
       }
     },
     "code_read_file": {
       "arguments": {
-        "$ref": "#/$defs/t225"
+        "$ref": "#/$defs/code_read_file.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t226"
+        "$ref": "#/$defs/CodeFile"
       }
     },
     "code_search": {
       "arguments": {
-        "$ref": "#/$defs/t227"
+        "$ref": "#/$defs/code_search.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t229"
+        "$ref": "#/$defs/CodeSearch"
       }
     },
     "code_changes": {
       "arguments": {
-        "$ref": "#/$defs/t231"
+        "$ref": "#/$defs/code_changes.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t232"
+        "$ref": "#/$defs/CodeChanges"
       }
     },
     "code_file_diff": {
       "arguments": {
-        "$ref": "#/$defs/t234"
+        "$ref": "#/$defs/code_file_diff.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t235"
+          "$ref": "#/$defs/CodeHunk"
         }
       }
     },
     "code_base_version": {
       "arguments": {
-        "$ref": "#/$defs/t236"
+        "$ref": "#/$defs/code_base_version.arguments"
       },
       "result": {
         "anyOf": [
@@ -907,149 +615,125 @@
     },
     "code_list_comments": {
       "arguments": {
-        "$ref": "#/$defs/t237"
+        "$ref": "#/$defs/code_list_comments.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t238"
+          "$ref": "#/$defs/CodeComment"
         }
       }
     },
     "code_add_comment": {
       "arguments": {
-        "$ref": "#/$defs/t239"
+        "$ref": "#/$defs/code_add_comment.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t238"
+          "$ref": "#/$defs/CodeComment"
         }
       }
     },
     "code_update_comment": {
       "arguments": {
-        "$ref": "#/$defs/t241"
+        "$ref": "#/$defs/code_update_comment.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t238"
+          "$ref": "#/$defs/CodeComment"
         }
       }
     },
     "code_resolve_comment": {
       "arguments": {
-        "$ref": "#/$defs/t242"
+        "$ref": "#/$defs/code_resolve_comment.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t238"
+          "$ref": "#/$defs/CodeComment"
         }
       }
     },
     "code_remove_comment": {
       "arguments": {
-        "$ref": "#/$defs/t243"
+        "$ref": "#/$defs/code_remove_comment.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t238"
+          "$ref": "#/$defs/CodeComment"
         }
       }
     },
     "code_clear_comments": {
       "arguments": {
-        "$ref": "#/$defs/t244"
+        "$ref": "#/$defs/code_clear_comments.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t238"
+          "$ref": "#/$defs/CodeComment"
         }
       }
     },
     "code_mark_comments_sent": {
       "arguments": {
-        "$ref": "#/$defs/t245"
+        "$ref": "#/$defs/code_mark_comments_sent.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t238"
+          "$ref": "#/$defs/CodeComment"
         }
       }
     },
     "code_symbols": {
       "arguments": {
-        "$ref": "#/$defs/t246"
+        "$ref": "#/$defs/code_symbols.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t247"
+          "$ref": "#/$defs/CodeSymbol"
         }
       }
     },
     "code_definitions": {
       "arguments": {
-        "$ref": "#/$defs/t248"
+        "$ref": "#/$defs/code_definitions.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t247"
+          "$ref": "#/$defs/CodeSymbol"
         }
       }
     },
     "code_stat": {
       "arguments": {
-        "$ref": "#/$defs/t249"
+        "$ref": "#/$defs/code_stat.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t250"
+          "$ref": "#/$defs/CodeStat"
         }
-      }
-    },
-    "open_url": {
-      "arguments": {
-        "$ref": "#/$defs/t251"
-      },
-      "result": {
-        "type": "null"
-      }
-    },
-    "open_browser": {
-      "arguments": {
-        "$ref": "#/$defs/t252"
-      },
-      "result": {
-        "$ref": "#/$defs/t53"
       }
     },
     "close_browser": {
       "arguments": {
-        "$ref": "#/$defs/t253"
+        "$ref": "#/$defs/close_browser.arguments"
       },
       "result": {
         "type": "null"
       }
     },
-    "browser_navigate": {
-      "arguments": {
-        "$ref": "#/$defs/t254"
-      },
-      "result": {
-        "$ref": "#/$defs/t53"
-      }
-    },
     "browser_history": {
       "arguments": {
-        "$ref": "#/$defs/t255"
+        "$ref": "#/$defs/browser_history.arguments"
       },
       "result": {
         "type": "null"
@@ -1057,7 +741,7 @@
     },
     "browser_focus": {
       "arguments": {
-        "$ref": "#/$defs/t256"
+        "$ref": "#/$defs/browser_focus.arguments"
       },
       "result": {
         "type": "null"
@@ -1065,7 +749,7 @@
     },
     "browser_zoom": {
       "arguments": {
-        "$ref": "#/$defs/t257"
+        "$ref": "#/$defs/browser_zoom.arguments"
       },
       "result": {
         "type": "null"
@@ -1073,12 +757,12 @@
     },
     "list_browsers": {
       "arguments": {
-        "$ref": "#/$defs/t258"
+        "$ref": "#/$defs/list_browsers.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t53"
+          "$ref": "#/$defs/BrowserView"
         }
       }
     },
@@ -1089,64 +773,64 @@
         "additionalProperties": false
       },
       "result": {
-        "$ref": "#/$defs/t259"
+        "$ref": "#/$defs/BrowserAvailability"
       }
     },
     "browser_set_comment_mode": {
       "arguments": {
-        "$ref": "#/$defs/t260"
+        "$ref": "#/$defs/browser_set_comment_mode.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t53"
+        "$ref": "#/$defs/BrowserView"
       }
     },
     "browser_list_comments": {
       "arguments": {
-        "$ref": "#/$defs/t261"
+        "$ref": "#/$defs/browser_list_comments.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t262"
+          "$ref": "#/$defs/BrowserComment"
         }
       }
     },
     "browser_update_comment": {
       "arguments": {
-        "$ref": "#/$defs/t265"
+        "$ref": "#/$defs/browser_update_comment.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t262"
+          "$ref": "#/$defs/BrowserComment"
         }
       }
     },
     "browser_remove_comment": {
       "arguments": {
-        "$ref": "#/$defs/t266"
+        "$ref": "#/$defs/browser_remove_comment.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t262"
+          "$ref": "#/$defs/BrowserComment"
         }
       }
     },
     "browser_resolve_comment": {
       "arguments": {
-        "$ref": "#/$defs/t267"
+        "$ref": "#/$defs/browser_resolve_comment.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t262"
+          "$ref": "#/$defs/BrowserComment"
         }
       }
     },
     "browser_snapshot_png": {
       "arguments": {
-        "$ref": "#/$defs/t268"
+        "$ref": "#/$defs/browser_snapshot_png.arguments"
       },
       "result": {
         "type": "string"
@@ -1154,15 +838,7 @@
     },
     "browser_open_devtools": {
       "arguments": {
-        "$ref": "#/$defs/t269"
-      },
-      "result": {
-        "type": "null"
-      }
-    },
-    "pop_out_pane": {
-      "arguments": {
-        "$ref": "#/$defs/t270"
+        "$ref": "#/$defs/browser_open_devtools.arguments"
       },
       "result": {
         "type": "null"
@@ -1170,7 +846,7 @@
     },
     "close_pane_window": {
       "arguments": {
-        "$ref": "#/$defs/t272"
+        "$ref": "#/$defs/close_pane_window.arguments"
       },
       "result": {
         "type": "null"
@@ -1178,7 +854,7 @@
     },
     "focus_pane_window": {
       "arguments": {
-        "$ref": "#/$defs/t273"
+        "$ref": "#/$defs/focus_pane_window.arguments"
       },
       "result": {
         "type": "null"
@@ -1193,13 +869,13 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t274"
+          "$ref": "#/$defs/PaneWindow"
         }
       }
     },
     "post_notification": {
       "arguments": {
-        "$ref": "#/$defs/t275"
+        "$ref": "#/$defs/post_notification.arguments"
       },
       "result": {
         "type": "null"
@@ -1232,84 +908,34 @@
         "additionalProperties": false
       },
       "result": {
-        "$ref": "#/$defs/t276"
-      }
-    },
-    "save_recipe": {
-      "arguments": {
-        "$ref": "#/$defs/t281"
-      },
-      "result": {
-        "$ref": "#/$defs/t282"
-      }
-    },
-    "delete_recipe": {
-      "arguments": {
-        "$ref": "#/$defs/t283"
-      },
-      "result": {
-        "$ref": "#/$defs/t276"
-      }
-    },
-    "set_recipe_offers": {
-      "arguments": {
-        "$ref": "#/$defs/t284"
-      },
-      "result": {
-        "$ref": "#/$defs/t276"
+        "$ref": "#/$defs/RecipesState"
       }
     },
     "agent_skills": {
       "arguments": {
-        "$ref": "#/$defs/t285"
+        "$ref": "#/$defs/agent_skills.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t162"
+          "$ref": "#/$defs/AgentSkill"
         }
-      }
-    },
-    "probe_agent_skills": {
-      "arguments": {
-        "$ref": "#/$defs/t286"
-      },
-      "result": {
-        "anyOf": [
-          {
-            "type": "null"
-          },
-          {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/t162"
-            }
-          }
-        ]
       }
     },
     "preview_recipe": {
       "arguments": {
-        "$ref": "#/$defs/t287"
+        "$ref": "#/$defs/preview_recipe.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t288"
+          "$ref": "#/$defs/RecipePreviewStep"
         }
-      }
-    },
-    "start_recipe": {
-      "arguments": {
-        "$ref": "#/$defs/t289"
-      },
-      "result": {
-        "$ref": "#/$defs/t290"
       }
     },
     "stop_recipe": {
       "arguments": {
-        "$ref": "#/$defs/t292"
+        "$ref": "#/$defs/stop_recipe.arguments"
       },
       "result": {
         "type": "null"
@@ -1324,13 +950,13 @@
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t290"
+          "$ref": "#/$defs/RecipeRun"
         }
       }
     },
     "dismiss_recipe_run": {
       "arguments": {
-        "$ref": "#/$defs/t293"
+        "$ref": "#/$defs/dismiss_recipe_run.arguments"
       },
       "result": {
         "type": "null"
@@ -1343,39 +969,31 @@
         "additionalProperties": false
       },
       "result": {
-        "$ref": "#/$defs/t294"
-      }
-    },
-    "open_in": {
-      "arguments": {
-        "$ref": "#/$defs/t296"
-      },
-      "result": {
-        "type": "null"
+        "$ref": "#/$defs/Openers"
       }
     },
     "ui.workspace.rename": {
       "arguments": {
-        "$ref": "#/$defs/t297"
+        "$ref": "#/$defs/ui.workspace.rename.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t298"
+        "$ref": "#/$defs/ui.workspace.rename.result"
       }
     },
     "ui.panels.list": {
       "arguments": {
-        "$ref": "#/$defs/t299"
+        "$ref": "#/$defs/ui.panels.list.arguments"
       },
       "result": {
         "type": "array",
         "items": {
-          "$ref": "#/$defs/t300"
+          "$ref": "#/$defs/WorkbenchPanel"
         }
       }
     },
     "ui.panels.open": {
       "arguments": {
-        "$ref": "#/$defs/t305"
+        "$ref": "#/$defs/ui.panels.open.arguments"
       },
       "result": {
         "anyOf": [
@@ -1393,95 +1011,87 @@
     },
     "ui.panels.focus": {
       "arguments": {
-        "$ref": "#/$defs/t306"
+        "$ref": "#/$defs/ui.panels.focus.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t300"
+        "$ref": "#/$defs/WorkbenchPanel"
       }
     },
     "ui.panels.close": {
       "arguments": {
-        "$ref": "#/$defs/t307"
+        "$ref": "#/$defs/ui.panels.close.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t308"
+        "$ref": "#/$defs/ui.panels.close.result"
       }
     },
     "ui.panels.move": {
       "arguments": {
-        "$ref": "#/$defs/t309"
+        "$ref": "#/$defs/ui.panels.move.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t300"
+        "$ref": "#/$defs/WorkbenchPanel"
       }
     },
     "ui.panels.resize": {
       "arguments": {
-        "$ref": "#/$defs/t313"
+        "$ref": "#/$defs/ui.panels.resize.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t314"
+        "$ref": "#/$defs/ui.panels.resize.result"
       }
     },
     "ui.chat.snapshot": {
       "arguments": {
-        "$ref": "#/$defs/t315"
+        "$ref": "#/$defs/ui.chat.snapshot.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t316"
+        "$ref": "#/$defs/ui.chat.snapshot.result"
       }
     },
     "ui.chat.edit": {
       "arguments": {
-        "$ref": "#/$defs/t317"
+        "$ref": "#/$defs/ui.chat.edit.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t318"
-      }
-    },
-    "ui.chat.configure": {
-      "arguments": {
-        "$ref": "#/$defs/t319"
-      },
-      "result": {
-        "$ref": "#/$defs/t300"
+        "$ref": "#/$defs/ui.chat.edit.result"
       }
     },
     "ui.composer.read": {
       "arguments": {
-        "$ref": "#/$defs/t320"
+        "$ref": "#/$defs/ui.composer.read.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t321"
+        "$ref": "#/$defs/ui.composer.read.result"
       }
     },
     "ui.composer.write": {
       "arguments": {
-        "$ref": "#/$defs/t322"
+        "$ref": "#/$defs/ui.composer.write.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t323"
+        "$ref": "#/$defs/ui.composer.write.result"
       }
     },
     "ui.navigate": {
       "arguments": {
-        "$ref": "#/$defs/t324"
+        "$ref": "#/$defs/ui.navigate.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t325"
+        "$ref": "#/$defs/ui.navigate.result"
       }
     },
     "ui.settings.show": {
       "arguments": {
-        "$ref": "#/$defs/t326"
+        "$ref": "#/$defs/ui.settings.show.arguments"
       },
       "result": {
-        "$ref": "#/$defs/t327"
+        "$ref": "#/$defs/ui.settings.show.result"
       }
     }
   },
   "$defs": {
-    "t1": {
+    "chat_edit_snapshot.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -1493,7 +1103,7 @@
       ],
       "additionalProperties": false
     },
-    "t2": {
+    "ChatEditSnapshot": {
       "type": "object",
       "properties": {
         "session": {
@@ -1505,7 +1115,7 @@
         "messages": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t3"
+            "$ref": "#/$defs/ChatEditMessage"
           }
         },
         "problem": {
@@ -1541,7 +1151,7 @@
       ],
       "additionalProperties": false
     },
-    "t3": {
+    "ChatEditMessage": {
       "type": "object",
       "properties": {
         "id": {
@@ -1583,7 +1193,7 @@
       ],
       "additionalProperties": false
     },
-    "t4": {
+    "PluginDraftView": {
       "type": "object",
       "properties": {
         "status": {
@@ -1689,11 +1299,14 @@
       ],
       "additionalProperties": false
     },
-    "t5": {
+    "PluginsSnapshot": {
       "type": "object",
       "properties": {
         "registry": {
-          "$ref": "#/$defs/t6"
+          "$ref": "#/$defs/PluginsSnapshot.registry"
+        },
+        "safe_mode": {
+          "type": "boolean"
         },
         "problem": {
           "anyOf": [
@@ -1708,25 +1321,26 @@
         "builtins": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t34"
+            "$ref": "#/$defs/BuiltinPlugin"
           }
         }
       },
       "required": [
         "registry",
+        "safe_mode",
         "problem",
         "builtins"
       ],
       "additionalProperties": false
     },
-    "t6": {
+    "PluginsSnapshot.registry": {
       "type": "object",
       "properties": {
         "version": {
           "type": "number"
         },
         "installed": {
-          "$ref": "#/$defs/t7"
+          "$ref": "#/$defs/PluginsSnapshot.registry.installed"
         },
         "disabled": {
           "type": "array",
@@ -1741,13 +1355,13 @@
           "type": "boolean"
         },
         "bindings": {
-          "$ref": "#/$defs/t26"
+          "$ref": "#/$defs/PluginsSnapshot.registry.bindings"
         },
         "extensions": {
-          "$ref": "#/$defs/t30"
+          "$ref": "#/$defs/PluginsSnapshot.registry.extensions"
         },
         "extension_choices": {
-          "$ref": "#/$defs/t13"
+          "$ref": "#/$defs/ExtensionStyle.properties"
         },
         "extension_order": {
           "type": "array",
@@ -1769,19 +1383,19 @@
       ],
       "additionalProperties": false
     },
-    "t7": {
+    "PluginsSnapshot.registry.installed": {
       "type": "object",
       "properties": {},
       "required": [],
       "additionalProperties": {
-        "$ref": "#/$defs/t8"
+        "$ref": "#/$defs/PluginInstalled"
       }
     },
-    "t8": {
+    "PluginInstalled": {
       "type": "object",
       "properties": {
         "current": {
-          "$ref": "#/$defs/t9"
+          "$ref": "#/$defs/PluginPackage"
         },
         "previous": {
           "anyOf": [
@@ -1789,7 +1403,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/t9"
+              "$ref": "#/$defs/PluginPackage"
             }
           ]
         },
@@ -1804,20 +1418,37 @@
       ],
       "additionalProperties": false
     },
-    "t9": {
+    "PluginPackage": {
       "type": "object",
       "properties": {
         "manifest": {
-          "$ref": "#/$defs/t10"
+          "$ref": "#/$defs/PluginManifest"
         },
         "source": {
           "type": "string"
         },
         "kind": {
-          "type": "string"
+          "anyOf": [
+            {
+              "const": "local"
+            },
+            {
+              "const": "git"
+            }
+          ]
         },
         "revision": {
           "type": "string"
+        },
+        "requested": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
         },
         "digest": {
           "type": "string"
@@ -1831,16 +1462,17 @@
         "source",
         "kind",
         "revision",
+        "requested",
         "digest",
         "directory"
       ],
       "additionalProperties": false
     },
-    "t10": {
+    "PluginManifest": {
       "type": "object",
       "properties": {
         "extensions": {
-          "$ref": "#/$defs/t11"
+          "$ref": "#/$defs/ExtensionContributions"
         },
         "schema": {
           "type": "number"
@@ -1863,31 +1495,31 @@
         "commands": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t22"
+            "$ref": "#/$defs/PluginCommand"
           }
         },
         "panels": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t23"
+            "$ref": "#/$defs/PluginManifest.panels.items"
           }
         },
         "session_backends": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t22"
+            "$ref": "#/$defs/PluginCommand"
           }
         },
         "terminals": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t22"
+            "$ref": "#/$defs/PluginCommand"
           }
         },
         "palettes": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t24"
+            "$ref": "#/$defs/PluginManifest.palettes.items"
           }
         },
         "platforms": {
@@ -1899,7 +1531,7 @@
         "views": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t25"
+            "$ref": "#/$defs/PluginManifest.views.items"
           }
         }
       },
@@ -1921,7 +1553,7 @@
       ],
       "additionalProperties": false
     },
-    "t11": {
+    "ExtensionContributions": {
       "type": "object",
       "properties": {
         "access": {
@@ -1945,31 +1577,31 @@
         "styles": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t12"
+            "$ref": "#/$defs/ExtensionStyle"
           }
         },
         "actions": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t14"
+            "$ref": "#/$defs/ExtensionAction"
           }
         },
         "content": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t15"
+            "$ref": "#/$defs/ExtensionContent"
           }
         },
         "settings": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t20"
+            "$ref": "#/$defs/ExtensionSetting"
           }
         },
         "hooks": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t21"
+            "$ref": "#/$defs/ExtensionHook"
           }
         }
       },
@@ -1985,7 +1617,7 @@
       ],
       "additionalProperties": false
     },
-    "t12": {
+    "ExtensionStyle": {
       "type": "object",
       "properties": {
         "id": {
@@ -1998,7 +1630,7 @@
           "type": "string"
         },
         "properties": {
-          "$ref": "#/$defs/t13"
+          "$ref": "#/$defs/ExtensionStyle.properties"
         }
       },
       "required": [
@@ -2009,7 +1641,7 @@
       ],
       "additionalProperties": false
     },
-    "t13": {
+    "ExtensionStyle.properties": {
       "type": "object",
       "properties": {},
       "required": [],
@@ -2017,7 +1649,7 @@
         "type": "string"
       }
     },
-    "t14": {
+    "ExtensionAction": {
       "type": "object",
       "properties": {
         "id": {
@@ -2054,7 +1686,7 @@
       ],
       "additionalProperties": false
     },
-    "t15": {
+    "ExtensionContent": {
       "type": "object",
       "properties": {
         "id": {
@@ -2084,16 +1716,16 @@
           "items": {
             "anyOf": [
               {
-                "$ref": "#/$defs/t16"
+                "$ref": "#/$defs/ExtensionWidget.0"
               },
               {
-                "$ref": "#/$defs/t17"
+                "$ref": "#/$defs/ExtensionWidget.action"
               },
               {
-                "$ref": "#/$defs/t18"
+                "$ref": "#/$defs/ExtensionWidget.setting"
               },
               {
-                "$ref": "#/$defs/t19"
+                "$ref": "#/$defs/ExtensionWidget.group"
               }
             ]
           }
@@ -2108,7 +1740,7 @@
       ],
       "additionalProperties": false
     },
-    "t16": {
+    "ExtensionWidget.0": {
       "type": "object",
       "properties": {
         "kind": {
@@ -2131,7 +1763,7 @@
       ],
       "additionalProperties": false
     },
-    "t17": {
+    "ExtensionWidget.action": {
       "type": "object",
       "properties": {
         "kind": {
@@ -2147,7 +1779,7 @@
       ],
       "additionalProperties": false
     },
-    "t18": {
+    "ExtensionWidget.setting": {
       "type": "object",
       "properties": {
         "kind": {
@@ -2163,7 +1795,7 @@
       ],
       "additionalProperties": false
     },
-    "t19": {
+    "ExtensionWidget.group": {
       "type": "object",
       "properties": {
         "kind": {
@@ -2177,16 +1809,16 @@
           "items": {
             "anyOf": [
               {
-                "$ref": "#/$defs/t16"
+                "$ref": "#/$defs/ExtensionWidget.0"
               },
               {
-                "$ref": "#/$defs/t17"
+                "$ref": "#/$defs/ExtensionWidget.action"
               },
               {
-                "$ref": "#/$defs/t18"
+                "$ref": "#/$defs/ExtensionWidget.setting"
               },
               {
-                "$ref": "#/$defs/t19"
+                "$ref": "#/$defs/ExtensionWidget.group"
               }
             ]
           }
@@ -2199,7 +1831,7 @@
       ],
       "additionalProperties": false
     },
-    "t20": {
+    "ExtensionSetting": {
       "type": "object",
       "properties": {
         "id": {
@@ -2249,7 +1881,7 @@
       ],
       "additionalProperties": false
     },
-    "t21": {
+    "ExtensionHook": {
       "type": "object",
       "properties": {
         "id": {
@@ -2280,7 +1912,7 @@
       ],
       "additionalProperties": false
     },
-    "t22": {
+    "PluginCommand": {
       "type": "object",
       "properties": {
         "id": {
@@ -2303,7 +1935,7 @@
       ],
       "additionalProperties": false
     },
-    "t23": {
+    "PluginManifest.panels.items": {
       "type": "object",
       "properties": {
         "id": {
@@ -2323,7 +1955,7 @@
       ],
       "additionalProperties": false
     },
-    "t24": {
+    "PluginManifest.palettes.items": {
       "type": "object",
       "properties": {
         "id": {
@@ -2354,7 +1986,7 @@
       ],
       "additionalProperties": false
     },
-    "t25": {
+    "PluginManifest.views.items": {
       "type": "object",
       "properties": {
         "id": {
@@ -2427,201 +2059,201 @@
       ],
       "additionalProperties": false
     },
-    "t26": {
+    "PluginsSnapshot.registry.bindings": {
       "type": "object",
       "properties": {
         "workbench": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "titlebar": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "sidebar": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "worktree_bar": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "home": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "sessions": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "code": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "database": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "new_worktree": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "settings_appearance": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "settings_general": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "settings_notifications": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "settings_advanced": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "settings_recipes": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         },
         "settings_actions": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t27"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.builtin"
             },
             {
-              "$ref": "#/$defs/t28"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.hidden"
             },
             {
-              "$ref": "#/$defs/t29"
+              "$ref": "#/$defs/PluginsSnapshot.registry.bindings.workbench.plugin"
             }
           ]
         }
@@ -2629,7 +2261,7 @@
       "required": [],
       "additionalProperties": false
     },
-    "t27": {
+    "PluginsSnapshot.registry.bindings.workbench.builtin": {
       "type": "object",
       "properties": {
         "kind": {
@@ -2641,7 +2273,7 @@
       ],
       "additionalProperties": false
     },
-    "t28": {
+    "PluginsSnapshot.registry.bindings.workbench.hidden": {
       "type": "object",
       "properties": {
         "kind": {
@@ -2653,7 +2285,7 @@
       ],
       "additionalProperties": false
     },
-    "t29": {
+    "PluginsSnapshot.registry.bindings.workbench.plugin": {
       "type": "object",
       "properties": {
         "kind": {
@@ -2673,15 +2305,15 @@
       ],
       "additionalProperties": false
     },
-    "t30": {
+    "PluginsSnapshot.registry.extensions": {
       "type": "object",
       "properties": {},
       "required": [],
       "additionalProperties": {
-        "$ref": "#/$defs/t31"
+        "$ref": "#/$defs/ExtensionPreferences"
       }
     },
-    "t31": {
+    "ExtensionPreferences": {
       "type": "object",
       "properties": {
         "disabled": {
@@ -2697,7 +2329,7 @@
           }
         },
         "values": {
-          "$ref": "#/$defs/t32"
+          "$ref": "#/$defs/ExtensionPreferences.values"
         }
       },
       "required": [
@@ -2707,21 +2339,21 @@
       ],
       "additionalProperties": false
     },
-    "t32": {
+    "ExtensionPreferences.values": {
       "type": "object",
       "properties": {},
       "required": [],
       "additionalProperties": {
-        "$ref": "#/$defs/t33"
+        "$ref": "#/$defs/ExtensionPreferences.values.values"
       }
     },
-    "t33": {
+    "ExtensionPreferences.values.values": {
       "type": "object",
       "properties": {},
       "required": [],
       "additionalProperties": {}
     },
-    "t34": {
+    "BuiltinPlugin": {
       "type": "object",
       "properties": {
         "id": {
@@ -2794,42 +2426,7 @@
       ],
       "additionalProperties": false
     },
-    "t35": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "provider": {
-          "type": "string"
-        },
-        "resume": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "integrated": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "provider",
-        "resume",
-        "integrated"
-      ],
-      "additionalProperties": false
-    },
-    "t36": {
+    "NativeSession": {
       "type": "object",
       "properties": {
         "session": {
@@ -2888,7 +2485,7 @@
           }
         },
         "capabilities": {
-          "$ref": "#/$defs/t37"
+          "$ref": "#/$defs/NativeSession.capabilities"
         },
         "title": {
           "anyOf": [
@@ -2913,7 +2510,7 @@
         "plan": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t38"
+            "$ref": "#/$defs/AgendaStep"
           }
         },
         "activity": {
@@ -2928,14 +2525,14 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/t39"
+              "$ref": "#/$defs/AgentUsage"
             }
           ]
         },
         "deliveries": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t40"
+            "$ref": "#/$defs/NativeReceipt"
           }
         },
         "error": {
@@ -2975,7 +2572,7 @@
       ],
       "additionalProperties": false
     },
-    "t37": {
+    "NativeSession.capabilities": {
       "type": "object",
       "properties": {
         "send": {
@@ -3003,7 +2600,7 @@
       ],
       "additionalProperties": false
     },
-    "t38": {
+    "AgendaStep": {
       "type": "object",
       "properties": {
         "text": {
@@ -3029,7 +2626,7 @@
       ],
       "additionalProperties": false
     },
-    "t39": {
+    "AgentUsage": {
       "type": "object",
       "properties": {
         "tokensIn": {
@@ -3064,7 +2661,7 @@
       ],
       "additionalProperties": false
     },
-    "t40": {
+    "NativeReceipt": {
       "type": "object",
       "properties": {
         "id": {
@@ -3118,6 +2715,25 @@
               "type": "string"
             }
           ]
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "const": "not_delivered"
+            },
+            {
+              "const": "withdrawn"
+            }
+          ]
+        },
+        "conversation": {
+          "type": "string"
+        },
+        "earlier": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -3126,11 +2742,14 @@
         "status",
         "error",
         "prototype",
-        "review"
+        "review",
+        "resolution",
+        "conversation",
+        "earlier"
       ],
       "additionalProperties": false
     },
-    "t41": {
+    "native_session.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -3142,35 +2761,62 @@
       ],
       "additionalProperties": false
     },
-    "t42": {
+    "interrupt_native_turn.arguments": {
       "type": "object",
       "properties": {
         "session": {
           "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "check_native_delivery.arguments": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "additionalProperties": false
+    },
+    "NativeDeliveryCheck": {
+      "type": "object",
+      "properties": {
+        "checked": {
+          "type": "boolean"
         },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session",
-        "text"
-      ],
-      "additionalProperties": false
-    },
-    "t43": {
-      "type": "object",
-      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
         "session": {
-          "type": "string"
+          "$ref": "#/$defs/NativeSession"
         }
       },
       "required": [
+        "checked",
+        "changed",
+        "reason",
         "session"
       ],
       "additionalProperties": false
     },
-    "t44": {
+    "discover_design_context.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -3186,7 +2832,7 @@
       ],
       "additionalProperties": false
     },
-    "t45": {
+    "DesignDiscovery": {
       "type": "object",
       "properties": {
         "root": {
@@ -3195,7 +2841,7 @@
         "sources": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t46"
+            "$ref": "#/$defs/DesignSource"
           }
         },
         "skipped": {
@@ -3216,7 +2862,7 @@
       ],
       "additionalProperties": false
     },
-    "t46": {
+    "DesignSource": {
       "type": "object",
       "properties": {
         "path": {
@@ -3240,7 +2886,7 @@
       ],
       "additionalProperties": false
     },
-    "t47": {
+    "list_prototypes.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -3252,23 +2898,34 @@
       ],
       "additionalProperties": false
     },
-    "t48": {
+    "PrototypeState": {
       "type": "object",
       "properties": {
         "prototype": {
-          "$ref": "#/$defs/t49"
+          "$ref": "#/$defs/Prototype"
         },
         "stale": {
           "type": "boolean"
+        },
+        "delivery": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/PrototypeDelivery"
+            }
+          ]
         }
       },
       "required": [
         "prototype",
-        "stale"
+        "stale",
+        "delivery"
       ],
       "additionalProperties": false
     },
-    "t49": {
+    "Prototype": {
       "type": "object",
       "properties": {
         "id": {
@@ -3310,7 +2967,7 @@
         "sources": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t46"
+            "$ref": "#/$defs/DesignSource"
           }
         },
         "revision": {
@@ -3331,7 +2988,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/t50"
+              "$ref": "#/$defs/Prototype.review.1"
             }
           ]
         },
@@ -3372,7 +3029,7 @@
       ],
       "additionalProperties": false
     },
-    "t50": {
+    "Prototype.review.1": {
       "type": "object",
       "properties": {
         "id": {
@@ -3392,7 +3049,65 @@
       ],
       "additionalProperties": false
     },
-    "t51": {
+    "PrototypeDelivery": {
+      "type": "object",
+      "properties": {
+        "receipt": {
+          "type": "string"
+        },
+        "review": {
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "const": "pending"
+            },
+            {
+              "const": "unknown"
+            },
+            {
+              "const": "delivered"
+            },
+            {
+              "const": "rejected"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "const": "not_delivered"
+            },
+            {
+              "const": "withdrawn"
+            }
+          ]
+        }
+      },
+      "required": [
+        "receipt",
+        "review",
+        "status",
+        "error",
+        "resolution"
+      ],
+      "additionalProperties": false
+    },
+    "dismiss_prototype.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -3408,118 +3123,7 @@
       ],
       "additionalProperties": false
     },
-    "t52": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "reviewId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session",
-        "id",
-        "reviewId"
-      ],
-      "additionalProperties": false
-    },
-    "t53": {
-      "type": "object",
-      "properties": {
-        "prototypeId": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "id": {
-          "type": "string"
-        },
-        "project": {
-          "type": "string"
-        },
-        "worktree": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        },
-        "loading": {
-          "type": "boolean"
-        },
-        "loadError": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "canGoBack": {
-          "type": "boolean"
-        },
-        "canGoForward": {
-          "type": "boolean"
-        },
-        "agentAccess": {
-          "type": "boolean"
-        },
-        "openedBy": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "commentMode": {
-          "type": "boolean"
-        },
-        "agentDriving": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "project",
-        "worktree",
-        "url",
-        "title",
-        "loading",
-        "loadError",
-        "canGoBack",
-        "canGoForward",
-        "agentAccess",
-        "openedBy",
-        "commentMode",
-        "agentDriving"
-      ],
-      "additionalProperties": false
-    },
-    "t54": {
+    "cancel_prototype.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -3535,7 +3139,30 @@
       ],
       "additionalProperties": false
     },
-    "t55": {
+    "PrototypeCancel": {
+      "type": "object",
+      "properties": {
+        "interrupted": {
+          "type": "boolean"
+        },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "interrupted",
+        "notice"
+      ],
+      "additionalProperties": false
+    },
+    "shell_run_target.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -3551,7 +3178,7 @@
       ],
       "additionalProperties": false
     },
-    "t56": {
+    "list_run_shells.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -3567,7 +3194,7 @@
       ],
       "additionalProperties": false
     },
-    "t57": {
+    "RunShell": {
       "type": "object",
       "properties": {
         "session": {
@@ -3621,68 +3248,14 @@
       ],
       "additionalProperties": false
     },
-    "t58": {
-      "type": "object",
-      "properties": {
-        "request": {
-          "$ref": "#/$defs/t59"
-        }
-      },
-      "required": [
-        "request"
-      ],
-      "additionalProperties": false
-    },
-    "t59": {
-      "type": "object",
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "shell": {
-          "type": "string"
-        },
-        "command": {
-          "type": "string"
-        },
-        "interpreter": {
-          "anyOf": [
-            {
-              "const": "sh"
-            },
-            {
-              "const": "bash"
-            },
-            {
-              "const": "zsh"
-            }
-          ]
-        }
-      },
-      "required": [
-        "key",
-        "projectId",
-        "worktreeId",
-        "shell",
-        "command",
-        "interpreter"
-      ],
-      "additionalProperties": false
-    },
-    "t60": {
+    "ShellRun": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string"
         },
         "request": {
-          "$ref": "#/$defs/t59"
+          "$ref": "#/$defs/ShellRunRequest"
         },
         "requester": {
           "anyOf": [
@@ -3747,19 +3320,19 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/t61"
+              "$ref": "#/$defs/ShellRun.outcome.success"
             },
             {
-              "$ref": "#/$defs/t62"
+              "$ref": "#/$defs/ShellRun.outcome.failed"
             },
             {
-              "$ref": "#/$defs/t63"
+              "$ref": "#/$defs/ShellRun.outcome.signalled"
             },
             {
-              "$ref": "#/$defs/t64"
+              "$ref": "#/$defs/ShellRun.outcome.timed_out"
             },
             {
-              "$ref": "#/$defs/t65"
+              "$ref": "#/$defs/ShellRun.outcome.cancelled"
             }
           ]
         },
@@ -3786,7 +3359,49 @@
       ],
       "additionalProperties": false
     },
-    "t61": {
+    "ShellRunRequest": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "worktreeId": {
+          "type": "string"
+        },
+        "shell": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "interpreter": {
+          "anyOf": [
+            {
+              "const": "sh"
+            },
+            {
+              "const": "bash"
+            },
+            {
+              "const": "zsh"
+            }
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "projectId",
+        "worktreeId",
+        "shell",
+        "command",
+        "interpreter"
+      ],
+      "additionalProperties": false
+    },
+    "ShellRun.outcome.success": {
       "type": "object",
       "properties": {
         "kind": {
@@ -3798,7 +3413,7 @@
       ],
       "additionalProperties": false
     },
-    "t62": {
+    "ShellRun.outcome.failed": {
       "type": "object",
       "properties": {
         "kind": {
@@ -3814,7 +3429,7 @@
       ],
       "additionalProperties": false
     },
-    "t63": {
+    "ShellRun.outcome.signalled": {
       "type": "object",
       "properties": {
         "kind": {
@@ -3830,7 +3445,7 @@
       ],
       "additionalProperties": false
     },
-    "t64": {
+    "ShellRun.outcome.timed_out": {
       "type": "object",
       "properties": {
         "kind": {
@@ -3846,7 +3461,7 @@
       ],
       "additionalProperties": false
     },
-    "t65": {
+    "ShellRun.outcome.cancelled": {
       "type": "object",
       "properties": {
         "kind": {
@@ -3858,7 +3473,7 @@
       ],
       "additionalProperties": false
     },
-    "t66": {
+    "cancel_shell_run.arguments": {
       "type": "object",
       "properties": {
         "runId": {
@@ -3870,7 +3485,7 @@
       ],
       "additionalProperties": false
     },
-    "t67": {
+    "focus_run_shell.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -3882,7 +3497,7 @@
       ],
       "additionalProperties": false
     },
-    "t68": {
+    "list_home_shell_grants.arguments": {
       "type": "object",
       "properties": {
         "home": {
@@ -3894,7 +3509,7 @@
       ],
       "additionalProperties": false
     },
-    "t69": {
+    "HomeShellGrant": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -3918,7 +3533,7 @@
       ],
       "additionalProperties": false
     },
-    "t70": {
+    "Project": {
       "type": "object",
       "properties": {
         "id": {
@@ -3949,7 +3564,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/t71"
+              "$ref": "#/$defs/TrustPrompt"
             }
           ]
         }
@@ -3964,7 +3579,7 @@
       ],
       "additionalProperties": false
     },
-    "t71": {
+    "TrustPrompt": {
       "type": "object",
       "properties": {
         "path": {
@@ -3982,7 +3597,7 @@
         "databases": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t72"
+            "$ref": "#/$defs/DatabaseTrustDeclaration"
           }
         },
         "contentHash": {
@@ -3997,7 +3612,7 @@
       ],
       "additionalProperties": false
     },
-    "t72": {
+    "DatabaseTrustDeclaration": {
       "type": "object",
       "properties": {
         "id": {
@@ -4021,50 +3636,7 @@
       ],
       "additionalProperties": false
     },
-    "t73": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "additionalProperties": false
-    },
-    "t74": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "projects": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/t70"
-          }
-        }
-      },
-      "required": [
-        "id",
-        "projects"
-      ],
-      "additionalProperties": false
-    },
-    "t75": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "additionalProperties": false
-    },
-    "t76": {
+    "list_worktrees.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -4076,7 +3648,7 @@
       ],
       "additionalProperties": false
     },
-    "t77": {
+    "Worktree": {
       "type": "object",
       "properties": {
         "id": {
@@ -4168,19 +3740,19 @@
         "badges": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t78"
+            "$ref": "#/$defs/Badge"
           }
         },
         "links": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t79"
+            "$ref": "#/$defs/Link"
           }
         },
         "table": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t80"
+            "$ref": "#/$defs/TableRow"
           }
         },
         "env": {
@@ -4226,7 +3798,7 @@
       ],
       "additionalProperties": false
     },
-    "t78": {
+    "Badge": {
       "type": "object",
       "properties": {
         "label": {
@@ -4242,7 +3814,7 @@
       ],
       "additionalProperties": false
     },
-    "t79": {
+    "Link": {
       "type": "object",
       "properties": {
         "label": {
@@ -4258,7 +3830,7 @@
       ],
       "additionalProperties": false
     },
-    "t80": {
+    "TableRow": {
       "type": "object",
       "properties": {
         "label": {
@@ -4289,7 +3861,7 @@
       ],
       "additionalProperties": false
     },
-    "t81": {
+    "sidebar_layout.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -4301,17 +3873,17 @@
       ],
       "additionalProperties": false
     },
-    "t82": {
+    "SidebarLayout": {
       "type": "object",
       "properties": {
         "groups": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t83"
+            "$ref": "#/$defs/SidebarGroup"
           }
         },
         "origins": {
-          "$ref": "#/$defs/t13"
+          "$ref": "#/$defs/ExtensionStyle.properties"
         }
       },
       "required": [
@@ -4320,7 +3892,7 @@
       ],
       "additionalProperties": false
     },
-    "t83": {
+    "SidebarGroup": {
       "type": "object",
       "properties": {
         "id": {
@@ -4347,14 +3919,14 @@
       ],
       "additionalProperties": false
     },
-    "t84": {
+    "set_sidebar_layout.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
           "type": "string"
         },
         "layout": {
-          "$ref": "#/$defs/t82"
+          "$ref": "#/$defs/SidebarLayout"
         }
       },
       "required": [
@@ -4363,7 +3935,7 @@
       ],
       "additionalProperties": false
     },
-    "t85": {
+    "worktree_form.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -4375,7 +3947,7 @@
       ],
       "additionalProperties": false
     },
-    "t86": {
+    "Form": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -4384,13 +3956,13 @@
         "fields": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t87"
+            "$ref": "#/$defs/Field"
           }
         },
         "actions": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t88"
+            "$ref": "#/$defs/Action"
           }
         }
       },
@@ -4401,7 +3973,7 @@
       ],
       "additionalProperties": false
     },
-    "t87": {
+    "Field": {
       "type": "object",
       "properties": {
         "key": {
@@ -4422,9 +3994,6 @@
               "const": "select"
             },
             {
-              "const": "path"
-            },
-            {
               "const": "multiline"
             },
             {
@@ -4432,6 +4001,9 @@
             },
             {
               "const": "multiselect"
+            },
+            {
+              "const": "path"
             }
           ]
         },
@@ -4517,7 +4089,7 @@
       ],
       "additionalProperties": false
     },
-    "t88": {
+    "Action": {
       "type": "object",
       "properties": {
         "id": {
@@ -4537,23 +4109,7 @@
       ],
       "additionalProperties": false
     },
-    "t89": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "fieldKey": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "projectId",
-        "fieldKey"
-      ],
-      "additionalProperties": false
-    },
-    "t90": {
+    "list_actions.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -4565,163 +4121,27 @@
       ],
       "additionalProperties": false
     },
-    "t91": {
+    "remove_preflight.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
           "type": "string"
         },
-        "values": {
-          "$ref": "#/$defs/t13"
+        "worktreeId": {
+          "type": "string"
         },
-        "adoptBranch": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
+        "deleteBranch": {
+          "type": "boolean"
         }
       },
       "required": [
         "projectId",
-        "values",
-        "adoptBranch"
+        "worktreeId",
+        "deleteBranch"
       ],
       "additionalProperties": false
     },
-    "t92": {
-      "type": "object",
-      "properties": {
-        "branch": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "directory": {
-          "type": "string"
-        },
-        "baseRef": {
-          "type": "string"
-        },
-        "baseCommit": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "willFetch": {
-          "type": "boolean"
-        },
-        "gitArgv": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "setupArgv": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ]
-        },
-        "setupCwd": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "preflight": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/t93"
-          }
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "lookups": {
-          "$ref": "#/$defs/t13"
-        },
-        "computed": {
-          "$ref": "#/$defs/t13"
-        },
-        "branchChoices": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/t94"
-          }
-        },
-        "namingFields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "normalized": {
-          "$ref": "#/$defs/t13"
-        },
-        "canCreate": {
-          "type": "boolean"
-        },
-        "issueKey": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "branch",
-        "directory",
-        "baseRef",
-        "baseCommit",
-        "willFetch",
-        "gitArgv",
-        "setupArgv",
-        "setupCwd",
-        "preflight",
-        "warnings",
-        "lookups",
-        "computed",
-        "branchChoices",
-        "namingFields",
-        "normalized",
-        "canCreate",
-        "issueKey"
-      ],
-      "additionalProperties": false
-    },
-    "t93": {
+    "Preflight": {
       "type": "object",
       "properties": {
         "id": {
@@ -4766,466 +4186,7 @@
       ],
       "additionalProperties": false
     },
-    "t94": {
-      "type": "object",
-      "properties": {
-        "branch": {
-          "type": "string"
-        },
-        "remoteOnly": {
-          "type": "boolean"
-        },
-        "directory": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "branch",
-        "remoteOnly",
-        "directory"
-      ],
-      "additionalProperties": false
-    },
-    "t95": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "values": {
-          "$ref": "#/$defs/t13"
-        },
-        "adoptBranch": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "acknowledged": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "rows": {
-          "type": "number"
-        },
-        "cols": {
-          "type": "number"
-        },
-        "creation": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "projectId",
-        "values",
-        "adoptBranch",
-        "acknowledged",
-        "rows",
-        "cols"
-      ],
-      "additionalProperties": false
-    },
-    "t96": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "const": "created"
-        },
-        "worktree": {
-          "$ref": "#/$defs/t77"
-        },
-        "setupSession": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "kind",
-        "worktree",
-        "setupSession"
-      ],
-      "additionalProperties": false
-    },
-    "t97": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "const": "setup_failed"
-        },
-        "worktree": {
-          "$ref": "#/$defs/t77"
-        },
-        "session": {
-          "type": "string"
-        },
-        "outcome": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/t61"
-            },
-            {
-              "$ref": "#/$defs/t62"
-            },
-            {
-              "$ref": "#/$defs/t63"
-            },
-            {
-              "$ref": "#/$defs/t64"
-            },
-            {
-              "$ref": "#/$defs/t65"
-            }
-          ]
-        },
-        "remedies": {
-          "type": "array",
-          "items": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/t98"
-              },
-              {
-                "$ref": "#/$defs/t99"
-              },
-              {
-                "$ref": "#/$defs/t100"
-              }
-            ]
-          }
-        }
-      },
-      "required": [
-        "kind",
-        "worktree",
-        "session",
-        "outcome",
-        "remedies"
-      ],
-      "additionalProperties": false
-    },
-    "t98": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "const": "retry_setup"
-        }
-      },
-      "required": [
-        "kind"
-      ],
-      "additionalProperties": false
-    },
-    "t99": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "const": "open_shell"
-        }
-      },
-      "required": [
-        "kind"
-      ],
-      "additionalProperties": false
-    },
-    "t100": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "const": "remove_worktree"
-        }
-      },
-      "required": [
-        "kind"
-      ],
-      "additionalProperties": false
-    },
-    "t101": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "const": "cancelled"
-        },
-        "worktree": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/t77"
-            }
-          ]
-        },
-        "session": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "kind",
-        "worktree",
-        "session"
-      ],
-      "additionalProperties": false
-    },
-    "t102": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "deleteBranch": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "deleteBranch"
-      ],
-      "additionalProperties": false
-    },
-    "t103": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "deleteBranch": {
-          "type": "boolean"
-        },
-        "force": {
-          "type": "boolean"
-        },
-        "acknowledged": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "deleteBranch",
-        "force",
-        "acknowledged"
-      ],
-      "additionalProperties": false
-    },
-    "t104": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "const": "removed"
-        },
-        "branchDeleted": {
-          "type": "boolean"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/t105"
-          }
-        }
-      },
-      "required": [
-        "kind",
-        "branchDeleted",
-        "warnings"
-      ],
-      "additionalProperties": false
-    },
-    "t105": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "message"
-      ],
-      "additionalProperties": false
-    },
-    "t106": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "const": "teardown_failed"
-        },
-        "session": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/t105"
-          }
-        }
-      },
-      "required": [
-        "kind",
-        "session",
-        "warnings"
-      ],
-      "additionalProperties": false
-    },
-    "t107": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "extraArgs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "rows": {
-          "type": "number"
-        },
-        "cols": {
-          "type": "number"
-        },
-        "creation": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "extraArgs",
-        "rows",
-        "cols"
-      ],
-      "additionalProperties": false
-    },
-    "t108": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "success": {
-          "type": "boolean"
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session",
-        "success",
-        "summary"
-      ],
-      "additionalProperties": false
-    },
-    "t109": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "actionId": {
-          "type": "string"
-        },
-        "rows": {
-          "type": "number"
-        },
-        "cols": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "actionId",
-        "rows",
-        "cols"
-      ],
-      "additionalProperties": false
-    },
-    "t110": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "rows": {
-          "type": "number"
-        },
-        "cols": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "rows",
-        "cols"
-      ],
-      "additionalProperties": false
-    },
-    "t111": {
+    "TerminalSession": {
       "type": "object",
       "properties": {
         "session": {
@@ -5245,7 +4206,7 @@
       ],
       "additionalProperties": false
     },
-    "t112": {
+    "terminal_replay.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -5257,7 +4218,7 @@
       ],
       "additionalProperties": false
     },
-    "t113": {
+    "TerminalReplay": {
       "type": "object",
       "properties": {
         "through": {
@@ -5273,35 +4234,7 @@
       ],
       "additionalProperties": false
     },
-    "t114": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session"
-      ],
-      "additionalProperties": false
-    },
-    "t115": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "dataBase64": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session",
-        "dataBase64"
-      ],
-      "additionalProperties": false
-    },
-    "t116": {
+    "pty_resize.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -5321,19 +4254,7 @@
       ],
       "additionalProperties": false
     },
-    "t117": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session"
-      ],
-      "additionalProperties": false
-    },
-    "t118": {
+    "list_agents.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -5352,7 +4273,7 @@
       ],
       "additionalProperties": false
     },
-    "t119": {
+    "AgentOption": {
       "type": "object",
       "properties": {
         "id": {
@@ -5424,190 +4345,7 @@
       ],
       "additionalProperties": false
     },
-    "t120": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "agentId": {
-          "type": "string"
-        },
-        "options": {
-          "$ref": "#/$defs/t121"
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "agentId",
-        "options"
-      ],
-      "additionalProperties": false
-    },
-    "t121": {
-      "type": "object",
-      "properties": {
-        "model": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "effort": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "mode": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "fast": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "resume": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "openedBy": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "typed": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        }
-      },
-      "required": [],
-      "additionalProperties": false
-    },
-    "t122": {
-      "type": "object",
-      "properties": {
-        "agentId": {
-          "type": "string"
-        },
-        "options": {
-          "$ref": "#/$defs/t123"
-        }
-      },
-      "required": [
-        "agentId",
-        "options"
-      ],
-      "additionalProperties": false
-    },
-    "t123": {
-      "type": "object",
-      "properties": {
-        "model": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "effort": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "mode": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "fast": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "resume": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [],
-      "additionalProperties": false
-    },
-    "t124": {
+    "HomeJob": {
       "type": "object",
       "properties": {
         "id": {
@@ -5670,7 +4408,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/t125"
+              "$ref": "#/$defs/HomeJob.step.1"
             }
           ]
         },
@@ -5721,7 +4459,7 @@
       ],
       "additionalProperties": false
     },
-    "t125": {
+    "HomeJob.step.1": {
       "type": "object",
       "properties": {
         "label": {
@@ -5741,7 +4479,7 @@
       ],
       "additionalProperties": false
     },
-    "t126": {
+    "home_dismiss_job.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -5753,73 +4491,7 @@
       ],
       "additionalProperties": false
     },
-    "t127": {
-      "type": "object",
-      "properties": {
-        "parentSession": {
-          "type": "string"
-        },
-        "options": {
-          "$ref": "#/$defs/t128"
-        }
-      },
-      "required": [
-        "parentSession",
-        "options"
-      ],
-      "additionalProperties": false
-    },
-    "t128": {
-      "type": "object",
-      "properties": {
-        "model": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "effort": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "mode": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "fast": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        }
-      },
-      "required": [],
-      "additionalProperties": false
-    },
-    "t129": {
+    "list_resumable.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -5831,7 +4503,7 @@
       ],
       "additionalProperties": false
     },
-    "t130": {
+    "Resumable": {
       "type": "object",
       "properties": {
         "provider": {
@@ -5891,7 +4563,7 @@
       ],
       "additionalProperties": false
     },
-    "t131": {
+    "forget_session.arguments": {
       "type": "object",
       "properties": {
         "provider": {
@@ -5907,7 +4579,7 @@
       ],
       "additionalProperties": false
     },
-    "t132": {
+    "agent_capability.arguments": {
       "type": "object",
       "properties": {
         "agentId": {
@@ -5919,19 +4591,19 @@
       ],
       "additionalProperties": false
     },
-    "t133": {
+    "Capability": {
       "type": "object",
       "properties": {
         "models": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t134"
+            "$ref": "#/$defs/AgentModel"
           }
         },
         "modes": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t136"
+            "$ref": "#/$defs/AgentMode"
           }
         },
         "modelsAreLive": {
@@ -5953,7 +4625,7 @@
       ],
       "additionalProperties": false
     },
-    "t134": {
+    "AgentModel": {
       "type": "object",
       "properties": {
         "id": {
@@ -5998,7 +4670,7 @@
         "efforts": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t135"
+            "$ref": "#/$defs/EffortOption"
           }
         }
       },
@@ -6013,7 +4685,7 @@
       ],
       "additionalProperties": false
     },
-    "t135": {
+    "EffortOption": {
       "type": "object",
       "properties": {
         "effort": {
@@ -6036,7 +4708,7 @@
       ],
       "additionalProperties": false
     },
-    "t136": {
+    "AgentMode": {
       "type": "object",
       "properties": {
         "id": {
@@ -6081,14 +4753,14 @@
       ],
       "additionalProperties": false
     },
-    "t137": {
+    "AccountUsage": {
       "type": "object",
       "properties": {
         "provider": {
           "type": "string"
         },
         "limits": {
-          "$ref": "#/$defs/t138"
+          "$ref": "#/$defs/UsageLimits"
         },
         "reportedAt": {
           "anyOf": [
@@ -6130,7 +4802,7 @@
       ],
       "additionalProperties": false
     },
-    "t138": {
+    "UsageLimits": {
       "type": "object",
       "properties": {
         "provider": {
@@ -6149,7 +4821,7 @@
         "windows": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t139"
+            "$ref": "#/$defs/LimitWindow"
           }
         },
         "resetCredits": {
@@ -6171,7 +4843,7 @@
       ],
       "additionalProperties": false
     },
-    "t139": {
+    "LimitWindow": {
       "type": "object",
       "properties": {
         "minutes": {
@@ -6216,7 +4888,7 @@
       ],
       "additionalProperties": false
     },
-    "t140": {
+    "refresh_usage_limits.arguments": {
       "type": "object",
       "properties": {
         "agentId": {
@@ -6228,113 +4900,7 @@
       ],
       "additionalProperties": false
     },
-    "t141": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        },
-        "attachments": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/t142"
-          }
-        }
-      },
-      "required": [
-        "session",
-        "text",
-        "attachments"
-      ],
-      "additionalProperties": false
-    },
-    "t142": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "mime": {
-          "type": "string"
-        },
-        "size": {
-          "type": "number"
-        },
-        "dataBase64": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "path",
-        "mime",
-        "size",
-        "dataBase64"
-      ],
-      "additionalProperties": false
-    },
-    "t143": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        },
-        "attachments": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/t142"
-          }
-        }
-      },
-      "required": [
-        "session",
-        "text",
-        "attachments"
-      ],
-      "additionalProperties": false
-    },
-    "t144": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path"
-      ],
-      "additionalProperties": false
-    },
-    "t145": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "mime": {
-          "type": "string"
-        },
-        "dataBase64": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "mime",
-        "dataBase64"
-      ],
-      "additionalProperties": false
-    },
-    "t146": {
+    "DictationStatus": {
       "type": "object",
       "properties": {
         "ready": {
@@ -6357,7 +4923,7 @@
       ],
       "additionalProperties": false
     },
-    "t147": {
+    "check_for_update.arguments": {
       "type": "object",
       "properties": {
         "manual": {
@@ -6369,7 +4935,7 @@
       ],
       "additionalProperties": false
     },
-    "t148": {
+    "UpdateStatus": {
       "type": "object",
       "properties": {
         "current": {
@@ -6404,7 +4970,7 @@
       ],
       "additionalProperties": false
     },
-    "t149": {
+    "list_worktree_files.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -6416,7 +4982,7 @@
       ],
       "additionalProperties": false
     },
-    "t150": {
+    "save_brief.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -6470,7 +5036,7 @@
       ],
       "additionalProperties": false
     },
-    "t151": {
+    "list_briefs.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -6486,7 +5052,7 @@
       ],
       "additionalProperties": false
     },
-    "t152": {
+    "Brief": {
       "type": "object",
       "properties": {
         "id": {
@@ -6514,7 +5080,7 @@
       ],
       "additionalProperties": false
     },
-    "t153": {
+    "remove_brief.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -6530,7 +5096,7 @@
       ],
       "additionalProperties": false
     },
-    "t154": {
+    "list_background_tasks.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -6542,7 +5108,7 @@
       ],
       "additionalProperties": false
     },
-    "t155": {
+    "BackgroundTask": {
       "type": "object",
       "properties": {
         "id": {
@@ -6573,7 +5139,7 @@
       ],
       "additionalProperties": false
     },
-    "t156": {
+    "interrupt_turn.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -6585,7 +5151,7 @@
       ],
       "additionalProperties": false
     },
-    "t157": {
+    "AgentSession": {
       "type": "object",
       "properties": {
         "session": {
@@ -6613,7 +5179,7 @@
       ],
       "additionalProperties": false
     },
-    "t158": {
+    "agent_replay.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -6625,7 +5191,7 @@
       ],
       "additionalProperties": false
     },
-    "t159": {
+    "SeqEvent": {
       "type": "object",
       "properties": {
         "seq": {
@@ -6634,85 +5200,85 @@
         "event": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t160"
+              "$ref": "#/$defs/AgentEvent.session_ready"
             },
             {
-              "$ref": "#/$defs/t161"
+              "$ref": "#/$defs/AgentEvent.skills_listed"
             },
             {
-              "$ref": "#/$defs/t163"
+              "$ref": "#/$defs/AgentEvent.mode_changed"
             },
             {
-              "$ref": "#/$defs/t164"
+              "$ref": "#/$defs/AgentEvent.turn_started"
             },
             {
-              "$ref": "#/$defs/t165"
+              "$ref": "#/$defs/AgentEvent.turn_finished"
             },
             {
-              "$ref": "#/$defs/t166"
+              "$ref": "#/$defs/AgentEvent.attachments"
             },
             {
-              "$ref": "#/$defs/t167"
+              "$ref": "#/$defs/AgentEvent.message_identity"
             },
             {
-              "$ref": "#/$defs/t168"
+              "$ref": "#/$defs/AgentEvent.history_boundary"
             },
             {
-              "$ref": "#/$defs/t169"
+              "$ref": "#/$defs/AgentEvent.historical_turn"
             },
             {
-              "$ref": "#/$defs/t170"
+              "$ref": "#/$defs/AgentEvent.user_echo"
             },
             {
-              "$ref": "#/$defs/t171"
+              "$ref": "#/$defs/AgentEvent.message_delta"
             },
             {
-              "$ref": "#/$defs/t172"
+              "$ref": "#/$defs/AgentEvent.message"
             },
             {
-              "$ref": "#/$defs/t173"
+              "$ref": "#/$defs/AgentEvent.reasoning_delta"
             },
             {
-              "$ref": "#/$defs/t174"
+              "$ref": "#/$defs/AgentEvent.tool_started"
             },
             {
-              "$ref": "#/$defs/t175"
+              "$ref": "#/$defs/AgentEvent.tool_finished"
             },
             {
-              "$ref": "#/$defs/t176"
+              "$ref": "#/$defs/AgentEvent.command_started"
             },
             {
-              "$ref": "#/$defs/t177"
+              "$ref": "#/$defs/AgentEvent.command_output"
             },
             {
-              "$ref": "#/$defs/t178"
+              "$ref": "#/$defs/AgentEvent.command_finished"
             },
             {
-              "$ref": "#/$defs/t179"
+              "$ref": "#/$defs/AgentEvent.patch"
             },
             {
-              "$ref": "#/$defs/t180"
+              "$ref": "#/$defs/AgentEvent.agenda_updated"
             },
             {
-              "$ref": "#/$defs/t181"
+              "$ref": "#/$defs/AgentEvent.approval_requested"
             },
             {
-              "$ref": "#/$defs/t190"
+              "$ref": "#/$defs/AgentEvent.approval_resolved"
             },
             {
-              "$ref": "#/$defs/t191"
+              "$ref": "#/$defs/AgentEvent.usage"
             },
             {
-              "$ref": "#/$defs/t192"
+              "$ref": "#/$defs/AgentEvent.notice"
             },
             {
-              "$ref": "#/$defs/t193"
+              "$ref": "#/$defs/AgentEvent.failed"
             },
             {
-              "$ref": "#/$defs/t194"
+              "$ref": "#/$defs/AgentEvent.limit_reached"
             },
             {
-              "$ref": "#/$defs/t195"
+              "$ref": "#/$defs/AgentEvent.raw"
             }
           ]
         }
@@ -6723,7 +5289,7 @@
       ],
       "additionalProperties": false
     },
-    "t160": {
+    "AgentEvent.session_ready": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6779,7 +5345,7 @@
       ],
       "additionalProperties": false
     },
-    "t161": {
+    "AgentEvent.skills_listed": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6788,7 +5354,7 @@
         "skills": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t162"
+            "$ref": "#/$defs/AgentSkill"
           }
         }
       },
@@ -6798,7 +5364,7 @@
       ],
       "additionalProperties": false
     },
-    "t162": {
+    "AgentSkill": {
       "type": "object",
       "properties": {
         "name": {
@@ -6832,7 +5398,7 @@
       ],
       "additionalProperties": false
     },
-    "t163": {
+    "AgentEvent.mode_changed": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6848,7 +5414,7 @@
       ],
       "additionalProperties": false
     },
-    "t164": {
+    "AgentEvent.turn_started": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6864,7 +5430,7 @@
       ],
       "additionalProperties": false
     },
-    "t165": {
+    "AgentEvent.turn_finished": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6874,7 +5440,7 @@
           "type": "string"
         },
         "usage": {
-          "$ref": "#/$defs/t39"
+          "$ref": "#/$defs/AgentUsage"
         },
         "costUsd": {
           "anyOf": [
@@ -6895,7 +5461,7 @@
       ],
       "additionalProperties": false
     },
-    "t166": {
+    "AgentEvent.attachments": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6904,7 +5470,7 @@
         "attachments": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t142"
+            "$ref": "#/$defs/AgentAttachment"
           }
         }
       },
@@ -6914,7 +5480,35 @@
       ],
       "additionalProperties": false
     },
-    "t167": {
+    "AgentAttachment": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "size": {
+          "type": "number"
+        },
+        "dataBase64": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "mime",
+        "size",
+        "dataBase64"
+      ],
+      "additionalProperties": false
+    },
+    "AgentEvent.message_identity": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6946,7 +5540,7 @@
       ],
       "additionalProperties": false
     },
-    "t168": {
+    "AgentEvent.history_boundary": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6962,7 +5556,7 @@
       ],
       "additionalProperties": false
     },
-    "t169": {
+    "AgentEvent.historical_turn": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6982,7 +5576,7 @@
       ],
       "additionalProperties": false
     },
-    "t170": {
+    "AgentEvent.user_echo": {
       "type": "object",
       "properties": {
         "kind": {
@@ -6998,7 +5592,7 @@
       ],
       "additionalProperties": false
     },
-    "t171": {
+    "AgentEvent.message_delta": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7014,7 +5608,7 @@
       ],
       "additionalProperties": false
     },
-    "t172": {
+    "AgentEvent.message": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7030,7 +5624,7 @@
       ],
       "additionalProperties": false
     },
-    "t173": {
+    "AgentEvent.reasoning_delta": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7046,7 +5640,7 @@
       ],
       "additionalProperties": false
     },
-    "t174": {
+    "AgentEvent.tool_started": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7077,7 +5671,7 @@
       ],
       "additionalProperties": false
     },
-    "t175": {
+    "AgentEvent.tool_finished": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7108,7 +5702,7 @@
       ],
       "additionalProperties": false
     },
-    "t176": {
+    "AgentEvent.command_started": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7139,7 +5733,7 @@
       ],
       "additionalProperties": false
     },
-    "t177": {
+    "AgentEvent.command_output": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7159,7 +5753,7 @@
       ],
       "additionalProperties": false
     },
-    "t178": {
+    "AgentEvent.command_finished": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7186,7 +5780,7 @@
       ],
       "additionalProperties": false
     },
-    "t179": {
+    "AgentEvent.patch": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7206,7 +5800,7 @@
       ],
       "additionalProperties": false
     },
-    "t180": {
+    "AgentEvent.agenda_updated": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7225,7 +5819,7 @@
         "steps": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t38"
+            "$ref": "#/$defs/AgendaStep"
           }
         }
       },
@@ -7236,7 +5830,7 @@
       ],
       "additionalProperties": false
     },
-    "t181": {
+    "AgentEvent.approval_requested": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7251,22 +5845,22 @@
         "request": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t182"
+              "$ref": "#/$defs/ApprovalRequest.command"
             },
             {
-              "$ref": "#/$defs/t183"
+              "$ref": "#/$defs/ApprovalRequest.file_change"
             },
             {
-              "$ref": "#/$defs/t184"
+              "$ref": "#/$defs/ApprovalRequest.permissions"
             },
             {
-              "$ref": "#/$defs/t185"
+              "$ref": "#/$defs/ApprovalRequest.plan_review"
             },
             {
-              "$ref": "#/$defs/t186"
+              "$ref": "#/$defs/ApprovalRequest.tool_input"
             },
             {
-              "$ref": "#/$defs/t187"
+              "$ref": "#/$defs/ApprovalRequest.user_input"
             }
           ]
         }
@@ -7279,7 +5873,7 @@
       ],
       "additionalProperties": false
     },
-    "t182": {
+    "ApprovalRequest.command": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7317,7 +5911,7 @@
       ],
       "additionalProperties": false
     },
-    "t183": {
+    "ApprovalRequest.file_change": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7366,7 +5960,7 @@
       ],
       "additionalProperties": false
     },
-    "t184": {
+    "ApprovalRequest.permissions": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7389,7 +5983,7 @@
       ],
       "additionalProperties": false
     },
-    "t185": {
+    "ApprovalRequest.plan_review": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7416,7 +6010,7 @@
       ],
       "additionalProperties": false
     },
-    "t186": {
+    "ApprovalRequest.tool_input": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7436,7 +6030,7 @@
       ],
       "additionalProperties": false
     },
-    "t187": {
+    "ApprovalRequest.user_input": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7445,7 +6039,7 @@
         "questions": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t188"
+            "$ref": "#/$defs/UserInputQuestion"
           }
         }
       },
@@ -7455,7 +6049,7 @@
       ],
       "additionalProperties": false
     },
-    "t188": {
+    "UserInputQuestion": {
       "type": "object",
       "properties": {
         "id": {
@@ -7470,7 +6064,7 @@
         "options": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t189"
+            "$ref": "#/$defs/UserInputOption"
           }
         },
         "multiple": {
@@ -7494,7 +6088,7 @@
       ],
       "additionalProperties": false
     },
-    "t189": {
+    "UserInputOption": {
       "type": "object",
       "properties": {
         "label": {
@@ -7517,7 +6111,7 @@
       ],
       "additionalProperties": false
     },
-    "t190": {
+    "AgentEvent.approval_resolved": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7533,7 +6127,7 @@
       ],
       "additionalProperties": false
     },
-    "t191": {
+    "AgentEvent.usage": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7572,7 +6166,7 @@
       ],
       "additionalProperties": false
     },
-    "t192": {
+    "AgentEvent.notice": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7599,7 +6193,7 @@
       ],
       "additionalProperties": false
     },
-    "t193": {
+    "AgentEvent.failed": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7615,7 +6209,7 @@
       ],
       "additionalProperties": false
     },
-    "t194": {
+    "AgentEvent.limit_reached": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7642,7 +6236,7 @@
       ],
       "additionalProperties": false
     },
-    "t195": {
+    "AgentEvent.raw": {
       "type": "object",
       "properties": {
         "kind": {
@@ -7664,7 +6258,7 @@
       ],
       "additionalProperties": false
     },
-    "t196": {
+    "AgentExchange": {
       "type": "object",
       "properties": {
         "id": {
@@ -7774,19 +6368,7 @@
       ],
       "additionalProperties": false
     },
-    "t197": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session"
-      ],
-      "additionalProperties": false
-    },
-    "t198": {
+    "get_pref.arguments": {
       "type": "object",
       "properties": {
         "key": {
@@ -7798,23 +6380,7 @@
       ],
       "additionalProperties": false
     },
-    "t199": {
-      "type": "object",
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "value": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "value"
-      ],
-      "additionalProperties": false
-    },
-    "t200": {
+    "Palette": {
       "type": "object",
       "properties": {
         "id": {
@@ -7856,7 +6422,7 @@
       ],
       "additionalProperties": false
     },
-    "t201": {
+    "Doctor": {
       "type": "object",
       "properties": {
         "resolvedPath": {
@@ -7871,7 +6437,7 @@
         "tools": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t202"
+            "$ref": "#/$defs/Tool"
           }
         }
       },
@@ -7883,7 +6449,7 @@
       ],
       "additionalProperties": false
     },
-    "t202": {
+    "Tool": {
       "type": "object",
       "properties": {
         "name": {
@@ -7906,7 +6472,7 @@
       ],
       "additionalProperties": false
     },
-    "t203": {
+    "list_database_connections.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -7922,7 +6488,7 @@
       ],
       "additionalProperties": false
     },
-    "t204": {
+    "DatabaseConnection": {
       "type": "object",
       "properties": {
         "id": {
@@ -8021,100 +6587,7 @@
       ],
       "additionalProperties": false
     },
-    "t205": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "profileId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "profileId"
-      ],
-      "additionalProperties": false
-    },
-    "t206": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "profileId": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "engine": {
-          "anyOf": [
-            {
-              "const": "postgres"
-            },
-            {
-              "const": "mysql"
-            },
-            {
-              "const": "sqlite"
-            }
-          ]
-        },
-        "environment": {
-          "anyOf": [
-            {
-              "const": "local"
-            },
-            {
-              "const": "test"
-            },
-            {
-              "const": "staging"
-            },
-            {
-              "const": "production"
-            }
-          ]
-        },
-        "access": {
-          "anyOf": [
-            {
-              "const": "read_write"
-            },
-            {
-              "const": "read_only"
-            }
-          ]
-        },
-        "serverVersion": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "profileId",
-        "label",
-        "engine",
-        "environment",
-        "access",
-        "serverVersion"
-      ],
-      "additionalProperties": false
-    },
-    "t207": {
+    "disconnect_database.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -8126,7 +6599,7 @@
       ],
       "additionalProperties": false
     },
-    "t208": {
+    "cancel_database_query.arguments": {
       "type": "object",
       "properties": {
         "session": {
@@ -8138,312 +6611,7 @@
       ],
       "additionalProperties": false
     },
-    "t209": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "additionalProperties": false
-    },
-    "t210": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "schema": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session",
-        "schema"
-      ],
-      "additionalProperties": false
-    },
-    "t211": {
-      "type": "object",
-      "properties": {
-        "schema": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "kind": {
-          "anyOf": [
-            {
-              "const": "table"
-            },
-            {
-              "const": "view"
-            },
-            {
-              "const": "materialized_view"
-            }
-          ]
-        }
-      },
-      "required": [
-        "schema",
-        "name",
-        "kind"
-      ],
-      "additionalProperties": false
-    },
-    "t212": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "schema": {
-          "type": "string"
-        },
-        "relation": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session",
-        "schema",
-        "relation"
-      ],
-      "additionalProperties": false
-    },
-    "t213": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "typeName": {
-          "type": "string"
-        },
-        "nullable": {
-          "type": "boolean"
-        },
-        "default": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "primaryKey": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "name",
-        "typeName",
-        "nullable",
-        "default",
-        "primaryKey"
-      ],
-      "additionalProperties": false
-    },
-    "t214": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "sql": {
-          "type": "string"
-        },
-        "maxRows": {
-          "type": "number"
-        },
-        "readOnly": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "session",
-        "sql",
-        "maxRows",
-        "readOnly"
-      ],
-      "additionalProperties": false
-    },
-    "t215": {
-      "type": "object",
-      "properties": {
-        "columns": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/t216"
-          }
-        },
-        "rows": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/t217"
-            }
-          }
-        },
-        "affectedRows": {
-          "type": "number"
-        },
-        "durationMs": {
-          "type": "number"
-        },
-        "truncated": {
-          "type": "boolean"
-        },
-        "message": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "columns",
-        "rows",
-        "affectedRows",
-        "durationMs",
-        "truncated",
-        "message"
-      ],
-      "additionalProperties": false
-    },
-    "t216": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "typeName": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "name",
-        "typeName"
-      ],
-      "additionalProperties": false
-    },
-    "t217": {
-      "type": "object",
-      "properties": {
-        "value": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "truncated": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "value",
-        "truncated"
-      ],
-      "additionalProperties": false
-    },
-    "t218": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        },
-        "request": {
-          "$ref": "#/$defs/t219"
-        }
-      },
-      "required": [
-        "session",
-        "request"
-      ],
-      "additionalProperties": false
-    },
-    "t219": {
-      "type": "object",
-      "properties": {
-        "schema": {
-          "type": "string"
-        },
-        "table": {
-          "type": "string"
-        },
-        "offset": {
-          "type": "number"
-        },
-        "limit": {
-          "type": "number"
-        },
-        "filter": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "orderBy": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "schema",
-        "table",
-        "offset",
-        "limit",
-        "filter",
-        "orderBy"
-      ],
-      "additionalProperties": false
-    },
-    "t220": {
-      "type": "object",
-      "properties": {
-        "session": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session"
-      ],
-      "additionalProperties": false
-    },
-    "t221": {
+    "code_tree.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -8459,7 +6627,7 @@
       ],
       "additionalProperties": false
     },
-    "t222": {
+    "CodeTree": {
       "type": "object",
       "properties": {
         "files": {
@@ -8506,7 +6674,7 @@
       ],
       "additionalProperties": false
     },
-    "t223": {
+    "code_list_dir.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -8526,7 +6694,7 @@
       ],
       "additionalProperties": false
     },
-    "t224": {
+    "CodeEntry": {
       "type": "object",
       "properties": {
         "name": {
@@ -8556,7 +6724,7 @@
       ],
       "additionalProperties": false
     },
-    "t225": {
+    "code_read_file.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -8576,7 +6744,7 @@
       ],
       "additionalProperties": false
     },
-    "t226": {
+    "CodeFile": {
       "type": "object",
       "properties": {
         "text": {
@@ -8622,7 +6790,7 @@
       ],
       "additionalProperties": false
     },
-    "t227": {
+    "code_search.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -8635,7 +6803,7 @@
           "type": "string"
         },
         "options": {
-          "$ref": "#/$defs/t228"
+          "$ref": "#/$defs/CodeSearchOptions"
         }
       },
       "required": [
@@ -8646,7 +6814,7 @@
       ],
       "additionalProperties": false
     },
-    "t228": {
+    "CodeSearchOptions": {
       "type": "object",
       "properties": {
         "caseSensitive": {
@@ -8674,13 +6842,13 @@
       ],
       "additionalProperties": false
     },
-    "t229": {
+    "CodeSearch": {
       "type": "object",
       "properties": {
         "hits": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t230"
+            "$ref": "#/$defs/CodeHit"
           }
         },
         "matches": {
@@ -8705,7 +6873,7 @@
       ],
       "additionalProperties": false
     },
-    "t230": {
+    "CodeHit": {
       "type": "object",
       "properties": {
         "path": {
@@ -8744,7 +6912,7 @@
       ],
       "additionalProperties": false
     },
-    "t231": {
+    "code_changes.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -8771,7 +6939,7 @@
       ],
       "additionalProperties": false
     },
-    "t232": {
+    "CodeChanges": {
       "type": "object",
       "properties": {
         "scope": {
@@ -8793,7 +6961,7 @@
         "changes": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t233"
+            "$ref": "#/$defs/CodeChange"
           }
         }
       },
@@ -8805,7 +6973,7 @@
       ],
       "additionalProperties": false
     },
-    "t233": {
+    "CodeChange": {
       "type": "object",
       "properties": {
         "path": {
@@ -8851,7 +7019,7 @@
       ],
       "additionalProperties": false
     },
-    "t234": {
+    "code_file_diff.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -8886,7 +7054,7 @@
       ],
       "additionalProperties": false
     },
-    "t235": {
+    "CodeHunk": {
       "type": "object",
       "properties": {
         "oldStart": {
@@ -8917,7 +7085,7 @@
       ],
       "additionalProperties": false
     },
-    "t236": {
+    "code_base_version.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -8941,7 +7109,7 @@
       ],
       "additionalProperties": false
     },
-    "t237": {
+    "code_list_comments.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -8953,7 +7121,7 @@
       ],
       "additionalProperties": false
     },
-    "t238": {
+    "CodeComment": {
       "type": "object",
       "properties": {
         "id": {
@@ -9018,14 +7186,14 @@
       ],
       "additionalProperties": false
     },
-    "t239": {
+    "code_add_comment.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
           "type": "string"
         },
         "comment": {
-          "$ref": "#/$defs/t240"
+          "$ref": "#/$defs/NewCodeComment"
         }
       },
       "required": [
@@ -9034,7 +7202,7 @@
       ],
       "additionalProperties": false
     },
-    "t240": {
+    "NewCodeComment": {
       "type": "object",
       "properties": {
         "path": {
@@ -9062,7 +7230,7 @@
       ],
       "additionalProperties": false
     },
-    "t241": {
+    "code_update_comment.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -9082,7 +7250,7 @@
       ],
       "additionalProperties": false
     },
-    "t242": {
+    "code_resolve_comment.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -9102,7 +7270,7 @@
       ],
       "additionalProperties": false
     },
-    "t243": {
+    "code_remove_comment.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -9118,7 +7286,7 @@
       ],
       "additionalProperties": false
     },
-    "t244": {
+    "code_clear_comments.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -9134,7 +7302,7 @@
       ],
       "additionalProperties": false
     },
-    "t245": {
+    "code_mark_comments_sent.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -9157,7 +7325,7 @@
       ],
       "additionalProperties": false
     },
-    "t246": {
+    "code_symbols.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -9185,7 +7353,7 @@
       ],
       "additionalProperties": false
     },
-    "t247": {
+    "CodeSymbol": {
       "type": "object",
       "properties": {
         "name": {
@@ -9251,7 +7419,7 @@
       ],
       "additionalProperties": false
     },
-    "t248": {
+    "code_definitions.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -9271,7 +7439,7 @@
       ],
       "additionalProperties": false
     },
-    "t249": {
+    "code_stat.arguments": {
       "type": "object",
       "properties": {
         "projectId": {
@@ -9294,7 +7462,7 @@
       ],
       "additionalProperties": false
     },
-    "t250": {
+    "CodeStat": {
       "type": "object",
       "properties": {
         "path": {
@@ -9325,45 +7493,7 @@
       ],
       "additionalProperties": false
     },
-    "t251": {
-      "type": "object",
-      "properties": {
-        "url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "url"
-      ],
-      "additionalProperties": false
-    },
-    "t252": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "url": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId"
-      ],
-      "additionalProperties": false
-    },
-    "t253": {
+    "close_browser.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9375,23 +7505,7 @@
       ],
       "additionalProperties": false
     },
-    "t254": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "url"
-      ],
-      "additionalProperties": false
-    },
-    "t255": {
+    "browser_history.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9420,7 +7534,7 @@
       ],
       "additionalProperties": false
     },
-    "t256": {
+    "browser_focus.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9432,7 +7546,7 @@
       ],
       "additionalProperties": false
     },
-    "t257": {
+    "browser_zoom.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9448,7 +7562,7 @@
       ],
       "additionalProperties": false
     },
-    "t258": {
+    "list_browsers.arguments": {
       "type": "object",
       "properties": {
         "worktreeId": {
@@ -9467,7 +7581,98 @@
       ],
       "additionalProperties": false
     },
-    "t259": {
+    "BrowserView": {
+      "type": "object",
+      "properties": {
+        "prototypeId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "loading": {
+          "type": "boolean"
+        },
+        "loadError": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "canGoBack": {
+          "type": "boolean"
+        },
+        "canGoForward": {
+          "type": "boolean"
+        },
+        "agentAccess": {
+          "type": "boolean"
+        },
+        "openedBy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "commentMode": {
+          "type": "boolean"
+        },
+        "agentDriving": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "project",
+        "worktree",
+        "url",
+        "title",
+        "loading",
+        "loadError",
+        "canGoBack",
+        "canGoForward",
+        "agentAccess",
+        "openedBy",
+        "commentMode",
+        "agentDriving"
+      ],
+      "additionalProperties": false
+    },
+    "BrowserAvailability": {
       "type": "object",
       "properties": {
         "available": {
@@ -9494,7 +7699,7 @@
       ],
       "additionalProperties": false
     },
-    "t260": {
+    "browser_set_comment_mode.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9510,7 +7715,7 @@
       ],
       "additionalProperties": false
     },
-    "t261": {
+    "browser_list_comments.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9522,7 +7727,7 @@
       ],
       "additionalProperties": false
     },
-    "t262": {
+    "BrowserComment": {
       "type": "object",
       "properties": {
         "id": {
@@ -9542,7 +7747,7 @@
           ]
         },
         "anchor": {
-          "$ref": "#/$defs/t263"
+          "$ref": "#/$defs/BrowserCommentAnchor"
         }
       },
       "required": [
@@ -9553,7 +7758,7 @@
       ],
       "additionalProperties": false
     },
-    "t263": {
+    "BrowserCommentAnchor": {
       "type": "object",
       "properties": {
         "selector": {
@@ -9591,7 +7796,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/t264"
+              "$ref": "#/$defs/BrowserAnchorRect"
             }
           ]
         },
@@ -9617,7 +7822,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/t13"
+              "$ref": "#/$defs/ExtensionStyle.properties"
             }
           ]
         }
@@ -9636,7 +7841,7 @@
       ],
       "additionalProperties": false
     },
-    "t264": {
+    "BrowserAnchorRect": {
       "type": "object",
       "properties": {
         "x": {
@@ -9660,7 +7865,7 @@
       ],
       "additionalProperties": false
     },
-    "t265": {
+    "browser_update_comment.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9680,7 +7885,7 @@
       ],
       "additionalProperties": false
     },
-    "t266": {
+    "browser_remove_comment.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9696,7 +7901,7 @@
       ],
       "additionalProperties": false
     },
-    "t267": {
+    "browser_resolve_comment.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9716,7 +7921,7 @@
       ],
       "additionalProperties": false
     },
-    "t268": {
+    "browser_snapshot_png.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9728,7 +7933,7 @@
       ],
       "additionalProperties": false
     },
-    "t269": {
+    "browser_open_devtools.arguments": {
       "type": "object",
       "properties": {
         "id": {
@@ -9740,53 +7945,7 @@
       ],
       "additionalProperties": false
     },
-    "t270": {
-      "type": "object",
-      "properties": {
-        "paneId": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        },
-        "state": {},
-        "rect": {
-          "$ref": "#/$defs/t271"
-        }
-      },
-      "required": [
-        "paneId",
-        "title",
-        "state",
-        "rect"
-      ],
-      "additionalProperties": false
-    },
-    "t271": {
-      "type": "object",
-      "properties": {
-        "x": {
-          "type": "number"
-        },
-        "y": {
-          "type": "number"
-        },
-        "w": {
-          "type": "number"
-        },
-        "h": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "x",
-        "y",
-        "w",
-        "h"
-      ],
-      "additionalProperties": false
-    },
-    "t272": {
+    "close_pane_window.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -9798,7 +7957,7 @@
       ],
       "additionalProperties": false
     },
-    "t273": {
+    "focus_pane_window.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -9817,7 +7976,7 @@
       ],
       "additionalProperties": false
     },
-    "t274": {
+    "PaneWindow": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -9831,7 +7990,7 @@
       ],
       "additionalProperties": false
     },
-    "t275": {
+    "post_notification.arguments": {
       "type": "object",
       "properties": {
         "title": {
@@ -9859,23 +8018,23 @@
       ],
       "additionalProperties": false
     },
-    "t276": {
+    "RecipesState": {
       "type": "object",
       "properties": {
         "recipes": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t277"
+            "$ref": "#/$defs/Recipe"
           }
         },
         "problems": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t279"
+            "$ref": "#/$defs/RecipesState.problems.items"
           }
         },
         "offers": {
-          "$ref": "#/$defs/t280"
+          "$ref": "#/$defs/RecipesState.offers"
         }
       },
       "required": [
@@ -9885,7 +8044,7 @@
       ],
       "additionalProperties": false
     },
-    "t277": {
+    "Recipe": {
       "type": "object",
       "properties": {
         "id": {
@@ -9906,7 +8065,7 @@
         "steps": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t278"
+            "$ref": "#/$defs/RecipeStep"
           }
         }
       },
@@ -9919,7 +8078,7 @@
       ],
       "additionalProperties": false
     },
-    "t278": {
+    "RecipeStep": {
       "type": "object",
       "properties": {
         "name": {
@@ -10017,7 +8176,7 @@
       ],
       "additionalProperties": false
     },
-    "t279": {
+    "RecipesState.problems.items": {
       "type": "object",
       "properties": {
         "id": {
@@ -10033,7 +8192,7 @@
       ],
       "additionalProperties": false
     },
-    "t280": {
+    "RecipesState.offers": {
       "type": "object",
       "properties": {},
       "required": [],
@@ -10044,66 +8203,7 @@
         }
       }
     },
-    "t281": {
-      "type": "object",
-      "properties": {
-        "recipe": {
-          "$ref": "#/$defs/t277"
-        }
-      },
-      "required": [
-        "recipe"
-      ],
-      "additionalProperties": false
-    },
-    "t282": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "all": {
-          "$ref": "#/$defs/t276"
-        }
-      },
-      "required": [
-        "id",
-        "all"
-      ],
-      "additionalProperties": false
-    },
-    "t283": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "additionalProperties": false
-    },
-    "t284": {
-      "type": "object",
-      "properties": {
-        "action": {
-          "type": "string"
-        },
-        "recipes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "action",
-        "recipes"
-      ],
-      "additionalProperties": false
-    },
-    "t285": {
+    "agent_skills.arguments": {
       "type": "object",
       "properties": {
         "agent": {
@@ -10137,41 +8237,7 @@
       ],
       "additionalProperties": false
     },
-    "t286": {
-      "type": "object",
-      "properties": {
-        "agent": {
-          "type": "string"
-        },
-        "projectId": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "worktreeId": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        }
-      },
-      "required": [
-        "agent",
-        "projectId",
-        "worktreeId"
-      ],
-      "additionalProperties": false
-    },
-    "t287": {
+    "preview_recipe.arguments": {
       "type": "object",
       "properties": {
         "recipeId": {
@@ -10184,7 +8250,7 @@
           "type": "string"
         },
         "vars": {
-          "$ref": "#/$defs/t13"
+          "$ref": "#/$defs/ExtensionStyle.properties"
         }
       },
       "required": [
@@ -10195,7 +8261,7 @@
       ],
       "additionalProperties": false
     },
-    "t288": {
+    "RecipePreviewStep": {
       "type": "object",
       "properties": {
         "text": {
@@ -10218,42 +8284,19 @@
       ],
       "additionalProperties": false
     },
-    "t289": {
+    "stop_recipe.arguments": {
       "type": "object",
       "properties": {
-        "recipeId": {
+        "run": {
           "type": "string"
-        },
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "action": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "vars": {
-          "$ref": "#/$defs/t13"
         }
       },
       "required": [
-        "recipeId",
-        "projectId",
-        "worktreeId",
-        "action",
-        "vars"
+        "run"
       ],
       "additionalProperties": false
     },
-    "t290": {
+    "RecipeRun": {
       "type": "object",
       "properties": {
         "id": {
@@ -10319,7 +8362,7 @@
         "steps": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t291"
+            "$ref": "#/$defs/RecipeRunStep"
           }
         }
       },
@@ -10338,7 +8381,7 @@
       ],
       "additionalProperties": false
     },
-    "t291": {
+    "RecipeRunStep": {
       "type": "object",
       "properties": {
         "name": {
@@ -10443,7 +8486,7 @@
       ],
       "additionalProperties": false
     },
-    "t292": {
+    "dismiss_recipe_run.arguments": {
       "type": "object",
       "properties": {
         "run": {
@@ -10455,25 +8498,13 @@
       ],
       "additionalProperties": false
     },
-    "t293": {
-      "type": "object",
-      "properties": {
-        "run": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "run"
-      ],
-      "additionalProperties": false
-    },
-    "t294": {
+    "Openers": {
       "type": "object",
       "properties": {
         "openers": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t295"
+            "$ref": "#/$defs/Opener"
           }
         },
         "preferred": {
@@ -10493,7 +8524,7 @@
       ],
       "additionalProperties": false
     },
-    "t295": {
+    "Opener": {
       "type": "object",
       "properties": {
         "id": {
@@ -10524,27 +8555,7 @@
       ],
       "additionalProperties": false
     },
-    "t296": {
-      "type": "object",
-      "properties": {
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
-        "openerId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "projectId",
-        "worktreeId",
-        "openerId"
-      ],
-      "additionalProperties": false
-    },
-    "t297": {
+    "ui.workspace.rename.arguments": {
       "type": "object",
       "properties": {
         "name": {
@@ -10556,7 +8567,7 @@
       ],
       "additionalProperties": false
     },
-    "t298": {
+    "ui.workspace.rename.result": {
       "type": "object",
       "properties": {
         "id": {
@@ -10576,16 +8587,29 @@
       ],
       "additionalProperties": false
     },
-    "t299": {
+    "ui.panels.list.arguments": {
       "type": "object",
       "properties": {},
       "required": [],
       "additionalProperties": false
     },
-    "t300": {
+    "WorkbenchPanel": {
       "type": "object",
       "properties": {
         "session": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "working": {
+          "type": "boolean"
+        },
+        "ended": {
           "anyOf": [
             {
               "type": "null"
@@ -10601,32 +8625,19 @@
         "worktreeId": {
           "type": "string"
         },
-        "working": {
-          "type": "boolean"
-        },
-        "ended": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
         "id": {
           "type": "string"
         },
         "kind": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t301"
+              "$ref": "#/$defs/SessionKind.shell"
             },
             {
-              "$ref": "#/$defs/t303"
+              "$ref": "#/$defs/SessionKind.agent"
             },
             {
-              "$ref": "#/$defs/t304"
+              "$ref": "#/$defs/SessionKind.browser"
             }
           ]
         },
@@ -10643,17 +8654,17 @@
       },
       "required": [
         "session",
-        "projectId",
-        "worktreeId",
         "working",
         "ended",
+        "projectId",
+        "worktreeId",
         "id",
         "kind",
         "title"
       ],
       "additionalProperties": false
     },
-    "t301": {
+    "SessionKind.shell": {
       "type": "object",
       "properties": {
         "kind": {
@@ -10679,7 +8690,7 @@
         "profile": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t302"
+              "$ref": "#/$defs/SessionKind.shell.profile.0"
             }
           ]
         }
@@ -10689,7 +8700,7 @@
       ],
       "additionalProperties": false
     },
-    "t302": {
+    "SessionKind.shell.profile.0": {
       "type": "object",
       "properties": {
         "plugin": {
@@ -10709,7 +8720,7 @@
       ],
       "additionalProperties": false
     },
-    "t303": {
+    "SessionKind.agent": {
       "type": "object",
       "properties": {
         "kind": {
@@ -10725,7 +8736,7 @@
       ],
       "additionalProperties": false
     },
-    "t304": {
+    "SessionKind.browser": {
       "type": "object",
       "properties": {
         "kind": {
@@ -10737,7 +8748,7 @@
       ],
       "additionalProperties": false
     },
-    "t305": {
+    "ui.panels.open.arguments": {
       "type": "object",
       "properties": {
         "kind": {
@@ -10773,7 +8784,7 @@
       ],
       "additionalProperties": false
     },
-    "t306": {
+    "ui.panels.focus.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -10787,7 +8798,7 @@
       "required": [],
       "additionalProperties": false
     },
-    "t307": {
+    "ui.panels.close.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -10801,7 +8812,7 @@
       "required": [],
       "additionalProperties": false
     },
-    "t308": {
+    "ui.panels.close.result": {
       "type": "object",
       "properties": {
         "closed": {
@@ -10813,7 +8824,7 @@
       ],
       "additionalProperties": false
     },
-    "t309": {
+    "ui.panels.move.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -10826,13 +8837,13 @@
         "target": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t310"
+              "$ref": "#/$defs/Target.pane"
             },
             {
-              "$ref": "#/$defs/t311"
+              "$ref": "#/$defs/Target.swap"
             },
             {
-              "$ref": "#/$defs/t312"
+              "$ref": "#/$defs/Target.surface"
             }
           ]
         }
@@ -10842,7 +8853,7 @@
       ],
       "additionalProperties": false
     },
-    "t310": {
+    "Target.pane": {
       "type": "object",
       "properties": {
         "kind": {
@@ -10875,7 +8886,7 @@
       ],
       "additionalProperties": false
     },
-    "t311": {
+    "Target.swap": {
       "type": "object",
       "properties": {
         "kind": {
@@ -10891,7 +8902,7 @@
       ],
       "additionalProperties": false
     },
-    "t312": {
+    "Target.surface": {
       "type": "object",
       "properties": {
         "kind": {
@@ -10920,7 +8931,7 @@
       ],
       "additionalProperties": false
     },
-    "t313": {
+    "ui.panels.resize.arguments": {
       "type": "object",
       "properties": {
         "path": {
@@ -10936,7 +8947,7 @@
       ],
       "additionalProperties": false
     },
-    "t314": {
+    "ui.panels.resize.result": {
       "type": "object",
       "properties": {
         "path": {
@@ -10952,7 +8963,7 @@
       ],
       "additionalProperties": false
     },
-    "t315": {
+    "ui.chat.snapshot.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -10966,7 +8977,7 @@
       "required": [],
       "additionalProperties": false
     },
-    "t316": {
+    "ui.chat.snapshot.result": {
       "type": "object",
       "properties": {
         "session": {
@@ -10978,7 +8989,7 @@
         "messages": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/t3"
+            "$ref": "#/$defs/ChatEditMessage"
           }
         },
         "problem": {
@@ -11004,12 +9015,6 @@
             }
           ]
         },
-        "projectId": {
-          "type": "string"
-        },
-        "worktreeId": {
-          "type": "string"
-        },
         "working": {
           "type": "boolean"
         },
@@ -11023,19 +9028,25 @@
             }
           ]
         },
+        "projectId": {
+          "type": "string"
+        },
+        "worktreeId": {
+          "type": "string"
+        },
         "id": {
           "type": "string"
         },
         "kind": {
           "anyOf": [
             {
-              "$ref": "#/$defs/t301"
+              "$ref": "#/$defs/SessionKind.shell"
             },
             {
-              "$ref": "#/$defs/t303"
+              "$ref": "#/$defs/SessionKind.agent"
             },
             {
-              "$ref": "#/$defs/t304"
+              "$ref": "#/$defs/SessionKind.browser"
             }
           ]
         },
@@ -11054,85 +9065,85 @@
           "items": {
             "anyOf": [
               {
-                "$ref": "#/$defs/t160"
+                "$ref": "#/$defs/AgentEvent.session_ready"
               },
               {
-                "$ref": "#/$defs/t161"
+                "$ref": "#/$defs/AgentEvent.skills_listed"
               },
               {
-                "$ref": "#/$defs/t163"
+                "$ref": "#/$defs/AgentEvent.mode_changed"
               },
               {
-                "$ref": "#/$defs/t164"
+                "$ref": "#/$defs/AgentEvent.turn_started"
               },
               {
-                "$ref": "#/$defs/t165"
+                "$ref": "#/$defs/AgentEvent.turn_finished"
               },
               {
-                "$ref": "#/$defs/t166"
+                "$ref": "#/$defs/AgentEvent.attachments"
               },
               {
-                "$ref": "#/$defs/t167"
+                "$ref": "#/$defs/AgentEvent.message_identity"
               },
               {
-                "$ref": "#/$defs/t168"
+                "$ref": "#/$defs/AgentEvent.history_boundary"
               },
               {
-                "$ref": "#/$defs/t169"
+                "$ref": "#/$defs/AgentEvent.historical_turn"
               },
               {
-                "$ref": "#/$defs/t170"
+                "$ref": "#/$defs/AgentEvent.user_echo"
               },
               {
-                "$ref": "#/$defs/t171"
+                "$ref": "#/$defs/AgentEvent.message_delta"
               },
               {
-                "$ref": "#/$defs/t172"
+                "$ref": "#/$defs/AgentEvent.message"
               },
               {
-                "$ref": "#/$defs/t173"
+                "$ref": "#/$defs/AgentEvent.reasoning_delta"
               },
               {
-                "$ref": "#/$defs/t174"
+                "$ref": "#/$defs/AgentEvent.tool_started"
               },
               {
-                "$ref": "#/$defs/t175"
+                "$ref": "#/$defs/AgentEvent.tool_finished"
               },
               {
-                "$ref": "#/$defs/t176"
+                "$ref": "#/$defs/AgentEvent.command_started"
               },
               {
-                "$ref": "#/$defs/t177"
+                "$ref": "#/$defs/AgentEvent.command_output"
               },
               {
-                "$ref": "#/$defs/t178"
+                "$ref": "#/$defs/AgentEvent.command_finished"
               },
               {
-                "$ref": "#/$defs/t179"
+                "$ref": "#/$defs/AgentEvent.patch"
               },
               {
-                "$ref": "#/$defs/t180"
+                "$ref": "#/$defs/AgentEvent.agenda_updated"
               },
               {
-                "$ref": "#/$defs/t181"
+                "$ref": "#/$defs/AgentEvent.approval_requested"
               },
               {
-                "$ref": "#/$defs/t190"
+                "$ref": "#/$defs/AgentEvent.approval_resolved"
               },
               {
-                "$ref": "#/$defs/t191"
+                "$ref": "#/$defs/AgentEvent.usage"
               },
               {
-                "$ref": "#/$defs/t192"
+                "$ref": "#/$defs/AgentEvent.notice"
               },
               {
-                "$ref": "#/$defs/t193"
+                "$ref": "#/$defs/AgentEvent.failed"
               },
               {
-                "$ref": "#/$defs/t194"
+                "$ref": "#/$defs/AgentEvent.limit_reached"
               },
               {
-                "$ref": "#/$defs/t195"
+                "$ref": "#/$defs/AgentEvent.raw"
               }
             ]
           }
@@ -11144,10 +9155,10 @@
         "messages",
         "problem",
         "status",
-        "projectId",
-        "worktreeId",
         "working",
         "ended",
+        "projectId",
+        "worktreeId",
         "id",
         "kind",
         "title",
@@ -11155,7 +9166,7 @@
       ],
       "additionalProperties": false
     },
-    "t317": {
+    "ui.chat.edit.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -11176,7 +9187,7 @@
       "required": [],
       "additionalProperties": false
     },
-    "t318": {
+    "ui.chat.edit.result": {
       "type": "object",
       "properties": {
         "opened": {
@@ -11188,45 +9199,7 @@
       ],
       "additionalProperties": false
     },
-    "t319": {
-      "type": "object",
-      "properties": {
-        "paneId": {
-          "anyOf": [
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "model": {
-          "anyOf": [
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "effort": {
-          "anyOf": [
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "fast": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        }
-      },
-      "required": [],
-      "additionalProperties": false
-    },
-    "t320": {
+    "ui.composer.read.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -11240,7 +9213,7 @@
       "required": [],
       "additionalProperties": false
     },
-    "t321": {
+    "ui.composer.read.result": {
       "type": "object",
       "properties": {
         "text": {
@@ -11256,7 +9229,7 @@
       ],
       "additionalProperties": false
     },
-    "t322": {
+    "ui.composer.write.arguments": {
       "type": "object",
       "properties": {
         "paneId": {
@@ -11279,7 +9252,7 @@
       ],
       "additionalProperties": false
     },
-    "t323": {
+    "ui.composer.write.result": {
       "type": "object",
       "properties": {
         "text": {
@@ -11295,7 +9268,7 @@
       ],
       "additionalProperties": false
     },
-    "t324": {
+    "ui.navigate.arguments": {
       "type": "object",
       "properties": {
         "target": {
@@ -11323,7 +9296,7 @@
       ],
       "additionalProperties": false
     },
-    "t325": {
+    "ui.navigate.result": {
       "type": "object",
       "properties": {
         "target": {
@@ -11335,14 +9308,11 @@
       ],
       "additionalProperties": false
     },
-    "t326": {
+    "ui.settings.show.arguments": {
       "type": "object",
       "properties": {
         "section": {
           "anyOf": [
-            {
-              "const": "recipes"
-            },
             {
               "const": "plugins"
             },
@@ -11357,6 +9327,9 @@
             },
             {
               "const": "advanced"
+            },
+            {
+              "const": "recipes"
             },
             {
               "const": "actions"
@@ -11379,7 +9352,7 @@
       ],
       "additionalProperties": false
     },
-    "t327": {
+    "ui.settings.show.result": {
       "type": "object",
       "properties": {
         "section": {

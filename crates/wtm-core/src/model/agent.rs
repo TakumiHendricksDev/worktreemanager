@@ -267,7 +267,15 @@ pub enum AgentEvent {
     /// Rendered rather than discarded because it is the provider's acknowledgement that the
     /// turn was received — without it, a slow first token is indistinguishable from a dropped
     /// message.
-    /// A provider-issued user item identity, distinct from the optimistic composer echo.
+    UserEcho {
+        text: String,
+    },
+    /// The provider's own id for a user message and the turn it opened.
+    ///
+    /// Separate from [`UserEcho`](AgentEvent::UserEcho) because the echo is optimistic: it is
+    /// painted before the provider has assigned anything, so it can never name the turn an edit
+    /// must fork from. `truncated` says the display text was bounded, so a reader never mistakes
+    /// the shortened copy for what the provider stored.
     MessageIdentity {
         message: String,
         turn: String,
@@ -277,16 +285,19 @@ pub enum AgentEvent {
         truncated: bool,
     },
     /// Whether the retained transcript begins at the start of the provider conversation.
+    ///
+    /// Without it, the oldest *visible* message of a paginated history would look like the
+    /// conversation's first, and editing it would fork from nothing — dropping every earlier turn.
     HistoryBoundary {
         complete: bool,
     },
-    /// A durable history turn carries identity without replaying live activity transitions.
+    /// A durable history turn, carrying its identity without replaying live activity transitions.
+    ///
+    /// A replayed `TurnStarted`/`TurnFinished` pair would mark a resumed pane busy and then idle
+    /// for work that finished long ago; this carries only what an edit needs to fork from it.
     HistoricalTurn {
         turn: String,
         complete: bool,
-    },
-    UserEcho {
-        text: String,
     },
     /// Files sent with the following [`UserEcho`](AgentEvent::UserEcho).
     Attachments {

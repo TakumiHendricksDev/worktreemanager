@@ -262,51 +262,70 @@ pub fn cancel(prototype: &mut Prototype) -> Result<(), ErrorView> {
     save(prototype)
 }
 
+/// What tells one fixed-document wrapper from another. Everything else in the wrapper, the CSP,
+/// the escaping and the frame, is shared, because that is the isolation; plugin views used to
+/// rewrite a finished prototype wrapper with string replacement, which would also have rewritten
+/// those words wherever they appeared inside the escaped document.
+#[derive(Debug, Clone, Copy)]
+pub struct Wrapper<'a> {
+    /// The wrapper document's `<title>`.
+    pub title: &'a str,
+    /// The frame's accessible name.
+    pub label: &'a str,
+    /// The `data-` attributes the isolated runtime finds the frame by.
+    pub markers: &'a str,
+    /// The frame's `sandbox` tokens. Never `allow-same-origin`: the document must stay opaque.
+    pub sandbox: &'a str,
+}
+
+/// A design review: scripts may run, nothing else.
+pub const REVIEW: Wrapper<'static> = Wrapper {
+    title: "Prototype review",
+    label: "Reviewed design snapshot",
+    markers: "data-wtm-prototype-preview",
+    sandbox: "allow-scripts",
+};
+
+const HEAD: &str = "<meta charset=\"utf-8\">\
+    <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+    <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; \
+    script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; \
+    connect-src 'none'; frame-src 'self' about:; base-uri 'none'; form-action 'none'\">";
+const FILL: &str = "<style>html,body,iframe{margin:0;width:100%;height:100%;border:0;\
+    display:block;overflow:hidden}</style>";
+const ARTIFACT_NOT_SELF_CONTAINED: &str = "The mockup references external or changing \
+    resources. Request a self-contained prototype.html with inline styles/scripts and data \
+    images before reviewing it.";
+
 pub fn review_document(html: &str) -> String {
+    wrap(html, &REVIEW)
+}
+
+/// `html` as the escaped `srcdoc` of one sandboxed frame inside a fixed, network-less document.
+pub fn wrap(html: &str, wrapper: &Wrapper<'_>) -> String {
     let encoded = html
         .replace('&', "&amp;")
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
+    let Wrapper {
+        title,
+        label,
+        markers,
+        sandbox,
+    } = wrapper;
     format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'self' about:; base-uri 'none'; form-action 'none'"><title>Prototype review</title><style>html,body,iframe{{margin:0;width:100%;height:100%;border:0;display:block;overflow:hidden}}</style></head><body><iframe data-wtm-prototype-preview title="Reviewed design snapshot" sandbox="allow-scripts" onload="this.dataset.loaded='true'" srcdoc="{encoded}"></iframe></body></html>"#
+        "<!doctype html><html><head>{HEAD}<title>{title}</title>{FILL}</head><body>\
+         <iframe {markers} title=\"{label}\" sandbox=\"{sandbox}\" \
+         onload=\"this.dataset.loaded='true'\" srcdoc=\"{encoded}\"></iframe></body></html>"
     )
 }
 
 /// A saved HTML document cannot freeze a live stylesheet, image or API response beside it.
 pub fn validate_artifact(html: &str) -> Result<(), ErrorView> {
-    let attributes = regex::Regex::new(r#"(?i)\b(?:src|href|srcset)\s*=\s*["']([^"']*)["']"#)
-        .map_err(|_| failure("Cannot validate artifact references"))?;
-    let css_urls = regex::Regex::new(r"(?i)url\(([^)]*)\)")
-        .map_err(|_| failure("Cannot validate artifact styles"))?;
-    let external_attribute = attributes.captures_iter(html).any(|capture| {
-        let value = capture[1].trim();
-        !value.is_empty() && !value.starts_with('#') && !value.starts_with("data:")
-    });
-    let external_css = css_urls.captures_iter(html).any(|capture| {
-        let value = capture[1].trim().trim_matches(['\'', '"']);
-        !value.starts_with('#') && !value.starts_with("data:")
-    });
-    let lower = html.to_ascii_lowercase();
-    if external_attribute
-        || external_css
-        || [
-            "@import",
-            "<iframe",
-            "<object",
-            "<embed",
-            "<base",
-            "fetch(",
-            "xmlhttprequest",
-            "websocket",
-            "import(",
-        ]
-        .iter()
-        .any(|pattern| lower.contains(pattern))
-    {
-        return Err(failure(
-            "The mockup references external or changing resources. Request a self-contained prototype.html with inline styles/scripts and data images before reviewing it.",
-        ));
+    if wtm_plugins::document::self_contained(html) {
+        Ok(())
+    } else {
+        Err(failure(ARTIFACT_NOT_SELF_CONTAINED))
     }
-    Ok(())
 }

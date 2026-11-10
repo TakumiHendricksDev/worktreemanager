@@ -33,11 +33,11 @@ just check
 ```
 
 That is `cargo fmt --check`, `prettier --check`, `cargo clippy --workspace --all-targets
---all-features -- -D warnings`, the generated plugin-contract check,
-`svelte-check --fail-on-warnings`, `cargo nextest run
---workspace`, and a `wasm32` check of `wtm-core`. CI runs exactly these commands, so if it
-passes locally it passes there. If it fails locally and you cannot tell why, say so in the PR
-and push anyway — a confusing lint message is a reasonable thing to ask about.
+--all-features -- -D warnings`, the generated plugin-contract check, `svelte-check
+--fail-on-warnings`, `cargo nextest run --workspace`, and a `wasm32` check of `wtm-core`. CI
+runs exactly these commands, so if it passes locally it passes there. If it fails locally and you
+cannot tell why, say so in the PR and push anyway — a confusing lint message is a reasonable thing
+to ask about.
 
 `just audit` (cargo-deny plus `bun audit`) is deliberately *not* part of `just check`, because
 it hits the network. CI runs it separately.
@@ -73,8 +73,33 @@ trust prompt after the user clicks Connect, and the update check asks a compiled
 for the latest release, also through `curl`. `src-tauri/tests/network_boundary.rs` pins the CSP, both
 fixed hosts, and the absence of a linked HTTP client. A new kind of egress, or reaching
 for `reqwest`, is an open-an-issue-first change — ARCHITECTURE §6a records the boundary. Browser
-panes are a *separate* webview with their own origin and no capabilities; §6c records what keeps a
-page in one out of the app.
+panes are a *separate* webview with their own origin and no Tauri capability; §6c records what keeps
+a page in one out of the app. Plugin panels and views run in that kind of pane too, with one
+owner-scoped request channel that Rust answers for the package it recorded (§6i).
+
+**Every IPC command and every plugin surface is classified**, enforced by
+`src-tauri/tests/extension_catalog.rs`. Each `invoke('…')` in `src/lib/ipc/commands.ts` must be an
+operation in `crates/wtm-plugins/contracts/catalog.json`, marked `public`, `protected` or
+`internal` with its own reason; every surface the catalog says takes contributions must be mounted
+by the component it names; every target the frontend mounts must be such a surface, and the
+`Surface` type in `src/lib/extensions.ts` must list exactly those.
+`crates/wtm-plugins/tests/catalog.rs` adds the operation rules: native-equivalent operations stay
+protected, each public one declares a `scope` (and `resources` exactly when the scope is
+`arguments`), and an argument of a non-global one that names a project, worktree, session or path
+is either a declared resource or in that file's `CONTAINED` table with the reason it stays in the
+caller's worktree. Adding to `CONTAINED` is a security
+decision; say why in the entry. The catalog is written by hand. `operations.json` beside it is
+generated from the TypeScript wrappers and `WorkbenchOperations` for public operations, so after
+changing either, or the catalog's public list, run `bun scripts/plugin-contracts.mjs` and commit
+the result; `bun scripts/plugin-contracts.mjs --check`, part of `just check`, fails on a stale one.
+
+**The example plugins must pass review.** `crates/wtm-plugins/tests/examples.rs` prepares and
+installs every package under `examples/plugins/` with the real package store, and holds the plugin
+guide's Hello, world to the same review. `src-tauri/tests/plugin_guide.rs` builds a real authoring
+workspace and fails if the guide copied into it links to a file that is not there, still says
+something only a wtm checkout can run, or is missing an example file: a new file in an example
+needs an entry in `EXAMPLES` in `src-tauri/src/plugin_authoring.rs`. Anything in `docs/plugins.md`
+from `## Developing wtm itself` on is left out of that copy, so repository-only material goes there.
 
 **`wtm-core` must compile for `wasm32-unknown-unknown`.** That is not because anyone runs it
 in a browser; it is a mechanical proof that the domain has no operating-system dependency. If
@@ -91,6 +116,22 @@ reason written next to it*.
 **No project-specific identifiers**, enforced by `src-tauri/tests/repo_hygiene.rs`. wtm is
 meant to work for any repository, and its source should not know about any particular one.
 Use a neutral placeholder in fixtures and docs.
+
+## UI checks that are not part of the gate
+
+Nothing in `just check` launches a browser, so a few scripts drive the real Svelte components with
+mocked IPC in headless Chrome. They are run by hand, before a change to the parts they cover, and
+the PR says whether they passed. None of them starts a provider or touches your wtm data.
+
+- `scripts/check-recipes-ui.mjs`, `check-creation-ui.mjs` and `check-design-first-ui.mjs` start
+  their own Vite server and drive Chrome through Playwright:
+  `WTM_PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs [WTM_SHOTS=dir] node scripts/<script>`.
+- `scripts/check-plugins-ui.mjs` (plugin contributions, editors and settings) and
+  `check-native-ui.mjs` (the Native CLI pane) speak CDP to a Chrome you start, against the Vite dev
+  server: run `bun x --bun vite` in one terminal (it serves on 5173), start Chrome headless with
+  `--remote-debugging-port=9393 --user-data-dir=<a fresh directory>`, then
+  `WTM_CDP_PORT=9393 [WTM_DEV_URL=http://localhost:5173] [WTM_SHOTS=dir] bun scripts/<script>`.
+  Each opens and closes only its own tab, and prints a line per check.
 
 ## The CSS rules, which are reviewed rather than enforced
 

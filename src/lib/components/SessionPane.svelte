@@ -1,15 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { EXTENSION_CONTEXT, extensionPart } from '../state/extensions.svelte';
-  import { setContext } from 'svelte';
-  import { registerExtensionComposer } from '../state/extension-workbench.svelte';
-  const publicContext = () => ({
-    projectId: pane.projectId,
-    worktreeId: pane.worktreeId,
-    paneId: pane.id,
-    session: pane.session ?? undefined,
-  });
-  setContext(EXTENSION_CONTEXT, publicContext);
   /**
    * One session, whatever kind it is: a header, a body, and for an agent a composer.
    *
@@ -37,17 +26,28 @@
   import { databaseConsole } from '../state/database-console.svelte';
   import { DESTINATION, dictation } from '../state/dictate.svelte';
   import { item, popUp, under, type MenuEntry } from '../native-menu';
-  import { sessions, type Pane } from '../state/sessions.svelte';
+  import { CHAT_DISABLED, sessions, type Pane } from '../state/sessions.svelte';
+  import { NATIVE_STATUS, unresolved } from '../native-sessions';
+  import { nativeSessions } from '../state/native-sessions.svelte';
+  import { plugins } from '../state/plugins.svelte';
   import { STATUS_WORD, type PaneStatus } from '../status';
   import { accept, matchFiles, matchSkills, queryAt, relativise } from '../suggest';
   import { fileIndex, resolveRef, type CodeRef } from '../code-links';
   import { codeRequests } from '../state/code-request.svelte';
   import { usage } from '../state/usage.svelte';
   import { workspace } from '../state/workspace.svelte';
-  import AgentTranscript from './AgentTranscript.svelte';
-  import PrototypeReview from './PrototypeReview.svelte';
-  import NativeSessionView from './NativeSessionView.svelte';
+  import {
+    extensionPart,
+    paneContext,
+    provideExtensionContext,
+  } from '../state/extensions.svelte';
+  import { registerExtensionComposer } from '../state/extension-workbench.svelte';
   import { settingsView } from '../state/settings-view.svelte';
+  import AgentTranscript from './AgentTranscript.svelte';
+  import ExtensionActions from './ExtensionActions.svelte';
+  import ExtensionPoint from './ExtensionPoint.svelte';
+  import NativeSessionView from './NativeSessionView.svelte';
+  import PrototypeReview from './PrototypeReview.svelte';
   import BrowserPane from './BrowserPane.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import ComposerQueue from './ComposerQueue.svelte';
@@ -112,6 +112,10 @@
   // Seeded from a draft that came with the pane from another window, so words typed there are here.
   const carried = untrack(() => sessions.takeDraft(pane.id));
   let draft = $state(carried?.text ?? '');
+  /**
+   * The draft as `ui.composer.read` and `ui.composer.write` see it. The revision counts edits, so
+   * a plugin that read the draft cannot overwrite what was typed after it read.
+   */
   let draftRevision = 0;
   let previousDraft = untrack(() => draft);
   function currentDraft() {
@@ -121,20 +125,26 @@
     }
     return { text: draft, revision: draftRevision };
   }
-  onDestroy(
-    registerExtensionComposer(
-      untrack(() => pane.id),
-      {
-        read: currentDraft,
-        write: (text, revision) => {
-          if (currentDraft().revision !== revision)
-            throw Error('Draft changed. Read it again before replacing it.');
-          draft = text;
-          currentDraft();
+  // Only a pane with a composer offers one. A shell, a browser or a native CLI keeps this draft
+  // without ever drawing it, so a plugin's `ui.composer.write` there used to succeed into text no
+  // one could see or send. Read once: a pane's kind never changes under a mounted component.
+  if (untrack(() => pane.kind.kind === 'agent'))
+    onDestroy(
+      registerExtensionComposer(
+        untrack(() => pane.id),
+        {
+          read: currentDraft,
+          write: (text, revision) => {
+            if (currentDraft().revision !== revision)
+              throw Error('Draft changed. Read it again before replacing it.');
+            draft = text;
+            currentDraft();
+          },
         },
-      },
-    ),
-  );
+      ),
+    );
+  /** Everything a plugin adds inside this pane is about this pane. */
+  const extension = provideExtensionContext(() => paneContext(pane));
   let attachments = $state<AgentAttachment[]>(carried?.attachments ?? []);
   let section = $state<HTMLElement | null>(null);
   let contextOpen = $state(false);
@@ -196,11 +206,21 @@
   const isIntegratedNative = $derived(
     isNative && pane.kind.kind === 'shell' && !pane.kind.plain,
   );
+  /** What the native adapter last reported for this pane's CLI. Undefined for anything else. */
+  const nativeState = $derived(
+    isIntegratedNative && pane.session ? nativeSessions.states[pane.session] : undefined,
+  );
 
   const label = $derived.by(() => {
     if (provider === null) return sessions.labelOf(pane);
     return sessions.options.find((o) => o.id === provider)?.label ?? provider;
   });
+  /** The CLI a native pane runs, by the catalogue's name: "Claude Code", not the pane's title. */
+  const cliLabel = $derived(
+    pane.kind.kind === 'shell' && pane.kind.native
+      ? sessions.providerLabel(pane.kind.native)
+      : label,
+  );
   /** A recipe step's own title, "Plan · Implementation", or null for every other pane. */
   const recipeStep = $derived(isRecipeRun(pane.run) ? pane.agentTitle : null);
   /**
@@ -285,13 +305,20 @@
    * The two states that have a message of their own use it; the rest use the status word. An error or
    * an exit summary says *what* went wrong, which "failed" does not.
    */
-  const note = $derived(
-    status === 'failed'
+  const note = $derived.by(() => {
+    // A native pane's body says what went wrong, in full and with what to do; the header saying
+    // it again in a truncated line was the second of three copies of one sentence.
+    if (isNative && status === 'failed') return STATUS_WORD.failed;
+    // The adapter's own words, which say more than the pane's — "connection lost" rather than
+    // "needs you". `idle` still draws nothing, as it does for every other pane.
+    if (nativeState && !pane.error && !pane.ended && nativeState.status !== 'idle')
+      return NATIVE_STATUS[nativeState.status];
+    return status === 'failed'
       ? pane.error
       : status === 'ended'
         ? pane.ended
-        : STATUS_WORD[status],
-  );
+        : STATUS_WORD[status];
+  });
 
   /**
    * Whether a message written now waits rather than goes.
@@ -514,6 +541,36 @@
   }
 
   /**
+   * One verb per pane, and one confirmation behind every route to it.
+   *
+   * An integrated CLI's restart ends the local process and resumes the saved conversation in a new
+   * one, which is what its connection notices had been calling Reconnect while the header called it
+   * Restart, and only the header asked first. So the pane picks the word, and the notice's button
+   * comes here too.
+   */
+  const restartVerb = $derived(isIntegratedNative ? 'Reconnect' : 'Restart');
+
+  /**
+   * Whether restarting now would cut off something still going on: a turn, a permission prompt in
+   * the terminal, or a CLI whose state WTM can no longer see.
+   */
+  const restartInterrupts = $derived(
+    pane.working ||
+      nativeState?.status === 'working' ||
+      nativeState?.status === 'needs_approval' ||
+      nativeState?.status === 'disconnected',
+  );
+
+  /** A notice's Reconnect: straight through when nothing would be lost, otherwise the confirmation. */
+  function requestRestart() {
+    if (restartInterrupts) confirmRestart = true;
+    else void sessions.restart(pane.id);
+  }
+
+  /** Instructions this pane's CLI has not confirmed, which a restart will not send again. */
+  const unconfirmed = $derived(nativeState?.deliveries.filter(unresolved).length ?? 0);
+
+  /**
    * Lift this pane out into a window of its own, over the tile it leaves.
    *
    * The draft goes with it, because a composer is component state and this component is about to
@@ -541,11 +598,25 @@
   const restartCalls = $derived(Boolean(pane.ended || pane.error) || pending !== null);
 
   /**
+   * A native pane's own rows: what it has no header button for at any width.
+   *
+   * A ⋯ of their own while the header is wide, and the tail of the folded menu once it is narrow,
+   * so neither menu repeats a button that is on screen beside it. In a pane window New-session
+   * defaults opens Settings in the main window, which is the only one that mounts it.
+   */
+  const nativeRows = $derived.by((): MenuEntry[] => {
+    if (!isNative) return [];
+    return [
+      item('Connection info…', () => (nativeDetailsOpen = true)),
+      item('New-session defaults…', () => settingsView.show('plugins', 'defaults')),
+    ];
+  });
+
+  /**
    * What a narrow pane's ⋯ menu holds: exactly the header buttons the container query hides.
    *
    * Built from the same conditions as those buttons, in the same order, so the menu and the row can
-   * never offer different things. Native connection diagnostics live here too, so those panes keep
-   * the menu available at every width without a second toolbar.
+   * never offer different things.
    */
   const folded = $derived.by((): MenuEntry[] => {
     const entries: MenuEntry[] = [];
@@ -554,7 +625,7 @@
       entries.push(item(`Back to ${origin.label}`, () => sessions.showRelated(back)));
     }
     if (!restartCalls)
-      entries.push(item('Restart Session…', () => (confirmRestart = true)));
+      entries.push(item(`${restartVerb} Session…`, () => (confirmRestart = true)));
     if (canSplit) {
       entries.push(
         item(
@@ -568,13 +639,7 @@
       );
     }
     if (canPopOut) entries.push(item('Pop Out into Its Own Window', popOut));
-    if (isNative) {
-      entries.push(
-        { kind: 'separator' },
-        item('Connection info…', () => (nativeDetailsOpen = true)),
-        item('New-session defaults…', () => settingsView.show('plugins')),
-      );
-    }
+    if (nativeRows.length > 0) entries.push({ kind: 'separator' }, ...nativeRows);
     return entries;
   });
 
@@ -1309,39 +1374,38 @@
   });
 </script>
 
-<ExtensionPoint target="component.session-pane" context={publicContext()}>
-  <!--
+<!--
   Clicking anywhere in a pane makes it the split target for the next session, which is what an
   editor does. `noteFocus` rather than `focus`, so the click does not also re-trigger the focus
   effect and fight the caret the user just placed.
 -->
-  <!--
+<!--
   A click anywhere makes this the split target for the next session, which is what an editor does.
   There is no keyboard equivalent to add because `focusin` already covers it: tabbing into the pane
   is the keyboard way of doing the same thing, which is why the two handlers sit together.
 -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <section
-    use:extensionPart={{ target: 'component.session-pane', context: publicContext }}
-    class="c-pane"
-    class:is-focused={isFocused}
-    bind:this={section}
-    aria-label="{atHome ? HOME_AGENT : label} session"
-    onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
-    onfocusin={() => {
-      sessions.noteFocus(pane.worktreeId, pane.id);
-      if (kind === 'shell' && pane.session)
-        void commands.focusRunShell(pane.session).catch(() => {});
-    }}
-  >
-    <div class="c-pane__main">
-      <header
-        use:extensionPart={{ target: 'panel.header', context: publicContext }}
-        class="c-pane__head"
-        class:has-origin={origin !== null}
-      >
-        <!--
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<section
+  class="c-pane"
+  class:is-focused={isFocused}
+  bind:this={section}
+  aria-label="{atHome ? HOME_AGENT : label} session"
+  onclick={() => sessions.noteFocus(pane.worktreeId, pane.id)}
+  onfocusin={() => {
+    sessions.noteFocus(pane.worktreeId, pane.id);
+    if (kind === 'shell' && pane.session)
+      void commands.focusRunShell(pane.session).catch(() => {});
+  }}
+>
+  <div class="c-pane__main">
+    <ExtensionPoint target="panel.header" position="before" />
+    <header
+      class="c-pane__head"
+      class:has-origin={origin !== null}
+      {@attach extensionPart('panel.header', extension)}
+    >
+      <!--
       First, before the title, because it is what the pane is held by — and because a handle after the
       name reads as an action on the name rather than on the pane.
 
@@ -1350,33 +1414,33 @@
       across the whole webview, in exchange for Finder drops carrying real paths. See the drag-drop
       effect above.
     -->
-        {#if host.kind === 'tile'}
-          <button
-            class="c-pane__grip"
-            type="button"
-            aria-label="Move this session"
-            aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
-            title="Drag to move this pane, or use the arrow keys"
-            onpointerdown={host.onmovestart}
-            onkeydown={host.onmovekey}
-          >
-            <Icon name="grip" size={12} />
-          </button>
-        {/if}
+      {#if host.kind === 'tile'}
+        <button
+          class="c-pane__grip"
+          type="button"
+          aria-label="Move this session"
+          aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown"
+          title="Drag to move this pane, or use the arrow keys"
+          onpointerdown={host.onmovestart}
+          onkeydown={host.onmovekey}
+        >
+          <Icon name="grip" size={12} />
+        </button>
+      {/if}
 
-        <h2 class="c-pane__title">
-          {#if atHome}
-            {HOME_AGENT} <span class="c-pane__cli">· {label}</span>
-          {:else if recipeStep}
-            <!-- "Plan · Implementation" first: with three steps of one recipe tiled side by side, the
+      <h2 class="c-pane__title">
+        {#if atHome}
+          {HOME_AGENT} <span class="c-pane__cli">· {label}</span>
+        {:else if recipeStep}
+          <!-- "Plan · Implementation" first: with three steps of one recipe tiled side by side, the
                CLI's name is the one thing they all share. -->
-            {recipeStep} <span class="c-pane__cli">· {label}</span>
-          {:else}
-            {label}
-          {/if}
-        </h2>
+          {recipeStep} <span class="c-pane__cli">· {label}</span>
+        {:else}
+          {label}
+        {/if}
+      </h2>
 
-        <!--
+      <!--
       One branch instead of four, and a dot beside the word.
 
       The word is what carries the state — `_semantic.scss` forbids colour alone, and here that rule
@@ -1387,17 +1451,18 @@
       `attention` is new, and it is a correction: a pane blocked on an approval is still between
       `turn_started` and `turn_finished`, so this used to report it as "working…" while it was in fact
       doing nothing and waiting for an answer. See `statusOf`.
-    -->
-        {#if isIntegratedNative}
-          <SessionDot {status} labelled />
-        {:else if status !== 'idle' && note}
-          <p class="c-pane__note {TONE[status]}">
-            <SessionDot {status} />
-            {note}
-          </p>
-        {/if}
 
-        <!--
+      A native CLI follows the same rule. It drew a lone labelled dot, for `idle` too, which put
+      colour alone in the one place every other pane writes the word.
+    -->
+      {#if status !== 'idle' && note}
+        <p class="c-pane__note {TONE[status]}">
+          <SessionDot {status} />
+          {note}
+        </p>
+      {/if}
+
+      <!--
       Restart · Split · Pop out · Close, in that order, and the order does not change with the pane's
       state.
 
@@ -1414,8 +1479,8 @@
       labelled Restart stays out: it only appears when it is the thing to press, and a button that
       is waiting on you is the last thing to hide behind a menu.
     -->
-        <div class="c-pane__actions">
-          <!--
+      <div class="c-pane__actions">
+        <!--
         The way out of a delegated child, and it is here rather than only in the rail because this
         is where you are looking when you want it.
 
@@ -1432,161 +1497,182 @@
         `_pane.scss`. The wrapper is `display: contents` until then, so the row lays out as if it
         were not there.
       -->
-          {#if origin}
-            <span class="c-pane__foldable">
-              <Button
-                variant="quiet"
-                size="sm"
-                title="Back to {origin.label}, the session that started this one"
-                onclick={() => sessions.showRelated(origin.id)}
-              >
-                ← {origin.label}
-              </Button>
-            </span>
-          {/if}
-
-          {#if host.kind === 'home'}
+        {#if origin}
+          <span class="c-pane__foldable">
             <Button
               variant="quiet"
               size="sm"
-              title="Review and revoke Home’s temporary shell grants"
-              disabled={!pane.session}
-              onclick={() => (shellRuns.permissions = pane.session)}>Commands</Button
+              title="Back to {origin.label}, the session that started this one"
+              onclick={() => sessions.showRelated(origin.id)}
             >
-            <!-- Past Home conversations. Home has no empty-worktree list to offer them from. -->
-            <Button
-              variant="quiet"
-              size="sm"
-              title="Pick up a past Home conversation"
-              ariaHaspopup="menu"
-              onclick={host.onhistory}
-            >
-              History
+              ← {origin.label}
             </Button>
-          {/if}
+          </span>
+        {/if}
 
-          {#if isIntegratedNative}
+        {#if host.kind === 'home'}
+          <Button
+            variant="quiet"
+            size="sm"
+            title="Review and revoke Home’s temporary shell grants"
+            disabled={!pane.session}
+            onclick={() => (shellRuns.permissions = pane.session)}>Commands</Button
+          >
+          <!-- Past Home conversations. Home has no empty-worktree list to offer them from. -->
+          <Button
+            variant="quiet"
+            size="sm"
+            title="Pick up a past Home conversation"
+            ariaHaspopup="menu"
+            onclick={host.onhistory}
+          >
+            History
+          </Button>
+        {/if}
+
+        {#if isIntegratedNative}
+          <Button
+            variant="quiet"
+            size="sm"
+            ariaExpanded={nativeDesignOpen}
+            ariaControls="native-design-{pane.id}"
+            onclick={(event) => {
+              nativeDesignTrigger = event.currentTarget as HTMLButtonElement;
+              nativeDesignOpen = !nativeDesignOpen;
+            }}>Open Design</Button
+          >
+        {/if}
+
+        {#if restartCalls}
+          <Button
+            variant="neutral"
+            size="sm"
+            title={pending ?? undefined}
+            onclick={() => (confirmRestart = true)}
+          >
+            {restartVerb}
+          </Button>
+        {:else}
+          <span class="c-pane__foldable">
             <Button
               variant="quiet"
               size="sm"
-              ariaExpanded={nativeDesignOpen}
-              ariaPressed={nativeDesignOpen}
-              ariaControls="native-design-{pane.id}"
-              onclick={(event) => {
-                nativeDesignTrigger = event.currentTarget as HTMLButtonElement;
-                nativeDesignOpen = !nativeDesignOpen;
-              }}>Open Design</Button
-            >
-          {/if}
-
-          {#if restartCalls}
-            <Button
-              variant="neutral"
-              size="sm"
-              title={pending ?? undefined}
+              icon="sm"
+              title={isIntegratedNative
+                ? 'Reconnect — end the local CLI and resume this conversation in a new one'
+                : isNative
+                  ? 'Restart this terminal — a new CLI, without this conversation'
+                  : 'Restart this session — the transcript is cleared and the conversation stays resumable'}
+              ariaLabel="{restartVerb} session"
               onclick={() => (confirmRestart = true)}
             >
-              Restart
+              <Icon name="restart" size={12} />
             </Button>
-          {:else}
-            <span class="c-pane__foldable">
-              <Button
-                variant="quiet"
-                size="sm"
-                icon="sm"
-                title="Restart this session — the transcript is cleared and the conversation stays resumable"
-                ariaLabel="Restart session"
-                onclick={() => (confirmRestart = true)}
-              >
-                <Icon name="restart" size={12} />
-              </Button>
-            </span>
-          {/if}
+          </span>
+        {/if}
 
-          <!-- Shells get this too, and it is how a second terminal is opened. The guard used to require
+        <!-- Shells get this too, and it is how a second terminal is opened. The guard used to require
            a provider, which was the last thing keeping a worktree to one shell once the backend
            allowed several. Every kind passes `pane.id` as the neighbour: the pane whose button was
            pressed, not whichever one the focus map thinks. See `Sessions.place` for why those
            differ on macOS. -->
-          {#if canSplit}
-            <span class="c-pane__foldable">
-              <Button
-                variant="quiet"
-                size="sm"
-                icon="sm"
-                title={isShell
-                  ? 'Open another shell to the right'
-                  : kind === 'browser'
-                    ? 'Open another browser to the right'
-                    : 'Split this session to the right'}
-                ariaLabel={isShell
-                  ? 'New shell to the right'
-                  : kind === 'browser'
-                    ? 'New browser to the right'
-                    : 'Split right'}
-                onclick={splitRight}
-              >
-                <Icon name="split-right" size={13} />
-              </Button>
-            </span>
-          {/if}
+        {#if canSplit}
+          <span class="c-pane__foldable">
+            <Button
+              variant="quiet"
+              size="sm"
+              icon="sm"
+              title={isShell
+                ? 'Open another shell to the right'
+                : kind === 'browser'
+                  ? 'Open another browser to the right'
+                  : 'Split this session to the right'}
+              ariaLabel={isShell
+                ? 'New shell to the right'
+                : kind === 'browser'
+                  ? 'New browser to the right'
+                  : 'Split right'}
+              onclick={splitRight}
+            >
+              <Icon name="split-right" size={13} />
+            </Button>
+          </span>
+        {/if}
 
-          <!--
+        <!--
           Beside Split, because both answer "where is this pane". Not offered for a restored pane with
           nothing behind it yet, which a window of its own could only show the same offer in; and not
           in a pane window, whose title bar carries Put back as a labelled button — a window holding
           one pane has room to say it in words.
         -->
-          {#if canPopOut}
-            <span class="c-pane__foldable">
-              <Button
-                variant="quiet"
-                size="sm"
-                icon="sm"
-                title="Move this pane into a window of its own"
-                ariaLabel="Pop out into its own window"
-                onclick={popOut}
-              >
-                <Icon name="pop-out" size={13} />
-              </Button>
-            </span>
-          {/if}
+        {#if canPopOut}
+          <span class="c-pane__foldable">
+            <Button
+              variant="quiet"
+              size="sm"
+              icon="sm"
+              title="Move this pane into a window of its own"
+              ariaLabel="Pop out into its own window"
+              onclick={popOut}
+            >
+              <Icon name="pop-out" size={13} />
+            </Button>
+          </span>
+        {/if}
 
-          {#if folded.length > 0}
-            <span class="c-pane__more" class:is-persistent={isNative}>
-              <Button
-                variant="quiet"
-                size="sm"
-                icon="sm"
-                title="More actions for this pane"
-                ariaLabel="More actions for this pane"
-                ariaHaspopup="menu"
-                onclick={(event) =>
-                  void popUp(folded, under(event.currentTarget as Element))}
-              >
-                <Icon name="more" size={13} />
-              </Button>
-            </span>
-          {/if}
+        <ExtensionActions target="panel.actions" />
 
-          <!-- Never folded: closing is the one thing every pane, however narrow, has to offer. -->
-          <Button
-            variant="quiet"
-            size="sm"
-            icon="sm"
-            title="End this session and close the pane"
-            ariaLabel="Close session"
-            onclick={() => (confirmClose = true)}
-          >
-            <Icon name="close" size={12} />
-          </Button>
-        </div>
-        <ExtensionPoint target="panel.header" context={publicContext()} />
-        <ExtensionPoint target="panel.actions" context={publicContext()} />
-      </header>
+        <!-- A native pane's rows while wide; in the folded menu below once narrow. -->
+        {#if nativeRows.length > 0}
+          <span class="c-pane__foldable">
+            <Button
+              variant="quiet"
+              size="sm"
+              icon="sm"
+              title="Connection and session defaults"
+              ariaLabel="Native session menu"
+              ariaHaspopup="menu"
+              onclick={(event) =>
+                void popUp(nativeRows, under(event.currentTarget as Element))}
+            >
+              <Icon name="more" size={13} />
+            </Button>
+          </span>
+        {/if}
 
-      {#if pane.detached && kind === 'agent'}
-        <!--
+        {#if folded.length > 0}
+          <span class="c-pane__more">
+            <Button
+              variant="quiet"
+              size="sm"
+              icon="sm"
+              title="More actions for this pane"
+              ariaLabel="More actions for this pane"
+              ariaHaspopup="menu"
+              onclick={(event) => void popUp(folded, under(event.currentTarget as Element))}
+            >
+              <Icon name="more" size={13} />
+            </Button>
+          </span>
+        {/if}
+
+        <!-- Never folded: closing is the one thing every pane, however narrow, has to offer. -->
+        <Button
+          variant="quiet"
+          size="sm"
+          icon="sm"
+          title="End this session and close the pane"
+          ariaLabel="Close session"
+          onclick={() => (confirmClose = true)}
+        >
+          <Icon name="close" size={12} />
+        </Button>
+      </div>
+    </header>
+    <ExtensionPoint target="panel.header" position="after" />
+
+    {#if pane.detached && kind === 'agent'}
+      <!--
       Restored from the last run with nothing behind it yet.
 
       Usually for a second or two: every agent pane is resumed at launch (`restoreAtLaunch`), and
@@ -1599,233 +1685,251 @@
       Resuming from here keeps its position; resuming from the list would open beside whatever had
       focus. See `sessions.reattach`.
     -->
-        <div class="c-pane__body c-pane__body--offer">
-          <div class="o-stack">
-            <p class="c-pane__empty">{offer}</p>
-            {#if pane.restoring}
-              <p class="c-pane__empty c-status--muted" aria-live="polite">
-                Picking this conversation up again…
-              </p>
-            {:else if pane.error}
-              <Banner variant="error">
-                Couldn't pick this conversation up again: {pane.error}
-              </Banner>
-              <div class="o-row">
-                <Button
-                  variant="accent"
-                  size="sm"
-                  title="Start a new {label} conversation in this pane"
-                  onclick={() => void sessions.startFresh(pane.id)}
-                >
-                  Start fresh
-                </Button>
-                <Button
-                  variant="neutral"
-                  size="sm"
-                  title="Try to pick the conversation up again"
-                  onclick={() => void sessions.reattach(pane.id)}
-                >
-                  Try again
-                </Button>
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  title="Close this pane"
-                  onclick={() => void sessions.close(pane.id)}
-                >
-                  Close
-                </Button>
-              </div>
-            {:else}
-              <div class="o-row">
-                <Button
-                  variant="accent"
-                  size="sm"
-                  title="Resume this conversation in this pane"
-                  onclick={() => void sessions.reattach(pane.id)}
-                >
-                  {pane.providerSession ? 'Resume' : `New ${label} session`}
-                </Button>
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  title="Close this pane without resuming"
-                  onclick={() => void sessions.close(pane.id)}
-                >
-                  Close
-                </Button>
-              </div>
-            {/if}
-            {#if pane.queue.length > 0}
-              <p class="c-pane__empty c-status--muted">
-                {pane.queue.length === 1
-                  ? 'One queued message is kept, paused, for when it is back.'
-                  : `${pane.queue.length} queued messages are kept, paused, for when it is back.`}
-              </p>
-            {/if}
-          </div>
+      <div class="c-pane__body c-pane__body--offer">
+        <div class="o-stack">
+          <p class="c-pane__empty">{offer}</p>
+          {#if pane.restoring}
+            <p class="c-pane__empty c-status--muted" aria-live="polite">
+              Picking this conversation up again…
+            </p>
+          {:else if !atHome && !plugins.enabled('wtm.chat')}
+            <!-- Rust refuses a chat pane's resume while Chat is off, so nothing here would work. The
+                 pane keeps its place and its conversation for when it is turned back on. -->
+            <p class="c-pane__empty" role="status">
+              {CHAT_DISABLED} This conversation comes back here when it is turned on again.
+            </p>
+            <div class="o-row">
+              <Button
+                variant="neutral"
+                size="sm"
+                onclick={() => settingsView.show('plugins')}>Plugin settings…</Button
+              >
+              <Button
+                variant="quiet"
+                size="sm"
+                title="Close this pane without resuming"
+                onclick={() => void sessions.close(pane.id)}
+              >
+                Close
+              </Button>
+            </div>
+          {:else if pane.error}
+            <Banner variant="error">
+              Couldn't pick this conversation up again: {pane.error}
+            </Banner>
+            <div class="o-row">
+              <Button
+                variant="accent"
+                size="sm"
+                title="Start a new {label} conversation in this pane"
+                onclick={() => void sessions.startFresh(pane.id)}
+              >
+                Start fresh
+              </Button>
+              <Button
+                variant="neutral"
+                size="sm"
+                title="Try to pick the conversation up again"
+                onclick={() => void sessions.reattach(pane.id)}
+              >
+                Try again
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
+                title="Close this pane"
+                onclick={() => void sessions.close(pane.id)}
+              >
+                Close
+              </Button>
+            </div>
+          {:else}
+            <div class="o-row">
+              <Button
+                variant="accent"
+                size="sm"
+                title="Resume this conversation in this pane"
+                onclick={() => void sessions.reattach(pane.id)}
+              >
+                {pane.providerSession ? 'Resume' : `New ${label} session`}
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
+                title="Close this pane without resuming"
+                onclick={() => void sessions.close(pane.id)}
+              >
+                Close
+              </Button>
+            </div>
+          {/if}
+          {#if pane.queue.length > 0}
+            <p class="c-pane__empty c-status--muted">
+              {pane.queue.length === 1
+                ? 'One queued message is kept, paused, for when it is back.'
+                : `${pane.queue.length} queued messages are kept, paused, for when it is back.`}
+            </p>
+          {/if}
         </div>
-      {:else if kind === 'browser'}
-        <div class="c-pane__body c-pane__body--browser">
-          <BrowserPane bind:this={browserPane} {pane} {visible} />
-        </div>
-      {:else if pane.kind.kind === 'shell' && pane.kind.native}
-        <NativeSessionView
-          {pane}
-          {visible}
-          bind:terminal
-          bind:designOpen={nativeDesignOpen}
-          bind:detailsOpen={nativeDetailsOpen}
-          ondesignclose={closeNativeDesign}
+      </div>
+    {:else if kind === 'browser'}
+      <div class="c-pane__body c-pane__body--browser">
+        <BrowserPane bind:this={browserPane} {pane} {visible} />
+      </div>
+    {:else if pane.kind.kind === 'shell' && pane.kind.native}
+      <NativeSessionView
+        {pane}
+        {visible}
+        label={cliLabel}
+        bind:terminal
+        bind:designOpen={nativeDesignOpen}
+        bind:detailsOpen={nativeDetailsOpen}
+        ondesignclose={closeNativeDesign}
+        onrestart={requestRestart}
+      />
+    {:else if kind === 'shell'}
+      <ShellRunHeader session={pane.session} />
+      <div class="c-pane__body c-pane__body--terminal">
+        <Terminal
+          bind:this={terminal}
+          session={pane.session}
+          active={visible && !pane.ended}
+          onexit={() => {}}
         />
-      {:else if kind === 'shell'}
-        <ShellRunHeader session={pane.session} />
-        <div class="c-pane__body c-pane__body--terminal">
-          <Terminal
-            bind:this={terminal}
-            session={pane.session}
-            active={visible && !pane.ended}
-            onexit={() => {}}
-          />
-        </div>
-      {:else}
-        <div class="c-pane__body" bind:this={scroller} onscroll={onScroll}>
-          <!-- The scroller reports its own fixed height, not its content's, so the thing the
+      </div>
+    {:else}
+      <div class="c-pane__body" bind:this={scroller} onscroll={onScroll}>
+        <!-- The scroller reports its own fixed height, not its content's, so the thing the
            `ResizeObserver` has to watch is a wrapper inside it. -->
-          <div bind:this={content}>
-            {#if pane.events.length === 0 && pane.ready}
-              <p class="c-pane__empty">Ask {label} something.</p>
-            {/if}
-            <AgentTranscript
-              events={pane.events}
-              onrunshell={(snippet) =>
-                shellRuns.open(pane.projectId, pane.worktreeId, snippet)}
-              onrunsql={atHome
-                ? undefined
-                : (sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}
-              {codeLink}
-            />
+        <div bind:this={content}>
+          {#if pane.events.length === 0 && pane.ready}
+            <p class="c-pane__empty">Ask {label} something.</p>
+          {/if}
+          <AgentTranscript
+            events={pane.events}
+            onrunshell={(snippet) =>
+              shellRuns.open(pane.projectId, pane.worktreeId, snippet)}
+            onrunsql={atHome
+              ? undefined
+              : (sql) => databaseConsole.open(pane.projectId, pane.worktreeId, sql)}
+            {codeLink}
+          />
 
-            {#if !atHome}<PrototypeReview {pane} />{/if}
+          {#if !atHome}<PrototypeReview {pane} />{/if}
 
-            {#if blocking}
-              <!--
+          {#if blocking}
+            <!--
             In the document flow, immediately after the activity that caused it. The user can scroll
             upward to inspect that activity without the request continuing to occupy half the pane;
             the one-line jump control below appears if the whole card leaves the viewport.
           -->
-              <div
-                id="approval-{pane.id}"
-                class="c-pane__approval"
-                bind:this={approvalNode}
-              >
-                <ApprovalCard
-                  request={blocking.request}
-                  root={codeLink?.root}
-                  focusOnMount={pinned}
-                  reading={reading && plan !== null}
-                  onread={() => (reading = !reading)}
-                  onanswer={(answer) =>
-                    void sessions.answerAndKeep(
-                      pane.id,
-                      blocking.id,
-                      answer,
-                      blocking.request,
-                    )}
-                />
-              </div>
-            {:else if relayed}
-              <!-- A relayed request participates in this scroller but not `AgentTranscript`, because
+            <div id="approval-{pane.id}" class="c-pane__approval" bind:this={approvalNode}>
+              <ApprovalCard
+                request={blocking.request}
+                root={codeLink?.root}
+                focusOnMount={pinned}
+                reading={reading && plan !== null}
+                onread={() => (reading = !reading)}
+                onanswer={(answer) =>
+                  void sessions.answerAndKeep(
+                    pane.id,
+                    blocking.id,
+                    answer,
+                    blocking.request,
+                  )}
+              />
+            </div>
+          {:else if relayed}
+            <!-- A relayed request participates in this scroller but not `AgentTranscript`, because
                  it is an inbox item from a different conversation rather than part of this one. -->
-              <div id="approval-{pane.id}" class="c-pane__relayed" bind:this={approvalNode}>
-                <p class="c-pane__relayed-from">
-                  <SessionDot status={sessions.statusOfPane(relayed.pane)} />
-                  <strong>{relayed.pane.agentTitle ?? 'A delegated agent'}</strong> needs
-                  you
-                  {#if delegated.length > 1}
-                    <span class="c-pane__relayed-more">
-                      · {delegated.length - 1} more waiting
-                    </span>
-                  {/if}
-                  <Button
-                    variant="link"
-                    size="sm"
-                    title="Open this agent's own pane"
-                    onclick={() => sessions.showRelated(relayed.pane.id)}
-                  >
-                    Open it
-                  </Button>
-                </p>
-                <ApprovalCard
-                  request={relayed.approval.request}
-                  root={workspace.worktrees.find((w) => w.id === relayed.pane.worktreeId)
-                    ?.path}
-                  focusOnMount={pinned}
-                  onanswer={(answer) =>
-                    void sessions.answerAndKeep(
-                      relayed.pane.id,
-                      relayed.approval.id,
-                      answer,
-                      relayed.approval.request,
-                    )}
-                />
-              </div>
-            {/if}
-          </div>
+            <div id="approval-{pane.id}" class="c-pane__relayed" bind:this={approvalNode}>
+              <p class="c-pane__relayed-from">
+                <SessionDot status={sessions.statusOfPane(relayed.pane)} />
+                <strong>{relayed.pane.agentTitle ?? 'A delegated agent'}</strong> needs you
+                {#if delegated.length > 1}
+                  <span class="c-pane__relayed-more">
+                    · {delegated.length - 1} more waiting
+                  </span>
+                {/if}
+                <Button
+                  variant="link"
+                  size="sm"
+                  title="Open this agent's own pane"
+                  onclick={() => sessions.showRelated(relayed.pane.id)}
+                >
+                  Open it
+                </Button>
+              </p>
+              <ApprovalCard
+                request={relayed.approval.request}
+                root={workspace.worktrees.find((w) => w.id === relayed.pane.worktreeId)
+                  ?.path}
+                focusOnMount={pinned}
+                onanswer={(answer) =>
+                  void sessions.answerAndKeep(
+                    relayed.pane.id,
+                    relayed.approval.id,
+                    answer,
+                    relayed.approval.request,
+                  )}
+              />
+            </div>
+          {/if}
         </div>
+      </div>
 
-        {#if approvalWaiting && !approvalVisible}
-          <div class="c-pane__approval-jump">
-            <Button
-              variant="neutral"
-              size="sm"
-              ariaControls="approval-{pane.id}"
-              onclick={jumpToApproval}
-            >
-              Approval waiting · Jump to request
-            </Button>
-          </div>
-        {/if}
+      {#if approvalWaiting && !approvalVisible}
+        <div class="c-pane__approval-jump">
+          <Button
+            variant="neutral"
+            size="sm"
+            ariaControls="approval-{pane.id}"
+            onclick={jumpToApproval}
+          >
+            Approval waiting · Jump to request
+          </Button>
+        </div>
+      {/if}
 
-        {#if side}
-          <SideQuestion {side} />
-        {/if}
+      {#if side}
+        <SideQuestion {side} />
+      {/if}
 
-        {#if pane.limit && !pane.ended}
-          <!--
+      {#if pane.limit && !pane.ended}
+        <!--
         Fixed because this is an offer rather than the record of what happened: the transcript gets
         a `notice` row for the same moment, while this copy disappears once it is taken or dismissed.
         Letting the actionable copy scroll away would leave no way to continue the limited session.
       -->
-          <div class="c-pane__limit">
-            <Banner variant="warn">
-              {pane.limit.message}{#if resetsAt}
-                — resets around {resetsAt}{/if}
-              {#snippet action()}
-                {#if continuation}
-                  <Button
-                    variant="neutral"
-                    size="sm"
-                    title="Open a {continuation.label} session here and carry this conversation into it"
-                    onclick={() => void sessions.continueOn(pane.id, continuation.id)}
-                  >
-                    Continue on {continuation.label}
-                  </Button>
-                {/if}
+        <div class="c-pane__limit">
+          <Banner variant="warn">
+            {pane.limit.message}{#if resetsAt}
+              — resets around {resetsAt}{/if}
+            {#snippet action()}
+              {#if continuation}
                 <Button
-                  variant="quiet"
+                  variant="neutral"
                   size="sm"
-                  title="Hide this. The session stays out of usage."
-                  onclick={() => sessions.dismissLimit(pane.id)}
+                  title="Open a {continuation.label} session here and carry this conversation into it"
+                  onclick={() => void sessions.continueOn(pane.id, continuation.id)}
                 >
-                  Dismiss
+                  Continue on {continuation.label}
                 </Button>
-              {/snippet}
-            </Banner>
-          </div>
-        {/if}
+              {/if}
+              <Button
+                variant="quiet"
+                size="sm"
+                title="Hide this. The session stays out of usage."
+                onclick={() => sessions.dismissLimit(pane.id)}
+              >
+                Dismiss
+              </Button>
+            {/snippet}
+          </Banner>
+        </div>
+      {/if}
 
-        <!--
+      <!--
       One card holding the message, what will run it, and the control that sends it.
 
       These were two strips: a settings row floating above a hairline, then the form. Nothing said
@@ -1833,209 +1937,207 @@
       come loose. Both desktop clients put all three inside one bordered field for that reason, and
       it is also what lets the whole thing take the focus ring as a unit.
     -->
-        <div class="c-pane__foot">
-          {#if skillsOpen}
-            <section class="c-context" aria-label="Skills available in this session">
-              <div class="c-context__head">
-                <strong>Skills</strong>
-                <span>{skills.length} available</span>
-              </div>
-              {#if skills.length === 0}
-                <p class="c-pane__empty">
-                  Nothing discovered yet. {label} reports its own list once the session has been
-                  asked something.
-                </p>
-              {:else}
-                <ul class="o-plain-list c-context__skills">
-                  {#each skills as skill (skill.name)}
-                    <li class="o-row">
-                      <button
-                        class="c-row-action"
-                        title="Put /{skill.name} in the message"
-                        onclick={() => {
-                          draft = `/${skill.name} `;
-                          skillsOpen = false;
-                        }}
-                      >
-                        /{skill.name}
-                      </button>
-                      <span class="c-status--subtle">{skill.description ?? ''}</span>
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
-            </section>
-          {/if}
-          {#if contextOpen}
-            <section class="c-context" aria-label="Session context usage">
-              <div class="c-context__head">
-                <strong>Context window</strong>
-                <!--
+      <div class="c-pane__foot">
+        {#if skillsOpen}
+          <section class="c-context" aria-label="Skills available in this session">
+            <div class="c-context__head">
+              <strong>Skills</strong>
+              <span>{skills.length} available</span>
+            </div>
+            {#if skills.length === 0}
+              <p class="c-pane__empty">
+                Nothing discovered yet. {label} reports its own list once the session has been
+                asked something.
+              </p>
+            {:else}
+              <ul class="o-plain-list c-context__skills">
+                {#each skills as skill (skill.name)}
+                  <li class="o-row">
+                    <button
+                      class="c-row-action"
+                      title="Put /{skill.name} in the message"
+                      onclick={() => {
+                        draft = `/${skill.name} `;
+                        skillsOpen = false;
+                      }}
+                    >
+                      /{skill.name}
+                    </button>
+                    <span class="c-status--subtle">{skill.description ?? ''}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+        {/if}
+        {#if contextOpen}
+          <section class="c-context" aria-label="Session context usage">
+            <div class="c-context__head">
+              <strong>Context window</strong>
+              <!--
               Three states, not two. A pane with a footprint but no window to compare it against
               can still say something true, and "Waiting for usage" would have been a lie about a
               number that is sitting right there.
             -->
-                <span
-                  >{contextPercent !== null
-                    ? `${contextPercent}% used`
-                    : contextUsed > 0
-                      ? `${formatTokens(contextUsed)} in context`
-                      : 'Waiting for usage'}</span
-                >
-              </div>
-              <Meter percent={contextPercent} label="Context window used" />
-              {#if pane.usage}
-                <dl class="c-context__facts">
-                  <div>
-                    <dt>In context</dt>
-                    <dd>{formatTokens(contextUsed)}</dd>
-                  </div>
-                  <div>
-                    <dt>Window</dt>
-                    <dd>
-                      {pane.usage.contextWindow
-                        ? formatTokens(pane.usage.contextWindow)
-                        : '—'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Input</dt>
-                    <dd>{formatTokens(pane.usage.tokensIn)}</dd>
-                  </div>
-                  <div>
-                    <dt>Cached</dt>
-                    <dd>{formatTokens(pane.usage.cached)}</dd>
-                  </div>
-                  <div>
-                    <dt>Output</dt>
-                    <dd>{formatTokens(pane.usage.tokensOut)}</dd>
-                  </div>
-                </dl>
-                <!--
+              <span
+                >{contextPercent !== null
+                  ? `${contextPercent}% used`
+                  : contextUsed > 0
+                    ? `${formatTokens(contextUsed)} in context`
+                    : 'Waiting for usage'}</span
+              >
+            </div>
+            <Meter percent={contextPercent} label="Context window used" />
+            {#if pane.usage}
+              <dl class="c-context__facts">
+                <div>
+                  <dt>In context</dt>
+                  <dd>{formatTokens(contextUsed)}</dd>
+                </div>
+                <div>
+                  <dt>Window</dt>
+                  <dd>
+                    {pane.usage.contextWindow
+                      ? formatTokens(pane.usage.contextWindow)
+                      : '—'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Input</dt>
+                  <dd>{formatTokens(pane.usage.tokensIn)}</dd>
+                </div>
+                <div>
+                  <dt>Cached</dt>
+                  <dd>{formatTokens(pane.usage.cached)}</dd>
+                </div>
+                <div>
+                  <dt>Output</dt>
+                  <dd>{formatTokens(pane.usage.tokensOut)}</dd>
+                </div>
+              </dl>
+              <!--
               Said out loud because the two halves of this card count different things, and a reader
               comparing them is right to be confused: the top row is the last request's prompt, the
               bottom three are everything the turn billed across all of its round trips. They do not
               add up to each other and are not supposed to.
             -->
-                <p>Input, cached and output are totals for the last turn.</p>
-              {:else}
-                <p>Usage appears after the provider reports its first token update.</p>
-              {/if}
-              {#if provider !== null}
-                {@const account = usage.accounts[provider]}
-                <!--
+              <p>Input, cached and output are totals for the last turn.</p>
+            {:else}
+              <p>Usage appears after the provider reports its first token update.</p>
+            {/if}
+            {#if provider !== null}
+              {@const account = usage.accounts[provider]}
+              <!--
                 The account's limits under the session's own context, as Claude's `/usage` lays them
                 out. Every pane on this agent shows the same figures, and so does the title bar's
                 usage dialog, because they all read one record.
               -->
-                <div class="c-context__limits">
-                  <div class="c-context__head">
-                    <strong>Usage limits</strong>
-                    {#if account?.limits.plan}<span>{account.limits.plan}</span>{/if}
-                  </div>
-                  <LimitMeters
-                    {provider}
-                    label={sessions.labelOf(pane)}
-                    {account}
-                    asking={usage.asking[provider] ?? false}
-                    now={limitsNow}
-                  />
+              <div class="c-context__limits">
+                <div class="c-context__head">
+                  <strong>Usage limits</strong>
+                  {#if account?.limits.plan}<span>{account.limits.plan}</span>{/if}
                 </div>
-              {/if}
-            </section>
-          {/if}
+                <LimitMeters
+                  {provider}
+                  label={sessions.labelOf(pane)}
+                  {account}
+                  asking={usage.asking[provider] ?? false}
+                  now={limitsNow}
+                />
+              </div>
+            {/if}
+          </section>
+        {/if}
 
-          {#if pane.queue.length > 0}
-            <!-- Last before the card, so what is waiting sits directly on top of what wrote it. -->
-            <ComposerQueue {pane} label={addressee} {steersMidTurn} />
-          {/if}
+        {#if pane.queue.length > 0}
+          <!-- Last before the card, so what is waiting sits directly on top of what wrote it. -->
+          <ComposerQueue {pane} label={addressee} {steersMidTurn} />
+        {/if}
 
-          <ExtensionPoint target="chat.composer" context={publicContext()}>
-            <form
-              use:extensionPart={{ target: 'chat.composer', context: publicContext }}
-              class="c-composer"
-              bind:this={form}
-              onsubmit={(event) => void submit(event)}
-            >
-              {#if suggestions.length > 0}
-                <!-- First child, so the card grows *upward* around it and the message stays where the
+        <ExtensionPoint target="chat.composer" position="before" />
+        <form
+          class="c-composer"
+          bind:this={form}
+          onsubmit={(event) => void submit(event)}
+          {@attach extensionPart('chat.composer', extension)}
+        >
+          {#if suggestions.length > 0}
+            <!-- First child, so the card grows *upward* around it and the message stays where the
                caret already is. In the flow rather than floating: see the component's own header
                for why that is the design and not a limitation. -->
-                <Suggest
-                  id="suggest-{pane.id}"
-                  items={suggestions}
-                  {active}
-                  onpick={(value) => pick(value)}
-                />
-              {/if}
+            <Suggest
+              id="suggest-{pane.id}"
+              items={suggestions}
+              {active}
+              onpick={(value) => pick(value)}
+            />
+          {/if}
 
-              {#if attachments.length > 0}
-                <div class="c-composer__attachments" aria-label="Attachments">
-                  {#each attachments as attachment (attachment.path)}
-                    <figure class="c-attachment">
-                      {#if attachment.mime.startsWith('image/')}
-                        <img
-                          src="data:{attachment.mime};base64,{attachment.dataBase64}"
-                          alt="Preview of {attachment.name}"
-                        />
-                      {:else}
-                        <span class="c-attachment__file" aria-hidden="true">
-                          <Icon name="file" size={16} />
-                        </span>
-                      {/if}
-                      <button
-                        type="button"
-                        aria-label="Remove {attachment.name}"
-                        title="Remove attachment"
-                        onclick={() =>
-                          (attachments = attachments.filter(
-                            (item) => item.path !== attachment.path,
-                          ))}
-                      >
-                        <Icon name="close" size={10} />
-                      </button>
-                      <figcaption>
-                        <span class="c-attachment__name" title={attachment.name}
-                          >{attachment.name}</span
-                        >
-                        <small class="c-attachment__size"
-                          >{formatBytes(attachment.size)}</small
-                        >
-                      </figcaption>
-                    </figure>
-                  {/each}
-                </div>
-              {/if}
+          {#if attachments.length > 0}
+            <div class="c-composer__attachments" aria-label="Attachments">
+              {#each attachments as attachment (attachment.path)}
+                <figure class="c-attachment">
+                  {#if attachment.mime.startsWith('image/')}
+                    <img
+                      src="data:{attachment.mime};base64,{attachment.dataBase64}"
+                      alt="Preview of {attachment.name}"
+                    />
+                  {:else}
+                    <span class="c-attachment__file" aria-hidden="true">
+                      <Icon name="file" size={16} />
+                    </span>
+                  {/if}
+                  <button
+                    type="button"
+                    aria-label="Remove {attachment.name}"
+                    title="Remove attachment"
+                    onclick={() =>
+                      (attachments = attachments.filter(
+                        (item) => item.path !== attachment.path,
+                      ))}
+                  >
+                    <Icon name="close" size={10} />
+                  </button>
+                  <figcaption>
+                    <span class="c-attachment__name" title={attachment.name}
+                      >{attachment.name}</span
+                    >
+                    <small class="c-attachment__size">{formatBytes(attachment.size)}</small>
+                  </figcaption>
+                </figure>
+              {/each}
+            </div>
+          {/if}
 
-              <!-- Deliberately NOT `.c-textarea`. That block is a bordered, filled form control, and its
+          <!-- Deliberately NOT `.c-textarea`. That block is a bordered, filled form control, and its
              partial sorts after this one in `main.scss` — so at equal specificity it won, and the
              card ended up with a second bordered box and a resize grip inside it. The two
              declarations actually wanted from it are restated in `.c-composer__input`; see there. -->
-              <textarea
-                class="c-composer__input"
-                bind:this={composer}
-                placeholder={steersByDefault
-                  ? `Tell ${addressee} more — it reads this at its next step…`
-                  : busy
-                    ? `Queue a message for ${addressee}…`
-                    : `Ask ${addressee}… — paste or @ files, / for commands`}
-                aria-label="Message {addressee}"
-                bind:value={draft}
-                oninput={noteCaret}
-                onclick={noteCaret}
-                onkeyup={noteCaret}
-                onkeydown={onKeydown}
-                onpaste={onPaste}
-                role="combobox"
-                aria-expanded={suggestions.length > 0}
-                aria-controls="suggest-{pane.id}"
-                aria-activedescendant={suggestions.length > 0
-                  ? `suggest-${pane.id}-${active}`
-                  : undefined}
-                disabled={pane.ended !== null || pane.error !== null}></textarea>
+          <textarea
+            class="c-composer__input"
+            bind:this={composer}
+            placeholder={steersByDefault
+              ? `Tell ${addressee} more — it reads this at its next step…`
+              : busy
+                ? `Queue a message for ${addressee}…`
+                : `Ask ${addressee}… — paste or @ files, / for commands`}
+            aria-label="Message {addressee}"
+            bind:value={draft}
+            oninput={noteCaret}
+            onclick={noteCaret}
+            onkeyup={noteCaret}
+            onkeydown={onKeydown}
+            onpaste={onPaste}
+            role="combobox"
+            aria-expanded={suggestions.length > 0}
+            aria-controls="suggest-{pane.id}"
+            aria-activedescendant={suggestions.length > 0
+              ? `suggest-${pane.id}-${active}`
+              : undefined}
+            disabled={pane.ended !== null || pane.error !== null}></textarea>
 
-              <div class="c-composer__bar">
-                <!--
+          <div class="c-composer__bar">
+            <!--
             Files first, then what will run them, then Send: the row reads left to right in the
             order a turn is assembled. Icon-only, because the pills beside it are already three
             words wide on a quarter-width pane and a `+` next to a message box is not ambiguous.
@@ -2048,29 +2150,29 @@
             `o-overlay-select` for the same reason the model pills use it: the native popup renders
             outside the stacking context, so this needs no third z-index. Fifth use of the idiom.
           -->
-                <span class="c-composer__add o-overlay-select">
-                  <span class="c-composer__addmark" aria-hidden="true">
-                    <Icon name="plus" size={14} />
-                  </span>
-                  <!-- The sentinel is selectable and does nothing rather than `disabled`, because a
+            <span class="c-composer__add o-overlay-select">
+              <span class="c-composer__addmark" aria-hidden="true">
+                <Icon name="plus" size={14} />
+              </span>
+              <!-- The sentinel is selectable and does nothing rather than `disabled`, because a
                  disabled option cannot reliably be re-selected programmatically — and this control
                  has to return to it after every use. Same note as `OpenInButton`. -->
-                  <select
-                    class="o-overlay-select__native"
-                    aria-label="Add files or folders"
-                    value=""
-                    disabled={pane.ended !== null || pane.error !== null}
-                    title="Add files or folders, or drop them here"
-                    onchange={onAdd}
-                  >
-                    <option value="">Add…</option>
-                    <option value="files">Files…</option>
-                    <option value="folders">Folders…</option>
-                  </select>
-                </span>
+              <select
+                class="o-overlay-select__native"
+                aria-label="Add files or folders"
+                value=""
+                disabled={pane.ended !== null || pane.error !== null}
+                title="Add files or folders, or drop them here"
+                onchange={onAdd}
+              >
+                <option value="">Add…</option>
+                <option value="files">Files…</option>
+                <option value="folders">Folders…</option>
+              </select>
+            </span>
 
-                {#if dictation.available}
-                  <!--
+            {#if dictation.available}
+              <!--
               Hold-to-talk, or tap-to-toggle, by preference.
 
               `onpointerdown`/`onpointerup` rather than click, because hold mode needs the two ends
@@ -2082,62 +2184,61 @@
               itself is not recoverable, and this feature's whole failure mode is getting a word
               wrong.
             -->
-                  <button
-                    class="c-composer__mic"
-                    class:is-recording={dictation.recording}
-                    type="button"
-                    disabled={pane.ended !== null ||
-                      pane.error !== null ||
-                      dictation.transcribing}
-                    aria-pressed={dictation.recording}
-                    aria-label={dictation.recording ? 'Stop dictating' : 'Dictate'}
-                    title={micTitle}
-                    onpointerdown={dictation.mode === 'hold' ? beginDictation : undefined}
-                    onpointerup={dictation.mode === 'hold' ? endDictation : undefined}
-                    onpointerleave={dictation.mode === 'hold' ? endDictation : undefined}
-                    onclick={dictation.mode === 'tap' ? toggleDictation : undefined}
-                  >
-                    <Icon name="mic" size={14} />
-                    {#if dictation.recording || dictation.transcribing}
-                      <span class="c-composer__mic-note">
-                        {dictation.transcribing ? 'transcribing…' : 'listening…'}
-                      </span>
-                    {/if}
-                  </button>
+              <button
+                class="c-composer__mic"
+                class:is-recording={dictation.recording}
+                type="button"
+                disabled={pane.ended !== null ||
+                  pane.error !== null ||
+                  dictation.transcribing}
+                aria-pressed={dictation.recording}
+                aria-label={dictation.recording ? 'Stop dictating' : 'Dictate'}
+                title={micTitle}
+                onpointerdown={dictation.mode === 'hold' ? beginDictation : undefined}
+                onpointerup={dictation.mode === 'hold' ? endDictation : undefined}
+                onpointerleave={dictation.mode === 'hold' ? endDictation : undefined}
+                onclick={dictation.mode === 'tap' ? toggleDictation : undefined}
+              >
+                <Icon name="mic" size={14} />
+                {#if dictation.recording || dictation.transcribing}
+                  <span class="c-composer__mic-note">
+                    {dictation.transcribing ? 'transcribing…' : 'listening…'}
+                  </span>
                 {/if}
+              </button>
+            {/if}
 
-                <button
-                  class="c-composer__context"
-                  class:is-open={contextOpen}
-                  type="button"
-                  aria-expanded={contextOpen}
-                  title="Show context-window usage and usage limits"
-                  onclick={() => (contextOpen = !contextOpen)}
-                >
-                  <span
-                    class="c-composer__context-ring"
-                    style:--context={contextPercent ?? 0}
-                  ></span>
-                  <span>Context {contextPercent === null ? '—' : `${contextPercent}%`}</span
-                  >
-                </button>
+            <button
+              class="c-composer__context"
+              class:is-open={contextOpen}
+              type="button"
+              aria-expanded={contextOpen}
+              title="Show context-window usage and usage limits"
+              onclick={() => (contextOpen = !contextOpen)}
+            >
+              <span class="c-composer__context-ring" style:--context={contextPercent ?? 0}
+              ></span>
+              <span>Context {contextPercent === null ? '—' : `${contextPercent}%`}</span>
+            </button>
 
-                <ModelPicker
-                  providers={groups}
-                  provider={provider ?? ''}
-                  pendingProvider={pane.pendingProvider}
-                  model={pane.model}
-                  effort={pane.effort}
-                  mode={pane.mode}
-                  fast={pane.fast}
-                  effortPending={pane.effortPending}
-                  disabled={pane.ended !== null || pane.error !== null}
-                  onchange={(next) => sessions.configure(pane.id, next)}
-                  onretry={(id) => void sessions.retryCapability(id)}
-                />
+            <ModelPicker
+              providers={groups}
+              provider={provider ?? ''}
+              pendingProvider={pane.pendingProvider}
+              model={pane.model}
+              effort={pane.effort}
+              mode={pane.mode}
+              fast={pane.fast}
+              effortPending={pane.effortPending}
+              disabled={pane.ended !== null || pane.error !== null}
+              onchange={(next) => sessions.configure(pane.id, next)}
+              onretry={(id) => void sessions.retryCapability(id)}
+            />
 
-                <div class="c-composer__send">
-                  <!--
+            <ExtensionActions target="chat.composer.actions" />
+
+            <div class="c-composer__send">
+              <!--
               `pane.working`, deliberately **not** `status === 'working'`.
 
               This is the one place that wants the raw field. `attention` outranks `working` in the
@@ -2151,50 +2252,49 @@
               into the queue, so the button stays where the pointer already is and says what it
               will do.
             -->
-                  {#if pane.working}
-                    <Button
-                      variant="neutral"
-                      size="sm"
-                      onclick={() => void sessions.interrupt(pane.id)}
-                    >
-                      Stop
-                    </Button>
-                  {/if}
-                  <!-- The shortcut lives here rather than in the placeholder, where it was competing
+              {#if pane.working}
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  onclick={() => void sessions.interrupt(pane.id)}
+                >
+                  Stop
+                </Button>
+              {/if}
+              <!-- The shortcut lives here rather than in the placeholder, where it was competing
                  with the prompt for the one line of text a user reads before typing. It follows
                  the setting because a hint that names the wrong key is worse than no hint. -->
-                  <span class="c-composer__hint" aria-hidden="true">
-                    {composerPrefs.sendKey === 'enter' ? '↵' : '⌘↵'}
-                  </span>
-                  <Button
-                    variant="accent"
-                    size="sm"
-                    type="submit"
-                    title={steersByDefault
-                      ? `Send now — ${addressee} reads it at its next step, without stopping. ⇧⌘↵ queues it for after this turn.`
-                      : busy
-                        ? `Queue — sends when ${addressee} is free. ⇧⌘↵ sends it now.`
-                        : undefined}
-                    disabled={(draft.trim().length === 0 && attachments.length === 0) ||
-                      pane.ended !== null ||
-                      sending}
-                  >
-                    {sending ? 'Sending…' : busy && !steersByDefault ? 'Queue' : 'Send'}
-                  </Button>
-                  {#if copiedReply}
-                    <span class="c-status--ok">Copied the last reply.</span>
-                  {/if}
-                </div>
-              </div>
-              <ExtensionPoint target="chat.composer.actions" context={publicContext()} />
-            </form>
-          </ExtensionPoint>
-        </div>
-      {/if}
-    </div>
+              <span class="c-composer__hint" aria-hidden="true">
+                {composerPrefs.sendKey === 'enter' ? '↵' : '⌘↵'}
+              </span>
+              <Button
+                variant="accent"
+                size="sm"
+                type="submit"
+                title={steersByDefault
+                  ? `Send now — ${addressee} reads it at its next step, without stopping. ⇧⌘↵ queues it for after this turn.`
+                  : busy
+                    ? `Queue — sends when ${addressee} is free. ⇧⌘↵ sends it now.`
+                    : undefined}
+                disabled={(draft.trim().length === 0 && attachments.length === 0) ||
+                  pane.ended !== null ||
+                  sending}
+              >
+                {sending ? 'Sending…' : busy && !steersByDefault ? 'Queue' : 'Send'}
+              </Button>
+              {#if copiedReply}
+                <span class="c-status--ok">Copied the last reply.</span>
+              {/if}
+            </div>
+          </div>
+        </form>
+        <ExtensionPoint target="chat.composer" position="after" />
+      </div>
+    {/if}
+  </div>
 
-    {#if reading && plan}
-      <!--
+  {#if reading && plan}
+    <!--
       The plan, beside the session rather than over it.
 
       It was a modal: a scrim, a focus trap, and the approval card it belongs to hidden behind it.
@@ -2203,59 +2303,90 @@
       transcript that is the context for both stays scrollable, and Approve is one click from
       wherever you got to in the plan.
       -->
-      <aside class="c-pane__aside" aria-label="Proposed plan">
-        <header class="c-pane__aside-head">
-          <strong>Proposed plan</strong>
-          <Button
-            variant="quiet"
-            size="sm"
-            title="Close the plan. The card below still has the decision."
-            onclick={() => (reading = false)}
-          >
-            <Icon name="close" size={12} />
-          </Button>
-        </header>
-        <div class="c-pane__aside-body">
-          <div class="c-planview">
-            <Markdown source={plan.markdown} />
-          </div>
-          {#if plan.path}
-            <p class="c-planview__meta"><code>{plan.path}</code></p>
-          {/if}
+    <aside class="c-pane__aside" aria-label="Proposed plan">
+      <header class="c-pane__aside-head">
+        <strong>Proposed plan</strong>
+        <Button
+          variant="quiet"
+          size="sm"
+          title="Close the plan. The card below still has the decision."
+          onclick={() => (reading = false)}
+        >
+          <Icon name="close" size={12} />
+        </Button>
+      </header>
+      <div class="c-pane__aside-body">
+        <div class="c-planview">
+          <Markdown source={plan.markdown} />
         </div>
-      </aside>
-    {/if}
-  </section>
+        {#if plan.path}
+          <p class="c-planview__meta"><code>{plan.path}</code></p>
+        {/if}
+      </div>
+    </aside>
+  {/if}
+</section>
 
-  {#if confirmRestart}
-    <Dialog title="Restart session?" onclose={() => (confirmRestart = false)}>
-      {#snippet body()}
+{#if confirmRestart}
+  <Dialog title="{restartVerb} session?" onclose={() => (confirmRestart = false)}>
+    {#snippet body()}
+      {#if isIntegratedNative}
+        <!-- What a native restart really does, which is not what a chat's does: the process goes,
+             the conversation does not, and WTM's own instructions are never typed in again. -->
         <p>
-          Restarting clears this pane's visible {kind === 'shell'
-            ? 'terminal scrollback'
-            : kind === 'browser'
-              ? 'page'
-              : 'chat'}
-          {#if kind === 'agent'}
-            . The provider conversation will remain available under “Pick up where you left
-            off”
-          {/if}.
+          This ends the local {cliLabel} process and starts a new one that {pane.providerSession
+            ? 'resumes this conversation'
+            : 'begins a new conversation, since this one has not been saved yet'}. Nothing
+          interrupted is restored.
+        </p>
+        {#if unconfirmed > 0}
+          <p class="c-note">
+            {unconfirmed === 1
+              ? 'One instruction is still unconfirmed. It is not resent; its notice stays.'
+              : `${unconfirmed} instructions are still unconfirmed. They are not resent; their notices stay.`}
+          </p>
+        {/if}
+        {#if nativeState?.status === 'needs_approval'}
+          <p class="c-status--warn">
+            The permission prompt in the terminal goes unanswered, and the turn stops.
+          </p>
+        {:else if nativeState?.status === 'disconnected'}
+          <p class="c-status--warn">
+            WTM cannot see whether a turn is running. If one is, it is stopped.
+          </p>
+        {:else if pane.working}
+          <p class="c-status--warn">The current turn will be stopped.</p>
+        {/if}
+      {:else}
+        <p>
+          {#if isNative}
+            This ends the plain {cliLabel} terminal and starts a new one. Its conversation is
+            not resumed here.
+          {:else}
+            Restarting clears this pane's visible {kind === 'shell'
+              ? 'terminal scrollback'
+              : kind === 'browser'
+                ? 'page'
+                : 'chat'}{kind === 'agent'
+              ? '. The provider conversation will remain available under “Pick up where you left off”'
+              : ''}.
+          {/if}
         </p>
         {#if pane.working}
           <p class="c-status--warn">The current turn will be stopped.</p>
         {/if}
-        {#if pending !== null}<p class="c-note">{pending}.</p>{/if}
-      {/snippet}
-      {#snippet footer()}
-        <Button variant="neutral" onclick={() => (confirmRestart = false)}>Cancel</Button>
-        <Button variant="danger-solid" onclick={() => void restartConfirmed()}
-          >Restart</Button
-        >
-      {/snippet}
-    </Dialog>
-  {/if}
+      {/if}
+      {#if pending !== null}<p class="c-note">{pending}.</p>{/if}
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="neutral" onclick={() => (confirmRestart = false)}>Cancel</Button>
+      <Button variant="danger-solid" onclick={() => void restartConfirmed()}
+        >{restartVerb}</Button
+      >
+    {/snippet}
+  </Dialog>
+{/if}
 
-  {#if confirmClose}
-    <CloseSessionDialog {pane} onclose={() => (confirmClose = false)} />
-  {/if}
-</ExtensionPoint>
+{#if confirmClose}
+  <CloseSessionDialog {pane} onclose={() => (confirmClose = false)} />
+{/if}

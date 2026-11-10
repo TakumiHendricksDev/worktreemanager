@@ -1,4 +1,5 @@
 import { workspaceLabels } from './state/workspace-labels.svelte';
+
 /** Display identities never replace the directory id used by actions. */
 export interface WorktreeIdentity {
   title: string;
@@ -8,6 +9,11 @@ export interface WorktreeIdentity {
   issueKey: string | null;
   isMain: boolean;
   head: string | null;
+  /**
+   * A row standing in for a worktree the listing does not have yet, so its `branch` and `head` are
+   * unknown rather than absent. See `arrangeFleet`.
+   */
+  placeholder?: boolean;
 }
 
 export function worktreeLabel(worktree: WorktreeIdentity): {
@@ -15,6 +21,16 @@ export function worktreeLabel(worktree: WorktreeIdentity): {
   name: string;
   detail: string;
 } {
+  // A placeholder knows only its folder. "Detached" is a claim about git, and saying it of a
+  // worktree whose branch has simply not been listed yet put it on a checkout an agent was working
+  // in until the next refresh, and only there.
+  if (worktree.placeholder) {
+    return {
+      key: null,
+      name: workspaceLabels.values[worktree.path] ?? worktree.dirname,
+      detail: [worktree.dirname, worktree.path].join('\n'),
+    };
+  }
   const human = worktree.title !== worktree.dirname && worktree.title !== worktree.branch;
   const key = worktree.issueKey;
   let name = human

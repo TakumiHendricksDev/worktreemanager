@@ -1,3 +1,5 @@
+import type { NativeDeliveryStatus, NativeResolution } from './native-sessions';
+
 /** Persisted review identity; execution belongs to the originating chat session. */
 export interface DesignSource {
   path: string;
@@ -35,9 +37,25 @@ export interface Prototype {
   dismissed: boolean;
 }
 
+export interface PrototypeDelivery {
+  receipt: string;
+  review: string;
+  status: NativeDeliveryStatus;
+  error: string | null;
+  resolution: NativeResolution | null;
+}
+
 export interface PrototypeState {
   prototype: Prototype;
   stale: boolean;
+  /** The native delivery of this design's approval; null in WTM Chat, whose turn is the delivery. */
+  delivery: PrototypeDelivery | null;
+}
+
+/** What cancelling a design did to the turn generating it. The design is cancelled either way. */
+export interface PrototypeCancel {
+  interrupted: boolean;
+  notice: string | null;
 }
 
 export interface PrototypeChanged {

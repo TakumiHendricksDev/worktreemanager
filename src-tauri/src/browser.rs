@@ -52,7 +52,17 @@
 //! # Caps
 //!
 //! Every child is a WebContent process. Four per worktree and eight in total, refused rather than
-//! evicted — an evicted browser might be the one showing a form the user half filled in.
+//! evicted — an evicted browser might be the one showing a form the user half filled in. Views
+//! that fill a workbench region for a plugin are counted apart, up to [`MAX_PLUGIN_VIEWS`]: one
+//! package can fill several regions at once, and its views must not use up the panes the user
+//! opens. So the real ceiling is the sum of the two.
+//!
+//! # Plugin panes are not agent targets
+//!
+//! A plugin's panel or view is a browser entry like any other, but its page carries the plugin's
+//! authority over the request bridge. An agent that could evaluate script in it could swap the
+//! plugin's document and speak with the plugin's access, so such panes are left out of everything
+//! an agent can address, and their agent access can never be turned on.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
@@ -71,6 +81,7 @@ use wtm_webview::{Handle, LoadFailure, Message, Navigation, World};
 use crate::app::App;
 use crate::browser_bridge;
 use crate::pane_windows::{self, Placement};
+use crate::plugin_views::plugin_owned;
 use crate::view::{BrowserView, ErrorView};
 
 /// Every browser webview's label starts with this, so a test can prove no capability matches one.
@@ -79,8 +90,12 @@ pub const LABEL_PREFIX: &str = "browser-";
 /// Browsers one worktree may hold. A WebContent process each; refused rather than evicted.
 pub const MAX_PER_WORKTREE: usize = 4;
 
-/// Browsers the app may hold in total.
+/// Browser panes the app may hold in total, plugin panels included. Region views are counted
+/// separately, against [`MAX_PLUGIN_VIEWS`].
 pub const MAX_TOTAL: usize = 8;
+
+/// Views plugins may hold filling workbench regions, across every package and worktree.
+pub const MAX_PLUGIN_VIEWS: usize = 20;
 
 /// The window every child is born in. It may move to a pane window later; see [`set_bounds`].
 const MAIN_WINDOW: &str = pane_windows::MAIN_WINDOW;
@@ -114,6 +129,9 @@ const MAX_CONSOLE_BYTES: usize = 64 * 1024;
 /// What a pane says when its page's web content process has gone. WebKit gives no reason.
 const CONTENT_PROCESS_GONE: &str =
     "The page stopped responding and was closed. Try again to reload it.";
+
+const PLUGIN_PANE_ACCESS: &str =
+    "A plugin's panel or view acts with that plugin's access, so agents cannot drive it";
 
 /// Where the child sits, in the app webview's CSS pixels with the window's content origin.
 ///
@@ -245,7 +263,8 @@ struct Entry {
     can_go_back: bool,
     can_go_forward: bool,
     /// The per-pane toggle. On by default: an agent that can already run `curl` here is not newly
-    /// empowered by a browser it drives visibly — see ARCHITECTURE §6b for the same argument.
+    /// empowered by a browser it drives visibly — see ARCHITECTURE §6b for the same argument. Off
+    /// for good in a plugin's pane, which an agent driving would be speaking as the plugin.
     agent_access: bool,
     /// The agent session that asked for this browser, when one did. Such a browser closes with its
     /// opener, the way a delegated child does.
@@ -332,6 +351,30 @@ impl Host {
             .collect()
     }
 
+    /// The panes in a worktree an agent may address: every one but a plugin's. See the module
+    /// docs for why; [`Host::ids_in`] still finds them, for closing a worktree's panes.
+    pub fn agent_targets_in(&self, worktree: &str) -> Vec<BrowserView> {
+        self.entries
+            .lock()
+            .iter()
+            .filter(|(_, entry)| {
+                entry.worktree == worktree && !plugin_owned(entry.opened_by.as_deref())
+            })
+            .map(|(id, entry)| Self::view(id, entry))
+            .collect()
+    }
+
+    /// Turn a pane's agent access on or off. A plugin's pane refuses to turn it on.
+    fn allow_agents(&self, id: &str, enabled: bool) -> Result<BrowserView, ErrorView> {
+        let mut entries = self.entries.lock();
+        let entry = entries.get_mut(id).ok_or_else(gone)?;
+        if enabled && plugin_owned(entry.opened_by.as_deref()) {
+            return Err(ErrorView::new("browserAccess", PLUGIN_PANE_ACCESS));
+        }
+        entry.agent_access = enabled;
+        Ok(Self::view(id, entry))
+    }
+
     pub fn ids_opened_by(&self, session: &str) -> Vec<String> {
         self.entries
             .lock()
@@ -374,7 +417,16 @@ impl Host {
             .values()
             .filter(|e| is_slot(e.opened_by.as_deref()) == slot)
             .count();
-        if owned >= if slot { 20 } else { MAX_TOTAL } {
+        if slot && owned >= MAX_PLUGIN_VIEWS {
+            return Err(ErrorView::new(
+                "browserCap",
+                format!(
+                    "plugins can fill at most {MAX_PLUGIN_VIEWS} regions at once; restore a \
+                     region to its built-in view first"
+                ),
+            ));
+        }
+        if !slot && owned >= MAX_TOTAL {
             return Err(ErrorView::new(
                 "browserCap",
                 format!("wtm holds at most {MAX_TOTAL} browser panes at once; close one first"),
@@ -407,7 +459,7 @@ impl Host {
                 load_error: None,
                 can_go_back: false,
                 can_go_forward: false,
-                agent_access: true,
+                agent_access: !plugin_owned(opened_by),
                 opened_by: opened_by.map(str::to_owned),
                 driving: None,
                 comment_mode: false,
@@ -1100,7 +1152,10 @@ fn on_runtime_message(handle: &AppHandle, app: &Arc<App>, id: &str, message: &Me
         return;
     }
     match body.get("event").and_then(Value::as_str) {
-        Some("plugin-request") => crate::plugin_views::dispatch(handle, app, id, &body["request"]),
+        Some("plugin-request") => {
+            let size = message.body.len();
+            crate::plugin_views::dispatch(handle, app, id, &body["request"], size);
+        }
         Some("prototype-ready") => {
             if let Some(view) = app.browsers.prototype_loaded(id) {
                 app.browsers.loaded(id);
@@ -1592,10 +1647,7 @@ pub fn set_agent_access(
     id: &str,
     enabled: bool,
 ) -> Result<BrowserView, ErrorView> {
-    let view = app
-        .browsers
-        .update(id, |entry| entry.agent_access = enabled)
-        .ok_or_else(gone)?;
+    let view = app.browsers.allow_agents(id, enabled)?;
     browser_bridge::announce_state(handle, &view);
     Ok(view)
 }
@@ -1839,6 +1891,52 @@ mod tests {
         let refused = host.register("p", "wt-c", BLANK, None).unwrap_err();
         assert_eq!(refused.kind, "browserCap");
         assert_eq!(host.list(None).len(), MAX_TOTAL);
+    }
+
+    #[test]
+    fn region_views_have_a_cap_of_their_own_that_names_regions_not_panes() {
+        let host = Host::default();
+        let view = "plugin-slot:example.tools:summary:code";
+        for _ in 0..MAX_PLUGIN_VIEWS {
+            host.register("p", "wt", BLANK, Some(view)).unwrap();
+        }
+        let refused = host.register("p", "wt", BLANK, Some(view)).unwrap_err();
+        assert_eq!(refused.kind, "browserCap");
+        assert!(refused.message.contains("regions"), "{}", refused.message);
+        host.register("p", "wt", BLANK, None).unwrap();
+    }
+
+    #[test]
+    fn a_plugins_panes_are_never_agent_targets_and_cannot_be_opened_to_agents() {
+        let host = Host::default();
+        let page = host.register("p", "wt", BLANK, None).unwrap();
+        let panel = host
+            .register("p", "wt", BLANK, Some("plugin-panel:example.tools:notes"))
+            .unwrap();
+        let view = host
+            .register(
+                "p",
+                "wt",
+                BLANK,
+                Some("plugin-slot:example.tools:summary:code"),
+            )
+            .unwrap();
+        let targets: Vec<_> = host
+            .agent_targets_in("wt")
+            .into_iter()
+            .map(|v| v.id)
+            .collect();
+        assert_eq!(targets, vec![page.clone()]);
+        for id in [&panel, &view] {
+            assert!(!host.view_of(id).unwrap().agent_access);
+            let refused = host.allow_agents(id, true).unwrap_err();
+            assert_eq!(refused.kind, "browserAccess");
+            assert!(!host.view_of(id).unwrap().agent_access);
+        }
+        assert!(!host.allow_agents(&page, false).unwrap().agent_access);
+        assert!(host.allow_agents(&page, true).unwrap().agent_access);
+        // Closing a worktree still finds them.
+        assert_eq!(host.ids_in("wt").len(), 3);
     }
 
     #[test]

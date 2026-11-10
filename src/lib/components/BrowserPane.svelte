@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionPart, extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A browser pane: its toolbar, its empty state, its comments, and the rectangle the page is laid
    * over.
@@ -50,7 +47,7 @@
   import { browsers, type BrowserShortcut } from '../state/browsers.svelte';
   import { overlay } from '../state/overlay.svelte';
   import { sessions, type Pane } from '../state/sessions.svelte';
-  import { theme } from '../state/theme.svelte';
+  import { pageThemeTokens, theme } from '../state/theme.svelte';
   import { workspace } from '../state/workspace.svelte';
   import Button from './ui/Button.svelte';
   import Icon from './ui/Icon.svelte';
@@ -262,17 +259,7 @@
     void loading;
     const browser = id;
     if (browser === null || browsers.runtimeUnavailable !== null) return;
-    const style = getComputedStyle(document.documentElement);
-    const read = (name: string) => style.getPropertyValue(name).trim();
-    void commands
-      .browserSetTheme(browser, {
-        accent: read('--accent'),
-        bg: read('--bg-elevated'),
-        fg: read('--fg'),
-        border: read('--border'),
-        font: read('--font-ui'),
-      })
-      .catch(() => {});
+    void commands.browserSetTheme(browser, pageThemeTokens()).catch(() => {});
   });
 
   // ── chords ──
@@ -468,352 +455,343 @@
   }
 </script>
 
-<ExtensionPoint target="component.browser-pane" context={publicContext()}>
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    use:extensionPart={{ target: 'component.browser-pane', context: publicContext }}
-    class="c-browser"
-    class:is-commenting={commenting}
-    onkeydown={onKey}
-  >
-    <div class="c-browser__main">
-      <div
-        class="c-browser__toolbar"
-        class:is-loading={loading}
-        role="toolbar"
-        aria-label="Browser controls"
-      >
-        <div class="c-browser__nav">
-          <Button
-            variant="quiet"
-            size="sm"
-            icon="sm"
-            title="Back (⌘[)"
-            ariaLabel="Back"
-            disabled={prototype || blank || !(view?.canGoBack ?? false)}
-            onclick={() => history('back')}
-          >
-            <Icon name="chevron-left" size={13} />
-          </Button>
-          <Button
-            variant="quiet"
-            size="sm"
-            icon="sm"
-            title="Forward (⌘])"
-            ariaLabel="Forward"
-            disabled={prototype || blank || !(view?.canGoForward ?? false)}
-            onclick={() => history('forward')}
-          >
-            <Icon name="chevron-right" size={13} />
-          </Button>
-          {#if loading}
-            <Button
-              variant="quiet"
-              size="sm"
-              icon="sm"
-              title="Stop loading (Esc)"
-              ariaLabel="Stop loading"
-              onclick={() => history('stop')}
-            >
-              <Icon name="close" size={12} />
-            </Button>
-          {:else}
-            <Button
-              variant="quiet"
-              size="sm"
-              icon="sm"
-              title="Reload (⌘R)"
-              ariaLabel="Reload"
-              disabled={blank}
-              onclick={() => history('reload')}
-            >
-              <Icon name="restart" size={12} />
-            </Button>
-          {/if}
-        </div>
-
-        {#if prototype}
-          <span class="c-browser__address"
-            >Prototype review · revise in the conversation</span
-          >
-          <Button
-            variant="quiet"
-            size="sm"
-            ariaLabel="Close preview"
-            title="Close this prototype preview"
-            onclick={() => void closePreview()}
-          >
-            <Icon name="close" size={12} /> Close
-          </Button>
-        {:else}
-          <form
-            class="c-browser__address"
-            class:is-editing={editing}
-            onsubmit={(event) => {
-              event.preventDefault();
-              void go();
-            }}
-          >
-            <TextInput
-              mono
-              bind:value={typed}
-              bind:element={address}
-              placeholder="Enter an address (⌘L)"
-              ariaLabel="Address"
-              oninput={() => {
-                editing = true;
-                problem = null;
-              }}
-              onblur={() => (editing = false)}
-            />
-          </form>
-        {/if}
-        {#if problem}
-          <span class="c-browser__problem" role="alert">{problem}</span>
-        {/if}
-
-        <!-- Comment mode and the list are one control: turning the mode on opens the list, and the
-           count on the button is how you find comments you left on an earlier visit. -->
-        <span class="c-browser__comment-toggle">
-          <Button
-            variant="quiet"
-            size="sm"
-            ariaPressed={commenting}
-            disabled={blank || runtimeOff !== null}
-            title={runtimeOff ??
-              (commenting
-                ? 'Comment mode is on: click an element in the page to comment on it. Click again to stop.'
-                : 'Comment on elements of the page (⌘⇧C)')}
-            onclick={() => setCommenting(!commenting)}
-          >
-            <Icon name="comment" size={13} /> Comment
-          </Button>
-          {#if comments.length > 0}
-            <button
-              type="button"
-              class="c-badge c-badge--accent"
-              title={commentsOpen ? 'Hide the comments' : 'Show the comments'}
-              aria-expanded={commentsOpen}
-              onclick={() => (commentsOpen = !commentsOpen)}
-            >
-              {openComments.length}
-            </button>
-          {/if}
-        </span>
-
-        <span
-          class="c-browser__agent"
-          class:is-driving={(view?.agentDriving ?? null) !== null}
-        >
-          <Button
-            variant={view?.agentAccess && runtimeOff === null ? 'neutral' : 'quiet'}
-            size="sm"
-            ariaLabel="Allow agents to use this page"
-            ariaPressed={runtimeOff === null && (view?.agentAccess ?? false)}
-            disabled={blank || runtimeOff !== null || agentAccessPending}
-            title={runtimeOff ??
-              (blank
-                ? 'Open a page to control whether agents may use it.'
-                : view?.agentAccess
-                  ? 'Agents in this worktree may read and interact with this page. Click to turn off access.'
-                  : 'Agent access is off for this page. Click to allow agents to read and interact with it.')}
-            onclick={() => void toggleAgents()}
-          >
-            Agent access{runtimeOff !== null
-              ? ': unavailable'
-              : view
-                ? view.agentAccess
-                  ? ': on'
-                  : ': off'
-                : ''}
-          </Button>
-          {#if view?.agentDriving}
-            {view.agentDriving} is browsing
-          {/if}
-        </span>
-
-        {#if import.meta.env.DEV}
-          <Button
-            variant="quiet"
-            size="sm"
-            title="Open the Web Inspector for this page (development builds only)"
-            disabled={blank}
-            onclick={() => id && void commands.browserOpenDevtools(id).catch(() => {})}
-          >
-            Inspect
-          </Button>
-        {/if}
-
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="c-browser" class:is-commenting={commenting} onkeydown={onKey}>
+  <div class="c-browser__main">
+    <div
+      class="c-browser__toolbar"
+      class:is-loading={loading}
+      role="toolbar"
+      aria-label="Browser controls"
+    >
+      <div class="c-browser__nav">
         <Button
           variant="quiet"
           size="sm"
           icon="sm"
-          title="Open this page in your browser"
-          ariaLabel="Open in your browser"
-          disabled={blank}
-          onclick={openExternally}
+          title="Back (⌘[)"
+          ariaLabel="Back"
+          disabled={prototype || blank || !(view?.canGoBack ?? false)}
+          onclick={() => history('back')}
         >
-          <Icon name="external" size={13} />
+          <Icon name="chevron-left" size={13} />
         </Button>
-      </div>
-
-      {#if blank}
-        <div class="c-browser__empty">
-          <p>
-            Type an address above, or open one of this worktree's pages. The page runs in a
-            real browser inside this pane, and the agents here can read and click through
-            it.
-          </p>
-          {#if worktree && (worktree.browserHome || worktree.links.length > 0)}
-            <div class="c-browser__links">
-              {#if worktree.browserHome}
-                <Button
-                  variant="accent"
-                  size="sm"
-                  title={worktree.browserHome}
-                  onclick={() => worktree?.browserHome && open(worktree.browserHome)}
-                >
-                  <Icon name="globe" size={13} />
-                  {hostOf(worktree.browserHome)}
-                </Button>
-              {/if}
-              {#each worktree.links as link, i (`${link.label}:${i}`)}
-                <Button
-                  variant="neutral"
-                  size="sm"
-                  title={link.url}
-                  onclick={() => open(link.url)}
-                >
-                  {link.label}
-                </Button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <div class="c-browser__view" bind:this={box}>
-          {#if failure !== null}
-            <div class="c-browser__failed" role="alert">
-              <p class="c-browser__failed-title">
-                {prototype ? 'This prototype can’t be shown' : 'This page can’t be shown'}
-              </p>
-              <p class="c-browser__failed-why">{failure}</p>
-              {#if shownAddress(view?.url ?? null) !== ''}
-                <code class="c-browser__failed-url">{view?.url}</code>
-              {/if}
-              <div class="c-browser__links">
-                <!-- The same command as the toolbar's Reload, which retries the address that failed
-                   rather than reloading the page before it. See `browser::history`. -->
-                <Button variant="accent" size="sm" onclick={() => history('reload')}>
-                  <Icon name="restart" size={12} /> Try again
-                </Button>
-                {#if !prototype}
-                  <Button
-                    variant="neutral"
-                    size="sm"
-                    title="Open this address in your browser"
-                    onclick={openExternally}
-                  >
-                    <Icon name="external" size={13} /> Open in your browser
-                  </Button>
-                {/if}
-              </div>
-            </div>
-          {:else if frozen}
-            <img class="c-browser__frozen" src={frozen} alt="" />
-          {/if}
-        </div>
-      {/if}
-    </div>
-
-    {#if commentsOpen && !blank}
-      <aside class="c-browser__comments" aria-label="Comments on this page">
-        <header class="c-browser__comments-head">
-          <h3 class="c-browser__comments-title">Comments</h3>
+        <Button
+          variant="quiet"
+          size="sm"
+          icon="sm"
+          title="Forward (⌘])"
+          ariaLabel="Forward"
+          disabled={prototype || blank || !(view?.canGoForward ?? false)}
+          onclick={() => history('forward')}
+        >
+          <Icon name="chevron-right" size={13} />
+        </Button>
+        {#if loading}
           <Button
             variant="quiet"
             size="sm"
             icon="sm"
-            title="Hide the comments"
-            ariaLabel="Hide comments"
-            onclick={() => (commentsOpen = false)}
+            title="Stop loading (Esc)"
+            ariaLabel="Stop loading"
+            onclick={() => history('stop')}
           >
             <Icon name="close" size={12} />
           </Button>
-        </header>
-        {#if comments.length === 0}
-          <p class="c-browser__comments-empty">
-            {commenting
-              ? 'Click an element in the page and say what should change.'
-              : 'Turn on comment mode, then click an element in the page.'}
-          </p>
         {:else}
-          <ol class="o-plain-list c-browser__comment-list">
-            {#each comments as comment, index (comment.id)}
-              <li
-                class="c-browser__comment"
-                class:is-resolved={comment.status === 'resolved'}
-                class:is-picked={picked === comment.id}
-              >
-                <div class="c-browser__comment-meta">
-                  <span class="c-browser__comment-n">{index + 1}</span>
-                  <span class="c-browser__comment-what" title={comment.anchor.selector}>
-                    {describe(comment)}
-                  </span>
-                </div>
-                {#if editingComment === comment.id}
-                  <!-- svelte-ignore a11y_autofocus -->
-                  <textarea
-                    class="c-input c-browser__comment-edit"
-                    rows="3"
-                    autofocus
-                    bind:value={editText}
-                    onblur={() => void saveEdit(comment)}
-                    onkeydown={(event) => {
-                      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                        event.preventDefault();
-                        void saveEdit(comment);
-                      } else if (event.key === 'Escape') {
-                        event.stopPropagation();
-                        editingComment = null;
-                      }
-                    }}></textarea>
-                {:else}
-                  <p class="c-browser__comment-text">{comment.text}</p>
-                {/if}
-                <div class="c-browser__comment-actions">
-                  <Button variant="quiet" size="sm" onclick={() => startEdit(comment)}
-                    >Edit</Button
-                  >
-                  <Button variant="quiet" size="sm" onclick={() => toggleResolved(comment)}>
-                    {comment.status === 'resolved' ? 'Reopen' : 'Resolve'}
-                  </Button>
-                  <Button variant="quiet" size="sm" onclick={() => remove(comment)}
-                    >Remove</Button
-                  >
-                </div>
-              </li>
-            {/each}
-          </ol>
-        {/if}
-        <footer class="c-browser__comments-foot">
-          <!-- Drafted, not sent: the message lands in the agent's composer for the user to read,
-             add to, and send themselves. -->
           <Button
-            variant="accent"
+            variant="quiet"
             size="sm"
-            disabled={openComments.length === 0 || target === null}
-            title={target === null
-              ? 'Open an agent session in this worktree first'
-              : `Draft these comments into ${targetLabel}'s composer`}
-            onclick={send}
+            icon="sm"
+            title="Reload (⌘R)"
+            ariaLabel="Reload"
+            disabled={blank}
+            onclick={() => history('reload')}
           >
-            {target
-              ? `Send ${openComments.length} to ${targetLabel}`
-              : `Send ${openComments.length}`}
+            <Icon name="restart" size={12} />
           </Button>
-        </footer>
-      </aside>
+        {/if}
+      </div>
+
+      {#if prototype}
+        <span class="c-browser__address">Prototype review · revise in the conversation</span
+        >
+        <Button
+          variant="quiet"
+          size="sm"
+          ariaLabel="Close preview"
+          title="Close this prototype preview"
+          onclick={() => void closePreview()}
+        >
+          <Icon name="close" size={12} /> Close
+        </Button>
+      {:else}
+        <form
+          class="c-browser__address"
+          class:is-editing={editing}
+          onsubmit={(event) => {
+            event.preventDefault();
+            void go();
+          }}
+        >
+          <TextInput
+            mono
+            bind:value={typed}
+            bind:element={address}
+            placeholder="Enter an address (⌘L)"
+            ariaLabel="Address"
+            oninput={() => {
+              editing = true;
+              problem = null;
+            }}
+            onblur={() => (editing = false)}
+          />
+        </form>
+      {/if}
+      {#if problem}
+        <span class="c-browser__problem" role="alert">{problem}</span>
+      {/if}
+
+      <!-- Comment mode and the list are one control: turning the mode on opens the list, and the
+           count on the button is how you find comments you left on an earlier visit. -->
+      <span class="c-browser__comment-toggle">
+        <Button
+          variant="quiet"
+          size="sm"
+          ariaPressed={commenting}
+          disabled={blank || runtimeOff !== null}
+          title={runtimeOff ??
+            (commenting
+              ? 'Comment mode is on: click an element in the page to comment on it. Click again to stop.'
+              : 'Comment on elements of the page (⌘⇧C)')}
+          onclick={() => setCommenting(!commenting)}
+        >
+          <Icon name="comment" size={13} /> Comment
+        </Button>
+        {#if comments.length > 0}
+          <button
+            type="button"
+            class="c-badge c-badge--accent"
+            title={commentsOpen ? 'Hide the comments' : 'Show the comments'}
+            aria-expanded={commentsOpen}
+            onclick={() => (commentsOpen = !commentsOpen)}
+          >
+            {openComments.length}
+          </button>
+        {/if}
+      </span>
+
+      <span
+        class="c-browser__agent"
+        class:is-driving={(view?.agentDriving ?? null) !== null}
+      >
+        <Button
+          variant={view?.agentAccess && runtimeOff === null ? 'neutral' : 'quiet'}
+          size="sm"
+          ariaLabel="Allow agents to use this page"
+          ariaPressed={runtimeOff === null && (view?.agentAccess ?? false)}
+          disabled={blank || runtimeOff !== null || agentAccessPending}
+          title={runtimeOff ??
+            (blank
+              ? 'Open a page to control whether agents may use it.'
+              : view?.agentAccess
+                ? 'Agents in this worktree may read and interact with this page. Click to turn off access.'
+                : 'Agent access is off for this page. Click to allow agents to read and interact with it.')}
+          onclick={() => void toggleAgents()}
+        >
+          Agent access{runtimeOff !== null
+            ? ': unavailable'
+            : view
+              ? view.agentAccess
+                ? ': on'
+                : ': off'
+              : ''}
+        </Button>
+        {#if view?.agentDriving}
+          {view.agentDriving} is browsing
+        {/if}
+      </span>
+
+      {#if import.meta.env.DEV}
+        <Button
+          variant="quiet"
+          size="sm"
+          title="Open the Web Inspector for this page (development builds only)"
+          disabled={blank}
+          onclick={() => id && void commands.browserOpenDevtools(id).catch(() => {})}
+        >
+          Inspect
+        </Button>
+      {/if}
+
+      <Button
+        variant="quiet"
+        size="sm"
+        icon="sm"
+        title="Open this page in your browser"
+        ariaLabel="Open in your browser"
+        disabled={blank}
+        onclick={openExternally}
+      >
+        <Icon name="external" size={13} />
+      </Button>
+    </div>
+
+    {#if blank}
+      <div class="c-browser__empty">
+        <p>
+          Type an address above, or open one of this worktree's pages. The page runs in a
+          real browser inside this pane, and the agents here can read and click through it.
+        </p>
+        {#if worktree && (worktree.browserHome || worktree.links.length > 0)}
+          <div class="c-browser__links">
+            {#if worktree.browserHome}
+              <Button
+                variant="accent"
+                size="sm"
+                title={worktree.browserHome}
+                onclick={() => worktree?.browserHome && open(worktree.browserHome)}
+              >
+                <Icon name="globe" size={13} />
+                {hostOf(worktree.browserHome)}
+              </Button>
+            {/if}
+            {#each worktree.links as link, i (`${link.label}:${i}`)}
+              <Button
+                variant="neutral"
+                size="sm"
+                title={link.url}
+                onclick={() => open(link.url)}
+              >
+                {link.label}
+              </Button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {:else}
+      <div class="c-browser__view" bind:this={box}>
+        {#if failure !== null}
+          <div class="c-browser__failed" role="alert">
+            <p class="c-browser__failed-title">
+              {prototype ? 'This prototype can’t be shown' : 'This page can’t be shown'}
+            </p>
+            <p class="c-browser__failed-why">{failure}</p>
+            {#if shownAddress(view?.url ?? null) !== ''}
+              <code class="c-browser__failed-url">{view?.url}</code>
+            {/if}
+            <div class="c-browser__links">
+              <!-- The same command as the toolbar's Reload, which retries the address that failed
+                   rather than reloading the page before it. See `browser::history`. -->
+              <Button variant="accent" size="sm" onclick={() => history('reload')}>
+                <Icon name="restart" size={12} /> Try again
+              </Button>
+              {#if !prototype}
+                <Button
+                  variant="neutral"
+                  size="sm"
+                  title="Open this address in your browser"
+                  onclick={openExternally}
+                >
+                  <Icon name="external" size={13} /> Open in your browser
+                </Button>
+              {/if}
+            </div>
+          </div>
+        {:else if frozen}
+          <img class="c-browser__frozen" src={frozen} alt="" />
+        {/if}
+      </div>
     {/if}
   </div>
-</ExtensionPoint>
+
+  {#if commentsOpen && !blank}
+    <aside class="c-browser__comments" aria-label="Comments on this page">
+      <header class="c-browser__comments-head">
+        <h3 class="c-browser__comments-title">Comments</h3>
+        <Button
+          variant="quiet"
+          size="sm"
+          icon="sm"
+          title="Hide the comments"
+          ariaLabel="Hide comments"
+          onclick={() => (commentsOpen = false)}
+        >
+          <Icon name="close" size={12} />
+        </Button>
+      </header>
+      {#if comments.length === 0}
+        <p class="c-browser__comments-empty">
+          {commenting
+            ? 'Click an element in the page and say what should change.'
+            : 'Turn on comment mode, then click an element in the page.'}
+        </p>
+      {:else}
+        <ol class="o-plain-list c-browser__comment-list">
+          {#each comments as comment, index (comment.id)}
+            <li
+              class="c-browser__comment"
+              class:is-resolved={comment.status === 'resolved'}
+              class:is-picked={picked === comment.id}
+            >
+              <div class="c-browser__comment-meta">
+                <span class="c-browser__comment-n">{index + 1}</span>
+                <span class="c-browser__comment-what" title={comment.anchor.selector}>
+                  {describe(comment)}
+                </span>
+              </div>
+              {#if editingComment === comment.id}
+                <!-- svelte-ignore a11y_autofocus -->
+                <textarea
+                  class="c-input c-browser__comment-edit"
+                  rows="3"
+                  autofocus
+                  bind:value={editText}
+                  onblur={() => void saveEdit(comment)}
+                  onkeydown={(event) => {
+                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                      event.preventDefault();
+                      void saveEdit(comment);
+                    } else if (event.key === 'Escape') {
+                      event.stopPropagation();
+                      editingComment = null;
+                    }
+                  }}></textarea>
+              {:else}
+                <p class="c-browser__comment-text">{comment.text}</p>
+              {/if}
+              <div class="c-browser__comment-actions">
+                <Button variant="quiet" size="sm" onclick={() => startEdit(comment)}
+                  >Edit</Button
+                >
+                <Button variant="quiet" size="sm" onclick={() => toggleResolved(comment)}>
+                  {comment.status === 'resolved' ? 'Reopen' : 'Resolve'}
+                </Button>
+                <Button variant="quiet" size="sm" onclick={() => remove(comment)}
+                  >Remove</Button
+                >
+              </div>
+            </li>
+          {/each}
+        </ol>
+      {/if}
+      <footer class="c-browser__comments-foot">
+        <!-- Drafted, not sent: the message lands in the agent's composer for the user to read,
+             add to, and send themselves. -->
+        <Button
+          variant="accent"
+          size="sm"
+          disabled={openComments.length === 0 || target === null}
+          title={target === null
+            ? 'Open an agent session in this worktree first'
+            : `Draft these comments into ${targetLabel}'s composer`}
+          onclick={send}
+        >
+          {target
+            ? `Send ${openComments.length} to ${targetLabel}`
+            : `Send ${openComments.length}`}
+        </Button>
+      </footer>
+    </aside>
+  {/if}
+</div>

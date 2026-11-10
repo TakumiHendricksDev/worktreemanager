@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ChatEditDialog from './lib/components/ChatEditDialog.svelte';
-  import { initExtensionWorkbench } from './lib/state/extension-workbench.svelte';
-  let offExtensions: (() => void) | undefined;
   /**
    * The app shell: a two-column grid with a resizable splitter.
    *
@@ -12,11 +9,10 @@
    */
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import PluginSlot from './lib/components/PluginSlot.svelte';
-  import { plugins } from './lib/state/plugins.svelte';
   import { onMount, untrack } from 'svelte';
 
   import AddProjectDialog from './lib/components/AddProjectDialog.svelte';
+  import ChatEditDialog from './lib/components/ChatEditDialog.svelte';
   import CodeSurface from './lib/components/CodeSurface.svelte';
   import { chordOf } from './lib/code-shortcuts';
   import { code } from './lib/state/code.svelte';
@@ -33,6 +29,7 @@
   import HomeAgent from './lib/components/HomeAgent.svelte';
   import HomeSurface from './lib/components/HomeSurface.svelte';
   import NewWorktreePane from './lib/components/NewWorktreePane.svelte';
+  import PluginSlot from './lib/components/PluginSlot.svelte';
   import RemoveProjectDialog from './lib/components/RemoveProjectDialog.svelte';
   import RemoveWorktreeDialog from './lib/components/RemoveWorktreeDialog.svelte';
   import Inspector from './lib/components/Inspector.svelte';
@@ -41,6 +38,7 @@
   import UsageDialog from './lib/components/UsageDialog.svelte';
   import Sidebar from './lib/components/Sidebar.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
+  import WorkbenchRecoveryBar from './lib/components/WorkbenchRecoveryBar.svelte';
   import Toasts from './lib/components/Toasts.svelte';
   import TrustBanner from './lib/components/TrustBanner.svelte';
   import UpdateDialog from './lib/components/UpdateDialog.svelte';
@@ -57,6 +55,8 @@
   import { composerPrefs } from './lib/state/composer.svelte';
   import { dictation } from './lib/state/dictate.svelte';
   import { initMainWindow } from './lib/state/pane-windows.svelte';
+  import { initExtensionWorkbench } from './lib/state/extension-workbench.svelte';
+  import { plugins } from './lib/state/plugins.svelte';
   import { sessions } from './lib/state/sessions.svelte';
   import { sessionAwareness } from './lib/state/session-awareness.svelte';
   import { browserTools } from './lib/state/browser-tools.svelte';
@@ -83,21 +83,9 @@
   let dragging = $state(false);
   let booted = $state(false);
   let offPluginState: (() => void) | undefined;
-  $effect(() => {
-    if (!plugins.ready) return;
-    if (!plugins.available('home')) view.homeMounted = false;
-    const region =
-      view.current === 'worktree'
-        ? 'sessions'
-        : view.current === 'new'
-          ? 'new_worktree'
-          : view.current;
-    if (plugins.available(region)) return;
-    const fallback = (['worktree', 'home', 'code', 'database'] as const).find((v) =>
-      plugins.available(v === 'worktree' ? 'sessions' : v),
-    );
-    if (fallback) view.show(fallback);
-  });
+  let offExtensions: (() => void) | undefined;
+  // A view whose region a plugin hid gives way to one that is still drawn. See `view.settle`.
+  $effect(() => view.settle());
   let addError = $state<string | null>(null);
   /*
    * What the main pane shows lives in `view.svelte.ts` now, because Home made it something
@@ -244,16 +232,8 @@
     let off: (() => void) | undefined;
     void listen<{ target: string; project?: string; worktree?: string }>(
       'plugins:navigate',
-      async ({ payload }) => {
-        if (payload.target === 'settings') {
-          settingsView.show('plugins');
-          return;
-        }
-        if (payload.project) await workspace.selectProject(payload.project);
-        if (payload.worktree) workspace.select(payload.worktree);
-        if (['home', 'worktree', 'code', 'database', 'new'].includes(payload.target))
-          view.show(payload.target as typeof view.current);
-      },
+      ({ payload }) =>
+        void view.navigate(payload.target, payload.project, payload.worktree),
     ).then((unlisten) => {
       if (gone) unlisten();
       else off = unlisten;
@@ -273,7 +253,6 @@
         return;
       }
       offPluginState = offPlugins;
-      if (!plugins.available('home')) view.show('worktree');
       await theme.init();
 
       // Before `sessions.init` for the same reason `attention.init` is: a composer can be typed
@@ -314,8 +293,11 @@
       // into nothing. Nothing can start a session until there is a worktree list to start one
       // from, so paying for this first costs nothing visible.
       offSessions = await sessions.init();
+      // Never rejects: a plugin that will not start, or a config it cannot read, costs plugins and
+      // not the window. Released here too, because the unmount that set `gone` has already run.
       offExtensions = await initExtensionWorkbench();
       if (gone) {
+        offExtensions();
         offSessions?.();
         offAttention?.();
         return;
@@ -579,28 +561,30 @@
   }
 </script>
 
+{#snippet titleBar()}
+  <TitleBar
+    {sidebarCollapsed}
+    home={view.home}
+    ontogglehome={() => view.toggleHome()}
+    ontogglesidebar={toggleSidebar}
+    onaddproject={addProject}
+    onremoveproject={() => (removingProject = workspace.activeProject)}
+    onusage={() => (showUsage = true)}
+    onsettings={() => settingsView.show()}
+  />
+{/snippet}
+
 <div class="c-shell" style:--sidebar-w="{sidebarWidth}px">
-  {#if plugins.binding('workbench').kind !== 'builtin' || plugins.binding('titlebar').kind !== 'builtin'}
-    <header class="c-titlebar">
-      <div class="c-titlebar__gutter"></div>
-      <div class="c-titlebar__identity">Custom workbench</div>
-      <Button onclick={addProject}>Add repository</Button><Button
-        onclick={() => settingsView.show('plugins')}>Plugins &amp; recovery</Button
-      >
-    </header>
-  {/if}
+  <!--
+    The built-in title bar until the registry has loaded, because `PluginSlot` draws nothing until
+    then and the first frames had no title bar and so nowhere to drag the window by. A replaced
+    title bar shows the built-in for those frames instead, which is the better of the two flashes.
+  -->
+  {#if !plugins.ready}{@render titleBar()}{/if}
+  <WorkbenchRecoveryBar onaddproject={addProject} />
   <PluginSlot region="workbench">
     <PluginSlot region="titlebar">
-      <TitleBar
-        {sidebarCollapsed}
-        home={view.home}
-        ontogglehome={() => view.toggleHome()}
-        ontogglesidebar={toggleSidebar}
-        onaddproject={addProject}
-        onremoveproject={() => (removingProject = workspace.activeProject)}
-        onusage={() => (showUsage = true)}
-        onsettings={() => settingsView.show()}
-      />
+      {@render titleBar()}
     </PluginSlot>
     <div
       class="c-shell__columns"

@@ -68,6 +68,7 @@
 @use 'components/banner';
 @use 'components/browser';
 @use 'components/button';
+@use 'components/chat-edit';
 @use 'components/choice';
 @use 'components/code-comment';
 @use 'components/code-editor';
@@ -83,6 +84,7 @@
 @use 'components/dialog';
 @use 'components/dot';
 @use 'components/drop';
+@use 'components/extensions';
 @use 'components/field';
 @use 'components/find';
 @use 'components/fleet';
@@ -96,13 +98,14 @@
 @use 'components/markdown';
 @use 'components/meter';
 @use 'components/model-picker';
+@use 'components/native-session';
 @use 'components/new-worktree';
 @use 'components/note';
 @use 'components/pane';
-@use 'components/native-session';
 @use 'components/pane-window';
 @use 'components/peek';
 @use 'components/planview';
+@use 'components/plugins';
 @use 'components/popped';
 @use 'components/preflight';
 @use 'components/progress';
@@ -119,8 +122,6 @@
 @use 'components/sidebar-group';
 @use 'components/section-heading';
 @use 'components/settings';
-@use 'components/plugins';
-@use 'components/extensions';
 @use 'components/shell';
 @use 'components/shell-run';
 @use 'components/side-question';

@@ -129,15 +129,22 @@ pub fn claude_capability() -> AgentCapability {
 
     AgentCapability {
         // Aliases first, deliberately: each resolves to the current model of its tier, so this list
-        // stays true across releases in a way a list of dated ids would not. Opus 5 and Opus 4.8
-        // are the pinned ids, and the exception is the point: no alias reaches either — `opus`
-        // resolves to Opus 5.5 as of CLI 2.1.280 — so offering an earlier generation at all means
-        // naming it. Hand-remove each when the CLI drops the id.
+        // stays true across releases in a way a list of dated ids would not. The labels are what
+        // the aliases resolve to in CLI 2.1.322's own model catalog (`opus` Opus 5.5, `sonnet`
+        // Sonnet 5.5, `haiku` Haiku 5.5, `fable` Fable 5.2), so they are the one part to re-read
+        // when the CLI moves an alias. Opus 5, Opus 4.8 and Fable 5.1 are the pinned ids, and the
+        // exception is the point: no alias reaches an earlier generation, so offering one at all
+        // means naming it. Hand-remove each when the CLI drops the id.
         models: vec![
             model("opus", "Opus 5.5", "The most capable tier", true),
-            model("sonnet", "Sonnet 5", "Balanced capability and speed", false),
-            model("haiku", "Haiku 4.5", "Fastest and cheapest", false),
-            model("fable", "Fable 5.1", "The newest tier", false),
+            model(
+                "sonnet",
+                "Sonnet 5.5",
+                "Balanced capability and speed",
+                false,
+            ),
+            model("haiku", "Haiku 5.5", "Fastest and cheapest", false),
+            model("fable", "Fable 5.2", "The newest tier", false),
             AgentModel {
                 // The one model whose meaning includes a mode: the CLI resolves `opusplan` to
                 // Opus only while `permissionMode == "plan"` and to Sonnet otherwise — read off
@@ -146,7 +153,7 @@ pub fn claude_capability() -> AgentCapability {
                 implied_mode: Some("plan".to_owned()),
                 ..model(
                     "opusplan",
-                    "Opus 5.5 (plan) / Sonnet 5",
+                    "Opus 5.5 (plan) / Sonnet 5.5",
                     "Opus while planning, Sonnet to execute; picking it switches the pane to Plan mode",
                     false,
                 )
@@ -161,6 +168,12 @@ pub fn claude_capability() -> AgentCapability {
                 "claude-opus-4-8",
                 "Opus 4.8",
                 "The generation before Opus 5",
+                false,
+            ),
+            model(
+                "claude-fable-5-1",
+                "Fable 5.1",
+                "The previous Fable generation",
                 false,
             ),
         ],

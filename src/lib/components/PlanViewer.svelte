@@ -1,7 +1,4 @@
 <script lang="ts">
-  import ExtensionPoint from './ExtensionPoint.svelte';
-  import { extensionContext } from '../state/extensions.svelte';
-  const publicContext = extensionContext();
   /**
    * A plan, rendered to be read.
    *
@@ -73,24 +70,22 @@
   });
 </script>
 
-<ExtensionPoint target="component.plan-viewer" context={publicContext()}>
-  <Dialog {title} {onclose} wide>
-    {#snippet body()}
-      <div class="c-planview">
-        <Markdown source={markdown} />
-      </div>
-      {#if provider || when || path}
-        <p class="c-planview__meta">
-          {#if provider}<span>{provider}</span>{/if}
-          {#if when}<span>{when}</span>{/if}
-          {#if path}<code>{path}</code>{/if}
-        </p>
-      {/if}
-    {/snippet}
+<Dialog {title} {onclose} wide>
+  {#snippet body()}
+    <div class="c-planview">
+      <Markdown source={markdown} />
+    </div>
+    {#if provider || when || path}
+      <p class="c-planview__meta">
+        {#if provider}<span>{provider}</span>{/if}
+        {#if when}<span>{when}</span>{/if}
+        {#if path}<code>{path}</code>{/if}
+      </p>
+    {/if}
+  {/snippet}
 
-    {#snippet footer()}
-      {#if actions}{@render actions()}{/if}
-      <Button variant="neutral" size="sm" onclick={onclose}>Close</Button>
-    {/snippet}
-  </Dialog>
-</ExtensionPoint>
+  {#snippet footer()}
+    {#if actions}{@render actions()}{/if}
+    <Button variant="neutral" size="sm" onclick={onclose}>Close</Button>
+  {/snippet}
+</Dialog>

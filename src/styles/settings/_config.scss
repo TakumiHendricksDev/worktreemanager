@@ -26,6 +26,12 @@ $pane-fold: 320px;
 /// session that started it. That label is wider than the other four buttons together.
 $pane-fold-origin: 420px;
 
+/// The native CLI pane width below which its Open Design review moves under the terminal.
+///
+/// A terminal narrower than its CLI's own layout is unusable, where a transcript would reflow, so
+/// the review gives way first and the two stack below this width.
+$pane-native-stack: 580px;
+
 /// The worktree bar width below which the Links button drops its label and keeps only its icon.
 ///
 /// Measured rather than chosen. The bar's actions are 364px without Links, and Links adds 99px with

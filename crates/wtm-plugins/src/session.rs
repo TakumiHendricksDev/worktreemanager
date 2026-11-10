@@ -36,7 +36,14 @@ impl Store {
     ) -> Result<Value, String> {
         let _running = self.activation(plugin);
         let id = uuid::Uuid::new_v4().to_string();
-        let wire = json!({"jsonrpc":"2.0", "id":id, "method":request.method, "params":request.params, "api":1}).to_string();
+        let wire = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": request.method,
+            "params": request.params,
+            "api": 1,
+        })
+        .to_string();
         if wire.len() > 65536 {
             return Err("Session request exceeds 64 KiB".into());
         }
@@ -62,9 +69,9 @@ impl Store {
                 client.to_owned(),
             );
             match request.method {
-                Method::Attach => {
-                    self.inner.lock().attached.insert(key);
-                }
+                // Not recorded for a package disabled while the attach ran: nothing would ever
+                // release it, and it would hold off the next install for good.
+                Method::Attach => self.attach(key)?,
                 Method::Detach => {
                     self.inner.lock().attached.remove(&key);
                 }
